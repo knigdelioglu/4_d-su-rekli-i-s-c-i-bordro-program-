@@ -1,8 +1,57 @@
+# =========================
+# Node / Bun / Frontend
+# =========================
 node_modules/
-build/
 dist/
-coverage/
-.DS_Store
+.vite/
 *.log
-.env*
+
+# =========================
+# Rust / Tauri build
+# =========================
+src-tauri/target/
+target/
+
+# =========================
+# Tauri generated files
+# =========================
+src-tauri/gen/
+
+# =========================
+# Local databases / runtime data
+# =========================
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
 !.env.example
+
+# =========================
+# macOS
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# =========================
+# Editors
+# =========================
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# =========================
+# Temporary / cache
+# =========================
+.tmp/
+tmp/
+.cache/
+coverage/

@@ -93,6 +93,11 @@ export const Navbar: React.FC<NavbarProps> = ({
               onChange={(e) => onSelectDonem(e.target.value)}
               className="bg-transparent text-xs font-bold text-white border-none focus:ring-0 cursor-pointer"
             >
+              {donemler.length === 0 && (
+                <option value="" className="bg-slate-900 text-white">
+                  Henüz Dönem Yok
+                </option>
+              )}
               {donemler.map((d) => {
                 const dateRange = d.donemAdi.match(/\(([^)]+)\)/)?.[1] || d.donemAdi;
                 return (

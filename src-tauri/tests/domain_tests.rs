@@ -193,6 +193,67 @@ mod tests {
     }
 
     #[test]
+    fn test_finalized_payroll_locked() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::services::payroll_service::PayrollService;
+
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-finalize");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-08".into(),
+            yil: 2026,
+            ay: 8,
+            baslangicTarihi: "2026-08-15".into(),
+            bitisTarihi: "2026-09-14".into(),
+            donemAdi: "Ağustos 2026".into(),
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        let bordro = BordroKaydi {
+            id: "test-finalize_2026-08".into(),
+            personelId: "test-finalize".into(),
+            donemId: "2026-08".into(),
+            puantajOzeti: PuantajOzeti::default(),
+            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(100000)), ..Default::default() },
+            gelirToplam: dec!(100000),
+            kesintiler: KesintiKalemleri::default(),
+            kesintiToplam: dec!(0),
+            netOdeme: dec!(90000),
+            status: BordroStatus::FINALIZED,
+            olusturulmaTarihi: "".into(),
+            sonGuncellemeTarihi: "".into(),
+            notlar: None,
+            oncekiKumulatifGvMatrahi: None,
+            oncekiKumulatifAsgariGvMatrahi: None,
+            manuelKumulatifGvMatrahi: None,
+            devredenPekGelen: None,
+            sonrakiDevredenPek: None,
+            pekDetay: None,
+        };
+        PayrollRepository::save(&conn, &bordro)?;
+
+        // 1. Downgrading from FINALIZED must fail
+        let res = PayrollService::set_payroll_status(&conn, "test-finalize", "2026-08", BordroStatus::CALCULATED);
+        assert!(matches!(res, Err(DomainError::PayrollFinalized(_))));
+
+        // 2. Re-setting FINALIZED is idempotent / allowed
+        let res = PayrollService::set_payroll_status(&conn, "test-finalize", "2026-08", BordroStatus::FINALIZED);
+        assert!(res.is_ok());
+
+        // 3. Re-calculating a FINALIZED payroll must fail
+        let res = PayrollService::calculate_payroll_for_personnel(&conn, "test-finalize", "2026-08");
+        assert!(matches!(res, Err(DomainError::PayrollFinalized(_))));
+
+        // 4. Status change for a nonexistent payroll errors with NotFound
+        let res = PayrollService::set_payroll_status(&conn, "test-finalize", "2026-09", BordroStatus::CALCULATED);
+        assert!(matches!(res, Err(DomainError::NotFound(_))));
+
+        Ok(())
+    }
+
+    #[test]
     fn test_migration_idempotent_and_rollback() -> Result<(), Box<dyn std::error::Error>> {
         let mut conn = create_in_memory_connection()?;
 

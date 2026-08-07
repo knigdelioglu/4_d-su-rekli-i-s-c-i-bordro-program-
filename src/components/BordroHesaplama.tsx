@@ -43,6 +43,7 @@ import {
   formatTL,
 } from '../utils/payrollUtils';
 import { PaySlipModal } from './PaySlipModal';
+import { tauriBridge } from '../services/tauriBridge';
 
 interface BordroHesaplamaProps {
   aktifDonem: BordroDonemi;
@@ -52,7 +53,7 @@ interface BordroHesaplamaProps {
   puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
   onSaveBordro: (bordro: BordroKaydi) => void;
-  onSavePersonel?: (personel: Personel) => void;
+  onSavePersonel?: (personel: Personel) => Promise<void> | void;
   initialPersonelId?: string;
   onGoToPuantaj?: (personelId?: string) => void;
 }
@@ -91,7 +92,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     };
 
   // Helper to calculate and save bordro for a person ONLY IF saved puantaj exists
-  const calculateAndSaveForPerson = (person: Personel): BordroKaydi | null => {
+  const calculateAndSaveForPerson = async (
+    person: Personel
+  ): Promise<BordroKaydi | null> => {
     const pPuantaj = puantajlar.find(
       (p) => p.personelId === person.id && p.donemId === aktifDonem.id
     );
@@ -99,6 +102,23 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     if (!pPuantaj || !pPuantaj.gunler || Object.keys(pPuantaj.gunler).length === 0) {
       // Saved puantaj NOT found for this person in this period! DO NOT calculate automatically!
       return null;
+    }
+
+    // In Tauri runtime the Rust engine is the authoritative calculator and persists
+    // the result to SQLite. This keeps a single source of truth for payroll math.
+    if (tauriBridge.isTauriAvailable()) {
+      try {
+        const rustBordro = await tauriBridge.calculatePayroll(
+          person.id,
+          aktifDonem.id
+        );
+        onSaveBordro(rustBordro);
+        return rustBordro;
+      } catch (err) {
+        console.error('Rust calculate_payroll failed:', err);
+        setErrorMessage(`Hesaplama hatası: ${String(err)}`);
+        return null;
+      }
     }
 
     const puantajOzeti = calculatePuantajOzeti(pPuantaj.gunler);
@@ -206,21 +226,21 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   // Batch calculation handler
-  const handleCalculateAll = () => {
+  const handleCalculateAll = async () => {
     setIsBatchProcessing(true);
     let successCount = 0;
     let failCount = 0;
     const missingPuantajPersons: string[] = [];
 
-    personeller.forEach((person) => {
-      const res = calculateAndSaveForPerson(person);
+    for (const person of personeller) {
+      const res = await calculateAndSaveForPerson(person);
       if (res) {
         successCount++;
       } else {
         failCount++;
         missingPuantajPersons.push(`${person.ad} ${person.soyad}`);
       }
-    });
+    }
 
     setIsBatchProcessing(false);
 
@@ -242,7 +262,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   // Open Pay Slip modal for a person
-  const handleOpenPaySlip = (person: Personel) => {
+  const handleOpenPaySlip = async (person: Personel) => {
     let bordro = bordrolar.find(
       (b) => b.personelId === person.id && b.donemId === aktifDonem.id
     );
@@ -259,7 +279,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         return;
       }
 
-      bordro = calculateAndSaveForPerson(person) || undefined;
+      bordro = (await calculateAndSaveForPerson(person)) || undefined;
     }
 
     if (bordro) {
@@ -268,7 +288,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   // Single calculation handler
-  const handleCalculateSingle = (person: Personel, e: React.MouseEvent) => {
+  const handleCalculateSingle = async (person: Personel, e: React.MouseEvent) => {
     e.stopPropagation();
     const hasPuantaj = puantajlar.some(
       (p) => p.personelId === person.id && p.donemId === aktifDonem.id
@@ -282,7 +302,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return;
     }
 
-    const res = calculateAndSaveForPerson(person);
+    const res = await calculateAndSaveForPerson(person);
     if (res) {
       setErrorMessage(null);
       setSuccessMessage(`${person.ad} ${person.soyad} bordrosu başarıyla hesaplandı.`);
@@ -811,23 +831,44 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={async () => {
                       let updatedAny = false;
-                      Object.keys(manualKumulatifGvMap).forEach((pId) => {
+                      for (const pId of Object.keys(manualKumulatifGvMap)) {
                         const person = personeller.find((p) => p.id === pId);
                         if (person && onSavePersonel) {
                           const val = manualKumulatifGvMap[pId];
-                          onSavePersonel({
+                          await onSavePersonel({
                             ...person,
                             devirKumulatifGvMatrahi: val,
                             devirKumulatifGvMatrahiYili: aktifDonem.yil,
                             devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
                           });
+                          // In Tauri runtime the Rust cumulative engine reads from
+                          // personnel_tax_opening. Persist the same opening there so the
+                          // authoritative calc and the UI stay in sync.
+                          if (tauriBridge.isTauriAvailable()) {
+                            try {
+                              await tauriBridge.saveTaxOpening({
+                                id: `${person.id}_${aktifDonem.yil}`,
+                                personnelId: person.id,
+                                year: aktifDonem.yil,
+                                gvCumulativeOpening: val,
+                                effectiveFromPeriodId: `${aktifDonem.yil}-${String(
+                                  aktifDonem.ay
+                                ).padStart(2, '0')}`,
+                              });
+                            } catch (taxErr) {
+                              console.error(
+                                'save_tax_opening failed:',
+                                taxErr
+                              );
+                            }
+                          }
                           updatedAny = true;
                         }
-                      });
+                      }
                       setIsKumulatifModalOpen(false);
-                      handleCalculateAll();
+                      await handleCalculateAll();
                       if (updatedAny) {
                         setSuccessMessage(
                           `${aktifDonem.yil} yılı kümülatif GV başlangıç matrahı güncellendi. Bu yıla ait bordrolar yeniden hesaplandı.`

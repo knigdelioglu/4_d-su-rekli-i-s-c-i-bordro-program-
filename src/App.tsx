@@ -90,23 +90,7 @@ export default function App() {
         const fetchedSettings = await tauriBridge.getInstitutionSettings();
         let savedActivePeriodId = await tauriBridge.getAppSetting('active_period_id');
 
-        // If database has no periods yet, initialize standard empty periods
-        if (fetchedPeriods.length === 0) {
-          const currentYear = new Date().getFullYear();
-          for (let m = 1; m <= 8; m++) {
-            const d = createBordroDonemi(currentYear, m);
-            await tauriBridge.savePeriod(d);
-            const defaultSetting: DönemselKurumDegerleri = {
-              donemId: d.id,
-              ...DEFAULT_KURUM_DEGERLERI,
-            };
-            await tauriBridge.saveInstitutionSettings(defaultSetting);
-          }
-          fetchedPeriods = await tauriBridge.getPeriods();
-          savedActivePeriodId = `${currentYear}-05`;
-          await tauriBridge.setAppSetting('active_period_id', savedActivePeriodId);
-        }
-
+        // If database has no periods yet, start clean without pre-populating periods
         const activeId = savedActivePeriodId || fetchedPeriods[0]?.id || '';
 
         setDonemler(fetchedPeriods);
@@ -144,18 +128,8 @@ export default function App() {
       console.error('Local storage load error:', err);
     }
 
-    if (loadedDonemler.length === 0) {
-      const currentYear = new Date().getFullYear();
-      for (let m = 1; m <= 8; m++) {
-        const d = createBordroDonemi(currentYear, m);
-        loadedDonemler.push(d);
-        loadedKurumMap[d.id] = { donemId: d.id, ...DEFAULT_KURUM_DEGERLERI };
-      }
-      loadedAktifDonemId = `${currentYear}-05`;
-    }
-
     setDonemler(loadedDonemler);
-    setAktifDonemId(loadedAktifDonemId);
+    setAktifDonemId(loadedAktifDonemId || loadedDonemler[0]?.id || '');
     setPersoneller(loadedPersoneller);
     setKurumDegerleriMap(loadedKurumMap);
     setPuantajlar(loadedPuantajlar);
@@ -371,14 +345,6 @@ export default function App() {
     setActiveTab('bordro');
   };
 
-  if (!aktifDonem) {
-    return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-        <div className="text-center font-semibold text-slate-600">Yükleniyor...</div>
-      </div>
-    );
-  }
-
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
       {/* Navbar */}
@@ -408,11 +374,39 @@ export default function App() {
             onSavePersonel={handleSavePersonel}
             onDeletePersonel={handleDeletePersonel}
             onSelectPersonelForBordro={handleSelectPersonelForBordro}
-            isPrimiGruplari={kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari}
+            isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
           />
         )}
 
-        {activeTab === 'puantaj' && (
+        {!aktifDonem && activeTab !== 'personel' && (
+          <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm text-center max-w-xl mx-auto my-12 space-y-4">
+            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">
+              !
+            </div>
+            <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Veritabanında aktif bir bordro dönemi mevcut değil. İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
+            </p>
+            <div className="flex items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsPeriodManagerOpen(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors"
+              >
+                Yeni Dönem Aç
+              </button>
+              <button
+                type="button"
+                onClick={handleResetSampleData}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors"
+              >
+                Örnek Verileri Yükle
+              </button>
+            </div>
+          </div>
+        )}
+
+        {aktifDonem && activeTab === 'puantaj' && (
           <PuantajGrid
             aktifDonem={aktifDonem}
             personeller={personeller}
@@ -422,7 +416,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'bordro' && (
+        {aktifDonem && activeTab === 'bordro' && (
           <BordroHesaplama
             aktifDonem={aktifDonem}
             donemler={donemler}
@@ -442,7 +436,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'banka' && (
+        {aktifDonem && activeTab === 'banka' && (
           <BankaListesi
             aktifDonem={aktifDonem}
             personeller={personeller}
@@ -450,7 +444,7 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'kesintiler' && (
+        {aktifDonem && activeTab === 'kesintiler' && (
           <KesintiListesi
             aktifDonem={aktifDonem}
             personeller={personeller}

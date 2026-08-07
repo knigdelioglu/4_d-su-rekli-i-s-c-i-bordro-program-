@@ -121,6 +121,13 @@ impl PayrollService {
     ) -> Result<()> {
         let all = PayrollRepository::get_all(conn)?;
         if let Some(mut bordro) = all.into_iter().find(|b| b.personelId == personnel_id && b.donemId == period_id) {
+            // A FINALIZED payroll is immutable: it can neither be re-calculated nor
+            // downgraded to a mutable status. Only the FINALIZED state can ever be set again.
+            if bordro.status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
+                return Err(DomainError::PayrollFinalized(
+                    "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into()
+                ));
+            }
             bordro.status = status;
             PayrollRepository::save(conn, &bordro)?;
             Ok(())
