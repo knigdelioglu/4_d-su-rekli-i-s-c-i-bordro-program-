@@ -38,10 +38,16 @@ pub struct Personel {
 pub struct BordroDonemi {
     pub id: String, // e.g. "2026-05"
     pub yil: i32,   // e.g. 2026
-    pub ay: i32,    // 1-12
+    pub ay: i32,    // 1-12 DÖNEM BAŞLANGIÇ AYI (15'in bulunduğu ay). Dönem adı/id bundan türetilir, anlamı DEĞİŞMEZ.
     pub baslangicTarihi: String,
     pub bitisTarihi: String,
     pub donemAdi: String,
+    /// Vergi yılı (tahakkuk/ödeme yılı). Asgari ücret GV referans kümülatifi ve
+    /// vergi hesabı bu alan üzerinden yürütülür. `yil`'den bağımsız olabilir
+    /// (ör. Aralık dönemi → Ocak ödemesi için aynı takvim yılı +1).
+    pub taxYear: i32,
+    /// Vergi ayı (ödeme/tahakkuk ayı), 1-12. Varsayılan öneri = bitiş ayı (ay + 1).
+    pub taxMonth: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

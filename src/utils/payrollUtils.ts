@@ -115,7 +115,12 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
  * Generates 15th to 14th payroll period
  * Example: year = 2026, month = 1 (Ocak) -> 15.01.2026 to 14.02.2026
  */
-export function createBordroDonemi(yil: number, ay: number): BordroDonemi {
+export function createBordroDonemi(
+  yil: number,
+  ay: number,
+  taxYear?: number,
+  taxMonth?: number
+): BordroDonemi {
   const pad = (n: number) => n.toString().padStart(2, '0');
   
   // Baslangic: Yil-Ay-15
@@ -135,6 +140,17 @@ export function createBordroDonemi(yil: number, ay: number): BordroDonemi {
   const donemId = `${yil}-${pad(ay)}`;
   const donemAdi = `${ayAdi} ${yil} Dönemi (15 ${ayAdi} - 14 ${sonrakiAyAdi})`;
 
+  // Vergi (ödeme/tahakkuk) ayı: varsayılan öneri = bitiş ayı (ay + 1; Aralık → Ocak, yıl +1).
+  // Kullanıcı seçeneği varsa (taxMonth/taxYear) onu kullan; yoksa bitiş ayı varsayımına dön.
+  let deflTaxAy = ay + 1;
+  let deflTaxYil = yil;
+  if (deflTaxAy > 12) {
+    deflTaxAy = 1;
+    deflTaxYil = yil + 1;
+  }
+  const resTaxYear = taxYear !== undefined ? taxYear : deflTaxYil;
+  const resTaxMonth = taxMonth !== undefined ? taxMonth : deflTaxAy;
+
   return {
     id: donemId,
     yil,
@@ -142,6 +158,8 @@ export function createBordroDonemi(yil: number, ay: number): BordroDonemi {
     baslangicTarihi,
     bitisTarihi,
     donemAdi,
+    taxYear: resTaxYear,
+    taxMonth: resTaxMonth,
   };
 }
 
@@ -1156,9 +1174,19 @@ export function calculatePreviousCumulativeAsgariUcretGvMatrah(
 
   if (!aktifDonem || !donemler) return cumulativeAsgariMatrah;
 
-  const priorPeriods = donemler.filter(
-    (d) => d.yil === aktifDonem.yil && d.ay < aktifDonem.ay
-  );
+  // Referans kümülatif, dönemin "başlangıç ayı" (ay) DEĞİL vergi (ödeme/tahakkuk)
+  // yılı/ayı (taxYear/taxMonth) takvim konumuna dayanır (GİB 7349 S.K.). Eski
+  // kayıtlarda alan yoksa bitiş ayı varsayımına geri dönülür (ay + 1; Aralık → Ocak).
+  const effTaxYear =
+    aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil);
+  const effTaxMonth =
+    aktifDonem.taxMonth ?? (aktifDonem.ay === 12 ? 1 : aktifDonem.ay + 1);
+
+  const priorPeriods = donemler.filter((d) => {
+    const dTaxYear = d.taxYear ?? (d.ay === 12 ? d.yil + 1 : d.yil);
+    const dTaxMonth = d.taxMonth ?? (d.ay === 12 ? 1 : d.ay + 1);
+    return dTaxYear === effTaxYear && dTaxMonth < effTaxMonth;
+  });
 
   for (const period of priorPeriods) {
     // Kümülatif asgari ücret GV matrahı takvim konumuna dayanır (GİB 7349 S.K.):

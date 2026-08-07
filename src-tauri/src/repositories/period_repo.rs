@@ -8,7 +8,7 @@ pub struct PeriodRepository;
 impl PeriodRepository {
     pub fn get_all(conn: &Connection) -> Result<Vec<BordroDonemi>> {
         let mut stmt = conn.prepare(
-            "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi
+            "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
              FROM payroll_periods ORDER BY yil ASC, ay ASC",
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
@@ -20,6 +20,8 @@ impl PeriodRepository {
                 baslangicTarihi: row.get(3)?,
                 bitisTarihi: row.get(4)?,
                 donemAdi: row.get(5)?,
+                taxYear: row.get(6)?,
+                taxMonth: row.get(7)?,
             })
         }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
@@ -38,11 +40,11 @@ impl PeriodRepository {
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO payroll_periods (id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO payroll_periods (id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
-                yil=?2, ay=?3, baslangic_tarihi=?4, bitis_tarihi=?5, donem_adi=?6",
-            params![d.id, d.yil, d.ay, d.baslangicTarihi, d.bitisTarihi, d.donemAdi, now],
+                yil=?2, ay=?3, baslangic_tarihi=?4, bitis_tarihi=?5, donem_adi=?6, tax_year=?7, tax_month=?8",
+            params![d.id, d.yil, d.ay, d.baslangicTarihi, d.bitisTarihi, d.donemAdi, d.taxYear, d.taxMonth, now],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
         Ok(())

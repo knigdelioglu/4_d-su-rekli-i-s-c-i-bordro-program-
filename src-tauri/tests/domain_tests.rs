@@ -41,6 +41,8 @@ mod tests {
             baslangicTarihi: "2026-05-15".into(),
             bitisTarihi: "2026-06-14".into(),
             donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
         };
 
         let haziran2026 = BordroDonemi {
@@ -50,6 +52,8 @@ mod tests {
             baslangicTarihi: "2026-06-15".into(),
             bitisTarihi: "2026-07-14".into(),
             donemAdi: "Haziran 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
         };
 
         let temmuz2026 = BordroDonemi {
@@ -59,6 +63,8 @@ mod tests {
             baslangicTarihi: "2026-07-15".into(),
             bitisTarihi: "2026-08-14".into(),
             donemAdi: "Temmuz 2026".into(),
+            taxYear: 2026,
+            taxMonth: 8,
         };
 
         let ocak2027 = BordroDonemi {
@@ -68,6 +74,8 @@ mod tests {
             baslangicTarihi: "2027-01-15".into(),
             bitisTarihi: "2027-02-14".into(),
             donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
         };
 
         PeriodRepository::save(&conn, &mayis2026)?;
@@ -167,6 +175,8 @@ mod tests {
             baslangicTarihi: "2026-01-15".into(),
             bitisTarihi: "2026-02-14".into(),
             donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 1,
         };
         PeriodRepository::save(&conn, &ocak2026)?;
 
@@ -220,6 +230,8 @@ mod tests {
             baslangicTarihi: "2026-08-15".into(),
             bitisTarihi: "2026-09-14".into(),
             donemAdi: "Ağustos 2026".into(),
+            taxYear: 2026,
+            taxMonth: 9,
         };
         PeriodRepository::save(&conn, &donem)?;
 
@@ -279,7 +291,7 @@ mod tests {
         assert!(!MigrationService::is_migrated(&conn)?);
 
         let valid_payload = r#"{
-            "donemler": [{ "id": "2026-05", "yil": 2026, "ay": 5, "baslangicTarihi": "2026-05-15", "bitisTarihi": "2026-06-14", "donemAdi": "Mayıs 2026" }],
+            "donemler": [{ "id": "2026-05", "yil": 2026, "ay": 5, "baslangicTarihi": "2026-05-15", "bitisTarihi": "2026-06-14", "donemAdi": "Mayıs 2026", "taxYear": 2026, "taxMonth": 6 }],
             "personeller": [{ "id": "p-10", "tcNo": "10000000000", "ad": "Veli", "soyad": "Test", "grup": "1. Grup", "sgkSicilNo": "", "iban": "" }]
         }"#;
 
@@ -522,6 +534,8 @@ mod tests {
             baslangicTarihi: "2026-05-15".into(),
             bitisTarihi: "2026-06-14".into(),
             donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-test")?;
@@ -558,6 +572,8 @@ mod tests {
             baslangicTarihi: "2026-05-15".into(),
             bitisTarihi: "2026-06-14".into(),
             donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-test")?;
@@ -610,6 +626,8 @@ mod tests {
             baslangicTarihi: "2026-06-15".into(),
             bitisTarihi: "2026-07-14".into(),
             donemAdi: "Haziran 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-test")?;
@@ -653,6 +671,8 @@ mod tests {
             baslangicTarihi: "2026-04-15".into(),
             bitisTarihi: "2026-05-14".into(),
             donemAdi: "Nisan 2026".into(),
+            taxYear: 2026,
+            taxMonth: 5,
         };
 
         let mayis_period = BordroDonemi {
@@ -662,6 +682,8 @@ mod tests {
             baslangicTarihi: "2026-05-15".into(),
             bitisTarihi: "2026-06-14".into(),
             donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-test")?;
@@ -911,6 +933,8 @@ mod tests {
                 baslangicTarihi: "2026-05-15".into(),
                 bitisTarihi: "2026-06-14".into(),
                 donemAdi: "Mayıs 2026".into(),
+                taxYear: 2026,
+                taxMonth: 6,
             };
             PeriodRepository::save(&conn, &donem)?;
 
@@ -1139,8 +1163,19 @@ mod tests {
             baslangicTarihi: "2026-01-15".into(),
             bitisTarihi: "2026-02-14".into(),
             donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 1,
         };
-        PeriodRepository::save(&conn, &donem)?;
+        // v1 (legacy) schema has no tax_year/tax_month columns yet: insert raw, legacy-style.
+        // Full migrations (migration 5) will ALTER + backfill these columns afterwards.
+        conn.execute(
+            "INSERT INTO payroll_periods (id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                donem.id, donem.yil, donem.ay, donem.baslangicTarihi, donem.bitisTarihi, donem.donemAdi,
+                "2026-01-15T00:00:00Z"
+            ],
+        )?;
 
         // Insert legacy record into payroll_records with old columns (no raporlu_gun / odenen_raporlu_gun)
         conn.execute(
@@ -1448,6 +1483,8 @@ mod tests {
             id: "2026-01".into(), yil: 2026, ay: 1,
             baslangicTarihi: "2026-01-01".into(), bitisTarihi: "2026-01-31".into(),
             donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 1,
         };
         PeriodRepository::save(&conn, &donem)?;
 
@@ -1496,6 +1533,84 @@ mod tests {
         assert_eq!(gv.asgariUcretGvIstisnasi, dec!(4211.33));
         assert_eq!(gv.kesilenGelirVergisi, dec!(0));
         assert_eq!(gv.yeniKumulatifGvMatrahi, dec!(28075.50));
+        Ok(())
+    }
+
+    // ===== Kabul kriteri 3: 15.06–14.07 dönemi taxMonth=7 → 196.528,50 / 4.537,75;
+    //     taxMonth=6 → 168.453,00 / 4.211,33 (regresyon)
+    #[test]
+    fn test_gv_istisna_tax_month_accept_3() {
+        use bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi;
+        let aylik = dec!(28075.50);
+
+        // 15.06–14.07 dönemi, taxMonth=7: referans kümülatif = 7 × 28.075,50, istisna Temmuz = 4.537,75
+        let d7 = calculate_gv_hesap_detayi(aylik, dec!(0), aylik, aylik * dec!(6));
+        assert_eq!(d7.asgariUcretReferansKumulatifMatrahi, dec!(196528.50));
+        assert_eq!(d7.asgariUcretGvIstisnasi, dec!(4537.75));
+
+        // taxMonth=6 (eski davranış) referans = 6 × 28.075,50, istisna Haziran = 4.211,33
+        let d6 = calculate_gv_hesap_detayi(aylik, dec!(0), aylik, aylik * dec!(5));
+        assert_eq!(d6.asgariUcretReferansKumulatifMatrahi, dec!(168453.00));
+        assert_eq!(d6.asgariUcretGvIstisnasi, dec!(4211.33));
+    }
+
+    // ===== Kabul kriteri 3 (servis katmanı): referans kümülatif vergi yılı/ayından gelir
+    #[test]
+    fn test_previous_asgari_gv_uses_tax_year_month() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        // Aralık 2025 dönemi takvim referansı 2026 vergi yılına aittir (taxYear=2026, taxMonth=1).
+        let aralik2025 = BordroDonemi {
+            id: "2025-12".into(),
+            yil: 2025,
+            ay: 12,
+            baslangicTarihi: "2025-12-15".into(),
+            bitisTarihi: "2026-01-14".into(),
+            donemAdi: "Aralık 2025".into(),
+            taxYear: 2026,
+            taxMonth: 1,
+        };
+        PeriodRepository::save(&conn, &aralik2025)?;
+
+        // Ocak..Mayıs 2026 → taxMonth 2..6
+        for m in 1..=5 {
+            let donem = BordroDonemi {
+                id: format!("2026-{:02}", m),
+                yil: 2026,
+                ay: m,
+                baslangicTarihi: format!("2026-{:02}-15", m),
+                bitisTarihi: format!("2026-{:02}-14", m + 1),
+                donemAdi: format!("{} 2026", m),
+                taxYear: 2026,
+                taxMonth: m + 1,
+            };
+            PeriodRepository::save(&conn, &donem)?;
+        }
+
+        // Aktif dönem: 15.06–14.07 (ay=6). Vergi yılı/ayı seçimine göre referans kümülatif:
+        //  - taxMonth=7 → önceki takvim ayları taxYear=2026 ve taxMonth<7:
+        //    Aralık(1) + Ocak..Mayıs(2..6) = 6 ay = 6 × 28.075,50
+        //  - taxMonth=6 → Aralık(1) + Ocak..Nisan(2..5) = 5 ay = 5 × 28.075,50
+        let aktif_tax7 = BordroDonemi {
+            id: "2026-06".into(),
+            yil: 2026,
+            ay: 6,
+            baslangicTarihi: "2026-06-15".into(),
+            bitisTarihi: "2026-07-14".into(),
+            donemAdi: "Haziran 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
+        };
+        let prev_7 = CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax7)?;
+        assert_eq!(prev_7, dec!(168453.00)); // 196.528,50 − 28.075,50
+
+        let aktif_tax6 = BordroDonemi {
+            taxYear: 2026,
+            taxMonth: 6,
+            ..aktif_tax7
+        };
+        let prev_6 = CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax6)?;
+        assert_eq!(prev_6, dec!(140377.50)); // 5 × 28.075,50
         Ok(())
     }
 }

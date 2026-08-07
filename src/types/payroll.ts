@@ -155,10 +155,14 @@ export interface PersonelTaxOpening {
 export interface BordroDonemi {
   id: string; // e.g. "2026-01"
   yil: number; // e.g. 2026
-  ay: number; // 1-12
+  ay: number; // 1-12 DÖNEM BAŞLANGIÇ AYI (15'in bulunduğu ay). Dönem adı/id bundan türetilir, anlamı değişmez.
   baslangicTarihi: string; // "YYYY-MM-DD"
   bitisTarihi: string; // "YYYY-MM-DD"
   donemAdi: string;
+  /** Vergi yılı (ödeme/tahakkuk yılı). Asgari ücret GV referans kümülatifi ve vergi hesabı bu alan üzerinden yürür. */
+  taxYear: number;
+  /** Vergi ayı (ödeme/tahakkuk ayı), 1-12. Varsayılan öneri = bitiş ayı (ay + 1). */
+  taxMonth: number;
 }
 
 export interface TediyeKalemi {

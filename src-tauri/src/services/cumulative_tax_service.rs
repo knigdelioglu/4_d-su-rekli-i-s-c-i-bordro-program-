@@ -103,7 +103,7 @@ impl CumulativeTaxService {
 
         let prior_periods: Vec<&BordroDonemi> = all_periods
             .iter()
-            .filter(|p| p.yil == active_period.yil && p.ay < active_period.ay)
+            .filter(|p| p.taxYear == active_period.taxYear && p.taxMonth < active_period.taxMonth)
             .collect();
 
         let mut cumulative_asgari = dec!(0);

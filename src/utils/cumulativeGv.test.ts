@@ -166,3 +166,40 @@ describe('Asgari Ücret GV İstisnası (takvim referansı) Regression Testi', ()
     expect(low.brutGelirVergisi).toBeLessThan(high.brutGelirVergisi);
   });
 });
+
+describe('taxMonth / taxYear (ödeme-tahakkuk ayı) Kabul Kriteri', () => {
+  test('A. createBordroDonemi varsayılan taxMonth = bitiş ayı (ay+1), taxYear aynı', () => {
+    const haziran = createBordroDonemi(2026, 6);
+    expect(haziran.ay).toBe(6);
+    expect(haziran.taxMonth).toBe(7);
+    expect(haziran.taxYear).toBe(2026);
+  });
+
+  test('B. Aralık dönemi varsayılan taxMonth=1, taxYear=yıl+1; dönem id/ad değişmez', () => {
+    const aralik = createBordroDonemi(2026, 12);
+    expect(aralik.id).toBe('2026-12');
+    expect(aralik.ay).toBe(12);
+    expect(aralik.taxMonth).toBe(1);
+    expect(aralik.taxYear).toBe(2027);
+  });
+
+  test('C. Kullanıcı üstüne yazmışsa taxMonth korunur', () => {
+    const donem = createBordroDonemi(2026, 6, 2026, 6);
+    expect(donem.ay).toBe(6);
+    expect(donem.taxMonth).toBe(6);
+    expect(donem.taxYear).toBe(2026);
+    expect(donem.id).toBe('2026-06');
+  });
+
+  test('D. 15.06–14.07 taxMonth=7 → 196.528,50 / 4.537,75; taxMonth=6 → 168.453,00 / 4.211,33', () => {
+    const aylik = 28075.5;
+
+    const d7 = calculateGvHesapDetayi(aylik, 0, aylik, aylik * 6);
+    expect(d7.asgariUcretReferansKumulatifMatrahi).toBeCloseTo(196528.5, 2);
+    expect(d7.asgariUcretGvIstisnasi).toBeCloseTo(4537.75, 2);
+
+    const d6 = calculateGvHesapDetayi(aylik, 0, aylik, aylik * 5);
+    expect(d6.asgariUcretReferansKumulatifMatrahi).toBeCloseTo(168453, 2);
+    expect(d6.asgariUcretGvIstisnasi).toBeCloseTo(4211.33, 2);
+  });
+});

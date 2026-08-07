@@ -53,6 +53,16 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   const currentYear = new Date().getFullYear();
   const [newYear, setNewYear] = useState<number>(currentYear);
   const [newMonth, setNewMonth] = useState<number>(1); // 1 = Ocak
+  const [newTaxYear, setNewTaxYear] = useState<number>(currentYear);
+  const [newTaxMonth, setNewTaxMonth] = useState<number>(2); // 1 = Ocak (varsayılan: bitiş ayı)
+
+  // Yıl/Ay değişince ödeme-tahakkuk (vergi) yılı/ayı varsayılana sıfırlanır: bitiş ayı (ay+1; Aralık → Ocak, yıl+1).
+  const resetTaxDefaults = (yr: number, mo: number) => {
+    const tm = mo === 12 ? 1 : mo + 1;
+    const ty = mo === 12 ? yr + 1 : yr;
+    setNewTaxMonth(tm);
+    setNewTaxYear(ty);
+  };
   const [activeTab, setActiveTab] = useState<'editParams' | 'editDeductions' | 'tediyeTis' | 'sickLeave' | 'select' | 'new'>(
     'editParams'
   );
@@ -165,13 +175,13 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   }, [aktifDonemId, kurumDegerleriMap]);
 
   // Preview generated dates
-  const previewDonem = createBordroDonemi(newYear, newMonth);
+  const previewDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
 
   if (!isOpen) return null;
 
   const handleCreateNewPeriod = (e: React.FormEvent) => {
     e.preventDefault();
-    const newDonem = createBordroDonemi(newYear, newMonth);
+    const newDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
     const initialKurum: DönemselKurumDegerleri = {
       ...DEFAULT_KURUM_DEGERLERI,
       ...paramsForm,
@@ -1548,7 +1558,11 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                   </label>
                   <select
                     value={newYear}
-                    onChange={(e) => setNewYear(parseInt(e.target.value, 10))}
+                    onChange={(e) => {
+                      const y = parseInt(e.target.value, 10);
+                      setNewYear(y);
+                      resetTaxDefaults(y, newMonth);
+                    }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
                   >
                     {[2024, 2025, 2026, 2027, 2028].map((y) => (
@@ -1565,7 +1579,11 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                   </label>
                   <select
                     value={newMonth}
-                    onChange={(e) => setNewMonth(parseInt(e.target.value, 10))}
+                    onChange={(e) => {
+                      const m = parseInt(e.target.value, 10);
+                      setNewMonth(m);
+                      resetTaxDefaults(newYear, m);
+                    }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
                   >
                     {AY_ISIMLERI.map((ayAdi, idx) => (
@@ -1587,6 +1605,53 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                 </div>
                 <div className="text-xs text-indigo-800 font-mono">
                   {previewDonem.baslangicTarihi} → {previewDonem.bitisTarihi}
+                </div>
+                <div className="text-xs text-indigo-800 font-mono">
+                  Ödeme/Tahakkuk Ayı: {AY_ISIMLERI[previewDonem.taxMonth - 1]} {previewDonem.taxYear}
+                </div>
+              </div>
+
+              <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-4 space-y-3">
+                <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">
+                  Ödeme / Tahakkuk (Vergi) Ayı — GİB 7349 S.K.
+                </div>
+                <div className="text-[11px] text-amber-800 leading-relaxed">
+                  Asgari ücret GV istisnası ve referans kümülatifi bu yıl/ayın takvim konumuna göre hesaplanır
+                  (varsayılan: dönem bitiş ayı; Aralık dönemi → Ocak, yıl +1).
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Vergi Yılı
+                    </label>
+                    <select
+                      value={newTaxYear}
+                      onChange={(e) => setNewTaxYear(parseInt(e.target.value, 10))}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {[2024, 2025, 2026, 2027, 2028].map((y) => (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      Vergi Ayı
+                    </label>
+                    <select
+                      value={newTaxMonth}
+                      onChange={(e) => setNewTaxMonth(parseInt(e.target.value, 10))}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {AY_ISIMLERI.map((ayAdi, idx) => (
+                        <option key={idx + 1} value={idx + 1}>
+                          {ayAdi} ({idx + 1}. Ay)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 

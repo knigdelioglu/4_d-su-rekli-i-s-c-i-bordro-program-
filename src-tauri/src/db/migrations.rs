@@ -152,6 +152,26 @@ pub fn get_migrations() -> Migrations<'static> {
             ALTER TABLE payroll_records ADD COLUMN gv_snapshot_json TEXT;
             "#,
         ),
+        M::up(
+            r#"
+            ALTER TABLE payroll_periods ADD COLUMN tax_year INTEGER;
+            ALTER TABLE payroll_periods ADD COLUMN tax_month INTEGER;
+
+            UPDATE payroll_periods
+               SET tax_month = CASE
+                                    WHEN ay = 12 THEN 1
+                                    ELSE ay + 1
+                                END,
+                   tax_year  = yil + CASE
+                                         WHEN ay = 12 THEN 1
+                                         ELSE 0
+                                     END
+             WHERE tax_month IS NULL OR tax_year IS NULL;
+
+            UPDATE payroll_periods SET tax_month = COALESCE(tax_month, 1);
+            UPDATE payroll_periods SET tax_year = COALESCE(tax_year, yil);
+            "#,
+        ),
     ])
 }
 

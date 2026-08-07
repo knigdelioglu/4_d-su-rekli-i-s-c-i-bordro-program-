@@ -74,6 +74,8 @@ mod smoke_tests {
                 baslangicTarihi: "2026-05-15".into(),
                 bitisTarihi: "2026-06-14".into(),
                 donemAdi: "Mayıs 2026".into(),
+                taxYear: 2026,
+                taxMonth: 6,
             };
 
             let haziran2026 = BordroDonemi {
@@ -83,6 +85,8 @@ mod smoke_tests {
                 baslangicTarihi: "2026-06-15".into(),
                 bitisTarihi: "2026-07-14".into(),
                 donemAdi: "Haziran 2026".into(),
+                taxYear: 2026,
+                taxMonth: 7,
             };
 
             PeriodRepository::save(&conn, &mayis2026)?;
@@ -246,6 +250,8 @@ mod smoke_tests {
                 baslangicTarihi: "2026-06-15".into(),
                 bitisTarihi: "2026-07-14".into(),
                 donemAdi: "Haziran 2026".into(),
+                taxYear: 2026,
+                taxMonth: 7,
             })?;
 
             assert_eq!(service_prev_gv, expected_june_prev_gv);
