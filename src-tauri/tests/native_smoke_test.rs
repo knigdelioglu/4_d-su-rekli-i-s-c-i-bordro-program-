@@ -198,7 +198,10 @@ mod smoke_tests {
             assert_eq!(restored_openings.len(), 1);
             assert_eq!(restored_payrolls[0].donemId, "2026-05");
 
-            // Verify snapshot of pekDetay and employer costs persisted across SQLite restart
+            // Verify snapshot of pekDetay, employer costs, raporluGun and odenenRaporluGun persisted across SQLite restart
+            assert_eq!(restored_payrolls[0].raporluGun, Some(0));
+            assert_eq!(restored_payrolls[0].odenenRaporluGun, Some(0));
+
             let restored_mayis_pek = restored_payrolls[0].pekDetay.as_ref().expect("Restored payroll must have pekDetay");
             assert!(restored_mayis_pek.isverenSgkPrimi.is_some());
             assert!(restored_mayis_pek.isverenIssizlikPrimi.is_some());

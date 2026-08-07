@@ -136,6 +136,12 @@ pub fn get_migrations() -> Migrations<'static> {
             CREATE INDEX IF NOT EXISTS idx_sick_leave_start_date ON sick_leave_records(start_date);
             "#,
         ),
+        M::up(
+            r#"
+            ALTER TABLE payroll_records ADD COLUMN raporlu_gun INTEGER;
+            ALTER TABLE payroll_records ADD COLUMN odenen_raporlu_gun INTEGER;
+            "#,
+        ),
     ])
 }
 
@@ -145,3 +151,4 @@ pub fn initialize_db(conn: &mut Connection) -> Result<(), Box<dyn std::error::Er
     migrations.to_latest(conn)?;
     Ok(())
 }
+

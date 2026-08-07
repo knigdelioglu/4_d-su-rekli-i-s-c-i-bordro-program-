@@ -778,4 +778,304 @@ mod tests {
         assert_eq!(pek_detay.yemekIstisnasiTutar, dec!(6600.00));
         assert_eq!(pek_detay.hesaplananPek, dec!(16.50));
     }
+
+    #[test]
+    fn test_raporlu_gun_persistence_and_finalized_reload() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::db::create_connection;
+        use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::payroll_service::PayrollService;
+        use std::collections::HashMap;
+        use std::fs;
+        use std::path::PathBuf;
+
+        let temp_dir = std::env::temp_dir();
+        let db_path: PathBuf = temp_dir.join(format!("raporlu_test_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(54321)));
+
+        if db_path.exists() {
+            let _ = fs::remove_file(&db_path);
+        }
+
+        // 1. Calculate and save payroll with Raporlu Gün = 6, Ödeme Yapılan Raporlu Gün = 2
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let person = setup_test_person("p-rapor-test");
+            PersonnelRepository::save(&conn, &person)?;
+
+            let donem = BordroDonemi {
+                id: "2026-05".into(),
+                yil: 2026,
+                ay: 5,
+                baslangicTarihi: "2026-05-15".into(),
+                bitisTarihi: "2026-06-14".into(),
+                donemAdi: "Mayıs 2026".into(),
+            };
+            PeriodRepository::save(&conn, &donem)?;
+
+            // 6 days of "R" + 24 days of "Ç" = 30 days
+            let mut gunler = HashMap::new();
+            for d in 1..=24 {
+                gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
+            }
+            for d in 25..=30 {
+                gunler.insert(format!("2026-05-{:02}", d), "R".to_string());
+            }
+
+            let puantaj = PersonelPuantaj {
+                id: "p-rapor-test_2026-05".into(),
+                personelId: "p-rapor-test".into(),
+                donemId: "2026-05".into(),
+                gunler,
+            };
+            AttendanceRepository::save(&conn, &puantaj)?;
+
+            // Sick leave record: 2026-05-25 to 2026-05-30 (6 days episode) -> first 2 days paid by employer
+            let sick = SickLeaveRecord {
+                id: "sick_rapor_1".into(),
+                personnelId: "p-rapor-test".into(),
+                startDate: "2026-05-25".into(),
+                endDate: "2026-05-30".into(),
+                createdAt: None,
+                updatedAt: None,
+            };
+            SickLeaveRepository::save(&conn, &sick)?;
+
+            // Calculate payroll
+            let calculated = PayrollService::calculate_payroll_for_personnel(&conn, "p-rapor-test", "2026-05")?;
+            assert_eq!(calculated.raporluGun, Some(6));
+            assert_eq!(calculated.odenenRaporluGun, Some(2));
+
+            // Connection is closed when conn drops
+            drop(conn);
+        }
+
+        // 2. Reopen same SQLite file from disk and verify persistence
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let payrolls = PayrollRepository::get_all(&conn)?;
+            assert_eq!(payrolls.len(), 1);
+            let restored = &payrolls[0];
+
+            assert_eq!(restored.raporluGun, Some(6), "raporluGun must be 6 after reloading from SQLite");
+            assert_eq!(restored.odenenRaporluGun, Some(2), "odenenRaporluGun must be 2 after reloading from SQLite");
+
+            // Finalize payroll
+            PayrollService::set_payroll_status(&conn, "p-rapor-test", "2026-05", BordroStatus::FINALIZED)?;
+
+            drop(conn);
+        }
+
+        // 3. Reopen again and verify FINALIZED payroll reload keeps exact values unchanged
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let payrolls = PayrollRepository::get_all(&conn)?;
+            assert_eq!(payrolls.len(), 1);
+            let finalized = &payrolls[0];
+
+            assert_eq!(finalized.status, BordroStatus::FINALIZED);
+            assert_eq!(finalized.raporluGun, Some(6), "FINALIZED payroll must keep raporluGun = 6");
+            assert_eq!(finalized.odenenRaporluGun, Some(2), "FINALIZED payroll must keep odenenRaporluGun = 2");
+
+            drop(conn);
+        }
+
+        // Cleanup
+        let _ = fs::remove_file(&db_path);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_legacy_db_migration_payroll_records_nullable_columns() -> Result<(), Box<dyn std::error::Error>> {
+        use rusqlite::Connection;
+        use rusqlite_migration::{Migrations, M};
+
+        let mut conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+
+        // Run ONLY migration 1 (the initial schema before migration 2)
+        let v1_migration = Migrations::new(vec![
+            M::up(
+                r#"
+                CREATE TABLE IF NOT EXISTS personnel (
+                    id TEXT PRIMARY KEY,
+                    tc_no TEXT UNIQUE NOT NULL,
+                    ad TEXT NOT NULL,
+                    soyad TEXT NOT NULL,
+                    grup TEXT NOT NULL,
+                    unvan TEXT,
+                    sgk_sicil_no TEXT NOT NULL DEFAULT '',
+                    iban TEXT NOT NULL DEFAULT '',
+                    hizmet_yili INTEGER NOT NULL DEFAULT 0,
+                    aciklama TEXT,
+                    sendika_uyesi INTEGER NOT NULL DEFAULT 0,
+                    sabit_sendika_aidati INTEGER DEFAULT 0,
+                    bes_uyesi INTEGER NOT NULL DEFAULT 0,
+                    oks_orani_yuzde INTEGER DEFAULT 0,
+                    sabit_bes_tutar INTEGER DEFAULT 0,
+                    icra_tutar INTEGER DEFAULT 0,
+                    kisi_borcu_tutar INTEGER DEFAULT 0,
+                    dogum_askerlik_borclanmasi_tutar INTEGER DEFAULT 0,
+                    hayat_saglik_sigortasi_tutar INTEGER DEFAULT 0,
+                    diger_kesinti_tutar INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS payroll_periods (
+                    id TEXT PRIMARY KEY,
+                    yil INTEGER NOT NULL,
+                    ay INTEGER NOT NULL,
+                    baslangic_tarihi TEXT NOT NULL,
+                    bitis_tarihi TEXT NOT NULL,
+                    donem_adi TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS attendance_records (
+                    id TEXT PRIMARY KEY,
+                    personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+                    period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                    attendance_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CONSTRAINT unique_personnel_period_attendance UNIQUE(personnel_id, period_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS personnel_tax_opening (
+                    id TEXT PRIMARY KEY,
+                    personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+                    year INTEGER NOT NULL,
+                    gv_cumulative_opening INTEGER NOT NULL,
+                    effective_from_period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CONSTRAINT unique_personnel_tax_opening_year UNIQUE(personnel_id, year)
+                );
+
+                CREATE TABLE IF NOT EXISTS payroll_records (
+                    id TEXT PRIMARY KEY,
+                    personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+                    period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                    gross_total INTEGER NOT NULL,
+                    sgk_base INTEGER NOT NULL,
+                    gv_base INTEGER NOT NULL,
+                    previous_cumulative_gv INTEGER NOT NULL,
+                    new_cumulative_gv INTEGER NOT NULL,
+                    income_tax INTEGER NOT NULL,
+                    stamp_tax INTEGER NOT NULL,
+                    total_deductions INTEGER NOT NULL,
+                    net_payment INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'CALCULATED',
+                    puantaj_summary_json TEXT NOT NULL,
+                    pek_detail_json TEXT,
+                    devreden_pek_gelen_json TEXT,
+                    sonraki_devreden_pek_json TEXT,
+                    calculated_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CONSTRAINT unique_personnel_period_payroll UNIQUE(personnel_id, period_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS payroll_income_items (
+                    id TEXT PRIMARY KEY,
+                    payroll_id TEXT NOT NULL REFERENCES payroll_records(id) ON DELETE CASCADE,
+                    item_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    source TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS payroll_deduction_items (
+                    id TEXT PRIMARY KEY,
+                    payroll_id TEXT NOT NULL REFERENCES payroll_records(id) ON DELETE CASCADE,
+                    item_type TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    source TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS institution_settings (
+                    period_id TEXT PRIMARY KEY REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                    settings_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS annual_payroll_parameters (
+                    year INTEGER PRIMARY KEY,
+                    params_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS sick_leave_records (
+                    id TEXT PRIMARY KEY,
+                    personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+                    start_date TEXT NOT NULL,
+                    end_date TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                "#,
+            ),
+        ]);
+        v1_migration.to_latest(&mut conn)?;
+
+        // Insert dummy personnel & period
+        let person = setup_test_person("p-old");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-15".into(),
+            bitisTarihi: "2026-02-14".into(),
+            donemAdi: "Ocak 2026".into(),
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        // Insert legacy record into payroll_records with old columns (no raporlu_gun / odenen_raporlu_gun)
+        conn.execute(
+            "INSERT INTO payroll_records (
+                id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
+                new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
+                puantaj_summary_json, calculated_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                "p-old_2026-01", "p-old", "2026-01", 5000000, 5000000, 4250000, 0,
+                4250000, 637500, 37950, 1425450, 3574550, "CALCULATED",
+                "{}", "2026-01-15T00:00:00Z", "2026-01-15T00:00:00Z"
+            ],
+        )?;
+
+        // Now run full migrations (applying migration 2 ALTER TABLE)
+        let all_migrations = bordro_programi_lib::db::migrations::get_migrations();
+        all_migrations.to_latest(&mut conn)?;
+
+        // Read all payroll records
+        let records = PayrollRepository::get_all(&conn)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].raporluGun, None);
+        assert_eq!(records[0].odenenRaporluGun, None);
+
+        // Now save a record with values
+        let mut rec = records[0].clone();
+        rec.raporluGun = Some(6);
+        rec.odenenRaporluGun = Some(2);
+        PayrollRepository::save(&conn, &rec)?;
+
+        let updated = PayrollRepository::get_all(&conn)?;
+        assert_eq!(updated[0].raporluGun, Some(6));
+        assert_eq!(updated[0].odenenRaporluGun, Some(2));
+
+        Ok(())
+    }
 }
+

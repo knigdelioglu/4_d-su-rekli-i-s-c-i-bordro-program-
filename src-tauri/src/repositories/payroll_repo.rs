@@ -12,7 +12,7 @@ impl PayrollRepository {
             "SELECT id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                     new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                     puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                    calculated_at, updated_at
+                    calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun
              FROM payroll_records",
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
@@ -36,6 +36,8 @@ impl PayrollRepository {
             let sonraki_devreden_pek_json: Option<String> = row.get(16)?;
             let calculated_at: String = row.get(17)?;
             let updated_at: String = row.get(18)?;
+            let raporlu_gun: Option<i32> = row.get(19)?;
+            let odenen_raporlu_gun: Option<i32> = row.get(20)?;
 
             let status = match status_str.as_str() {
                 "DRAFT" => BordroStatus::DRAFT,
@@ -48,7 +50,7 @@ impl PayrollRepository {
             let devreden_pek_gelen: Option<Vec<DevredenPekKaydi>> = devreden_pek_gelen_json.and_then(|j| serde_json::from_str(&j).ok());
             let sonraki_devreden_pek: Option<Vec<DevredenPekKaydi>> = sonraki_devreden_pek_json.and_then(|j| serde_json::from_str(&j).ok());
 
-            Ok((id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at))
+            Ok((id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun))
         }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
         let mut record_tuples = Vec::new();
@@ -58,7 +60,7 @@ impl PayrollRepository {
 
         let mut result = Vec::new();
 
-        for (id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at) in record_tuples {
+        for (id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun) in record_tuples {
             // Load income items
             let mut inc_stmt = conn.prepare(
                 "SELECT item_type, amount FROM payroll_income_items WHERE payroll_id = ?1",
@@ -143,8 +145,8 @@ impl PayrollRepository {
                 devredenPekGelen: devreden_pek_gelen,
                 sonrakiDevredenPek: sonraki_devreden_pek,
                 pekDetay: pek_detay,
-                odenenRaporluGun: None,
-                raporluGun: None,
+                odenenRaporluGun: odenen_raporlu_gun,
+                raporluGun: raporlu_gun,
             });
         }
 
@@ -181,17 +183,18 @@ impl PayrollRepository {
                 id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                 new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                calculated_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+                raporlu_gun, odenen_raporlu_gun, calculated_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
             ON CONFLICT(personnel_id, period_id) DO UPDATE SET
                 gross_total=?4, sgk_base=?5, gv_base=?6, previous_cumulative_gv=?7, new_cumulative_gv=?8,
                 income_tax=?9, stamp_tax=?10, total_deductions=?11, net_payment=?12, status=?13,
                 puantaj_summary_json=?14, pek_detail_json=?15, devreden_pek_gelen_json=?16,
-                sonraki_devreden_pek_json=?17, updated_at=?19",
+                sonraki_devreden_pek_json=?17, raporlu_gun=?18, odenen_raporlu_gun=?19, updated_at=?21",
             params![
                 b.id, b.personelId, b.donemId, gross_total, sgk_base, gv_base, prev_gv, new_gv,
                 income_tax, stamp_tax, total_deductions, net_payment, status_str,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
+                b.raporluGun, b.odenenRaporluGun,
                 now, now
             ],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
