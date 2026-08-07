@@ -119,10 +119,21 @@ pub fn get_migrations() -> Migrations<'static> {
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS sick_leave_records (
+                id TEXT PRIMARY KEY,
+                personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+                start_date TEXT NOT NULL,
+                end_date TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_payroll_records_personnel ON payroll_records(personnel_id);
             CREATE INDEX IF NOT EXISTS idx_payroll_records_period ON payroll_records(period_id);
             CREATE INDEX IF NOT EXISTS idx_attendance_records_period ON attendance_records(period_id);
             CREATE INDEX IF NOT EXISTS idx_tax_opening_personnel_year ON personnel_tax_opening(personnel_id, year);
+            CREATE INDEX IF NOT EXISTS idx_sick_leave_personnel ON sick_leave_records(personnel_id);
+            CREATE INDEX IF NOT EXISTS idx_sick_leave_start_date ON sick_leave_records(start_date);
             "#,
         ),
     ])

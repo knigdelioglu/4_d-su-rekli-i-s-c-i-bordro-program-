@@ -32,6 +32,9 @@ pub fn run() {
             commands::set_app_setting,
             commands::check_legacy_migrated,
             commands::migrate_legacy_payload,
+            commands::get_sick_leave_records,
+            commands::save_sick_leave_record,
+            commands::delete_sick_leave_record,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

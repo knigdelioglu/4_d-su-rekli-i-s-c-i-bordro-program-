@@ -5,6 +5,7 @@ import {
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
+  SickLeaveRecord,
 } from '../types/payroll';
 
 // Type-safe IPC invoke helper with window fallback detection
@@ -99,5 +100,17 @@ export const tauriBridge = {
 
   async migrateLegacyPayload(payloadJson: string): Promise<void> {
     return invokeTauri<void>('migrate_legacy_payload', { payloadJson });
+  },
+
+  async getSickLeaveRecords(personnelId?: string): Promise<SickLeaveRecord[]> {
+    return invokeTauri<SickLeaveRecord[]>('get_sick_leave_records', { personnel_id: personnelId || null });
+  },
+
+  async saveSickLeaveRecord(record: SickLeaveRecord): Promise<void> {
+    return invokeTauri<void>('save_sick_leave_record', { record });
+  },
+
+  async deleteSickLeaveRecord(id: string): Promise<void> {
+    return invokeTauri<void>('delete_sick_leave_record', { id });
   },
 };

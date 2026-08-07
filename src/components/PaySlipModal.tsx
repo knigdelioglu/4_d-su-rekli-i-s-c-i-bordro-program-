@@ -100,8 +100,13 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
 
           {/* Puantaj Breakdown Summary */}
           <div className="space-y-1">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600">
-              Puantaj İcmal Özeti (15-14 Dönemi)
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center justify-between">
+              <span>Puantaj İcmal Özeti (15-14 Dönemi)</span>
+              {bordro.odenenRaporluGun !== undefined && (
+                <span className="text-[10px] text-rose-700 font-mono">
+                  Ödeme Yapılan Rapor: <strong>{bordro.odenenRaporluGun} Gün</strong> (Toplam R: {bordro.puantajOzeti.R} Gün)
+                </span>
+              )}
             </div>
             <div className="grid grid-cols-7 gap-1 text-center text-xs font-mono">
               <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">Çalışılan (Ç)</div><div className="font-bold">{bordro.puantajOzeti.Ç}</div></div>
@@ -114,17 +119,23 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </div>
           </div>
 
-          {/* SGK PEK & Devreden PEK Bilgilendirme Kartı */}
+          {/* SGK PEK & Devreden PEK & Yemek İstisnası Bilgilendirme Kartı */}
           {bordro.pekDetay && (
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-1">
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
               <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                <span>SGK Prime Esas Kazanç (PEK) Detayları (5510 S.K. 80/d):</span>
+                <span>SGK Prime Esas Kazanç (PEK) ve Yemek İstisnası Detayları:</span>
                 <span className="text-indigo-700 font-mono">PEK Matrahı: {formatTL(bordro.pekDetay.finalPek)}</span>
               </div>
-              <div className="grid grid-cols-3 gap-2 text-[11px] text-slate-600 pt-1 border-t border-slate-200">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-600 pt-1 border-t border-slate-200">
                 <div>
                   <span className="text-slate-500">Hesaplanan Brüt PEK: </span>
                   <span className="font-semibold font-mono">{formatTL(bordro.pekDetay.hesaplananPek)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500">SGK Yemek İstisnası ({bordro.pekDetay.fiiliYemekGunu} Gün): </span>
+                  <span className="font-semibold font-mono text-emerald-700">
+                    {formatTL(bordro.pekDetay.yemekIstisnasiTutar)}
+                  </span>
                 </div>
                 <div>
                   <span className="text-slate-500">Önceki Aydan Gelen PEK: </span>
@@ -142,6 +153,44 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                       : '0,00 TL'}
                   </span>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* İşveren Prim ve Maliyet Detayları (Kurum Payı) Kartı */}
+          {bordro.pekDetay && (
+            <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-3 text-xs space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-indigo-950">
+                <div className="flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-indigo-700" />
+                  <span>İşveren SGK ve İşsizlik Prim Maliyeti (Kurum Maliyet Kalemleri):</span>
+                </div>
+                <span className="text-indigo-900 font-mono font-bold">
+                  Toplam İşveren Primi: {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))))}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-700 pt-1 border-t border-indigo-200 font-mono">
+                <div>
+                  <span className="text-slate-500 font-sans">SSK Primi — İşveren Payı (%{bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75}): </span>
+                  <span className="font-bold text-indigo-900">
+                    {formatTL(bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100))}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">İşsizlik Sigortası Primi — İşveren Payı (%{bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2}): </span>
+                  <span className="font-bold text-indigo-900">
+                    {formatTL(bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Toplam İşveren Prim Maliyeti: </span>
+                  <span className="font-black text-indigo-950">
+                    {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))))}
+                  </span>
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-500 italic pt-0.5">
+                * Bu primler işveren/kurum maliyeti olup personelin net ödemesinden kesilmez.
               </div>
             </div>
           )}
@@ -194,6 +243,8 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                   <tr><td className="p-1.5 font-sans">Vasıta / Yol</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.vasitaYol)}</td></tr>
                   <tr><td className="p-1.5 font-sans">Giyim Yardımı</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.giyimYardimi)}</td></tr>
                   <tr><td className="p-1.5 font-sans">İş Primi</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.isPrimi)}</td></tr>
+                  <tr><td className="p-1.5 font-sans">Gece Çalışması Ücreti</td><td className="p-1.5 text-right font-semibold text-indigo-700">{formatTL(bordro.gelirler.geceCalismasiUcreti)}</td></tr>
+                  <tr><td className="p-1.5 font-sans">Gece Çalışması Tatili Ücreti</td><td className="p-1.5 text-right font-semibold text-teal-700">{formatTL(bordro.gelirler.geceCalismasiTatiliUcreti)}</td></tr>
                   <tr><td className="p-1.5 font-sans">Hizmet Zammı</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.hizmetZammi)}</td></tr>
                   <tr><td className="p-1.5 font-sans">Diğer Gelir</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.digerGelir)}</td></tr>
                 </tbody>

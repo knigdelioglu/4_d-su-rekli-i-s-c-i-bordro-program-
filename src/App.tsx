@@ -463,6 +463,7 @@ export default function App() {
         onCreateDonem={handleCreateDonem}
         kurumDegerleriMap={kurumDegerleriMap}
         onSaveKurumDegerleri={handleSaveKurumDegerleri}
+        personeller={personeller}
       />
     </div>
   );

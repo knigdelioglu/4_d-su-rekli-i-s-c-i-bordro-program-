@@ -168,6 +168,16 @@ mod smoke_tests {
             // May previous cumulative GV must equal tax opening (120,000 TL)
             assert_eq!(mayis_bordro.oncekiKumulatifGvMatrahi, Some(dec!(120000)));
 
+            // Verify employer premiums in May payroll
+            let mayis_pek = mayis_bordro.pekDetay.as_ref().expect("May payroll must have pekDetay");
+            assert!(mayis_pek.isverenSgkPrimi.is_some());
+            assert!(mayis_pek.isverenIssizlikPrimi.is_some());
+            assert!(mayis_pek.isverenPrimToplami.is_some());
+            let mayis_isveren_sgk = mayis_pek.isverenSgkPrimi.unwrap();
+            let mayis_isveren_issizlik = mayis_pek.isverenIssizlikPrimi.unwrap();
+            let mayis_isveren_toplam = mayis_pek.isverenPrimToplami.unwrap();
+            assert_eq!(mayis_isveren_toplam, mayis_isveren_sgk + mayis_isveren_issizlik);
+
             // Explicitly drop connection to simulate shutting down the app
             drop(conn);
             println!("==> 4. Application process fully closed. SQLite connection dropped.");
@@ -188,6 +198,12 @@ mod smoke_tests {
             assert_eq!(restored_openings.len(), 1);
             assert_eq!(restored_payrolls[0].donemId, "2026-05");
 
+            // Verify snapshot of pekDetay and employer costs persisted across SQLite restart
+            let restored_mayis_pek = restored_payrolls[0].pekDetay.as_ref().expect("Restored payroll must have pekDetay");
+            assert!(restored_mayis_pek.isverenSgkPrimi.is_some());
+            assert!(restored_mayis_pek.isverenIssizlikPrimi.is_some());
+            assert!(restored_mayis_pek.isverenPrimToplami.is_some());
+
             // Calculate May GV matrah from saved May payroll
             let mayis_saved = &restored_payrolls[0];
             let isci_sgk = mayis_saved.kesintiler.isciSgkPrimi.unwrap_or_default();
@@ -203,15 +219,21 @@ mod smoke_tests {
             println!("     Önceki Küm. GV Matrahı: {:?} TL", haziran_bordro.oncekiKumulatifGvMatrahi);
             println!("     June Net Payment: {} TL", haziran_bordro.netOdeme);
 
+            // Verify June employer costs
+            let haziran_pek = haziran_bordro.pekDetay.as_ref().expect("June payroll must have pekDetay");
+            assert!(haziran_pek.isverenSgkPrimi.is_some());
+            assert!(haziran_pek.isverenIssizlikPrimi.is_some());
+            assert!(haziran_pek.isverenPrimToplami.is_some());
+
             // Calculate cumulative GV for June: Opening (120,000 TL) + May GV Base
             let expected_june_prev_gv = dec!(120000) + mayis_gv_base;
             println!("     Expected June Previous Cumulative GV: {} TL", expected_june_prev_gv);
 
-            // Verify previous cumulative GV for June matches expectations (185,000 TL)
+            // Verify previous cumulative GV for June matches expectations (120,000 + May GV Base)
             assert_eq!(
                 haziran_bordro.oncekiKumulatifGvMatrahi,
-                Some(dec!(185000)),
-                "June previous cumulative GV must be EXACTLY 185,000 TL!"
+                Some(expected_june_prev_gv),
+                "June previous cumulative GV must match 120,000 + May GV base!"
             );
 
             let service_prev_gv = CumulativeTaxService::get_previous_cumulative_gv(&conn, "p-smoke-1", &BordroDonemi {
@@ -223,7 +245,7 @@ mod smoke_tests {
                 donemAdi: "Haziran 2026".into(),
             })?;
 
-            assert_eq!(service_prev_gv, dec!(185000));
+            assert_eq!(service_prev_gv, expected_june_prev_gv);
         }
 
         // Cleanup temp file

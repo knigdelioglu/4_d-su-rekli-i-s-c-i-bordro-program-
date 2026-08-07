@@ -3,6 +3,7 @@ pub mod period_repo;
 pub mod personnel_repo;
 pub mod payroll_repo;
 pub mod settings_repo;
+pub mod sick_leave_repo;
 pub mod tax_opening_repo;
 
 use rust_decimal::prelude::*;

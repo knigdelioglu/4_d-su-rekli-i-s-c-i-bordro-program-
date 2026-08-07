@@ -151,6 +151,8 @@ export interface DönemselKurumDegerleri {
   hizmetZammiBirimi: number;
   isPrimiYuzde?: number;
   isPrimiGruplari?: IsPrimiGrupItem[];
+  geceCalismaPrimiYuzde?: number;
+  geceCalismaTatiliPrimiYuzde?: number;
   ekOdeme?: number;
   digerGelirVarsayilan?: number;
   tediyeListesi?: TediyeKalemi[];
@@ -169,6 +171,18 @@ export interface DönemselKurumDegerleri {
   gunlukYemekIstisnasiSGK?: number;
   pekTavanKatsayisi?: number;
   gunlukAsgariUcret?: number;
+
+  sgkIsverenOraniYuzde?: number;
+  issizlikIsverenOraniYuzde?: number;
+}
+
+export interface SickLeaveRecord {
+  id: string;
+  personnelId: string;
+  startDate: string; // "YYYY-MM-DD"
+  endDate: string;   // "YYYY-MM-DD"
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type PuantajOzeti = Record<PuantajKodu, number>;
@@ -190,6 +204,8 @@ export interface GelirKalemleri {
   vasitaYol: number | null;
   giyimYardimi: number | null;
   isPrimi: number | null;
+  geceCalismasiUcreti?: number | null;
+  geceCalismasiTatiliUcreti?: number | null;
   hizmetZammi: number | null;
   digerGelir: number | null;
 }
@@ -222,6 +238,11 @@ export interface PekDetayi {
   pekUstSinir: number;
   fiiliYemekGunu: number;
   yemekIstisnasiTutar: number;
+  isverenSgkPrimi?: number;
+  isverenIssizlikPrimi?: number;
+  isverenPrimToplami?: number;
+  sgkIsverenOraniYuzde?: number;
+  isverenIssizlikOraniYuzde?: number;
 }
 
 export type BordroStatus = 'DRAFT' | 'CALCULATED' | 'FINALIZED';
@@ -246,6 +267,8 @@ export interface BordroKaydi {
   devredenPekGelen?: DevredenPekKaydi[];
   sonrakiDevredenPek?: DevredenPekKaydi[];
   pekDetay?: PekDetayi;
+  odenenRaporluGun?: number;
+  raporluGun?: number;
 }
 
 export interface ZamHesaplama {

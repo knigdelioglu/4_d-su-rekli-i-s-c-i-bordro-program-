@@ -81,6 +81,8 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   hizmetZammiBirimi: 24.67,
   isPrimiYuzde: 0,
   isPrimiGruplari: DEFAULT_IS_PRIMI_GRUPLARI,
+  geceCalismaPrimiYuzde: 0,
+  geceCalismaTatiliPrimiYuzde: 0,
   ekOdeme: 0,
   digerGelirVarsayilan: 0,
   tediyeListesi: DEFAULT_TEDIYE_LISTESI,
@@ -101,6 +103,10 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   gunlukYemekIstisnasiSGK: 300.00, // 2026-08 (17.04.2026 sonrası) Günlük SGK yemek istisnası = 300 TL
   pekTavanKatsayisi: 9, // 2026 PEK Tavan Katsayısı = 9
   gunlukAsgariUcret: 1101.00, // 2026 Günlük Brüt Asgari Ücret (TL) - PEK Alt Sınır Birimi
+
+  // İşveren Prim Oranları
+  sgkIsverenOraniYuzde: 21.75, // SGK İşveren Prim Oranı = %21,75
+  issizlikIsverenOraniYuzde: 2.00, // İşveren İşsizlik Sigortası Prim Oranı = %2,00
 };
 
 /**
@@ -384,53 +390,79 @@ export function autoFillGelirlerFromPuantaj(
   hizmetYili: number,
   grup: IsPrimiGrubu = '1. Grup'
 ): GelirKalemleri {
-  // Payed days count = Worked + Rest + Public Holiday + Paid Leave
-  const hakedisGunSayisi = puantajOzeti.Ç + puantajOzeti.T + puantajOzeti.G + puantajOzeti.İ;
-  
+  // Payed days count = Worked + Rest + Public Holiday + Paid Leave + Night Work + Night Rest
+  const hakedisGunSayisi =
+    puantajOzeti.Ç +
+    puantajOzeti.T +
+    puantajOzeti.G +
+    puantajOzeti.İ +
+    (puantajOzeti.GÇ || 0) +
+    (puantajOzeti.GÇT || 0);
+
   const tabanBrutAylik = Math.round(hakedisGunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
-  
-  // Meals applied for actual worked days (Ç)
-  const yemek = Math.round(puantajOzeti.Ç * kurumDegerleri.gunlukYemek * 100) / 100;
-  
-  // Transit applied for actual worked days (Ç)
-  const vasitaYol = Math.round(puantajOzeti.Ç * kurumDegerleri.gunlukVasitaYol * 100) / 100;
-  
+
+  // Actual worked days = Ç + GÇ
+  const fiiliCalismaGunu = puantajOzeti.Ç + (puantajOzeti.GÇ || 0);
+
+  // Meals applied for actual worked days (Ç + GÇ)
+  const yemek = Math.round(fiiliCalismaGunu * kurumDegerleri.gunlukYemek * 100) / 100;
+
+  // Transit applied for actual worked days (Ç + GÇ)
+  const vasitaYol = Math.round(fiiliCalismaGunu * kurumDegerleri.gunlukVasitaYol * 100) / 100;
+
   // Social assistance flat monthly
   const birlestirilmisSosyalYardim = kurumDegerleri.birlestirilmisSosyalYardim || 0;
-  
+
   // Clothing allowance flat or 0
   const giyimYardimi = kurumDegerleri.giyimYardimi || 0;
-  
+
   // Service seniority bonus = Hizmet yılı * birim (24.67 TL/yıl)
   const hizmetZammi = Math.round((hizmetYili || 0) * (kurumDegerleri.hizmetZammiBirimi || 24.67) * 100) / 100;
 
   // Work premium based on worker Group: 1. Grup = %9, 2. Grup = %8, 3. Grup = %7
   // Formula: Daily İş Primi = ROUND(gunlukTabanUcret * isPrimiOrani / 100, 2)
-  // Monthly İş Primi = Daily İş Primi * worked days (Ç)
-  const isPrimiOrani = kurumDegerleri.isPrimiYuzde && kurumDegerleri.isPrimiYuzde > 0
-    ? kurumDegerleri.isPrimiYuzde
-    : getGrupIsPrimiOrani(grup, kurumDegerleri.isPrimiGruplari);
-  
+  // Monthly İş Primi = Daily İş Primi * worked days (Ç + GÇ)
+  const isPrimiOrani =
+    kurumDegerleri.isPrimiYuzde && kurumDegerleri.isPrimiYuzde > 0
+      ? kurumDegerleri.isPrimiYuzde
+      : getGrupIsPrimiOrani(grup, kurumDegerleri.isPrimiGruplari);
+
   const gunlukIsPrimi = Math.round(kurumDegerleri.gunlukTabanUcret * (isPrimiOrani / 100) * 100) / 100;
-  const isPrimiHakGunu = puantajOzeti.Ç || 0;
+  const isPrimiHakGunu = fiiliCalismaGunu;
   const isPrimi = Math.round(gunlukIsPrimi * isPrimiHakGunu * 100) / 100;
+
+  // Night Work premium (GÇ): Daily base * rate * GÇ days
+  const gcOrani = kurumDegerleri.geceCalismaPrimiYuzde || 0;
+  const geceCalismasiUcreti =
+    gcOrani > 0 && (puantajOzeti.GÇ || 0) > 0
+      ? Math.round(kurumDegerleri.gunlukTabanUcret * (gcOrani / 100) * (puantajOzeti.GÇ || 0) * 100) / 100
+      : 0;
+
+  // Night Rest premium (GÇT): Daily base * rate * GÇT days
+  const gctOrani = kurumDegerleri.geceCalismaTatiliPrimiYuzde || 0;
+  const geceCalismasiTatiliUcreti =
+    gctOrani > 0 && (puantajOzeti.GÇT || 0) > 0
+      ? Math.round(kurumDegerleri.gunlukTabanUcret * (gctOrani / 100) * (puantajOzeti.GÇT || 0) * 100) / 100
+      : 0;
 
   // Active Tediye calculation
   let tediye: number | null = null;
   const activeTediye = kurumDegerleri.tediyeListesi?.find((t) => t.aktifDonemdeOdensin);
   if (activeTediye) {
-    tediye = activeTediye.sabitTutar && activeTediye.sabitTutar > 0
-      ? activeTediye.sabitTutar
-      : Math.round(activeTediye.gunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
+    tediye =
+      activeTediye.sabitTutar && activeTediye.sabitTutar > 0
+        ? activeTediye.sabitTutar
+        : Math.round(activeTediye.gunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
   }
 
   // Active TİS İkramiyesi calculation
   let tisIkramiyesi: number | null = null;
   const activeTis = kurumDegerleri.tisIkramiyeListesi?.find((t) => t.aktifDonemdeOdensin);
   if (activeTis) {
-    tisIkramiyesi = activeTis.sabitTutar && activeTis.sabitTutar > 0
-      ? activeTis.sabitTutar
-      : Math.round(activeTis.gunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
+    tisIkramiyesi =
+      activeTis.sabitTutar && activeTis.sabitTutar > 0
+        ? activeTis.sabitTutar
+        : Math.round(activeTis.gunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
   }
 
   return {
@@ -443,6 +475,8 @@ export function autoFillGelirlerFromPuantaj(
     vasitaYol,
     giyimYardimi,
     isPrimi,
+    geceCalismasiUcreti,
+    geceCalismasiTatiliUcreti,
     hizmetZammi,
     digerGelir: kurumDegerleri.digerGelirVarsayilan || null,
   };
@@ -497,7 +531,7 @@ export function calculateGelirVergisi2026(matrah: number, kumulatifOnceki: numbe
  * 2. Nakdi vasıta/yol yardımı PEK'e tamamen dahildir (0 istisna).
  * 3. Yemek yardımı: Tarihte/dönemde geçerli günlük SGK yemek istisnası (17.04.2026 sonrası 300 TL) yalnız fiili çalışılan yemek günü sayısı kadar düşülür.
  * 4. 2026 PEK Alt/Üst Sınırı:
- *    - Prim gün sayısına göre belirlenir (Ç + T + G + İ + R). Günlük alt sınır = 1.101,00 TL, günlük tavan = 9.909,00 TL (katsayı 9).
+ *    - Prim gün sayısına göre belirlenir (Ç + T + G + İ + GÇ + GÇT + R). Günlük alt sınır = 1.101,00 TL, günlük tavan = 9.909,00 TL (katsayı 9).
  *    - 30 prim günü için alt sınır = 33.030,00 TL, üst sınır = 297.270,00 TL.
  * 5. Ücret dışı ödemelerde PEK tavanını aşan kısım takip eden en fazla 2 ayın PEK tavanına devredilir (Devreden PEK).
  */
@@ -515,8 +549,13 @@ export function calculatePrimeEsasKazanc(
   yemekIstisnasiTutar: number;
   pekAltSinir: number;
   pekUstSinir: number;
+  isverenSgkPrimi: number;
+  isverenIssizlikPrimi: number;
+  isverenPrimToplami: number;
+  sgkIsverenOraniYuzde: number;
+  isverenIssizlikOraniYuzde: number;
 } {
-  // Prim gün sayısı (Ç + T + G + İ + R toplamı, üst sınır 30)
+  // Prim gün sayısı (Ç + T + G + İ + GÇ + GÇT + R toplamı, üst sınır 30)
   let rawPrimGun = 0;
   if (puantajOzeti) {
     rawPrimGun =
@@ -524,12 +563,14 @@ export function calculatePrimeEsasKazanc(
       (puantajOzeti.T || 0) +
       (puantajOzeti.G || 0) +
       (puantajOzeti.İ || 0) +
+      (puantajOzeti.GÇ || 0) +
+      (puantajOzeti.GÇT || 0) +
       (puantajOzeti.R || 0);
   }
   const primGunSayisi = Math.min(30, Math.max(0, rawPrimGun));
 
-  // Fiili yemek günü (Puantajdaki 'Ç' gün sayısı)
-  const fiiliYemekGunu = puantajOzeti?.Ç ?? 0;
+  // Fiili yemek günü (Puantajdaki Ç + GÇ gün sayısı)
+  const fiiliYemekGunu = (puantajOzeti?.Ç ?? 0) + (puantajOzeti?.GÇ ?? 0);
 
   // Günlük SGK Yemek İstisnası (17.04.2026 sonrası SGK 2026/12 Genelgesi uyarınca 300.00 TL)
   const gunlukYemekIstisnasi = kurumDegerleri?.gunlukYemekIstisnasiSGK ?? 300.00;
@@ -550,6 +591,8 @@ export function calculatePrimeEsasKazanc(
   const birlestirilmisSosyalYardim = gelirler.birlestirilmisSosyalYardim || 0;
   const giyimYardimi = gelirler.giyimYardimi || 0;
   const isPrimi = gelirler.isPrimi || 0;
+  const geceCalismasi = gelirler.geceCalismasiUcreti || 0;
+  const geceCalismasiTatili = gelirler.geceCalismasiTatiliUcreti || 0;
   const hizmetZammi = gelirler.hizmetZammi || 0;
   const digerGelir = gelirler.digerGelir || 0;
 
@@ -561,7 +604,9 @@ export function calculatePrimeEsasKazanc(
     birlestirilmisSosyalYardim +
     giyimYardimi +
     hizmetZammi +
-    digerGelir;
+    digerGelir +
+    geceCalismasi +
+    geceCalismasiTatili;
 
   // Ücret Dışı Ödemeler (5510 S.K. 80/d maddesi uyarınca tavan aşımı sonraki 2 aya devreden prim/ikramiye/tediye ödemeleri)
   const ucretDisiOdemeler = tediye + tisIkramiyesi + ekOdeme + isPrimi;
@@ -643,6 +688,12 @@ export function calculatePrimeEsasKazanc(
     finalPek = pekAltSinir;
   }
 
+  const isverenSgkRate = (kurumDegerleri?.sgkIsverenOraniYuzde ?? 21.75) / 100;
+  const isverenIssizlikRate = (kurumDegerleri?.issizlikIsverenOraniYuzde ?? 2.00) / 100;
+  const isverenSgkPrimi = Math.round(finalPek * isverenSgkRate * 100) / 100;
+  const isverenIssizlikPrimi = Math.round(finalPek * isverenIssizlikRate * 100) / 100;
+  const isverenPrimToplami = Math.round((isverenSgkPrimi + isverenIssizlikPrimi) * 100) / 100;
+
   return {
     hesaplananPek: Math.round(hamPek * 100) / 100,
     finalPek: Math.round(finalPek * 100) / 100,
@@ -652,6 +703,11 @@ export function calculatePrimeEsasKazanc(
     yemekIstisnasiTutar: Math.round(yemekIstisnasiTutar * 100) / 100,
     pekAltSinir,
     pekUstSinir,
+    isverenSgkPrimi,
+    isverenIssizlikPrimi,
+    isverenPrimToplami,
+    sgkIsverenOraniYuzde: kurumDegerleri?.sgkIsverenOraniYuzde ?? 21.75,
+    isverenIssizlikOraniYuzde: kurumDegerleri?.issizlikIsverenOraniYuzde ?? 2.00,
   };
 }
 

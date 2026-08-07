@@ -95,6 +95,8 @@ pub struct GelirKalemleri {
     pub vasitaYol: Option<Decimal>,
     pub giyimYardimi: Option<Decimal>,
     pub isPrimi: Option<Decimal>,
+    pub geceCalismasiUcreti: Option<Decimal>,
+    pub geceCalismasiTatiliUcreti: Option<Decimal>,
     pub hizmetZammi: Option<Decimal>,
     pub digerGelir: Option<Decimal>,
 }
@@ -117,6 +119,17 @@ pub struct KesintiKalemleri {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SickLeaveRecord {
+    pub id: String,
+    pub personnelId: String,
+    pub startDate: String, // YYYY-MM-DD
+    pub endDate: String,   // YYYY-MM-DD
+    pub createdAt: Option<String>,
+    pub updatedAt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DevredenPekKaydi {
     pub tutar: Decimal,
     pub kalanAySayisi: i32,
@@ -133,6 +146,11 @@ pub struct PekDetayi {
     pub pekUstSinir: Decimal,
     pub fiiliYemekGunu: i32,
     pub yemekIstisnasiTutar: Decimal,
+    pub isverenSgkPrimi: Option<Decimal>,
+    pub isverenIssizlikPrimi: Option<Decimal>,
+    pub isverenPrimToplami: Option<Decimal>,
+    pub sgkIsverenOraniYuzde: Option<Decimal>,
+    pub isverenIssizlikOraniYuzde: Option<Decimal>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -192,6 +210,8 @@ pub struct BordroKaydi {
     pub devredenPekGelen: Option<Vec<DevredenPekKaydi>>,
     pub sonrakiDevredenPek: Option<Vec<DevredenPekKaydi>>,
     pub pekDetay: Option<PekDetayi>,
+    pub odenenRaporluGun: Option<i32>,
+    pub raporluGun: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,6 +256,8 @@ pub struct DonemselKurumDegerleri {
     pub hizmetZammiBirimi: Decimal,
     pub isPrimiYuzde: Option<Decimal>,
     pub isPrimiGruplari: Option<Vec<IsPrimiGrupItem>>,
+    pub geceCalismaPrimiYuzde: Option<Decimal>,
+    pub geceCalismaTatiliPrimiYuzde: Option<Decimal>,
     pub ekOdeme: Option<Decimal>,
     pub digerGelirVarsayilan: Option<Decimal>,
     pub tediyeListesi: Option<Vec<TediyeKalemi>>,
@@ -251,9 +273,15 @@ pub struct DonemselKurumDegerleri {
     pub besOraniYuzde: Option<Decimal>,
     pub sabitBesTutar: Option<Decimal>,
 
+    #[serde(alias = "sgk_yemek_istisnasi_gunluk", alias = "sgkYemekIstisnasiGunluk")]
     pub gunlukYemekIstisnasiSGK: Option<Decimal>,
     pub pekTavanKatsayisi: Option<Decimal>,
     pub gunlukAsgariUcret: Option<Decimal>,
+
+    #[serde(alias = "sgk_isveren_prim_orani", alias = "sgkIsverenPrimOrani")]
+    pub sgkIsverenOraniYuzde: Option<Decimal>,
+    #[serde(alias = "isveren_issizlik_prim_orani", alias = "isverenIssizlikPrimOrani")]
+    pub issizlikIsverenOraniYuzde: Option<Decimal>,
 }
 
 impl Default for DonemselKurumDegerleri {
@@ -273,6 +301,8 @@ impl Default for DonemselKurumDegerleri {
                 IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8) },
                 IsPrimiGrupItem { id: "3. Grup".into(), ad: "3. Grup".into(), oran: dec!(7) },
             ]),
+            geceCalismaPrimiYuzde: Some(dec!(0)),
+            geceCalismaTatiliPrimiYuzde: Some(dec!(0)),
             ekOdeme: Some(dec!(0)),
             digerGelirVarsayilan: Some(dec!(0)),
             tediyeListesi: None,
@@ -289,6 +319,8 @@ impl Default for DonemselKurumDegerleri {
             gunlukYemekIstisnasiSGK: Some(dec!(300.00)),
             pekTavanKatsayisi: Some(dec!(9)),
             gunlukAsgariUcret: Some(dec!(1101.00)),
+            sgkIsverenOraniYuzde: Some(dec!(21.75)),
+            issizlikIsverenOraniYuzde: Some(dec!(2.00)),
         }
     }
 }

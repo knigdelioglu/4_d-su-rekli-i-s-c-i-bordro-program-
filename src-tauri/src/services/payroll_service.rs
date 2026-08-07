@@ -80,6 +80,12 @@ impl PayrollService {
             prev_asgari_gv,
         );
 
+        let odenen_raporlu_gun = super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
+            conn,
+            personnel_id,
+            &period,
+        )?;
+
         let gelir_toplam = calculate_gelir_toplam(&gelirler);
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
@@ -90,7 +96,7 @@ impl PayrollService {
             id: format!("{}_{}", personnel_id, period_id),
             personelId: personnel_id.to_string(),
             donemId: period_id.to_string(),
-            puantajOzeti: summary,
+            puantajOzeti: summary.clone(),
             gelirler,
             gelirToplam: gelir_toplam,
             kesintiler,
@@ -106,6 +112,8 @@ impl PayrollService {
             devredenPekGelen: Some(devreden_pek_gelen),
             sonrakiDevredenPek: Some(sonraki_devreden),
             pekDetay: Some(pek_detay),
+            odenenRaporluGun: Some(odenen_raporlu_gun),
+            raporluGun: Some(summary.r),
         };
 
         PayrollRepository::save(conn, &new_bordro)?;

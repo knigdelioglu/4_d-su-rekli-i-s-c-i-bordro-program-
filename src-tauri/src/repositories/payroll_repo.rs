@@ -83,6 +83,8 @@ impl PayrollRepository {
                         "vasitaYol" => gelirler.vasitaYol = Some(amt),
                         "giyimYardimi" => gelirler.giyimYardimi = Some(amt),
                         "isPrimi" => gelirler.isPrimi = Some(amt),
+                        "geceCalismasiUcreti" => gelirler.geceCalismasiUcreti = Some(amt),
+                        "geceCalismasiTatiliUcreti" => gelirler.geceCalismasiTatiliUcreti = Some(amt),
                         "hizmetZammi" => gelirler.hizmetZammi = Some(amt),
                         "digerGelir" => gelirler.digerGelir = Some(amt),
                         _ => {}
@@ -141,6 +143,8 @@ impl PayrollRepository {
                 devredenPekGelen: devreden_pek_gelen,
                 sonrakiDevredenPek: sonraki_devreden_pek,
                 pekDetay: pek_detay,
+                odenenRaporluGun: None,
+                raporluGun: None,
             });
         }
 
@@ -206,6 +210,8 @@ impl PayrollRepository {
             ("vasitaYol", b.gelirler.vasitaYol),
             ("giyimYardimi", b.gelirler.giyimYardimi),
             ("isPrimi", b.gelirler.isPrimi),
+            ("geceCalismasiUcreti", b.gelirler.geceCalismasiUcreti),
+            ("geceCalismasiTatiliUcreti", b.gelirler.geceCalismasiTatiliUcreti),
             ("hizmetZammi", b.gelirler.hizmetZammi),
             ("digerGelir", b.gelirler.digerGelir),
         ];

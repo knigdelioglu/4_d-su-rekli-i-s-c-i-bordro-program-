@@ -3,11 +3,13 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Calendar, Save, Plus, Settings, Check, X, Info, Gift, Award, Sparkles, ShieldAlert, Percent, Trash2, Layers, Settings2 } from 'lucide-react';
+import { Calendar, Save, Plus, Settings, Check, X, Info, Gift, Award, Sparkles, ShieldAlert, Percent, Trash2, Layers, Settings2, FileText, User } from 'lucide-react';
 import {
   BordroDonemi,
   DönemselKurumDegerleri,
   IsPrimiGrupItem,
+  Personel,
+  SickLeaveRecord,
   TediyeKalemi,
   TisIkramiyeKalemi,
 } from '../types/payroll';
@@ -20,6 +22,7 @@ import {
   DEFAULT_TIS_IKRAMIYE_LISTESI,
   formatTL,
 } from '../utils/payrollUtils';
+import { tauriBridge } from '../services/tauriBridge';
 
 interface PeriodManagerModalProps {
   isOpen: boolean;
@@ -33,6 +36,7 @@ interface PeriodManagerModalProps {
   ) => void;
   kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
   onSaveKurumDegerleri: (kurumDegerleri: DönemselKurumDegerleri) => void;
+  personeller?: Personel[];
 }
 
 export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
@@ -44,11 +48,12 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   onCreateDonem,
   kurumDegerleriMap,
   onSaveKurumDegerleri,
+  personeller = [],
 }) => {
   const currentYear = new Date().getFullYear();
   const [newYear, setNewYear] = useState<number>(currentYear);
   const [newMonth, setNewMonth] = useState<number>(1); // 1 = Ocak
-  const [activeTab, setActiveTab] = useState<'editParams' | 'editDeductions' | 'tediyeTis' | 'select' | 'new'>(
+  const [activeTab, setActiveTab] = useState<'editParams' | 'editDeductions' | 'tediyeTis' | 'sickLeave' | 'select' | 'new'>(
     'editParams'
   );
 
@@ -74,6 +79,78 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [isGrupModalOpen, setIsGrupModalOpen] = useState<boolean>(false);
 
+  // Sick leave records state
+  const [sickLeaveList, setSickLeaveList] = useState<SickLeaveRecord[]>([]);
+  const [selectedPersonForSick, setSelectedPersonForSick] = useState<string>(personeller[0]?.id || '');
+  const [sickStartDate, setSickStartDate] = useState<string>('');
+  const [sickEndDate, setSickEndDate] = useState<string>('');
+  const [sickSuccessMsg, setSickSuccessMsg] = useState<string | null>(null);
+
+  const loadSickLeaves = async () => {
+    if (tauriBridge.isTauriAvailable()) {
+      try {
+        const list = await tauriBridge.getSickLeaveRecords();
+        setSickLeaveList(list);
+      } catch (err) {
+        console.error('Failed to load sick leave records:', err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      loadSickLeaves();
+    }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (personeller.length > 0 && !selectedPersonForSick) {
+      setSelectedPersonForSick(personeller[0].id);
+    }
+  }, [personeller, selectedPersonForSick]);
+
+  const handleAddSickLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPersonForSick || !sickStartDate || !sickEndDate) return;
+
+    const newRecord: SickLeaveRecord = {
+      id: `sick_${selectedPersonForSick}_${Date.now()}`,
+      personnelId: selectedPersonForSick,
+      startDate: sickStartDate,
+      endDate: sickEndDate,
+    };
+
+    if (tauriBridge.isTauriAvailable()) {
+      try {
+        await tauriBridge.saveSickLeaveRecord(newRecord);
+        await loadSickLeaves();
+        setSickSuccessMsg('Rapor olayı başarıyla kaydedildi.');
+        setTimeout(() => setSickSuccessMsg(null), 2500);
+        setSickStartDate('');
+        setSickEndDate('');
+      } catch (err) {
+        console.error('Failed to save sick leave record:', err);
+      }
+    } else {
+      setSickLeaveList((prev) => [...prev, newRecord]);
+      setSickStartDate('');
+      setSickEndDate('');
+    }
+  };
+
+  const handleDeleteSickLeave = async (id: string) => {
+    if (tauriBridge.isTauriAvailable()) {
+      try {
+        await tauriBridge.deleteSickLeaveRecord(id);
+        await loadSickLeaves();
+      } catch (err) {
+        console.error('Failed to delete sick leave record:', err);
+      }
+    } else {
+      setSickLeaveList((prev) => prev.filter((r) => r.id !== id));
+    }
+  };
+
   useEffect(() => {
     const active = kurumDegerleriMap[aktifDonemId] || {
       donemId: aktifDonemId,
@@ -96,6 +173,8 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
     e.preventDefault();
     const newDonem = createBordroDonemi(newYear, newMonth);
     const initialKurum: DönemselKurumDegerleri = {
+      ...DEFAULT_KURUM_DEGERLERI,
+      ...paramsForm,
       donemId: newDonem.id,
       gunlukTabanUcret: paramsForm.gunlukTabanUcret ?? DEFAULT_KURUM_DEGERLERI.gunlukTabanUcret,
       gunlukYemek: paramsForm.gunlukYemek ?? DEFAULT_KURUM_DEGERLERI.gunlukYemek,
@@ -113,6 +192,13 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       tediyeListesi: paramsForm.tediyeListesi || DEFAULT_TEDIYE_LISTESI,
       tisIkramiyeListesi: paramsForm.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI,
       tediyeTisNotu: paramsForm.tediyeTisNotu || DEFAULT_KURUM_DEGERLERI.tediyeTisNotu,
+      sgkIsciOraniYuzde: paramsForm.sgkIsciOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.sgkIsciOraniYuzde,
+      issizlikIsciOraniYuzde: paramsForm.issizlikIsciOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.issizlikIsciOraniYuzde,
+      sgkIsverenOraniYuzde: paramsForm.sgkIsverenOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.sgkIsverenOraniYuzde,
+      issizlikIsverenOraniYuzde: paramsForm.issizlikIsverenOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.issizlikIsverenOraniYuzde,
+      gunlukYemekIstisnasiSGK: paramsForm.gunlukYemekIstisnasiSGK ?? DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiSGK,
+      pekTavanKatsayisi: paramsForm.pekTavanKatsayisi ?? DEFAULT_KURUM_DEGERLERI.pekTavanKatsayisi,
+      gunlukAsgariUcret: paramsForm.gunlukAsgariUcret ?? DEFAULT_KURUM_DEGERLERI.gunlukAsgariUcret,
     };
 
     onCreateDonem(newDonem, initialKurum);
@@ -293,6 +379,19 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
           >
             <Gift className="w-4 h-4 text-amber-500" />
             <span>Tediye & TİS Gelirleri</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('sickLeave')}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-t-xl border-t border-x transition-all flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'sickLeave'
+                ? 'bg-white border-slate-200 text-rose-700 shadow-2xs -mb-px'
+                : 'border-transparent text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <FileText className="w-4 h-4 text-rose-600" />
+            <span>Rapor Olayları & İstirahat ({sickLeaveList.length})</span>
           </button>
 
           <button
@@ -542,6 +641,50 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Gece Çalışması Primi (%) (GÇ Oranı)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={paramsForm.geceCalismaPrimiYuzde ?? 0}
+                    onChange={(e) =>
+                      setParamsForm({
+                        ...paramsForm,
+                        geceCalismaPrimiYuzde: parseFloat(e.target.value) || 0,
+                      })
+                    }
+                    placeholder="0"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                  <span className="text-[11px] text-slate-500 mt-0.5 block">
+                    GÇ günleri için günlük taban ücret üzerinden hesaplanır (Örn: %8).
+                  </span>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Gece Çalışması Tatili Primi (%) (GÇT Oranı)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={paramsForm.geceCalismaTatiliPrimiYuzde ?? 0}
+                    onChange={(e) =>
+                      setParamsForm({
+                        ...paramsForm,
+                        geceCalismaTatiliPrimiYuzde: parseFloat(e.target.value) || 0,
+                      })
+                    }
+                    placeholder="0"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                  <span className="text-[11px] text-slate-500 mt-0.5 block">
+                    GÇT günleri için günlük taban ücret üzerinden hesaplanır (Örn: %10).
+                  </span>
+                </div>
               </div>
 
               <div className="pt-3 border-t border-slate-200 flex justify-end">
@@ -654,6 +797,48 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                     />
                     <span className="text-[11px] text-slate-500 mt-0.5 block">
                       Yasal Standart: 7.59 ‰ (%0.759 Brüt Toplam üzerinden)
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      SGK İşveren Prim Oranı (%)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={paramsForm.sgkIsverenOraniYuzde ?? 21.75}
+                      onChange={(e) =>
+                        setParamsForm({
+                          ...paramsForm,
+                          sgkIsverenOraniYuzde: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
+                    />
+                    <span className="text-[11px] text-slate-500 mt-0.5 block">
+                      Yasal Standart: %21,75 (PEK Matrahı üzerinden işveren payı)
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      İşveren İşsizlik Sigortası Oranı (%)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={paramsForm.issizlikIsverenOraniYuzde ?? 2.0}
+                      onChange={(e) =>
+                        setParamsForm({
+                          ...paramsForm,
+                          issizlikIsverenOraniYuzde: parseFloat(e.target.value) || 0,
+                        })
+                      }
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
+                    />
+                    <span className="text-[11px] text-slate-500 mt-0.5 block">
+                      Yasal Standart: %2,00 (PEK Matrahı üzerinden işveren payı)
                     </span>
                   </div>
                 </div>
@@ -1129,6 +1314,161 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                 </button>
               </div>
             </form>
+          )}
+
+          {/* TAB: Rapor Olayları & İstirahat Yönetimi */}
+          {activeTab === 'sickLeave' && (
+            <div className="space-y-6">
+              <div className="bg-rose-50/90 border border-rose-200 rounded-2xl p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="font-bold text-xs text-rose-950 flex items-center gap-1.5">
+                    <FileText className="w-4 h-4 text-rose-600" />
+                    <span>Kurum Raporlu Gün Ödeme Kuralı (Takvim Yılı)</span>
+                  </div>
+                  <span className="text-[11px] text-rose-700 font-semibold">
+                    (Yılda ilk 5 raporda en fazla ilk 2 gün)
+                  </span>
+                </div>
+                <p className="text-xs text-rose-900 leading-relaxed">
+                  Bir işçinin takvim yılı içinde aldığı ilk 5 ayrı sağlık raporunun ilk 2'şer günü kurum tarafından ödenir (6. ve sonraki rapor olaylarında kurum ödemesi 0 gündür). 15-14 dönem sınırından bölünen rapor olaylarında ilk 2 gün hakkı sadece 1 kez kullandırılır.
+                </p>
+              </div>
+
+              {sickSuccessMsg && (
+                <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  <span>{sickSuccessMsg}</span>
+                </div>
+              )}
+
+              {/* Add New Sick Leave Record Form */}
+              <form onSubmit={handleAddSickLeave} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                <h4 className="font-bold text-xs text-slate-900 flex items-center gap-1.5">
+                  <Plus className="w-4 h-4 text-indigo-600" />
+                  <span>Yeni Rapor Olayı (İstirahat Kaydı) Ekle</span>
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Personel Seçimi
+                    </label>
+                    <select
+                      value={selectedPersonForSick}
+                      onChange={(e) => setSelectedPersonForSick(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                    >
+                      {personeller.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.ad} {p.soyad} (TC: {p.tcNo})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Rapor Başlangıç Tarihi
+                    </label>
+                    <input
+                      type="date"
+                      value={sickStartDate}
+                      onChange={(e) => setSickStartDate(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Rapor Bitiş Tarihi
+                    </label>
+                    <input
+                      type="date"
+                      value={sickEndDate}
+                      onChange={(e) => setSickEndDate(e.target.value)}
+                      required
+                      className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="submit"
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Rapor Olayını Kaydet</span>
+                  </button>
+                </div>
+              </form>
+
+              {/* Sick Leave Records Table */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800">
+                    Kayıtlı Rapor Olayları ({sickLeaveList.length})
+                  </span>
+                </div>
+
+                {sickLeaveList.length === 0 ? (
+                  <div className="text-center py-8 text-xs text-slate-500 bg-slate-50 rounded-2xl border border-slate-200">
+                    Henüz kayıtlı bir rapor olayı bulunmuyor. Yukarıdaki formdan ekleyebilirsiniz.
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-100 text-slate-700 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                        <tr>
+                          <th className="p-3">Personel</th>
+                          <th className="p-3">Başlangıç Tarihi</th>
+                          <th className="p-3">Bitiş Tarihi</th>
+                          <th className="p-3 text-center">Toplam Gün</th>
+                          <th className="p-3 text-right">İşlem</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {sickLeaveList.map((rec) => {
+                          const person = personeller.find((p) => p.id === rec.personnelId);
+                          let totalDays = 1;
+                          try {
+                            const d1 = new Date(rec.startDate + 'T00:00:00');
+                            const d2 = new Date(rec.endDate + 'T00:00:00');
+                            totalDays = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+                          } catch {
+                            totalDays = 1;
+                          }
+
+                          return (
+                            <tr key={rec.id} className="hover:bg-slate-50">
+                              <td className="p-3 font-semibold text-slate-900">
+                                {person ? `${person.ad} ${person.soyad}` : rec.personnelId}
+                              </td>
+                              <td className="p-3 font-mono text-slate-700">{rec.startDate}</td>
+                              <td className="p-3 font-mono text-slate-700">{rec.endDate}</td>
+                              <td className="p-3 text-center font-bold font-mono text-rose-700">
+                                {totalDays} Gün
+                              </td>
+                              <td className="p-3 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteSickLeave(rec.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Rapor Olayını Sil"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           {/* TAB 3: Select Existing Period */}

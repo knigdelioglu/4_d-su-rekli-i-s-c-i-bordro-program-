@@ -58,6 +58,32 @@ pub fn calculate_gelir_vergisi_2026(matrah: Decimal, kumulatif_onceki: Decimal) 
     round2(total_tax_current - total_tax_previous)
 }
 
+pub struct NightWorkPolicy;
+
+impl NightWorkPolicy {
+    pub fn calculate_gece_calismasi_primi(
+        gunluk_taban_ucret: Decimal,
+        gece_calisma_orani_yuzde: Decimal,
+        gc_gun_sayisi: i32,
+    ) -> Decimal {
+        if gc_gun_sayisi <= 0 || gece_calisma_orani_yuzde <= dec!(0) {
+            return dec!(0);
+        }
+        round2(gunluk_taban_ucret * (gece_calisma_orani_yuzde / dec!(100)) * Decimal::from(gc_gun_sayisi))
+    }
+
+    pub fn calculate_gece_calismasi_tatili_primi(
+        gunluk_taban_ucret: Decimal,
+        gece_calisma_tatili_orani_yuzde: Decimal,
+        gct_gun_sayisi: i32,
+    ) -> Decimal {
+        if gct_gun_sayisi <= 0 || gece_calisma_tatili_orani_yuzde <= dec!(0) {
+            return dec!(0);
+        }
+        round2(gunluk_taban_ucret * (gece_calisma_tatili_orani_yuzde / dec!(100)) * Decimal::from(gct_gun_sayisi))
+    }
+}
+
 pub fn calculate_gelir_toplam(gelirler: &GelirKalemleri) -> Decimal {
     let mut sum = dec!(0);
     if let Some(v) = gelirler.tabanBrutAylik { sum += v; }
@@ -69,6 +95,8 @@ pub fn calculate_gelir_toplam(gelirler: &GelirKalemleri) -> Decimal {
     if let Some(v) = gelirler.vasitaYol { sum += v; }
     if let Some(v) = gelirler.giyimYardimi { sum += v; }
     if let Some(v) = gelirler.isPrimi { sum += v; }
+    if let Some(v) = gelirler.geceCalismasiUcreti { sum += v; }
+    if let Some(v) = gelirler.geceCalismasiTatiliUcreti { sum += v; }
     if let Some(v) = gelirler.hizmetZammi { sum += v; }
     if let Some(v) = gelirler.digerGelir { sum += v; }
     round2(sum)
@@ -123,12 +151,13 @@ pub fn auto_fill_gelirler_from_puantaj(
     hizmet_yili: i32,
     grup: Option<&str>,
 ) -> GelirKalemleri {
-    let hakedis_gun = puantaj_ozeti.c + puantaj_ozeti.t + puantaj_ozeti.g + puantaj_ozeti.i;
+    let hakedis_gun = puantaj_ozeti.c + puantaj_ozeti.t + puantaj_ozeti.g + puantaj_ozeti.i + puantaj_ozeti.gc + puantaj_ozeti.gct;
     let hakedis_dec = Decimal::from(hakedis_gun);
+    let fiili_calisma_gun = Decimal::from(puantaj_ozeti.c + puantaj_ozeti.gc);
 
     let taban_brut_aylik = round2(hakedis_dec * kurum_degerleri.gunlukTabanUcret);
-    let yemek = round2(Decimal::from(puantaj_ozeti.c) * kurum_degerleri.gunlukYemek);
-    let vasita_yol = round2(Decimal::from(puantaj_ozeti.c) * kurum_degerleri.gunlukVasitaYol);
+    let yemek = round2(fiili_calisma_gun * kurum_degerleri.gunlukYemek);
+    let vasita_yol = round2(fiili_calisma_gun * kurum_degerleri.gunlukVasitaYol);
     let birlestirilmis_sosyal_yardim = kurum_degerleri.birlestirilmisSosyalYardim;
     let giyim_yardimi = kurum_degerleri.giyimYardimi;
     let hizmet_zammi = round2(Decimal::from(hizmet_yili) * kurum_degerleri.hizmetZammiBirimi);
@@ -140,7 +169,22 @@ pub fn auto_fill_gelirler_from_puantaj(
     };
 
     let gunluk_is_primi = round2(kurum_degerleri.gunlukTabanUcret * (is_primi_orani / dec!(100)));
-    let is_primi = round2(gunluk_is_primi * Decimal::from(puantaj_ozeti.c));
+    let is_primi = round2(gunluk_is_primi * fiili_calisma_gun);
+
+    let gc_orani = kurum_degerleri.geceCalismaPrimiYuzde.unwrap_or(dec!(0));
+    let gct_orani = kurum_degerleri.geceCalismaTatiliPrimiYuzde.unwrap_or(dec!(0));
+
+    let gece_calismasi_ucreti = NightWorkPolicy::calculate_gece_calismasi_primi(
+        kurum_degerleri.gunlukTabanUcret,
+        gc_orani,
+        puantaj_ozeti.gc,
+    );
+
+    let gece_calismasi_tatili_ucreti = NightWorkPolicy::calculate_gece_calismasi_tatili_primi(
+        kurum_degerleri.gunlukTabanUcret,
+        gct_orani,
+        puantaj_ozeti.gct,
+    );
 
     let mut tediye: Option<Decimal> = None;
     if let Some(ref t_list) = kurum_degerleri.tediyeListesi {
@@ -172,6 +216,8 @@ pub fn auto_fill_gelirler_from_puantaj(
         vasitaYol: Some(vasita_yol),
         giyimYardimi: Some(giyim_yardimi),
         isPrimi: Some(is_primi),
+        geceCalismasiUcreti: Some(gece_calismasi_ucreti),
+        geceCalismasiTatiliUcreti: Some(gece_calismasi_tatili_ucreti),
         hizmetZammi: Some(hizmet_zammi),
         digerGelir: kurum_degerleri.digerGelirVarsayilan,
     }
@@ -183,9 +229,9 @@ pub fn calculate_prime_esas_kazanc(
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     devreden_pek_gelen: &[DevredenPekKaydi],
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
-    let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.r);
+    let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
     let prim_gun_sayisi = min(30, raw_prim_gun.max(0));
-    let fiili_yemek_gunu = puantaj_ozeti.map_or(0, |p| p.c);
+    let fiili_yemek_gunu = puantaj_ozeti.map_or(0, |p| p.c + p.gc);
 
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
@@ -203,6 +249,8 @@ pub fn calculate_prime_esas_kazanc(
     let birlestirilmis_sosyal_yardim = gelirler.birlestirilmisSosyalYardim.unwrap_or(dec!(0));
     let giyim_yardimi = gelirler.giyimYardimi.unwrap_or(dec!(0));
     let is_primi = gelirler.isPrimi.unwrap_or(dec!(0));
+    let gece_calismasi = gelirler.geceCalismasiUcreti.unwrap_or(dec!(0));
+    let gece_calismasi_tatili = gelirler.geceCalismasiTatiliUcreti.unwrap_or(dec!(0));
     let hizmet_zammi = gelirler.hizmetZammi.unwrap_or(dec!(0));
     let diger_gelir = gelirler.digerGelir.unwrap_or(dec!(0));
 
@@ -212,7 +260,9 @@ pub fn calculate_prime_esas_kazanc(
         + birlestirilmis_sosyal_yardim
         + giyim_yardimi
         + hizmet_zammi
-        + diger_gelir;
+        + diger_gelir
+        + gece_calismasi
+        + gece_calismasi_tatili;
 
     let ucret_disi_odemeler = tediye + tis_ikramiyesi + ek_odeme + is_primi;
     let ham_pek = ucretler + ucret_disi_odemeler;
@@ -269,6 +319,13 @@ pub fn calculate_prime_esas_kazanc(
         final_pek = pek_alt_sinir;
     }
 
+    let isveren_sgk_rate = k.sgkIsverenOraniYuzde.unwrap_or(dec!(21.75)) / dec!(100);
+    let isveren_issizlik_rate = k.issizlikIsverenOraniYuzde.unwrap_or(dec!(2.00)) / dec!(100);
+
+    let isveren_sgk_primi = round2(final_pek * isveren_sgk_rate);
+    let isveren_issizlik_primi = round2(final_pek * isveren_issizlik_rate);
+    let isveren_prim_toplami = isveren_sgk_primi + isveren_issizlik_primi;
+
     let det = PekDetayi {
         hesaplananPek: round2(ham_pek),
         finalPek: round2(final_pek),
@@ -277,6 +334,11 @@ pub fn calculate_prime_esas_kazanc(
         pekUstSinir: pek_ust_sinir,
         fiiliYemekGunu: fiili_yemek_gunu,
         yemekIstisnasiTutar: round2(yemek_istisnasi_tutar),
+        isverenSgkPrimi: Some(isveren_sgk_primi),
+        isverenIssizlikPrimi: Some(isveren_issizlik_primi),
+        isverenPrimToplami: Some(isveren_prim_toplami),
+        sgkIsverenOraniYuzde: Some(k.sgkIsverenOraniYuzde.unwrap_or(dec!(21.75))),
+        isverenIssizlikOraniYuzde: Some(k.issizlikIsverenOraniYuzde.unwrap_or(dec!(2.00))),
     };
 
     (det, sonraki_devreden_list)

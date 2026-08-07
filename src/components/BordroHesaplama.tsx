@@ -19,6 +19,7 @@ import {
   RefreshCw,
   AlertTriangle,
   CalendarCheck,
+  Building2,
   X,
 } from 'lucide-react';
 import {
@@ -217,6 +218,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             pekUstSinir: statutory.pekResult.pekUstSinir,
             fiiliYemekGunu: statutory.pekResult.fiiliYemekGunu,
             yemekIstisnasiTutar: statutory.pekResult.yemekIstisnasiTutar,
+            isverenSgkPrimi: statutory.pekResult.isverenSgkPrimi,
+            isverenIssizlikPrimi: statutory.pekResult.isverenIssizlikPrimi,
+            isverenPrimToplami: statutory.pekResult.isverenPrimToplami,
+            sgkIsverenOraniYuzde: statutory.pekResult.sgkIsverenOraniYuzde,
+            isverenIssizlikOraniYuzde: statutory.pekResult.isverenIssizlikOraniYuzde,
           }
         : undefined,
     };
@@ -325,6 +331,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const totalGross = activePeriodBordrolar.reduce((acc, b) => acc + (b.gelirToplam || 0), 0);
   const totalNet = activePeriodBordrolar.reduce((acc, b) => acc + (b.netOdeme || 0), 0);
   const totalDeductions = activePeriodBordrolar.reduce((acc, b) => acc + (b.kesintiToplam || 0), 0);
+  const totalEmployerCost = activePeriodBordrolar.reduce((acc, b) => {
+    const isverenSgk = b.pekDetay?.isverenSgkPrimi ?? (b.pekDetay ? Math.round(b.pekDetay.finalPek * (b.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100 * 100) / 100 : 0);
+    const isverenIssizlik = b.pekDetay?.isverenIssizlikPrimi ?? (b.pekDetay ? Math.round(b.pekDetay.finalPek * (b.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100 * 100) / 100 : 0);
+    return acc + (b.pekDetay?.isverenPrimToplami ?? (isverenSgk + isverenIssizlik));
+  }, 0);
 
   return (
     <div className="space-y-6">
@@ -392,56 +403,69 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       )}
 
       {/* KPI Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-blue-50 text-blue-700 rounded-xl">
-            <Users className="w-6 h-6" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+          <div className="p-3 bg-blue-50 text-blue-700 rounded-xl shrink-0">
+            <Users className="w-5 h-5" />
           </div>
           <div>
             <span className="text-xs text-slate-500 font-medium">Toplam Personel</span>
-            <div className="text-xl font-bold text-slate-900">{personeller.length} Kişi</div>
+            <div className="text-lg font-bold text-slate-900">{personeller.length} Kişi</div>
             <span className="text-[11px] text-blue-600 font-medium">
               {activePeriodBordrolar.length} / {personeller.length} Hesaplandı
             </span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-indigo-50 text-indigo-700 rounded-xl">
-            <Wallet className="w-6 h-6" />
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+          <div className="p-3 bg-indigo-50 text-indigo-700 rounded-xl shrink-0">
+            <Wallet className="w-5 h-5" />
           </div>
           <div>
             <span className="text-xs text-slate-500 font-medium">Toplam Brüt Gelir</span>
-            <div className="text-xl font-bold text-indigo-900 font-mono">
+            <div className="text-lg font-bold text-indigo-900 font-mono">
               {formatTL(totalGross)}
             </div>
             <span className="text-[11px] text-slate-400">Vergi ve SGK Öncesi</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-rose-50 text-rose-700 rounded-xl">
-            <Receipt className="w-6 h-6" />
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+          <div className="p-3 bg-rose-50 text-rose-700 rounded-xl shrink-0">
+            <Receipt className="w-5 h-5" />
           </div>
           <div>
-            <span className="text-xs text-slate-500 font-medium">Toplam Kesintiler</span>
-            <div className="text-xl font-bold text-rose-800 font-mono">
+            <span className="text-xs text-slate-500 font-medium">İşçi Kesintileri</span>
+            <div className="text-lg font-bold text-rose-800 font-mono">
               {formatTL(totalDeductions)}
             </div>
             <span className="text-[11px] text-slate-400">SGK + Vergi + Özel Kesinti</span>
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl">
-            <TrendingUp className="w-6 h-6" />
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+          <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl shrink-0">
+            <TrendingUp className="w-5 h-5" />
           </div>
           <div>
             <span className="text-xs text-slate-500 font-medium">Toplam Net Ödeme</span>
-            <div className="text-xl font-bold text-emerald-700 font-mono">
+            <div className="text-lg font-bold text-emerald-700 font-mono">
               {formatTL(totalNet)}
             </div>
             <span className="text-[11px] text-emerald-600 font-semibold">Banka Ele Geçen</span>
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
+          <div className="p-3 bg-amber-50 text-amber-700 rounded-xl shrink-0">
+            <Building2 className="w-5 h-5" />
+          </div>
+          <div>
+            <span className="text-xs text-slate-500 font-medium">İşveren Prim Maliyeti</span>
+            <div className="text-lg font-bold text-amber-900 font-mono">
+              {formatTL(totalEmployerCost)}
+            </div>
+            <span className="text-[11px] text-amber-700 font-semibold">Kurum SGK + İşsizlik</span>
           </div>
         </div>
       </div>
@@ -552,16 +576,31 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       {/* Puantaj Summary Pills */}
                       <td className="py-3 px-4 text-center">
                         {bordro ? (
-                          <div className="inline-flex items-center gap-1 text-[10px] font-mono">
-                            <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold">
+                          <div className="inline-flex flex-wrap items-center justify-center gap-1 text-[10px] font-mono max-w-[220px]">
+                            <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold" title="Çalışılan Gün">
                               {bordro.puantajOzeti.Ç} Ç
                             </span>
-                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold">
+                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold" title="Hafta Tatili">
                               {bordro.puantajOzeti.T} T
                             </span>
+                            {bordro.puantajOzeti.GÇ > 0 && (
+                              <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded font-bold" title="Gece Çalışması">
+                                {bordro.puantajOzeti.GÇ} GÇ
+                              </span>
+                            )}
+                            {bordro.puantajOzeti.GÇT > 0 && (
+                              <span className="px-1.5 py-0.5 bg-teal-100 text-teal-800 rounded font-bold" title="Gece Çalışması Tatili">
+                                {bordro.puantajOzeti.GÇT} GÇT
+                              </span>
+                            )}
                             {bordro.puantajOzeti.İ > 0 && (
-                              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-bold">
+                              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-bold" title="İzin">
                                 {bordro.puantajOzeti.İ} İ
+                              </span>
+                            )}
+                            {bordro.puantajOzeti.R > 0 && (
+                              <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 rounded font-bold" title="Raporlu Gün / Kurumun Ödediği Gün">
+                                {bordro.puantajOzeti.R} R {bordro.odenenRaporluGun !== undefined ? `(${bordro.odenenRaporluGun} Öd.)` : ''}
                               </span>
                             )}
                           </div>
