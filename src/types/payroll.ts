@@ -236,10 +236,12 @@ export interface PekDetayi {
   devredenPekAşanTutar: number;
   pekAltSinir: number;
   pekUstSinir: number;
+  altSinirTamamlamaFarki?: number;
   fiiliYemekGunu: number;
   yemekIstisnasiTutar: number;
   isverenSgkPrimi?: number;
   isverenIssizlikPrimi?: number;
+  pekAltSinirTamamlamaIsverenPrimi?: number;
   isverenPrimToplami?: number;
   sgkIsverenOraniYuzde?: number;
   isverenIssizlikOraniYuzde?: number;

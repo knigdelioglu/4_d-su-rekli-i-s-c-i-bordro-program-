@@ -1,10 +1,19 @@
 use super::models::*;
 use rust_decimal::Decimal;
+use rust_decimal::RoundingStrategy;
 use rust_decimal_macros::dec;
 use std::cmp::min;
 
 fn round2(val: Decimal) -> Decimal {
     val.round_dp(2)
+}
+
+/// SGK/işsizlik prim tahakkuklarının parasal yuvarlama politikası.
+/// SGK'nın resmî örneklerine uygun olarak midpoint değerler sıfırdan uzağa yuvarlanır
+/// (banker's rounding değil): 33.030 × %21,75 = 7.184,025 → 7.184,03.
+/// Genel round2()'dan (MidpointNearestEven) farklıdır ve yalnız SGK prim kalemlerinde kullanılır.
+fn round_sgk_amount(val: Decimal) -> Decimal {
+    val.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
 }
 
 fn floor_dec(val: Decimal) -> Decimal {
@@ -315,16 +324,29 @@ pub fn calculate_prime_esas_kazanc(
     }
 
     let mut final_pek = pek_matrah_adayi;
+    let alt_sinir_tamamlama_farki = if ham_pek > dec!(0) && ham_pek < pek_alt_sinir {
+        round2(pek_alt_sinir - ham_pek)
+    } else {
+        dec!(0)
+    };
+
     if final_pek < pek_alt_sinir && ham_pek > dec!(0) {
         final_pek = pek_alt_sinir;
     }
 
     let isveren_sgk_rate = k.sgkIsverenOraniYuzde.unwrap_or(dec!(21.75)) / dec!(100);
     let isveren_issizlik_rate = k.issizlikIsverenOraniYuzde.unwrap_or(dec!(2.00)) / dec!(100);
+    let isci_sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
+    let isci_issizlik_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
 
-    let isveren_sgk_primi = round2(final_pek * isveren_sgk_rate);
-    let isveren_issizlik_primi = round2(final_pek * isveren_issizlik_rate);
-    let isveren_prim_toplami = isveren_sgk_primi + isveren_issizlik_primi;
+    let isveren_sgk_primi = round_sgk_amount(final_pek * isveren_sgk_rate);
+    let isveren_issizlik_primi = round_sgk_amount(final_pek * isveren_issizlik_rate);
+
+    let isveren_alt_sinir_sgk_farki = round_sgk_amount(alt_sinir_tamamlama_farki * isci_sgk_rate);
+    let isveren_alt_sinir_issizlik_farki = round_sgk_amount(alt_sinir_tamamlama_farki * isci_issizlik_rate);
+    let pek_alt_sinir_tamamlama_isveren_primi = isveren_alt_sinir_sgk_farki + isveren_alt_sinir_issizlik_farki;
+
+    let isveren_prim_toplami = isveren_sgk_primi + isveren_issizlik_primi + pek_alt_sinir_tamamlama_isveren_primi;
 
     let det = PekDetayi {
         hesaplananPek: round2(ham_pek),
@@ -332,10 +354,12 @@ pub fn calculate_prime_esas_kazanc(
         devredenPekAşanTutar: devreden_pek_asan_tutar,
         pekAltSinir: pek_alt_sinir,
         pekUstSinir: pek_ust_sinir,
+        altSinirTamamlamaFarki: alt_sinir_tamamlama_farki,
         fiiliYemekGunu: fiili_yemek_gunu,
         yemekIstisnasiTutar: round2(yemek_istisnasi_tutar),
         isverenSgkPrimi: Some(isveren_sgk_primi),
         isverenIssizlikPrimi: Some(isveren_issizlik_primi),
+        pekAltSinirTamamlamaIsverenPrimi: Some(pek_alt_sinir_tamamlama_isveren_primi),
         isverenPrimToplami: Some(isveren_prim_toplami),
         sgkIsverenOraniYuzde: Some(k.sgkIsverenOraniYuzde.unwrap_or(dec!(21.75))),
         isverenIssizlikOraniYuzde: Some(k.issizlikIsverenOraniYuzde.unwrap_or(dec!(2.00))),
@@ -363,14 +387,16 @@ pub fn calculate_statutory_deductions(
     }
 
     let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc(gelirler, puantaj_ozeti, kurum_degerleri, devreden_pek_gelen);
-    let pek_matrah = pek_detay.finalPek;
+    // Worker deductions must be calculated over real earnings (hesaplananPek / ham_pek) capped at ceiling,
+    // NOT on the artificially inflated floor finalPek (5510 m.82 & 4447 m.49).
+    let worker_pek_matrah = pek_detay.hesaplananPek.min(pek_detay.pekUstSinir);
 
     let sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
     let issizlik_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
     let dv_rate = k.damgaVergisiOraniBinde.unwrap_or(dec!(7.59)) / dec!(1000);
 
-    let isci_sgk_primi = round2(pek_matrah * sgk_rate);
-    let isci_issizlik_primi = round2(pek_matrah * issizlik_rate);
+    let isci_sgk_primi = round_sgk_amount(worker_pek_matrah * sgk_rate);
+    let isci_issizlik_primi = round_sgk_amount(worker_pek_matrah * issizlik_rate);
 
     let gelir_vergisi_matrah = (brut_gelir - isci_sgk_primi - isci_issizlik_primi).max(dec!(0));
 
@@ -416,7 +442,7 @@ pub fn calculate_statutory_deductions(
         }.unwrap_or_else(|| {
             let custom_oran = p_kesintiler.and_then(|pk| pk.oksOraniYuzde);
             let oks_orani = custom_oran.unwrap_or_else(|| k.besOraniYuzde.unwrap_or(dec!(3))) / dec!(100);
-            floor_dec(pek_matrah * oks_orani)
+            floor_dec(worker_pek_matrah * oks_orani)
         })
     } else {
         dec!(0)

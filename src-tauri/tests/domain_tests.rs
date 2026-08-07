@@ -1077,5 +1077,164 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_pek_alt_sinir_tamamlama_isveren_prim_ayrimi() {
+        use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
+
+        let mut puantaj = PuantajOzeti::default();
+        puantaj.c = 30; // 30 prim günü -> Alt Sınır = 33.030 TL
+
+        let kurum = DonemselKurumDegerleri::default(); // Gunluk asgari = 1101 TL, SGK isci = %14, Issizlik isci = %1, SGK isveren = %21.75, Issizlik isveren = %2
+
+        let gelirler = GelirKalemleri {
+            tabanBrutAylik: Some(dec!(25000.00)), // Ham PEK = 25.000 TL
+            ..Default::default()
+        };
+
+        // 1. PEK Hesaplaması
+        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+
+        assert_eq!(pek_detay.hesaplananPek, dec!(25000.00)); // ham PEK
+        assert_eq!(pek_detay.pekAltSinir, dec!(33030.00)); // 30 * 1101 = 33.030 TL
+        assert_eq!(pek_detay.finalPek, dec!(33030.00)); // nihai PEK
+        assert_eq!(pek_detay.altSinirTamamlamaFarki, dec!(8030.00)); // 33.030 - 25.000 = 8.030 TL
+
+        // Normal İşveren Primi:
+        // SGK İşveren (%21,75): 33.030 * %21,75 = 7.184,025 -> 7.184,03 TL (MidpointAwayFromZero)
+        // İşsizlik İşveren (%2): 33.030 * %2 = 660,60 TL
+        assert_eq!(pek_detay.isverenSgkPrimi, Some(dec!(7184.03)));
+        assert_eq!(pek_detay.isverenIssizlikPrimi, Some(dec!(660.60)));
+
+        // Alt Sınır Tamamlama İşveren Primi:
+        // 8.030 * %14 (SGK işçi payı farkı) = 1.124,20 TL
+        // 8.030 * %1 (İşsizlik işçi payı farkı) = 80,30 TL
+        // Toplam Alt Sınır İşveren Yükü = 1.204,50 TL
+        assert_eq!(pek_detay.pekAltSinirTamamlamaIsverenPrimi, Some(dec!(1204.50)));
+
+        // Toplam İşveren Primi = 7.184,03 + 660,60 + 1.204,50 = 9.049,13 TL
+        assert_eq!(pek_detay.isverenPrimToplami, Some(dec!(9049.13)));
+
+        // 2. Yasal Kesintiler (İşçi Payları)
+        let (kesintiler, _, _) = calculate_statutory_deductions(
+            &gelirler,
+            Some(&kurum),
+            None,
+            Some(&puantaj),
+            dec!(0),
+            &[],
+            dec!(0),
+        );
+
+        // İşçi SGK kesintisi 33.030 üzerinden DEĞİL, 25.000 (ham PEK) üzerinden yapılmalı (5510 m.82)
+        // 25.000 * %14 = 3.500,00 TL
+        assert_eq!(kesintiler.isciSgkPrimi, Some(dec!(3500.00)));
+
+        // İşçi İşsizlik kesintisi 33.030 üzerinden DEĞİL, 25.000 (ham PEK) üzerinden yapılmalı (4447 m.49 / Model A)
+        // 25.000 * %1 = 250,00 TL
+        assert_eq!(kesintiler.isciIssizlikPrimi, Some(dec!(250.00)));
+
+        // 3. Toplam SGK Tahakkuk Bütünlüğü Kontrolü:
+        // İşçi Kesintisi (3.500,00 SGK + 250,00 İşsizlik = 3.750,00 TL)
+        // + Normal İşveren Primi (7.184,03 SGK + 660,60 İşsizlik = 7.844,63 TL)
+        // + İşveren Alt Sınır Yükü (1.204,50 TL)
+        // = 12.799,13 TL
+        // SGK'ya Bildirilecek Toplam Prim: 33.030 * %38,75 (%14+%1+%21.75+%2) = 12.799,125 -> 12.799,13 TL
+        let isci_toplam_prim = kesintiler.isciSgkPrimi.unwrap() + kesintiler.isciIssizlikPrimi.unwrap();
+        let isveren_toplam_prim = pek_detay.isverenPrimToplami.unwrap();
+        let genel_sgk_tahakkuk = isci_toplam_prim + isveren_toplam_prim;
+
+        assert_eq!(genel_sgk_tahakkuk, dec!(12799.13));
+    }
+
+    #[test]
+    fn test_sgk_resmi_2026_ornegi_midpoint_away_from_zero() {
+        use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
+        use rust_decimal::RoundingStrategy;
+
+        // Rounding policy: 33.030 × %21,75 = 7.184,025 -> 7.184,03 (MidpointAwayFromZero, SGK resmî örneği)
+        let topla = dec!(33030.00) * (dec!(21.75) / dec!(100));
+        assert_eq!(topla, dec!(7184.025));
+        assert_eq!(topla.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero), dec!(7184.03));
+
+        let mut puantaj = PuantajOzeti::default();
+        puantaj.c = 30; // 30 prim günü, PEK = 33.030 TL
+
+        let kurum = DonemselKurumDegerleri::default();
+
+        let gelirler = GelirKalemleri {
+            tabanBrutAylik: Some(dec!(33030.00)), // PEK = 33.030 TL
+            ..Default::default()
+        };
+
+        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (kesintiler, _, _) = calculate_statutory_deductions(
+            &gelirler,
+            Some(&kurum),
+            None,
+            Some(&puantaj),
+            dec!(0),
+            &[],
+            dec!(0),
+        );
+
+        // İşveren SGK (%21,75): 33.030 × %21,75 = 7.184,025 -> 7.184,03 TL
+        assert_eq!(pek_detay.isverenSgkPrimi, Some(dec!(7184.03)));
+        // İşveren İşsizlik (%2): 33.030 × %2 = 660,60 TL
+        assert_eq!(pek_detay.isverenIssizlikPrimi, Some(dec!(660.60)));
+
+        // İşçi SGK (%14): 33.030 × %14 = 4.624,20 TL
+        assert_eq!(kesintiler.isciSgkPrimi, Some(dec!(4624.20)));
+        // İşçi İşsizlik (%1): 33.030 × %1 = 330,30 TL
+        assert_eq!(kesintiler.isciIssizlikPrimi, Some(dec!(330.30)));
+
+        // Toplam değerlendirme: %38,75 toplam tahakkuk = 12.799,13 TL
+        let isci_toplam = kesintiler.isciSgkPrimi.unwrap() + kesintiler.isciIssizlikPrimi.unwrap();
+        let isveren_toplam = pek_detay.isverenSgkPrimi.unwrap() + pek_detay.isverenIssizlikPrimi.unwrap();
+        let toplam_tahakkuk = isci_toplam + isveren_toplam;
+        assert_eq!(toplam_tahakkuk, dec!(12799.13));
+    }
+
+    #[test]
+    fn test_pek_alt_sinir_ustunde_normal_bordro() {
+        use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
+
+        let mut puantaj = PuantajOzeti::default();
+        puantaj.c = 30;
+
+        let kurum = DonemselKurumDegerleri::default();
+
+        let gelirler = GelirKalemleri {
+            tabanBrutAylik: Some(dec!(100000.00)), // Ham PEK = 100.000 TL (Alt sınırın üzerinde)
+            ..Default::default()
+        };
+
+        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+
+        assert_eq!(pek_detay.hesaplananPek, dec!(100000.00));
+        assert_eq!(pek_detay.finalPek, dec!(100000.00));
+        assert_eq!(pek_detay.altSinirTamamlamaFarki, dec!(0.00));
+        assert_eq!(pek_detay.pekAltSinirTamamlamaIsverenPrimi, Some(dec!(0.00)));
+
+        let (kesintiler, _, _) = calculate_statutory_deductions(
+            &gelirler,
+            Some(&kurum),
+            None,
+            Some(&puantaj),
+            dec!(0),
+            &[],
+            dec!(0),
+        );
+
+        // 100.000 * %14 = 14.000 TL
+        assert_eq!(kesintiler.isciSgkPrimi, Some(dec!(14000.00)));
+        // 100.000 * %1 = 1.000 TL
+        assert_eq!(kesintiler.isciIssizlikPrimi, Some(dec!(1000.00)));
+        // 100.000 * %21,75 = 21.750 TL
+        assert_eq!(pek_detay.isverenSgkPrimi, Some(dec!(21750.00)));
+        // 100.000 * %2 = 2.000 TL
+        assert_eq!(pek_detay.isverenIssizlikPrimi, Some(dec!(2000.00)));
+    }
 }
+
 

@@ -144,10 +144,13 @@ pub struct PekDetayi {
     pub devredenPekAşanTutar: Decimal,
     pub pekAltSinir: Decimal,
     pub pekUstSinir: Decimal,
+    #[serde(default)]
+    pub altSinirTamamlamaFarki: Decimal,
     pub fiiliYemekGunu: i32,
     pub yemekIstisnasiTutar: Decimal,
     pub isverenSgkPrimi: Option<Decimal>,
     pub isverenIssizlikPrimi: Option<Decimal>,
+    pub pekAltSinirTamamlamaIsverenPrimi: Option<Decimal>,
     pub isverenPrimToplami: Option<Decimal>,
     pub sgkIsverenOraniYuzde: Option<Decimal>,
     pub isverenIssizlikOraniYuzde: Option<Decimal>,

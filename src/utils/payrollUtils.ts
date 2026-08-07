@@ -549,8 +549,10 @@ export function calculatePrimeEsasKazanc(
   yemekIstisnasiTutar: number;
   pekAltSinir: number;
   pekUstSinir: number;
+  altSinirTamamlamaFarki: number;
   isverenSgkPrimi: number;
   isverenIssizlikPrimi: number;
+  pekAltSinirTamamlamaIsverenPrimi: number;
   isverenPrimToplami: number;
   sgkIsverenOraniYuzde: number;
   isverenIssizlikOraniYuzde: number;
@@ -684,15 +686,28 @@ export function calculatePrimeEsasKazanc(
 
   // Alt sınır kontrolü
   let finalPek = pekMatrahAdayi;
+  const altSinirTamamlamaFarki =
+    hamPek > 0 && hamPek < pekAltSinir ? Math.round((pekAltSinir - hamPek) * 100) / 100 : 0;
+
   if (finalPek < pekAltSinir && hamPek > 0) {
     finalPek = pekAltSinir;
   }
 
   const isverenSgkRate = (kurumDegerleri?.sgkIsverenOraniYuzde ?? 21.75) / 100;
   const isverenIssizlikRate = (kurumDegerleri?.issizlikIsverenOraniYuzde ?? 2.00) / 100;
+  const isciSgkRate = (kurumDegerleri?.sgkIsciOraniYuzde ?? 14) / 100;
+  const isciIssizlikRate = (kurumDegerleri?.issizlikIsciOraniYuzde ?? 1) / 100;
+
   const isverenSgkPrimi = Math.round(finalPek * isverenSgkRate * 100) / 100;
   const isverenIssizlikPrimi = Math.round(finalPek * isverenIssizlikRate * 100) / 100;
-  const isverenPrimToplami = Math.round((isverenSgkPrimi + isverenIssizlikPrimi) * 100) / 100;
+
+  const isverenAltSinirSgkFarki = Math.round(altSinirTamamlamaFarki * isciSgkRate * 100) / 100;
+  const isverenAltSinirIssizlikFarki = Math.round(altSinirTamamlamaFarki * isciIssizlikRate * 100) / 100;
+  const pekAltSinirTamamlamaIsverenPrimi =
+    Math.round((isverenAltSinirSgkFarki + isverenAltSinirIssizlikFarki) * 100) / 100;
+
+  const isverenPrimToplami =
+    Math.round((isverenSgkPrimi + isverenIssizlikPrimi + pekAltSinirTamamlamaIsverenPrimi) * 100) / 100;
 
   return {
     hesaplananPek: Math.round(hamPek * 100) / 100,
@@ -703,8 +718,10 @@ export function calculatePrimeEsasKazanc(
     yemekIstisnasiTutar: Math.round(yemekIstisnasiTutar * 100) / 100,
     pekAltSinir,
     pekUstSinir,
+    altSinirTamamlamaFarki,
     isverenSgkPrimi,
     isverenIssizlikPrimi,
+    pekAltSinirTamamlamaIsverenPrimi,
     isverenPrimToplami,
     sgkIsverenOraniYuzde: kurumDegerleri?.sgkIsverenOraniYuzde ?? 21.75,
     isverenIssizlikOraniYuzde: kurumDegerleri?.issizlikIsverenOraniYuzde ?? 2.00,
@@ -754,7 +771,9 @@ export function calculateStatutoryDeductions(
 
   // PEK Motoru üzerinden matrah tespiti
   const pekResult = calculatePrimeEsasKazanc(gelirler, puantajOzeti, kurumDegerleri, devredenPekGelen);
-  const pekMatrah = pekResult.finalPek;
+  // Worker deductions must be calculated over real earnings (hesaplananPek / ham_pek) capped at ceiling,
+  // NOT on the artificially inflated floor finalPek (5510 m.82 & 4447 m.49).
+  const workerPekMatrah = Math.min(pekResult.hesaplananPek, pekResult.pekUstSinir);
 
   // Configured or default rates
   const sgkRate = (kurumDegerleri?.sgkIsciOraniYuzde ?? 14) / 100;
@@ -762,9 +781,9 @@ export function calculateStatutoryDeductions(
   const dvPerThousand = kurumDegerleri?.damgaVergisiOraniBinde ?? 7.59;
   const dvRate = dvPerThousand / 1000;
 
-  // SGK Primi ve İşsizlik PEK üzerinden
-  const isciSgkPrimi = Math.round(pekMatrah * sgkRate * 100) / 100;
-  const isciIssizlikPrimi = Math.round(pekMatrah * issizlikRate * 100) / 100;
+  // SGK Primi ve İşsizlik workerPekMatrah üzerinden
+  const isciSgkPrimi = Math.round(workerPekMatrah * sgkRate * 100) / 100;
+  const isciIssizlikPrimi = Math.round(workerPekMatrah * issizlikRate * 100) / 100;
 
   // Gelir vergisi matrahı = Brüt - İşçi SGK - İşçi İşsizlik
   const gelirVergisiMatrah = Math.max(0, brutGelir - isciSgkPrimi - isciIssizlikPrimi);
@@ -818,7 +837,7 @@ export function calculateStatutoryDeductions(
     } else {
       const customOran = pKesintiler?.oksOraniYuzde;
       const oksOrani = (customOran && customOran > 0 ? customOran : (kurumDegerleri?.besOraniYuzde ?? 3)) / 100;
-      const rawOks = pekMatrah * oksOrani;
+      const rawOks = workerPekMatrah * oksOrani;
       bes = Math.floor(rawOks);
     }
   } else {

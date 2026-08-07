@@ -124,25 +124,29 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
               <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
                 <span>SGK Prime Esas Kazanç (PEK) ve Yemek İstisnası Detayları:</span>
-                <span className="text-indigo-700 font-mono">PEK Matrahı: {formatTL(bordro.pekDetay.finalPek)}</span>
+                <span className="text-indigo-700 font-mono">PEK Matrahı (Nihai): {formatTL(bordro.pekDetay.finalPek)}</span>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-600 pt-1 border-t border-slate-200">
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] text-slate-600 pt-1 border-t border-slate-200">
                 <div>
-                  <span className="text-slate-500">Hesaplanan Brüt PEK: </span>
+                  <span className="text-slate-500">Ham PEK (Gerçek): </span>
                   <span className="font-semibold font-mono">{formatTL(bordro.pekDetay.hesaplananPek)}</span>
                 </div>
+                <div>
+                  <span className="text-slate-500">Nihai / Bildirim PEK: </span>
+                  <span className="font-semibold font-mono text-indigo-900">{formatTL(bordro.pekDetay.finalPek)}</span>
+                </div>
+                {(bordro.pekDetay.altSinirTamamlamaFarki ?? (bordro.pekDetay.finalPek > bordro.pekDetay.hesaplananPek ? bordro.pekDetay.finalPek - bordro.pekDetay.hesaplananPek : 0)) > 0 && (
+                  <div>
+                    <span className="text-slate-500">Alt Sınır Farkı: </span>
+                    <span className="font-semibold font-mono text-amber-700">
+                      {formatTL(bordro.pekDetay.altSinirTamamlamaFarki ?? (bordro.pekDetay.finalPek - bordro.pekDetay.hesaplananPek))}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <span className="text-slate-500">SGK Yemek İstisnası ({bordro.pekDetay.fiiliYemekGunu} Gün): </span>
                   <span className="font-semibold font-mono text-emerald-700">
                     {formatTL(bordro.pekDetay.yemekIstisnasiTutar)}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Önceki Aydan Gelen PEK: </span>
-                  <span className="font-semibold font-mono text-amber-700">
-                    {bordro.devredenPekGelen && bordro.devredenPekGelen.length > 0
-                      ? formatTL(bordro.devredenPekGelen.reduce((a, b) => a + b.tutar, 0))
-                      : '0,00 TL'}
                   </span>
                 </div>
                 <div>
@@ -166,10 +170,10 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                   <span>İşveren SGK ve İşsizlik Prim Maliyeti (Kurum Maliyet Kalemleri):</span>
                 </div>
                 <span className="text-indigo-900 font-mono font-bold">
-                  Toplam İşveren Primi: {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))))}
+                  Toplam İşveren Primi: {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100)) + (bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0)))}
                 </span>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-700 pt-1 border-t border-indigo-200 font-mono">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-[11px] text-slate-700 pt-1 border-t border-indigo-200 font-mono">
                 <div>
                   <span className="text-slate-500 font-sans">SSK Primi — İşveren Payı (%{bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75}): </span>
                   <span className="font-bold text-indigo-900">
@@ -177,15 +181,23 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-500 font-sans">İşsizlik Sigortası Primi — İşveren Payı (%{bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2}): </span>
+                  <span className="text-slate-500 font-sans">İşsizlik Primi — İşveren Payı (%{bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2}): </span>
                   <span className="font-bold text-indigo-900">
                     {formatTL(bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))}
                   </span>
                 </div>
+                {(bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0) > 0 && (
+                  <div>
+                    <span className="text-slate-500 font-sans">PEK Alt Sınır Tamamlama — İşveren: </span>
+                    <span className="font-bold text-amber-900">
+                      {formatTL(bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi)}
+                    </span>
+                  </div>
+                )}
                 <div>
                   <span className="text-slate-500 font-sans">Toplam İşveren Prim Maliyeti: </span>
                   <span className="font-black text-indigo-950">
-                    {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))))}
+                    {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100)) + (bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0)))}
                   </span>
                 </div>
               </div>

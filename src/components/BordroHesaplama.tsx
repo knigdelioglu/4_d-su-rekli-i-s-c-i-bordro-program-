@@ -334,7 +334,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const totalEmployerCost = activePeriodBordrolar.reduce((acc, b) => {
     const isverenSgk = b.pekDetay?.isverenSgkPrimi ?? (b.pekDetay ? Math.round(b.pekDetay.finalPek * (b.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100 * 100) / 100 : 0);
     const isverenIssizlik = b.pekDetay?.isverenIssizlikPrimi ?? (b.pekDetay ? Math.round(b.pekDetay.finalPek * (b.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100 * 100) / 100 : 0);
-    return acc + (b.pekDetay?.isverenPrimToplami ?? (isverenSgk + isverenIssizlik));
+    const isverenAltSinirFark = b.pekDetay?.pekAltSinirTamamlamaIsverenPrimi ?? 0;
+    return acc + (b.pekDetay?.isverenPrimToplami ?? (isverenSgk + isverenIssizlik + isverenAltSinirFark));
   }, 0);
 
   return (

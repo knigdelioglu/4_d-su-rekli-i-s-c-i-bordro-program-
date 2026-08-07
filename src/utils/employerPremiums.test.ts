@@ -297,4 +297,112 @@ describe('SGK Yemek İstisnası ve İşveren Primleri Regression Testleri (A - H
     expect(pekResult.yemekIstisnasiTutar).toBe(6600.00);
     expect(pekResult.hesaplananPek).toBe(16.50);
   });
+
+  // Test I — SGK 2026 Resmî Örnek: PEK = 33.030 TL, %38,75 Toplam Tahakkuk = 12.799,13 TL
+  test('Test I — PEK = 33.030 => İşçi SGK 4.624,20, İşçi İşsizlik 330,30, İşveren SGK 7.184,03, İşveren İşsizlik 660,60, Toplam 12.799,13', () => {
+    const puantaj: PuantajOzeti = { Ç: 30, T: 0, G: 0, İ: 0, GÇ: 0, GÇT: 0, R: 0 };
+    const kurum: DönemselKurumDegerleri = {
+      donemId: '2026-05',
+      gunlukTabanUcret: 2443.28,
+      gunlukYemek: 0,
+      birlestirilmisSosyalYardim: 0,
+      gunlukVasitaYol: 0,
+      giyimYardimi: 0,
+      hizmetZammiBirimi: 0,
+      sgkIsciOraniYuzde: 14,
+      issizlikIsciOraniYuzde: 1,
+      sgkIsverenOraniYuzde: 21.75,
+      issizlikIsverenOraniYuzde: 2.00,
+    };
+
+    const gelirler: GelirKalemleri = {
+      tabanBrutAylik: 33030.00,
+      tediye: 0,
+      tisIkramiyesi: 0,
+      ekOdeme: 0,
+      yemek: 0,
+      birlestirilmisSosyalYardim: 0,
+      vasitaYol: 0,
+      giyimYardimi: 0,
+      isPrimi: 0,
+      hizmetZammi: 0,
+      digerGelir: 0,
+    };
+
+    const pekResult = calculatePrimeEsasKazanc(gelirler, puantaj, kurum, []);
+    const statutory = calculateStatutoryDeductions(gelirler, kurum, undefined, puantaj, 0, [], 0);
+
+    // Midpoint: 33.030 × %21,75 = 7.184,025 -> 7.184,03 (sıfırdan uzağa)
+    expect(Math.round(33030.00 * 0.2175 * 100) / 100).toBe(7184.03);
+
+    expect(statutory.isciSgkPrimi).toBe(4624.20);
+    expect(statutory.isciIssizlikPrimi).toBe(330.30);
+    expect(pekResult.isverenSgkPrimi).toBe(7184.03);
+    expect(pekResult.isverenIssizlikPrimi).toBe(660.60);
+
+    const toplamTahakkuk =
+      statutory.isciSgkPrimi! + statutory.isciIssizlikPrimi! +
+      pekResult.isverenSgkPrimi + pekResult.isverenIssizlikPrimi;
+    expect(toplamTahakkuk).toBe(12799.13);
+  });
+
+  // Test J — PEK Alt Sınır Senaryosu (Ham 25.000, Nihai 33.030, Fark 8.030)
+  test('Test J — Ham PEK 25.000 / Nihai PEK 33.030: işçi 3.750, işveren 9.049,13, toplam tahakkuk 12.799,13', () => {
+    const puantaj: PuantajOzeti = { Ç: 30, T: 0, G: 0, İ: 0, GÇ: 0, GÇT: 0, R: 0 };
+    const kurum: DönemselKurumDegerleri = {
+      donemId: '2026-05',
+      gunlukTabanUcret: 2443.28,
+      gunlukYemek: 0,
+      birlestirilmisSosyalYardim: 0,
+      gunlukVasitaYol: 0,
+      giyimYardimi: 0,
+      hizmetZammiBirimi: 0,
+      gunlukAsgariUcret: 1101.00,
+      sgkIsciOraniYuzde: 14,
+      issizlikIsciOraniYuzde: 1,
+      sgkIsverenOraniYuzde: 21.75,
+      issizlikIsverenOraniYuzde: 2.00,
+    };
+
+    const gelirler: GelirKalemleri = {
+      tabanBrutAylik: 25000.00,
+      tediye: 0,
+      tisIkramiyesi: 0,
+      ekOdeme: 0,
+      yemek: 0,
+      birlestirilmisSosyalYardim: 0,
+      vasitaYol: 0,
+      giyimYardimi: 0,
+      isPrimi: 0,
+      hizmetZammi: 0,
+      digerGelir: 0,
+    };
+
+    const pekResult = calculatePrimeEsasKazanc(gelirler, puantaj, kurum, []);
+    const statutory = calculateStatutoryDeductions(gelirler, kurum, undefined, puantaj, 0, [], 0);
+
+    // PEK ayrımı (Model A): ham 25.000, nihai 33.030, fark 8.030
+    expect(pekResult.hesaplananPek).toBe(25000.00);
+    expect(pekResult.pekAltSinir).toBe(33030.00);
+    expect(pekResult.finalPek).toBe(33030.00);
+    expect(pekResult.altSinirTamamlamaFarki).toBe(8030.00);
+
+    // İşçi kesintileri ham PEK (25.000) üzerinden
+    expect(statutory.isciSgkPrimi).toBe(3500.00);
+    expect(statutory.isciIssizlikPrimi).toBe(250.00);
+
+    // İşveren normal payları nihai PEK (33.030) üzerinden
+    expect(pekResult.isverenSgkPrimi).toBe(7184.03);
+    expect(pekResult.isverenIssizlikPrimi).toBe(660.60);
+
+    // Alt sınır farkı işveren yükü: 8.030 × %14 = 1.124,20 + 8.030 × %1 = 80,30 = 1.204,50
+    expect(pekResult.pekAltSinirTamamlamaIsverenPrimi).toBe(1204.50);
+    // İşveren toplam: 7.184,03 + 660,60 + 1.204,50 = 9.049,13
+    expect(pekResult.isverenPrimToplami).toBe(9049.13);
+
+    // Toplam SGK tahakkuk: 3.750,00 + 9.049,13 = 12.799,13
+    const toplamTahakkuk =
+      statutory.isciSgkPrimi! + statutory.isciIssizlikPrimi! + pekResult.isverenPrimToplami;
+    expect(toplamTahakkuk).toBe(12799.13);
+  });
 });
