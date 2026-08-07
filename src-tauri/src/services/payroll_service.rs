@@ -9,6 +9,7 @@ use crate::repositories::settings_repo::SettingsRepository;
 use super::cumulative_tax_service::CumulativeTaxService;
 use rusqlite::Connection;
 use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
 
 pub struct PayrollService;
 
@@ -65,7 +66,7 @@ impl PayrollService {
             Some(&personel.grup),
         )?;
 
-        let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
+let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
         let prev_asgari_gv = CumulativeTaxService::get_previous_cumulative_asgari_gv(conn, personnel_id, &period)?;
 
         let devreden_pek_gelen = Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
@@ -80,13 +81,35 @@ impl PayrollService {
             prev_asgari_gv,
         );
 
+        let gelir_toplam = calculate_gelir_toplam(&gelirler);
+
+        // GV detay snapshot: gerçek kümülatif ile asgari takvim referansı açıkça ayrılır.
+        let sgk_orani = kurum_degerleri.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
+        let issizlik_orani = kurum_degerleri.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
+        let gunluk_asgari = kurum_degerleri.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
+        let cari_gv_matrah = calculate_gv_matrah(
+            gelir_toplam,
+            kesintiler.isciSgkPrimi.unwrap_or_default(),
+            kesintiler.isciIssizlikPrimi.unwrap_or_default(),
+        );
+        let asgari_ucret_aylik_matrah = calculate_aylik_asgari_ucret_gv_matrahi(
+            gunluk_asgari,
+            sgk_orani,
+            issizlik_orani,
+        );
+        let gv_detay = calculate_gv_hesap_detayi(
+            cari_gv_matrah,
+            prev_gv,
+            asgari_ucret_aylik_matrah,
+            prev_asgari_gv,
+        );
+
         let odenen_raporlu_gun = super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
             conn,
             personnel_id,
             &period,
         )?;
 
-        let gelir_toplam = calculate_gelir_toplam(&gelirler);
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
 
@@ -113,6 +136,7 @@ impl PayrollService {
             sonrakiDevredenPek: Some(sonraki_devreden),
             pekDetay: Some(pek_detay),
             isPrimiDetay: Some(is_primi_detay),
+            gvDetay: Some(gv_detay),
             odenenRaporluGun: Some(odenen_raporlu_gun),
             raporluGun: Some(summary.r),
         };

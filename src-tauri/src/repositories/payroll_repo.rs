@@ -12,7 +12,8 @@ impl PayrollRepository {
             "SELECT id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                     new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                     puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                    calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json
+                    calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json,
+                    gv_snapshot_json
              FROM payroll_records",
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
@@ -39,6 +40,7 @@ impl PayrollRepository {
             let raporlu_gun: Option<i32> = row.get(19)?;
             let odenen_raporlu_gun: Option<i32> = row.get(20)?;
             let is_primi_snapshot_json: Option<String> = row.get(21)?;
+            let gv_snapshot_json: Option<String> = row.get(22)?;
 
             let status = match status_str.as_str() {
                 "DRAFT" => BordroStatus::DRAFT,
@@ -51,8 +53,9 @@ impl PayrollRepository {
             let devreden_pek_gelen: Option<Vec<DevredenPekKaydi>> = devreden_pek_gelen_json.and_then(|j| serde_json::from_str(&j).ok());
             let sonraki_devreden_pek: Option<Vec<DevredenPekKaydi>> = sonraki_devreden_pek_json.and_then(|j| serde_json::from_str(&j).ok());
             let is_primi_detay: Option<IsPrimiHesapDetayi> = is_primi_snapshot_json.and_then(|j| serde_json::from_str(&j).ok());
+            let gv_detay: Option<GvHesapDetayi> = gv_snapshot_json.and_then(|j| serde_json::from_str(&j).ok());
 
-            Ok((id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_detay))
+            Ok((id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_detay, gv_detay))
         }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
         let mut record_tuples = Vec::new();
@@ -62,7 +65,7 @@ impl PayrollRepository {
 
         let mut result = Vec::new();
 
-        for (id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_detay) in record_tuples {
+        for (id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_detay, gv_detay) in record_tuples {
             // Load income items
             let mut inc_stmt = conn.prepare(
                 "SELECT item_type, amount FROM payroll_income_items WHERE payroll_id = ?1",
@@ -148,6 +151,7 @@ impl PayrollRepository {
                 sonrakiDevredenPek: sonraki_devreden_pek,
                 pekDetay: pek_detay,
                 isPrimiDetay: is_primi_detay,
+                gvDetay: gv_detay,
                 odenenRaporluGun: odenen_raporlu_gun,
                 raporluGun: raporlu_gun,
             });
@@ -181,26 +185,28 @@ impl PayrollRepository {
         let devreden_pek_gelen_json = b.devredenPekGelen.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
         let sonraki_devreden_pek_json = b.sonrakiDevredenPek.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
         let is_primi_snapshot_json = b.isPrimiDetay.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
+        let gv_snapshot_json = b.gvDetay.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
 
         conn.execute(
-            "INSERT INTO payroll_records (
+"INSERT INTO payroll_records (
                 id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                 new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, calculated_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+                raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json, calculated_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
             ON CONFLICT(personnel_id, period_id) DO UPDATE SET
                 gross_total=?4, sgk_base=?5, gv_base=?6, previous_cumulative_gv=?7, new_cumulative_gv=?8,
                 income_tax=?9, stamp_tax=?10, total_deductions=?11, net_payment=?12, status=?13,
                 puantaj_summary_json=?14, pek_detail_json=?15, devreden_pek_gelen_json=?16,
                 sonraki_devreden_pek_json=?17, raporlu_gun=?18, odenen_raporlu_gun=?19,
-                is_primi_snapshot_json=?20, updated_at=?22",
+                is_primi_snapshot_json=?20, gv_snapshot_json=?21, updated_at=?23",
             params![
                 b.id, b.personelId, b.donemId, gross_total, sgk_base, gv_base, prev_gv, new_gv,
                 income_tax, stamp_tax, total_deductions, net_payment, status_str,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                 b.raporluGun, b.odenenRaporluGun,
                 is_primi_snapshot_json,
+                gv_snapshot_json,
                 now, now
             ],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;

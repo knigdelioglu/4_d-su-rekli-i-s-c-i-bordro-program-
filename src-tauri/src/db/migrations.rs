@@ -147,6 +147,11 @@ pub fn get_migrations() -> Migrations<'static> {
             ALTER TABLE payroll_records ADD COLUMN is_primi_snapshot_json TEXT;
             "#,
         ),
+        M::up(
+            r#"
+            ALTER TABLE payroll_records ADD COLUMN gv_snapshot_json TEXT;
+            "#,
+        ),
     ])
 }
 

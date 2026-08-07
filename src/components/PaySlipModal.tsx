@@ -237,6 +237,50 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </div>
           </div>
 
+          {/* Asgari Ücret Gelir Vergisi İstisnası Detay Kartı (GİB 7349 S.K.) */}
+          {bordro.gvDetay && (
+            <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 text-xs space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] font-bold text-emerald-950">
+                <div className="flex items-center gap-1.5">
+                  <Shield className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Asgari Ücret Gelir Vergisi İstisnası Detayları (7349 Sayılı Kanun):</span>
+                </div>
+                <span className="text-emerald-900 font-mono font-bold">
+                  Kesilen Gelir Vergisi: {formatTL(bordro.gvDetay.kesilenGelirVergisi)}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-700 pt-1 border-t border-emerald-200 font-mono">
+                <div>
+                  <span className="text-slate-500 font-sans">Asgari Ücret Aylık GV Matrahı: </span>
+                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.asgariUcretGvMatrahi)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Takvim Referans Küm. Matrah: </span>
+                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.asgariUcretReferansKumulatifMatrahi)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Aylık İstisna Hakkı (Vergi): </span>
+                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.asgariUcretGvIstisnasi)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Brüt Gelir Vergisi (İstisna Öncesi): </span>
+                  <span className="font-semibold text-slate-900">{formatTL(bordro.gvDetay.brutGelirVergisi)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Uygulanan İstisna: </span>
+                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.uygulananGvIstisnasi)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Kesilecek Gelir Vergisi: </span>
+                  <span className="font-bold text-rose-900">{formatTL(bordro.gvDetay.kesilenGelirVergisi)}</span>
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-500 italic pt-0.5">
+                * Cari GV matrahı: {formatTL(bordro.gvDetay.cariGvMatrahi)} · Dönem sonu kümülatif matrah: {formatTL(bordro.gvDetay.yeniKumulatifGvMatrahi)}. İstisna, çalışanın kendi bordrosuna değil takvim konumuna göre hesaplanır.
+              </div>
+            </div>
+          )}
+
           {/* Income & Deduction Tables */}
           <div className="grid grid-cols-2 gap-6 text-xs">
             {/* GELİRLER */}

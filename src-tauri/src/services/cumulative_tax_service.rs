@@ -95,11 +95,10 @@ impl CumulativeTaxService {
 
     pub fn get_previous_cumulative_asgari_gv(
         conn: &Connection,
-        personnel_id: &str,
+        _personnel_id: &str,
         active_period: &BordroDonemi,
     ) -> Result<Decimal> {
         let all_periods = PeriodRepository::get_all(conn)?;
-        let all_payrolls = PayrollRepository::get_all(conn)?;
         let inst_map = crate::repositories::settings_repo::SettingsRepository::get_all_institution_settings(conn)?;
 
         let prior_periods: Vec<&BordroDonemi> = all_periods
@@ -110,11 +109,6 @@ impl CumulativeTaxService {
         let mut cumulative_asgari = dec!(0);
 
         for p in prior_periods {
-            let has_payroll = all_payrolls.iter().any(|b| b.personelId == personnel_id && b.donemId == p.id);
-            if !has_payroll {
-                continue;
-            }
-
             let k_degerleri = inst_map.get(&p.id).cloned().unwrap_or_default();
             let gunluk_asgari = k_degerleri.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
             let sgk_rate = k_degerleri.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);

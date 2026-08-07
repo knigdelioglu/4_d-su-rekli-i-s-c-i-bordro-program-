@@ -1,5 +1,11 @@
 import { expect, test, describe } from 'bun:test';
-import { calculatePreviousCumulativeGvMatrah, createBordroDonemi } from './payrollUtils';
+import {
+  calculateAylikAsgariUcretGvMatrahi,
+  calculateGvHesapDetayi,
+  calculatePreviousCumulativeAsgariUcretGvMatrah,
+  calculatePreviousCumulativeGvMatrah,
+  createBordroDonemi,
+} from './payrollUtils';
 import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 
 describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => {
@@ -121,9 +127,42 @@ describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => 
       sonGuncellemeTarihi: '',
     };
 
-    // Both devir for May (120,000) AND saved Jan 2026 bordro exist -> Conflict!
     expect(() => {
       calculatePreviousCumulativeGvMatrah('test-p1', mayis2026, [ocakBordro], donemlerWithOcak, person);
     }).toThrow('ÇAKIŞMA UYARISI');
+  });
+});
+
+describe('Asgari Ücret GV İstisnası (takvim referansı) Regression Testi', () => {
+  const aylik = 28075.5;
+
+  test('A. Ocak — aylık matrah 28.075,50 ve istisna 4.211,33 TL', () => {
+    const aylikMatrah = calculateAylikAsgariUcretGvMatrahi(1101, 0.14, 0.01);
+    expect(aylikMatrah).toBeCloseTo(28075.5, 2);
+
+    const det = calculateGvHesapDetayi(28075.5, 0, aylikMatrah, 0);
+    expect(det.asgariUcretGvMatrahi).toBeCloseTo(28075.5, 2);
+    expect(det.asgariUcretGvIstisnasi).toBeCloseTo(4211.33, 2);
+    expect(det.uygulananGvIstisnasi).toBeCloseTo(4211.33, 2);
+    expect(det.kesilenGelirVergisi).toBeCloseTo(0, 2);
+  });
+
+  test('B. Temmuz — referans kümülatif takvimden (6 × 28.075,50), istisna 4.537,75 TL', () => {
+    const det = calculateGvHesapDetayi(aylik, 0, aylik, aylik * 6);
+    expect(det.asgariUcretReferansKumulatifMatrahi).toBeCloseTo(196528.5, 2);
+    expect(det.asgariUcretGvIstisnasi).toBeCloseTo(4537.75, 2);
+  });
+
+  test('C. Ağustos — referans 7 × 28.075,50, istisna 5.615,10 TL', () => {
+    const det = calculateGvHesapDetayi(aylik, 0, aylik, aylik * 7);
+    expect(det.asgariUcretReferansKumulatifMatrahi).toBeCloseTo(224604, 2);
+    expect(det.asgariUcretGvIstisnasi).toBeCloseTo(5615.1, 2);
+  });
+
+  test('D. Gerçek kümülatif aynı ay istisneyi değiştirmez; referans takvimden gelir', () => {
+    const low = calculateGvHesapDetayi(65000, 5000, aylik, 0);
+    const high = calculateGvHesapDetayi(65000, 300000, aylik, 0);
+    expect(low.asgariUcretGvIstisnasi).toBeCloseTo(high.asgariUcretGvIstisnasi, 2);
+    expect(low.brutGelirVergisi).toBeLessThan(high.brutGelirVergisi);
   });
 });

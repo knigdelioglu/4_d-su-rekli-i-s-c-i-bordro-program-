@@ -8,6 +8,7 @@ import {
   DevredenPekKaydi,
   DönemselKurumDegerleri,
   GelirKalemleri,
+  GvHesapDetayi,
   IsPrimiGrubu,
   IsPrimiGrupItem,
   IsPrimiHesapDetayi,
@@ -578,11 +579,77 @@ export function calculateTotalTaxForCumulativeMatrah(kumulatif: number): number 
   return totalTax;
 }
 
+/**
+ * Gelir vergisi kalemlerinin parasal yuvarlama politikası (GİB uygulaması).
+ * Yarım kuruşluk değerler sıfırdan uzağa yuvarlanır (banker's rounding değil):
+ * Ocak asgari istisnası tax(28.075,50) = 4.211,325 → 4.211,33.
+ * Yalnız GV kalemlerinde kullanılır; `Math.round` (genel 2 hane) ve SGK yuvarlamasına dokunulmaz.
+ */
+export function roundGvAmount(val: number): number {
+  if (val === 0) return 0;
+  const sign = val < 0 ? -1 : 1;
+  const n = Math.abs(val);
+  // Float hatasından kaçınmak için parseFloat üzerinden çalışan half-up yuvarlama.
+  return sign * Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 export function calculateGelirVergisi2026(matrah: number, kumulatifOnceki: number = 0): number {
   if (matrah <= 0) return 0;
   const totalTaxCurrent = calculateTotalTaxForCumulativeMatrah(kumulatifOnceki + matrah);
   const totalTaxPrevious = calculateTotalTaxForCumulativeMatrah(kumulatifOnceki);
-  return Math.round((totalTaxCurrent - totalTaxPrevious) * 100) / 100;
+  return roundGvAmount(totalTaxCurrent - totalTaxPrevious);
+}
+
+/**
+ * Asgari ücretin takvim referans aylık GV matrahı:
+ * aylık brüt asgari - (işçi SGK + işsizlik). Oranlar 0-1 aralığındadır (ör. 0.14).
+ */
+export function calculateAylikAsgariUcretGvMatrahi(
+  gunlukAsgari: number,
+  sgkIsciOrani: number,
+  issizlikIsciOrani: number
+): number {
+  const aylikBrutAsgari = Math.round(gunlukAsgari * 30 * 100) / 100;
+  const aylikAsgariSgk = Math.round(aylikBrutAsgari * (sgkIsciOrani + issizlikIsciOrani) * 100) / 100;
+  return Math.max(0, Math.round((aylikBrutAsgari - aylikAsgariSgk) * 100) / 100);
+}
+
+/**
+ * GV matrahı = brüt gelir - işçi SGK - işçi işsizlik (negatif olamaz).
+ */
+export function calculateGvMatrah(brutGelir: number, isciSgk: number, isciIssizlik: number): number {
+  return Math.max(0, brutGelir - isciSgk - isciIssizlik);
+}
+
+/**
+ * Gelir vergisi bloğunun tam, denetlenebilir hesap detayını döndürür.
+ * İstisna BİR kez toplam cari matraha uygulanır (matrah indirimi değil, vergi düşümü);
+ * kesilecek GV negatif olamaz; GV kalemlerinde roundG2 kullanılır.
+ */
+export function calculateGvHesapDetayi(
+  cariGvMatrahi: number,
+  kumulatifGvMatrahiOnceki: number,
+  asgariUcretAylikGvMatrahi: number,
+  kumulatifAsgariGvOnceki: number
+): GvHesapDetayi {
+  const brutGelirVergisi = calculateGelirVergisi2026(cariGvMatrahi, kumulatifGvMatrahiOnceki);
+  const asgariUcretGvIstisnasi = calculateGelirVergisi2026(
+    asgariUcretAylikGvMatrahi,
+    kumulatifAsgariGvOnceki
+  );
+  const uygulananGvIstisnasi = Math.min(brutGelirVergisi, asgariUcretGvIstisnasi);
+  const kesilenGelirVergisi = Math.max(0, brutGelirVergisi - uygulananGvIstisnasi);
+
+  return {
+    cariGvMatrahi,
+    yeniKumulatifGvMatrahi: Math.round((kumulatifGvMatrahiOnceki + cariGvMatrahi) * 100) / 100,
+    brutGelirVergisi: roundGvAmount(brutGelirVergisi),
+    asgariUcretGvMatrahi: asgariUcretAylikGvMatrahi,
+    asgariUcretReferansKumulatifMatrahi: Math.round((kumulatifAsgariGvOnceki + asgariUcretAylikGvMatrahi) * 100) / 100,
+    asgariUcretGvIstisnasi: roundGvAmount(asgariUcretGvIstisnasi),
+    uygulananGvIstisnasi: roundGvAmount(uygulananGvIstisnasi),
+    kesilenGelirVergisi: roundGvAmount(kesilenGelirVergisi),
+  };
 }
 
 /**
@@ -791,6 +858,7 @@ export function calculatePrimeEsasKazanc(
 
 export interface StatutoryDeductionsResult extends Partial<KesintiKalemleri> {
   pekResult?: ReturnType<typeof calculatePrimeEsasKazanc>;
+  gvDetay?: GvHesapDetayi;
 }
 
 /**
@@ -856,10 +924,14 @@ export function calculateStatutoryDeductions(
   const aylikAsgariSgk = Math.round(aylikBrutAsgariUcret * (sgkRate + issizlikRate) * 100) / 100;
   const asgariUcretGvMatrah = Math.max(0, aylikBrutAsgariUcret - aylikAsgariSgk);
 
-  // Asgari Ücret GV İstisnası (7349 S.K. - Yasal aylık asgari ücret matrahı ve kümülatif asgari ücret matrahı üzerinden hesaplama)
-  const asgariUcretGvIstisnasi = calculateGelirVergisi2026(asgariUcretGvMatrah, kumulatifAsgariUcretGvMatrahiOnceki);
-  const hamGelirVergisi = calculateGelirVergisi2026(gelirVergisiMatrah, kumulatifGvMatrahiOnceki);
-  const gelirVergisi = Math.max(0, Math.round((hamGelirVergisi - asgariUcretGvIstisnasi) * 100) / 100);
+  // GV bloğu GİB uyumlu tam hesap detayı üzerinden (yalnız GV kalemlerinde roundGvAmount)
+  const gvDetay = calculateGvHesapDetayi(
+    gelirVergisiMatrah,
+    kumulatifGvMatrahiOnceki,
+    asgariUcretGvMatrah,
+    kumulatifAsgariUcretGvMatrahiOnceki
+  );
+  const gelirVergisi = gvDetay.kesilenGelirVergisi;
 
   // Asgari Ücret Damga Vergisi İstisnası (7349 S.K. - Yasal aylık brüt asgari ücret üzerinden)
   const asgariUcretDvIstisnasi = Math.round(aylikBrutAsgariUcret * dvRate * 100) / 100;
@@ -925,6 +997,7 @@ export function calculateStatutoryDeductions(
     hayatSaglikSigortasi,
     digerKesinti,
     pekResult,
+    gvDetay,
   };
 }
 
@@ -1088,11 +1161,10 @@ export function calculatePreviousCumulativeAsgariUcretGvMatrah(
   );
 
   for (const period of priorPeriods) {
-    // Only accumulate minimum wage matrah for periods where employee actually has a saved payroll record
-    const hasBordro = bordrolar?.some(
-      (b) => b.personelId === personelId && b.donemId === period.id
-    );
-    if (!hasBordro) continue;
+    // Kümülatif asgari ücret GV matrahı takvim konumuna dayanır (GİB 7349 S.K.):
+    // çalışanın kendi bordrosu o ayda kayıtlı olmasa bile o ayın yasal asgari ücret
+    // matrahı referansa eklenir. Böylece istisna, hiç kayıtlı bordrosu olmayan
+    // çalışanlar için eksik hesaplanmaz.
 
     const kDegerleri = kurumDegerleriMap?.[period.id] || DEFAULT_KURUM_DEGERLERI;
     const gunlukAsgariUcret = kDegerleri.gunlukAsgariUcret ?? 1101.00;

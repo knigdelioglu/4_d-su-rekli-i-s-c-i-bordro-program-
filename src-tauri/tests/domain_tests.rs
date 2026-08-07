@@ -113,6 +113,7 @@ mod tests {
             sonrakiDevredenPek: None,
             pekDetay: None,
             isPrimiDetay: None,
+            gvDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -144,6 +145,7 @@ mod tests {
             sonrakiDevredenPek: None,
             pekDetay: None,
             isPrimiDetay: None,
+            gvDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -189,6 +191,7 @@ mod tests {
             sonrakiDevredenPek: None,
             pekDetay: None,
             isPrimiDetay: None,
+            gvDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -241,6 +244,7 @@ mod tests {
             sonrakiDevredenPek: None,
             pekDetay: None,
             isPrimiDetay: None,
+            gvDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -1331,6 +1335,168 @@ mod tests {
         assert_eq!(pek_detay.isverenSgkPrimi, Some(dec!(21750.00)));
         // 100.000 * %2 = 2.000 TL
         assert_eq!(pek_detay.isverenIssizlikPrimi, Some(dec!(2000.00)));
+    }
+
+    // ===== Test A: Ocak — asgari ücret GV istisnası = 4.211,33 TL + aylık matrah = 28.075,50 TL
+    #[test]
+    fn test_gv_istisna_ocak() {
+        let aylik_asgari_gv_matrah = bordro_programi_lib::domain::calculations::calculate_aylik_asgari_ucret_gv_matrahi(
+            dec!(1101.00), dec!(0.14), dec!(0.01),
+        );
+        assert_eq!(aylik_asgari_gv_matrah, dec!(28075.50));
+
+        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            dec!(28075.50), dec!(0), aylik_asgari_gv_matrah, dec!(0),
+        );
+        assert_eq!(det.asgariUcretGvMatrahi, dec!(28075.50));
+        assert_eq!(det.asgariUcretReferansKumulatifMatrahi, dec!(28075.50));
+        assert_eq!(det.asgariUcretGvIstisnasi, dec!(4211.33));
+        // Ocak: brüt GV = 4211,33 olduğu için istisna tam kullanılır, kesilen = 0
+        assert_eq!(det.uygulananGvIstisnasi, dec!(4211.33));
+        assert_eq!(det.kesilenGelirVergisi, dec!(0));
+    }
+
+    // ===== Test B: Temmuz — referans kümülatif takvimden (Oca-Tem) gelir, istisna = 4.537,75
+    #[test]
+    fn test_gv_istisna_temmuz() {
+        let aylik = dec!(28075.50);
+        let ref_prev = aylik * dec!(6); // Ocak..Haziran
+        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            aylik, dec!(0), aylik, ref_prev,
+        );
+        assert_eq!(det.asgariUcretReferansKumulatifMatrahi, dec!(196528.50));
+        assert_eq!(det.asgariUcretGvIstisnasi, dec!(4537.75));
+    }
+
+    // ===== Test C: Ağustos — istisna = 5.615,10 TL (takvim konumu arttıkça istisna büyür)
+    #[test]
+    fn test_gv_istisna_agustos() {
+        let aylik = dec!(28075.50);
+        let ref_prev = aylik * dec!(7); // Ocak..Temmuz
+        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            aylik, dec!(0), aylik, ref_prev,
+        );
+        assert_eq!(det.asgariUcretReferansKumulatifMatrahi, dec!(224604.00));
+        assert_eq!(det.asgariUcretGvIstisnasi, dec!(5615.10));
+    }
+
+    // ===== Test D: Gerçek kümülatif aynı ay istisnayı değiştirmez; referans takvimden gelir
+    #[test]
+    fn test_gv_istisna_gercek_kumulatif_bagimsiz() {
+        let aylik = dec!(28075.50);
+        let ref_prev = aylik * dec!(0); // Ocak
+        let det_low = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            dec!(65000), dec!(5000), aylik, ref_prev,
+        );
+        let det_high = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            dec!(65000), dec!(300000), aylik, ref_prev,
+        );
+        // İstisna, gerçek kümülatiften matematiksel olarak bağımsızdır (referans takvim matrahı):
+        assert_eq!(det_low.asgariUcretGvIstisnasi, det_high.asgariUcretGvIstisnasi);
+        assert!(det_low.brutGelirVergisi < det_high.brutGelirVergisi);
+    }
+
+    // ===== Test E: Gerçek kümülatif / devir — açılış 120.000 + 65.000 = 185.000, istisna Mayıs 4.211,33
+    #[test]
+    fn test_gv_istisna_devir_gercek_kumulatif() {
+        let aylik = dec!(28075.50);
+        // Mayıs takvim konumu 4 → önceki referans = 4 ay
+        let ref_prev_def = aylik * dec!(4);
+        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            dec!(65000), dec!(120000), aylik, ref_prev_def,
+        );
+        assert_eq!(det.yeniKumulatifGvMatrahi, dec!(185000));
+        assert_eq!(det.asgariUcretGvIstisnasi, dec!(4211.33));
+    }
+
+    // ===== Test F: brüt GV < istisna hakkı → uygulanan = brüt, kesilen = 0
+    #[test]
+    fn test_gv_istisna_brut_alti() {
+        let aylik = dec!(28075.50);
+        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(dec!(10000), dec!(0), aylik, dec!(0));
+        // brüt GV = 10.000 * %15 = 1.500; istisna hakkı 4.211,33
+        assert_eq!(det.brutGelirVergisi, dec!(1500));
+        assert_eq!(det.uygulananGvIstisnasi, dec!(1500));
+        assert_eq!(det.kesilenGelirVergisi, dec!(0));
+    }
+
+    // ===== Test G: Çoklu gelir kalemi — istisna BİR kez uygulanır
+    #[test]
+    fn test_gv_istisna_coklu_gelir_bir_kez() {
+        use bordro_programi_lib::domain::calculations::calculate_statutory_deductions;
+        let gelirler = GelirKalemleri {
+            tabanBrutAylik: Some(dec!(50000)),
+            isPrimi: Some(dec!(10000)),
+            digerGelir: Some(dec!(5000)),
+            ..Default::default()
+        };
+        let puantaj = PuantajOzeti { c: 30, ..Default::default() };
+        let (kesintiler, _, _) = calculate_statutory_deductions(&gelirler, None, None, Some(&puantaj), dec!(0), &[], dec!(0));
+        // matrah = 65.000 - SGK(9.100) - işsizlik(650) = 55.250 → brüt GV 8.287,50
+        // istisna (Ocak) 4.211,33 → kesilen = 8.287,50 - 4.211,33 = 4.076,17
+        assert_eq!(kesintiler.gelirVergisi, Some(dec!(4076.17)));
+    }
+
+    // ===== Test H: FINALIZED bordronun GV snapshot'ı kaydedilip geri yüklenir, tutarı korunur
+    #[test]
+    fn test_gv_snapshot_finalized_persistence() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+        let person = setup_test_person("test-gv");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-01".into(), yil: 2026, ay: 1,
+            baslangicTarihi: "2026-01-01".into(), bitisTarihi: "2026-01-31".into(),
+            donemAdi: "Ocak 2026".into(),
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        let gv_detay = GvHesapDetayi {
+            cariGvMatrahi: dec!(28075.50),
+            yeniKumulatifGvMatrahi: dec!(28075.50),
+            brutGelirVergisi: dec!(4211.33),
+            asgariUcretGvMatrahi: dec!(28075.50),
+            asgariUcretReferansKumulatifMatrahi: dec!(28075.50),
+            asgariUcretGvIstisnasi: dec!(4211.33),
+            uygulananGvIstisnasi: dec!(4211.33),
+            kesilenGelirVergisi: dec!(0),
+        };
+
+        let kall = BordroKaydi {
+            id: "test-gv_2026-01".into(),
+            personelId: "test-gv".into(),
+            donemId: "2026-01".into(),
+            puantajOzeti: PuantajOzeti::default(),
+            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(28075.50)), ..Default::default() },
+            gelirToplam: dec!(28075.50),
+            kesintiler: KesintiKalemleri::default(),
+            kesintiToplam: dec!(0),
+            netOdeme: dec!(28075.50),
+            status: BordroStatus::FINALIZED,
+            olusturulmaTarihi: "".into(),
+            sonGuncellemeTarihi: "".into(),
+            notlar: None,
+            oncekiKumulatifGvMatrahi: Some(dec!(0)),
+            oncekiKumulatifAsgariGvMatrahi: Some(dec!(0)),
+            manuelKumulatifGvMatrahi: None,
+            devredenPekGelen: None,
+            sonrakiDevredenPek: None,
+            pekDetay: None,
+            isPrimiDetay: None,
+            gvDetay: Some(gv_detay),
+            odenenRaporluGun: None,
+            raporluGun: None,
+        };
+        PayrollRepository::save(&conn, &kall)?;
+
+        let reloaded = PayrollRepository::get_all(&conn)?
+            .into_iter().find(|b| b.donemId == "2026-01").expect("kayit yok");
+        let gv = reloaded.gvDetay.expect("gvDetay persist edilmedi");
+        assert_eq!(gv.brutGelirVergisi, dec!(4211.33));
+        assert_eq!(gv.asgariUcretGvIstisnasi, dec!(4211.33));
+        assert_eq!(gv.kesilenGelirVergisi, dec!(0));
+        assert_eq!(gv.yeniKumulatifGvMatrahi, dec!(28075.50));
+        Ok(())
     }
 }
 

@@ -10,6 +10,15 @@ fn round2(val: Decimal) -> Decimal {
     val.round_dp(2)
 }
 
+/// Gelir vergisi kalemlerinin parasal yuvarlama politikası (GİB uygulaması).
+/// Yarım kuruşluk değerler sıfırdan uzağa yuvarlanır (MidpointAwayFromZero / banker's
+/// rounding değil): Ocak asgari istisnası tax(28.075,50) = 4.211,325 → 4.211,33.
+/// Yalnız GV kalemlerinde (brüt GV, asgari istisna, kesilen GV ve asgari ara değerler)
+/// kullanılır. `round2` (MidpointNearestEven) ve `round_sgk_amount` dokunulmaz.
+fn round_gv_amount(val: Decimal) -> Decimal {
+    val.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+}
+
 /// SGK/işsizlik prim tahakkuklarının parasal yuvarlama politikası.
 /// SGK'nın resmî örneklerine uygun olarak midpoint değerler sıfırdan uzağa yuvarlanır
 /// (banker's rounding değil): 33.030 × %21,75 = 7.184,025 → 7.184,03.
@@ -66,7 +75,50 @@ pub fn calculate_gelir_vergisi_2026(matrah: Decimal, kumulatif_onceki: Decimal) 
     }
     let total_tax_current = calculate_total_tax_for_cumulative_matrah(kumulatif_onceki + matrah);
     let total_tax_previous = calculate_total_tax_for_cumulative_matrah(kumulatif_onceki);
-    round2(total_tax_current - total_tax_previous)
+    round_gv_amount(total_tax_current - total_tax_previous)
+}
+
+/// GV matrahı = brüt gelir - işçi SGK - işçi işsizlik (negatif olamaz).
+pub fn calculate_gv_matrah(brut_gelir: Decimal, isci_sgk: Decimal, isci_issizlik: Decimal) -> Decimal {
+    (brut_gelir - isci_sgk - isci_issizlik).max(dec!(0))
+}
+
+/// Asgari ücretin takvim referans aylık GV matrahı:
+/// aylık brüt asgari - (işçi SGK + işsizlik). Oranlar 0-1 aralığındadır (ör. 0.14).
+pub fn calculate_aylik_asgari_ucret_gv_matrahi(
+    gunluk_asgari: Decimal,
+    sgk_isci_orani: Decimal,
+    issizlik_isci_orani: Decimal,
+) -> Decimal {
+    let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
+    let aylik_asgari_sgk = round2(aylik_brut_asgari * (sgk_isci_orani + issizlik_isci_orani));
+    (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0))
+}
+
+/// Gelir vergisi bloğunun tam, denetlenebilir hesap detayını döndürür.
+/// İstisna BİR kez toplam cari matraha uygulanır (matrah indirimi değil, vergi
+/// düşümü); kesilecek GV negatif olamaz; GV kalemlerinde round_gv_amount kullanılır.
+pub fn calculate_gv_hesap_detayi(
+    cari_gv_matrahi: Decimal,
+    kumulatif_gv_matrahi_onceki: Decimal,
+    asgari_ucret_aylik_gv_matrahi: Decimal,
+    kumulatif_asgari_gv_onceki: Decimal,
+) -> GvHesapDetayi {
+    let brut_gelir_vergisi = calculate_gelir_vergisi_2026(cari_gv_matrahi, kumulatif_gv_matrahi_onceki);
+    let asgari_ucret_gv_istisnasi = calculate_gelir_vergisi_2026(asgari_ucret_aylik_gv_matrahi, kumulatif_asgari_gv_onceki);
+    let uygulanan_gv_istisnasi = min(brut_gelir_vergisi, asgari_ucret_gv_istisnasi);
+    let kesilen_gelir_vergisi = (brut_gelir_vergisi - uygulanan_gv_istisnasi).max(dec!(0));
+
+GvHesapDetayi {
+        cariGvMatrahi: cari_gv_matrahi,
+        yeniKumulatifGvMatrahi: kumulatif_gv_matrahi_onceki + cari_gv_matrahi,
+        brutGelirVergisi: brut_gelir_vergisi,
+        asgariUcretGvMatrahi: asgari_ucret_aylik_gv_matrahi,
+        asgariUcretReferansKumulatifMatrahi: kumulatif_asgari_gv_onceki + asgari_ucret_aylik_gv_matrahi,
+        asgariUcretGvIstisnasi: asgari_ucret_gv_istisnasi,
+        uygulananGvIstisnasi: uygulanan_gv_istisnasi,
+        kesilenGelirVergisi: kesilen_gelir_vergisi,
+    }
 }
 
 pub struct NightWorkPolicy;
@@ -461,16 +513,20 @@ pub fn calculate_statutory_deductions(
     let isci_sgk_primi = round_sgk_amount(worker_pek_matrah * sgk_rate);
     let isci_issizlik_primi = round_sgk_amount(worker_pek_matrah * issizlik_rate);
 
-    let gelir_vergisi_matrah = (brut_gelir - isci_sgk_primi - isci_issizlik_primi).max(dec!(0));
+    let gelir_vergisi_matrah = calculate_gv_matrah(brut_gelir, isci_sgk_primi, isci_issizlik_primi);
 
     let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
     let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
     let aylik_asgari_sgk = round2(aylik_brut_asgari * (sgk_rate + issizlik_rate));
     let asgari_ucret_gv_matrah = (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0));
 
-    let asgari_ucret_gv_istisnasi = calculate_gelir_vergisi_2026(asgari_ucret_gv_matrah, kumulatif_asgari_gv_onceki);
-    let ham_gelir_vergisi = calculate_gelir_vergisi_2026(gelir_vergisi_matrah, kumulatif_gv_matrahi_onceki);
-    let gelir_vergisi = (round2(ham_gelir_vergisi - asgari_ucret_gv_istisnasi)).max(dec!(0));
+    let gv_detay = calculate_gv_hesap_detayi(
+        gelir_vergisi_matrah,
+        kumulatif_gv_matrahi_onceki,
+        asgari_ucret_gv_matrah,
+        kumulatif_asgari_gv_onceki,
+    );
+    let gelir_vergisi = gv_detay.kesilenGelirVergisi;
 
     let asgari_ucret_dv_istisnasi = round2(aylik_brut_asgari * dv_rate);
     let ham_damga_vergisi = round2(brut_gelir * dv_rate);

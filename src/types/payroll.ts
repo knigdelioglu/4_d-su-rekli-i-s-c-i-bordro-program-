@@ -95,6 +95,32 @@ export interface IsPrimiHesapDetayi {
   tutar: number;
 }
 
+/**
+ * Hesaplanan bordronun gelir vergisi bölümünün denetlenebilir snapshot'ı.
+ * Çalışanın gerçek kümülatifi (`cariGvMatrahi`/`yeniKumulatifGvMatrahi`) ile
+ * asgari ücret istisnasının kendi takvim referansı (`asgariUcretGvMatrahi`/
+ * `asgariUcretReferansKumulatifMatrahi`) açıkça ayrılır; GİB uyumlu hesapta
+ * `brutGelirVergisi - uygulananGvIstisnasi = kesilenGelirVergisi` sağlanır.
+ */
+export interface GvHesapDetayi {
+  /** Cari dönem GV matrahı (brüt gelir - işçi SGK - işçi işsizlik). */
+  cariGvMatrahi: number;
+  /** Cari sonrası gerçek kümülatif matrah (önceki + cari). */
+  yeniKumulatifGvMatrahi: number;
+  /** İstisna ÖNCESİ hesaplanan gelir vergisi (gerçek kümülatif üzerinden). */
+  brutGelirVergisi: number;
+  /** Asgari ücretin aylık GV matrahı (takvim referansı). */
+  asgariUcretGvMatrahi: number;
+  /** Asgari ücret istisnasının takvim referans kümülatif matrahı. */
+  asgariUcretReferansKumulatifMatrahi: number;
+  /** Asgari ücretin ilgili ay için hesaplanan vergi istisnası hakkı. */
+  asgariUcretGvIstisnasi: number;
+  /** Gerçekte uygulanan istisna: min(brüt GV, aylık istisna hakkı). */
+  uygulananGvIstisnasi: number;
+  /** Kesilecek gelir vergisi (negatif olamaz). */
+  kesilenGelirVergisi: number;
+}
+
 export type IsPrimiGrubu = string;
 
 export interface Personel {
@@ -282,6 +308,7 @@ export interface BordroKaydi {
   sonrakiDevredenPek?: DevredenPekKaydi[];
   pekDetay?: PekDetayi;
   isPrimiDetay?: IsPrimiHesapDetayi;
+  gvDetay?: GvHesapDetayi;
   odenenRaporluGun?: number;
   raporluGun?: number;
 }

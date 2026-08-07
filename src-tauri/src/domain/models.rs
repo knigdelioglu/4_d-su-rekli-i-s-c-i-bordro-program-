@@ -214,6 +214,7 @@ pub struct BordroKaydi {
     pub sonrakiDevredenPek: Option<Vec<DevredenPekKaydi>>,
     pub pekDetay: Option<PekDetayi>,
     pub isPrimiDetay: Option<IsPrimiHesapDetayi>,
+    pub gvDetay: Option<GvHesapDetayi>,
     pub odenenRaporluGun: Option<i32>,
     pub raporluGun: Option<i32>,
 }
@@ -269,6 +270,33 @@ pub struct IsPrimiHesapDetayi {
     /// Yalnız gösterim amaçlıdır; bordro toplamının authoritative girdisi değildir.
     pub gunlukIsPrimi: Decimal,
     pub tutar: Decimal,
+}
+
+/// Hesaplanan bordronun gelir vergisi bölümünün denetlenebilir snapshot'ı.
+/// Çalışanın gerçek kümülatifi (`cariGvMatrahi`/`yeniKumulatifGvMatrahi`) ile
+/// asgari ücret istisnasının kendi takvim referansı (`asgariUcretGvMatrahi`/
+/// `asgariUcretReferansKumulatifMatrahi`) açıkça ayrılır; GİB'e uygun hesaplama
+/// `brutGelirVergisi - uygulananGvIstisnasi = kesilenGelirVergisi` şeklindedir.
+/// FINALIZED bordroda asgari ücret/tarife/açılış değişse bile kayıt altında kalır.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GvHesapDetayi {
+    /// Cari dönem GV matrahı (brüt gelir - işçi SGK - işçi işsizlik).
+    pub cariGvMatrahi: Decimal,
+    /// Cari sonrası gerçek kümülatif matrah (önceki + cari).
+    pub yeniKumulatifGvMatrahi: Decimal,
+    /// İstisna ÖNCESİ hesaplanan gelir vergisi (gerçek kümülatif üzerinden).
+    pub brutGelirVergisi: Decimal,
+    /// Asgari ücretin aylık GV matrahı (takvim referansı).
+    pub asgariUcretGvMatrahi: Decimal,
+    /// Asgari ücret istisnasının takvim referans kümülatif matrahı.
+    pub asgariUcretReferansKumulatifMatrahi: Decimal,
+    /// Asgari ücretin ilgili ay için hesaplanan vergi istisnası hakkı.
+    pub asgariUcretGvIstisnasi: Decimal,
+    /// Gerçekte uygulanan istisna: min(brüt GV, aylık istisna hakkı).
+    pub uygulananGvIstisnasi: Decimal,
+    /// Kesilecek gelir vergisi (negatif olamaz).
+    pub kesilenGelirVergisi: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
