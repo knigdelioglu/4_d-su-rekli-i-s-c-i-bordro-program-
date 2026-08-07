@@ -1,4 +1,6 @@
+use super::errors::DomainError;
 use super::models::*;
+use super::Result;
 use rust_decimal::Decimal;
 use rust_decimal::RoundingStrategy;
 use rust_decimal_macros::dec;
@@ -127,40 +129,98 @@ pub fn calculate_kesinti_toplam(kesintiler: &KesintiKalemleri) -> Decimal {
     round2(sum)
 }
 
-pub fn get_grup_is_primi_orani(
+/// Personelin is primi grubunu tanimli gruplar arasinda cozer ve grubu dondurur.
+///
+/// Is primi oraninin tek authoritative kaynagi personelin grubudur:
+/// kurum genelindeki tek oran (isPrimiYuzde) burada kullanilmaz. Sessiz fallback yok.
+/// Grup bos/tanimsiz, hicbir aktif kayitla eslesmiyor, grup pasif veya oran gecersizse
+/// [DomainError::ValidationError] doner; motor tahmini tutar uretmez.
+pub fn resolve_is_primi_grubu(
     grup: Option<&str>,
     is_primi_gruplari: Option<&[IsPrimiGrupItem]>,
-) -> Decimal {
-    let default_list = vec![
-        IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9) },
-        IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8) },
-        IsPrimiGrupItem { id: "3. Grup".into(), ad: "3. Grup".into(), oran: dec!(7) },
-    ];
-    let list = is_primi_gruplari.unwrap_or(&default_list);
-
-    let grp_str = match grup {
-        Some(g) if !g.is_empty() => g,
-        _ => return list.first().map(|g| g.oran).unwrap_or(dec!(9)),
+) -> Result<IsPrimiGrupItem> {
+    let grp = match grup {
+        Some(g) if !g.trim().is_empty() => g.trim(),
+        _ => {
+            return Err(DomainError::ValidationError(
+                "Personelin is primi grubu tanimli degil.".to_string(),
+            ))
+        }
     };
 
-    if let Some(found) = list.iter().find(|g| g.ad == grp_str || g.id == grp_str) {
-        return found.oran;
+    let list = match is_primi_gruplari {
+        Some(list) if !list.is_empty() => list,
+        _ => {
+            return Err(DomainError::ValidationError(format!(
+                "Is primi gruplari tanimli degil. Personel grubu: '{}'. Tanimli gruplardan birine atayin.",
+                grp
+            )))
+        }
+    };
+
+    if let Some(found) = list.iter().find(|g| (g.ad == grp || g.id == grp) && g.aktif) {
+        if found.oran < dec!(0) {
+            Err(DomainError::ValidationError(format!(
+                "Is primi grubu '{}' orani gecersiz (negatif).",
+                found.ad
+            )))
+        } else {
+            Ok(found.clone())
+        }
+    } else if let Some(pasif) = list.iter().find(|g| g.ad == grp || g.id == grp) {
+        Err(DomainError::ValidationError(format!(
+            "Is primi grubu '{}' pasif durumda ve kullanilamaz.",
+            pasif.ad
+        )))
+    } else {
+        Err(DomainError::ValidationError(format!(
+            "Personelin is primi grubu gecersiz: '{}'. Tanimli gruplardan birini secin.",
+            grp
+        )))
     }
-
-    if grp_str.contains("1. Grup") { return dec!(9); }
-    if grp_str.contains("2. Grup") { return dec!(8); }
-    if grp_str.contains("3. Grup") { return dec!(7); }
-
-    list.first().map(|g| g.oran).unwrap_or(dec!(9))
 }
 
+/// Is primi hesap detayi: tek-final-rounding uygular.
+/// ```text
+/// tutar = round2(gunluk_taban x oran / 100 x hak_gunu)
+/// ```
+/// Gunluk deger (gunluk x oran/100) yalniz gosterim icindir; bordro toplaminin
+/// authoritative girdisi degildir.
+pub fn calculate_is_primi_detayi(
+    gunluk_taban_ucret: Decimal,
+    is_primi_hak_gunu: i32,
+    grup: Option<&str>,
+    is_primi_gruplari: Option<&[IsPrimiGrupItem]>,
+) -> Result<IsPrimiHesapDetayi> {
+    let item = resolve_is_primi_grubu(grup, is_primi_gruplari)?;
+    let oran_katsayi = item.oran / dec!(100);
+    let gunluk_is_primi = round2(gunluk_taban_ucret * oran_katsayi);
+    let tutar = round2(gunluk_taban_ucret * oran_katsayi * Decimal::from(is_primi_hak_gunu));
+
+    Ok(IsPrimiHesapDetayi {
+        grupId: item.id,
+        grupAd: item.ad,
+        oran: item.oran,
+        hakGunu: is_primi_hak_gunu,
+        gunlukIsPrimi: gunluk_is_primi,
+        tutar,
+    })
+}
+
+/// Puantajdan gelir kalemlerini otomatik doldurur.
+///
+/// Is primi: oran personelin grubundan (grup) gelir; kurumsal tek oran
+/// isPrimiYuzde bu hesapta rol oynamaz. Hak gunu = C + GC. Sessiz fallback yok:
+/// grup cozumleme hatalari [DomainError] olarak doner ve motor tahmin uretmez.
 pub fn auto_fill_gelirler_from_puantaj(
     puantaj_ozeti: &PuantajOzeti,
     kurum_degerleri: &DonemselKurumDegerleri,
     hizmet_yili: i32,
     grup: Option<&str>,
-) -> GelirKalemleri {
-    let hakedis_gun = puantaj_ozeti.c + puantaj_ozeti.t + puantaj_ozeti.g + puantaj_ozeti.i + puantaj_ozeti.gc + puantaj_ozeti.gct;
+) -> Result<(GelirKalemleri, IsPrimiHesapDetayi)> {
+    let hakedis_gun =
+        puantaj_ozeti.c + puantaj_ozeti.t + puantaj_ozeti.g + puantaj_ozeti.i
+            + puantaj_ozeti.gc + puantaj_ozeti.gct;
     let hakedis_dec = Decimal::from(hakedis_gun);
     let fiili_calisma_gun = Decimal::from(puantaj_ozeti.c + puantaj_ozeti.gc);
 
@@ -171,14 +231,15 @@ pub fn auto_fill_gelirler_from_puantaj(
     let giyim_yardimi = kurum_degerleri.giyimYardimi;
     let hizmet_zammi = round2(Decimal::from(hizmet_yili) * kurum_degerleri.hizmetZammiBirimi);
 
-    let is_primi_orani = if let Some(custom) = kurum_degerleri.isPrimiYuzde {
-        if custom > dec!(0) { custom } else { get_grup_is_primi_orani(grup, kurum_degerleri.isPrimiGruplari.as_deref()) }
-    } else {
-        get_grup_is_primi_orani(grup, kurum_degerleri.isPrimiGruplari.as_deref())
-    };
-
-    let gunluk_is_primi = round2(kurum_degerleri.gunlukTabanUcret * (is_primi_orani / dec!(100)));
-    let is_primi = round2(gunluk_is_primi * fiili_calisma_gun);
+    // Is primi: oran personelin grubundan gelir; hak gunu = C + GC.
+    let is_primi_hak_gunu = puantaj_ozeti.c + puantaj_ozeti.gc;
+    let is_primi_detay = calculate_is_primi_detayi(
+        kurum_degerleri.gunlukTabanUcret,
+        is_primi_hak_gunu,
+        grup,
+        kurum_degerleri.isPrimiGruplari.as_deref(),
+    )?;
+    let is_primi = is_primi_detay.tutar;
 
     let gc_orani = kurum_degerleri.geceCalismaPrimiYuzde.unwrap_or(dec!(0));
     let gct_orani = kurum_degerleri.geceCalismaTatiliPrimiYuzde.unwrap_or(dec!(0));
@@ -215,7 +276,7 @@ pub fn auto_fill_gelirler_from_puantaj(
         }
     }
 
-    GelirKalemleri {
+    let gelirler = GelirKalemleri {
         tabanBrutAylik: Some(taban_brut_aylik),
         tediye,
         tisIkramiyesi: tis_ikramiyesi,
@@ -229,7 +290,9 @@ pub fn auto_fill_gelirler_from_puantaj(
         geceCalismasiTatiliUcreti: Some(gece_calismasi_tatili_ucreti),
         hizmetZammi: Some(hizmet_zammi),
         digerGelir: kurum_degerleri.digerGelirVarsayilan,
-    }
+    };
+
+    Ok((gelirler, is_primi_detay))
 }
 
 pub fn calculate_prime_esas_kazanc(

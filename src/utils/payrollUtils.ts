@@ -10,6 +10,7 @@ import {
   GelirKalemleri,
   IsPrimiGrubu,
   IsPrimiGrupItem,
+  IsPrimiHesapDetayi,
   KesintiKalemleri,
   PekDetayi,
   Personel,
@@ -64,9 +65,9 @@ export const DEFAULT_TIS_IKRAMIYE_LISTESI: TisIkramiyeKalemi[] = [
 ];
 
 export const DEFAULT_IS_PRIMI_GRUPLARI: IsPrimiGrupItem[] = [
-  { id: '1. Grup', ad: '1. Grup', oran: 9 },
-  { id: '2. Grup', ad: '2. Grup', oran: 8 },
-  { id: '3. Grup', ad: '3. Grup', oran: 7 },
+  { id: '1. Grup', ad: '1. Grup', oran: 9, aktif: true },
+  { id: '2. Grup', ad: '2. Grup', oran: 8, aktif: true },
+  { id: '3. Grup', ad: '3. Grup', oran: 7, aktif: true },
 ];
 
 /**
@@ -345,32 +346,92 @@ export function formatDateTR(dateStr: string): string {
 }
 
 /**
- * İş Primi Grubu Oranı (%9, %8, %7 veya özel tanımlı gruplar)
+ * İş primi grubunu tanımlı (aktif) gruplar arasında çözer.
+ * İş primi oranının tek authoritative kaynağı personelin grubudur; `isPrimiYuzde`
+ * burada kullanılmaz. Sessiz fallback yok: grup boş/tanımsız, hiçbir aktif kayıtla
+ * eşleşmiyor, grup pasif veya oran geçersizse açık hata (Error) fırlatılır.
+ */
+export function resolveIsPrimiGrubu(
+  grup?: IsPrimiGrubu | string,
+  isPrimiGruplari?: IsPrimiGrupItem[]
+): IsPrimiGrupItem {
+  const grp = (grup ?? '').toString().trim();
+  if (!grp) {
+    throw new Error('Personelin iş primi grubu tanımlı değil.');
+  }
+
+  const list = isPrimiGruplari && isPrimiGruplari.length > 0 ? isPrimiGruplari : undefined;
+  if (!list) {
+    throw new Error(`İş primi grupları tanımlı değil. Personel grubu: '${grp}'. Tanımlı gruplardan birine atayın.`);
+  }
+
+  const found = list.find((g) => (g.ad === grp || g.id === grp) && g.aktif !== false);
+  if (found) {
+    if (found.oran < 0) {
+      throw new Error(`İş primi grubu '${found.ad}' oranı geçersiz (negatif).`);
+    }
+    return found;
+  }
+
+  const pasif = list.find((g) => g.ad === grp || g.id === grp);
+  if (pasif) {
+    throw new Error(`İş primi grubu '${pasif.ad}' pasif durumda ve kullanılamaz.`);
+  }
+
+  throw new Error(`Personelin iş primi grubu geçersiz: '${grp}'. Tanımlı gruplardan birini seçin.`);
+}
+
+/**
+ * İş primi oranını (aktif gruplar içinde) döndürür. Grup çözümlenemiyorsa hata fırlatır.
  */
 export function getGrupIsPrimiOrani(
   grup?: IsPrimiGrubu | string,
   isPrimiGruplari?: IsPrimiGrupItem[]
 ): number {
-  const list = isPrimiGruplari && isPrimiGruplari.length > 0
-    ? isPrimiGruplari
-    : DEFAULT_IS_PRIMI_GRUPLARI;
+  return resolveIsPrimiGrubu(grup, isPrimiGruplari).oran;
+}
 
-  if (!grup) return list[0]?.oran ?? 9;
+/**
+ * Görsel gösterim için güvenli varyant: grup çözümlenemezse `null` döner
+ * (asla tahmini bir oran/fallback üretmez). Hesaplama için kullanılmaz.
+ */
+export function getGrupIsPrimiOraniDisplay(
+  grup?: IsPrimiGrubu | string,
+  isPrimiGruplari?: IsPrimiGrupItem[]
+): number | null {
+  try {
+    return getGrupIsPrimiOrani(grup, isPrimiGruplari);
+  } catch {
+    return null;
+  }
+}
 
-  // Exact match by name or id
-  const exact = list.find((g) => g.ad === grup || g.id === grup);
-  if (exact) return Number(exact.oran) || 0;
+/**
+ * İş primi hesap detayı: tek-final-rounding uygular.
+ *   tutar = round2(günlük_taban × oran / 100 × hak_günü)
+ * Günlük değer (günlük × oran/100) yalnız görsel gösterim içindir; bordro toplamının
+ * authoritative girdisi değildir.
+ */
+export function calculateIsPrimiDetayi(
+  gunlukTabanUcret: number,
+  isPrimiHakGunu: number,
+  grup?: IsPrimiGrubu | string,
+  isPrimiGruplari?: IsPrimiGrupItem[]
+): IsPrimiHesapDetayi {
+  const item = resolveIsPrimiGrubu(grup, isPrimiGruplari);
+  const oranKatsayi = item.oran / 100;
+  const gunlukIsPrimi = Math.round(gunlukTabanUcret * oranKatsayi * 100) / 100;
+  const tutar =
+    Math.round(gunlukTabanUcret * oranKatsayi * isPrimiHakGunu * 100) / 100;
 
-  // Partial match
-  const partial = list.find((g) => grup.includes(g.ad) || g.ad.includes(grup));
-  if (partial) return Number(partial.oran) || 0;
-
-  // Fallback defaults for legacy strings "1. Grup", "2. Grup", "3. Grup"
-  if (grup.includes('1. Grup')) return 9;
-  if (grup.includes('2. Grup')) return 8;
-  if (grup.includes('3. Grup')) return 7;
-
-  return list[0]?.oran ?? 9;
+  return {
+    grupId: item.id,
+    grupAd: item.ad,
+    oran: item.oran,
+    hakGunu: isPrimiHakGunu,
+    gunlukIsPrimi,
+    tutar,
+  };
 }
 
 /**
@@ -419,17 +480,17 @@ export function autoFillGelirlerFromPuantaj(
   // Service seniority bonus = Hizmet yılı * birim (24.67 TL/yıl)
   const hizmetZammi = Math.round((hizmetYili || 0) * (kurumDegerleri.hizmetZammiBirimi || 24.67) * 100) / 100;
 
-  // Work premium based on worker Group: 1. Grup = %9, 2. Grup = %8, 3. Grup = %7
-  // Formula: Daily İş Primi = ROUND(gunlukTabanUcret * isPrimiOrani / 100, 2)
-  // Monthly İş Primi = Daily İş Primi * worked days (Ç + GÇ)
-  const isPrimiOrani =
-    kurumDegerleri.isPrimiYuzde && kurumDegerleri.isPrimiYuzde > 0
-      ? kurumDegerleri.isPrimiYuzde
-      : getGrupIsPrimiOrani(grup, kurumDegerleri.isPrimiGruplari);
-
-  const gunlukIsPrimi = Math.round(kurumDegerleri.gunlukTabanUcret * (isPrimiOrani / 100) * 100) / 100;
+  // Work premium based on worker Group (strict, single final rounding).
+  // Yetkili kaynak personelin grubudur; kurumsal `isPrimiYuzde` hesapta rol oynamaz.
+  // Hak günü = Ç + GÇ.  Grup çözümlenemezse açık hata fırlatılır (sessiz fallback yok).
+  //   tutar = round2(günlük_taban × oran / 100 × hak_günü)
   const isPrimiHakGunu = fiiliCalismaGunu;
-  const isPrimi = Math.round(gunlukIsPrimi * isPrimiHakGunu * 100) / 100;
+  const isPrimi = calculateIsPrimiDetayi(
+    kurumDegerleri.gunlukTabanUcret,
+    isPrimiHakGunu,
+    grup,
+    kurumDegerleri.isPrimiGruplari
+  ).tutar;
 
   // Night Work premium (GÇ): Daily base * rate * GÇ days
   const gcOrani = kurumDegerleri.geceCalismaPrimiYuzde || 0;

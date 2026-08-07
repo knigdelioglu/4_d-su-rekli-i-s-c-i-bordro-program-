@@ -58,12 +58,12 @@ impl PayrollService {
         let inst_map = SettingsRepository::get_all_institution_settings(conn)?;
         let kurum_degerleri = inst_map.get(period_id).cloned().unwrap_or_default();
 
-        let gelirler = auto_fill_gelirler_from_puantaj(
+        let (gelirler, is_primi_detay) = auto_fill_gelirler_from_puantaj(
             &summary,
             &kurum_degerleri,
             personel.hizmetYili,
             Some(&personel.grup),
-        );
+        )?;
 
         let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
         let prev_asgari_gv = CumulativeTaxService::get_previous_cumulative_asgari_gv(conn, personnel_id, &period)?;
@@ -112,6 +112,7 @@ impl PayrollService {
             devredenPekGelen: Some(devreden_pek_gelen),
             sonrakiDevredenPek: Some(sonraki_devreden),
             pekDetay: Some(pek_detay),
+            isPrimiDetay: Some(is_primi_detay),
             odenenRaporluGun: Some(odenen_raporlu_gun),
             raporluGun: Some(summary.r),
         };

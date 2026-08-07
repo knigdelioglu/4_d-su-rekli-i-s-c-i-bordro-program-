@@ -5,7 +5,7 @@
 import React from 'react';
 import { Printer, X, Download, Shield, Building2 } from 'lucide-react';
 import { BordroDonemi, BordroKaydi, IsPrimiGrupItem, Personel } from '../types/payroll';
-import { formatDateTR, formatTL, getGrupIsPrimiOrani } from '../utils/payrollUtils';
+import { formatDateTR, formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
 import { printElement } from '../utils/excelExport';
 
 interface PaySlipModalProps {
@@ -87,7 +87,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             <div className="space-y-1">
               <div><strong className="text-slate-600">T.C. Kimlik No:</strong> <span className="font-mono">{personel.tcNo}</span></div>
               <div><strong className="text-slate-600">Adı Soyadı:</strong> <span className="font-bold">{personel.ad} {personel.soyad}</span></div>
-              <div><strong className="text-slate-600">İş Primi Grubu:</strong> <span className="font-semibold text-indigo-900">{personel.grup || personel.unvan || '1. Grup'} (%{getGrupIsPrimiOrani(personel.grup, isPrimiGruplari)})</span></div>
+              <div><strong className="text-slate-600">İş Primi Grubu:</strong> <span className="font-semibold text-indigo-900">{personel.grup || personel.unvan || '1. Grup'} (%{getGrupIsPrimiOraniDisplay(personel.grup, isPrimiGruplari) ?? '—'})</span></div>
               <div><strong className="text-slate-600">Kıdem Yılı:</strong> {personel.hizmetYili} Yıl</div>
             </div>
             <div className="space-y-1">

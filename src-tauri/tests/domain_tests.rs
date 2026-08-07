@@ -112,6 +112,7 @@ mod tests {
             devredenPekGelen: None,
             sonrakiDevredenPek: None,
             pekDetay: None,
+            isPrimiDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -142,6 +143,7 @@ mod tests {
             devredenPekGelen: None,
             sonrakiDevredenPek: None,
             pekDetay: None,
+            isPrimiDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -186,6 +188,7 @@ mod tests {
             devredenPekGelen: None,
             sonrakiDevredenPek: None,
             pekDetay: None,
+            isPrimiDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -237,6 +240,7 @@ mod tests {
             devredenPekGelen: None,
             sonrakiDevredenPek: None,
             pekDetay: None,
+            isPrimiDetay: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -304,10 +308,10 @@ mod tests {
         kurum.gunlukTabanUcret = dec!(1000);
         kurum.gunlukYemek = dec!(100);
         kurum.gunlukVasitaYol = dec!(50);
-        kurum.isPrimiYuzde = Some(dec!(10));
+        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(10), aktif: true }]);
         kurum.geceCalismaPrimiYuzde = Some(dec!(8));
 
-        let gelirler = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, None);
+        let (gelirler, _is_primi_detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).expect("grup cozumlenmeli");
 
         // 27 Ç + 3 GÇ = 30 Hakediş Günü
         // 30 * 1000 = 30,000 TL Taban Aylık
@@ -339,11 +343,11 @@ mod tests {
         kurum.gunlukTabanUcret = dec!(1000);
         kurum.gunlukYemek = dec!(100);
         kurum.gunlukVasitaYol = dec!(50);
-        kurum.isPrimiYuzde = Some(dec!(10));
+        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(10), aktif: true }]);
         kurum.geceCalismaPrimiYuzde = Some(dec!(8));
         kurum.geceCalismaTatiliPrimiYuzde = Some(dec!(10));
 
-        let gelirler = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, None);
+        let (gelirler, _is_primi_detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).expect("grup cozumlenmeli");
 
         // 24 + 2 + 2 + 2 = 30 Hakediş Günü -> 30,000 TL
         assert_eq!(gelirler.tabanBrutAylik, Some(dec!(30000)));
@@ -386,13 +390,106 @@ mod tests {
         kurum.geceCalismaPrimiYuzde = Some(dec!(0));
         kurum.geceCalismaTatiliPrimiYuzde = Some(dec!(0));
 
-        let gelirler = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, None);
+        let (gelirler, _is_primi_detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).expect("grup cozumlenmeli");
 
         // 25 + 5 = 30 Hakediş günü -> 60,000 TL taban ücret (günler kaybolmaz)
         assert_eq!(gelirler.tabanBrutAylik, Some(dec!(60000)));
         // Ek gece primi: 0 TL
         assert_eq!(gelirler.geceCalismasiUcreti, Some(dec!(0)));
         assert_eq!(gelirler.geceCalismasiTatiliUcreti, Some(dec!(0)));
+    }
+
+#[test]
+    fn test_is_prime_group_is_authoritative_not_fallback() {
+        use bordro_programi_lib::domain::calculations::auto_fill_gelirler_from_puantaj;
+
+        let mut puantaj = PuantajOzeti::default();
+        puantaj.c = 26;
+        puantaj.gc = 4;
+
+        let mut kurum = DonemselKurumDegerleri::default();
+        kurum.gunlukTabanUcret = dec!(1000);
+        // Even if the institution-wide single rate is 50, the authoritative
+        // source is the personnel group (2. Grup = 8%).
+        kurum.isPrimiYuzde = Some(dec!(50));
+        kurum.isPrimiGruplari = Some(vec![
+            IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8), aktif: true },
+        ]);
+
+        let (gelirler, detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("2. Grup"))
+            .expect("grup cozumlenmeli");
+        // Hak gunu = C + GC = 26 + 4 = 30; 1000 * 0.08 * 30 = 2400
+        assert_eq!(gelirler.isPrimi, Some(dec!(2400)));
+        assert_eq!(detay.tutar, dec!(2400));
+        assert_eq!(detay.hakGunu, 30);
+    }
+
+    #[test]
+    fn test_is_prime_single_final_math() {
+        use bordro_programi_lib::domain::calculations::calculate_is_primi_detayi;
+
+        let gruplar = vec![
+            IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(3), aktif: true },
+        ];
+
+        let detay = calculate_is_primi_detayi(dec!(27.55), 3, Some("1. Grup"), Some(&gruplar))
+            .expect("grup cozumlenmeli");
+
+        // Hak gunu = 3, taban 27.55, %3:
+        // 27.55 * 0.03 = 0.8265 ; * 3 = 2.4795 -> round2 = 2.48 (single rounding)
+        assert_eq!(detay.tutar, dec!(2.48));
+        // Gunluk deger display-only: round2(0.8265) = 0.83
+        assert_eq!(detay.gunlukIsPrimi, dec!(0.83));
+        // Double rounding would give round2(0.8265)=0.83, then 0.83*3 = 2.49.
+        assert_ne!(detay.tutar, dec!(2.49));
+    }
+
+    #[test]
+    fn test_is_prime_tanimsiz_grup_err() {
+        use bordro_programi_lib::domain::DomainError;
+        use bordro_programi_lib::domain::calculations::calculate_is_primi_detayi;
+
+        let gruplar = vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9), aktif: true }];
+
+        // Personnel group missing -> ValidationError
+        let e1 = calculate_is_primi_detayi(dec!(1000), 30, None, Some(&gruplar)).unwrap_err();
+        assert!(matches!(e1, DomainError::ValidationError(_)));
+
+        // Group list empty/absent -> ValidationError
+        let e2 = calculate_is_primi_detayi(dec!(1000), 30, Some("1. Grup"), None).unwrap_err();
+        assert!(matches!(e2, DomainError::ValidationError(_)));
+
+        // Group not found in list -> ValidationError
+        let e3 = calculate_is_primi_detayi(dec!(1000), 30, Some("5. Grup"), Some(&gruplar)).unwrap_err();
+        assert!(matches!(e3, DomainError::ValidationError(_)));
+
+        // Inactive group -> ValidationError
+        let pasif = vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9), aktif: false }];
+        let e4 = calculate_is_primi_detayi(dec!(1000), 30, Some("1. Grup"), Some(&pasif)).unwrap_err();
+        assert!(matches!(e4, DomainError::ValidationError(_)));
+    }
+
+    #[test]
+    fn test_is_prime_hak_gunu_c_gc_only() {
+        use bordro_programi_lib::domain::calculations::auto_fill_gelirler_from_puantaj;
+
+        let mut puantaj = PuantajOzeti::default();
+        puantaj.c = 24;
+        puantaj.gc = 2;
+        puantaj.gct = 2;
+        puantaj.t = 2;
+
+        let mut kurum = DonemselKurumDegerleri::default();
+        kurum.gunlukTabanUcret = dec!(1000);
+        kurum.isPrimiGruplari = Some(vec![
+            IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(10), aktif: true },
+        ]);
+
+        let (gelirler, detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).unwrap();
+        // Is primi hak gunu: only C + GC = 26. GCT and T are NOT included.
+        assert_eq!(detay.hakGunu, 26);
+        // 1000 * 0.10 * 26 = 2600
+        assert_eq!(gelirler.isPrimi, Some(dec!(2600)));
     }
 
     #[test]

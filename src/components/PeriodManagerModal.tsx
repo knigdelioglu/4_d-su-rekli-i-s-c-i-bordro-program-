@@ -1655,6 +1655,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                       id: `grup_${Date.now()}`,
                       ad: `${newNum}. Grup`,
                       oran: 5,
+                      aktif: true,
                     };
                     setParamsForm({
                       ...paramsForm,

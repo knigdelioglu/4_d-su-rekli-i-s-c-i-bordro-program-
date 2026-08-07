@@ -213,6 +213,7 @@ pub struct BordroKaydi {
     pub devredenPekGelen: Option<Vec<DevredenPekKaydi>>,
     pub sonrakiDevredenPek: Option<Vec<DevredenPekKaydi>>,
     pub pekDetay: Option<PekDetayi>,
+    pub isPrimiDetay: Option<IsPrimiHesapDetayi>,
     pub odenenRaporluGun: Option<i32>,
     pub raporluGun: Option<i32>,
 }
@@ -239,12 +240,35 @@ pub struct TisIkramiyeKalemi {
     pub sabitTutar: Option<Decimal>,
 }
 
+fn default_is_primi_aktif() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IsPrimiGrupItem {
     pub id: String,
     pub ad: String,
     pub oran: Decimal,
+    /// Grup aktif/pasif. Salt serileştirilmemiş/pasif gruplar bordro motorunda
+    /// iş primi oran kaynağı olarak kullanılamaz.
+    #[serde(default = "default_is_primi_aktif")]
+    pub aktif: bool,
+}
+
+/// Hesaplanan bordronun iş primi bölümünün denetlenebilir snapshot'ı.
+/// Grup tanımı/oranı daha sonra değiştirilse bile FINALIZED bordroda
+/// uygulanan grup/oran/hak günü/tutar kayıt altında kalır.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IsPrimiHesapDetayi {
+    pub grupId: String,
+    pub grupAd: String,
+    pub oran: Decimal,
+    pub hakGunu: i32,
+    /// Yalnız gösterim amaçlıdır; bordro toplamının authoritative girdisi değildir.
+    pub gunlukIsPrimi: Decimal,
+    pub tutar: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,9 +324,9 @@ impl Default for DonemselKurumDegerleri {
             hizmetZammiBirimi: dec!(24.67),
             isPrimiYuzde: Some(dec!(0)),
             isPrimiGruplari: Some(vec![
-                IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9) },
-                IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8) },
-                IsPrimiGrupItem { id: "3. Grup".into(), ad: "3. Grup".into(), oran: dec!(7) },
+                IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9), aktif: true },
+                IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8), aktif: true },
+                IsPrimiGrupItem { id: "3. Grup".into(), ad: "3. Grup".into(), oran: dec!(7), aktif: true },
             ]),
             geceCalismaPrimiYuzde: Some(dec!(0)),
             geceCalismaTatiliPrimiYuzde: Some(dec!(0)),

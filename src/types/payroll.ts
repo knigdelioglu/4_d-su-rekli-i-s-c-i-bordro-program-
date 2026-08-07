@@ -81,6 +81,18 @@ export interface IsPrimiGrupItem {
   id: string;
   ad: string;
   oran: number;
+  /** Grup aktif/pasif. Pasif gruplar bordro motorunda iş primi oran kaynağı olarak kullanılamaz. */
+  aktif?: boolean;
+}
+
+export interface IsPrimiHesapDetayi {
+  grupId: string;
+  grupAd: string;
+  oran: number;
+  hakGunu: number;
+  /** Yalnız gösterim amaçlıdır; bordro toplamının authoritative girdisi değildir. */
+  gunlukIsPrimi: number;
+  tutar: number;
 }
 
 export type IsPrimiGrubu = string;
@@ -269,6 +281,7 @@ export interface BordroKaydi {
   devredenPekGelen?: DevredenPekKaydi[];
   sonrakiDevredenPek?: DevredenPekKaydi[];
   pekDetay?: PekDetayi;
+  isPrimiDetay?: IsPrimiHesapDetayi;
   odenenRaporluGun?: number;
   raporluGun?: number;
 }

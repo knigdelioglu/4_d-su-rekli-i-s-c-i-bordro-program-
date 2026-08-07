@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Save, X, CreditCard, Shield, Briefcase, Calendar, Layers } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
-import { DEFAULT_IS_PRIMI_GRUPLARI, getGrupIsPrimiOrani } from '../utils/payrollUtils';
+import { DEFAULT_IS_PRIMI_GRUPLARI, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
 
 interface PersonelFormModalProps {
   isOpen: boolean;
@@ -97,7 +97,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
     if (!validate()) return;
 
     const selGrup = formData.grup || groups[0]?.ad || '1. Grup';
-    const rate = getGrupIsPrimiOrani(selGrup, groups);
+    const rate = getGrupIsPrimiOraniDisplay(selGrup, groups) ?? groups[0]?.oran ?? 9;
 
     const newPersonel: Personel = {
       id: formData.id || `p-${Date.now()}`,

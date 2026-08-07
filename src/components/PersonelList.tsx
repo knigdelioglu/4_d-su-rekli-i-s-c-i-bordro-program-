@@ -15,7 +15,7 @@ import {
   List,
 } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
-import { getGrupIsPrimiOrani } from '../utils/payrollUtils';
+import { getGrupIsPrimiOrani, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
 import { PersonelFormModal } from './PersonelFormModal';
 
 interface PersonelListProps {
@@ -187,7 +187,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
                       </span>
                     </div>
                     <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[11px] rounded-md font-mono">
-                      %{getGrupIsPrimiOrani(p.grup, isPrimiGruplari)} İş Primi
+                      %{getGrupIsPrimiOraniDisplay(p.grup, isPrimiGruplari) ?? '—'} İş Primi
                     </span>
                   </div>
 
@@ -272,7 +272,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
                           {(p.grup || p.unvan || '1. Grup').replace(/\s*\(.*?\)/, '')}
                         </span>
                         <span className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 text-indigo-700 font-bold text-[10px] rounded font-mono">
-                          %{getGrupIsPrimiOrani(p.grup, isPrimiGruplari)}
+                          %{getGrupIsPrimiOraniDisplay(p.grup, isPrimiGruplari) ?? '—'}
                         </span>
                       </div>
                     </td>
