@@ -1049,8 +1049,24 @@ export function calculateIncomingDevredenPek(
 }
 
 /**
+ * Vergi (ödeme/tahakkuk) yılı/ayını döndürür. Normal yeni kayıtlar `taxYear`/
+ * `taxMonth` alanını taşır (authoritative). Yalnız bu alanları hiç içermeyen
+ * LEGACY kayıtlar için geriye dönük fallback uygulanır: bitiş ayı varsayımı
+ * (ay + 1; Aralık → Ocak, yıl +1) — migration backfill ile aynı kural.
+ */
+export function effectiveTaxOf(d: Pick<BordroDonemi, 'yil' | 'ay' | 'taxYear' | 'taxMonth'>): {
+  taxYear: number;
+  taxMonth: number;
+} {
+  const taxYear = d.taxYear ?? (d.ay === 12 ? d.yil + 1 : d.yil);
+  const taxMonth = d.taxMonth ?? (d.ay === 12 ? 1 : d.ay + 1);
+  return { taxYear, taxMonth };
+}
+
+/**
  * Checks if there is a conflict between manual cumulative tax base carryover
- * and existing saved payroll records in the same year prior to the carryover start month.
+ * and existing saved payroll records in the same tax year prior to the carryover start month.
+ * Vergi yılı/ayı (taxYear/taxMonth) sıralaması authoritative'dir.
  */
 export function checkDevredenGvMatrahConflict(
   personel: Personel,
@@ -1062,21 +1078,28 @@ export function checkDevredenGvMatrahConflict(
     return { hasConflict: false, conflictingPeriodNames: [] };
   }
 
-  // If devir year is different from active period year, no conflict in active period year
-  if (personel.devirKumulatifGvMatrahiYili && personel.devirKumulatifGvMatrahiYili !== aktifDonem.yil) {
+  const effTaxYear = effectiveTaxOf(aktifDonem).taxYear;
+
+  // Devir yılı aktif dönemin VERGİ YILINDAN farklıysa aktif vergi yılında çakışma yok.
+  if (personel.devirKumulatifGvMatrahiYili && personel.devirKumulatifGvMatrahiYili !== effTaxYear) {
     return { hasConflict: false, conflictingPeriodNames: [] };
   }
 
   const startMonth = personel.devirKumulatifGvMatrahiBaslangicAyi || 1;
+  // Legacy başlangıç alanı çalışma ayıdır; vergi ayına çevrilir (bitiş ayı kuralı).
+  const startTaxMonth = startMonth === 12 ? 1 : startMonth + 1;
 
-  if (startMonth <= 1) {
+  if (startTaxMonth <= 1) {
     return { hasConflict: false, conflictingPeriodNames: [] };
   }
 
-  // Find saved bordros for this person in the same year that belong to months PRIOR to startMonth
+  // Devirden önce aynı vergi yılında vergi ayı startTaxMonth'tan küçük olan kayıtlı bordrolar çakışır.
   const priorPeriodMap = new Map(
     donemler
-      .filter((d) => d.yil === aktifDonem.yil && d.ay < startMonth)
+      .filter((d) => {
+        const t = effectiveTaxOf(d);
+        return t.taxYear === effTaxYear && t.taxMonth < startTaxMonth;
+      })
       .map((d) => [d.id, d.donemAdi])
   );
 
@@ -1095,8 +1118,10 @@ export function checkDevredenGvMatrahConflict(
 
 /**
  * Calculates previous cumulative Income Tax Base (Kümülatif Gelir Vergisi Matrahı)
- * for a person in the current period's year from initial devir value + previous saved payroll records.
- * Throws explicit conflict error if devir overlaps with prior saved bordros in the same year.
+ * for a person from the tax-year opening (devir) + previous saved payroll records.
+ * Sıralama ve yıl filtresi taxYear/taxMonth üzerinden çalışır (çalışma yılı/ayı
+ * authoritative değildir); yıl geçişinde önceki takvim yılı kümülatifi taşınmaz.
+ * Throws explicit conflict error if devir overlaps with prior saved bordros in the same tax year.
  */
 export function calculatePreviousCumulativeGvMatrah(
   personelId: string,
@@ -1107,36 +1132,45 @@ export function calculatePreviousCumulativeGvMatrah(
 ): number {
   let cumulativeMatrah = 0;
 
-  // Use devir base ONLY if its year matches the active period's year
-  if (personel && personel.devirKumulatifGvMatrahi && personel.devirKumulatifGvMatrahi > 0) {
-    const isSameYear =
-      !personel.devirKumulatifGvMatrahiYili ||
-      personel.devirKumulatifGvMatrahiYili === aktifDonem.yil;
+  const eff = effectiveTaxOf(aktifDonem);
+  const effTaxYear = eff.taxYear;
+  const effTaxMonth = eff.taxMonth;
 
-    if (isSameYear) {
-      // Check for conflict with saved prior bordros before start month
-      const conflict = checkDevredenGvMatrahConflict(personel, aktifDonem, bordrolar, donemler);
-      if (conflict.hasConflict) {
-        throw new Error(
-          `ÇAKIŞMA UYARISI: Bu devir matrahı sistemde mevcut geçmiş bordrolarla aynı dönemi kapsamaktadır. Mükerrer vergi matrahını önlemek için devir tutarını veya devir başlangıç dönemini düzeltin.`
-        );
-      }
-      cumulativeMatrah = personel.devirKumulatifGvMatrahi;
+  // Devir matrahı yalnız aktif dönemin VERGİ YILI ile eşleştiğinde kullanılır.
+  const hasOpeningForYear = Boolean(
+    personel &&
+      personel.devirKumulatifGvMatrahi &&
+      personel.devirKumulatifGvMatrahi > 0 &&
+      (!personel.devirKumulatifGvMatrahiYili || personel.devirKumulatifGvMatrahiYili === effTaxYear)
+  );
+
+  if (hasOpeningForYear && personel) {
+    const conflict = checkDevredenGvMatrahConflict(personel, aktifDonem, bordrolar, donemler);
+    if (conflict.hasConflict) {
+      throw new Error(
+        `ÇAKIŞMA UYARISI: Bu devir matrahı sistemde mevcut geçmiş bordrolarla aynı dönemi kapsamaktadır. Mükerrer vergi matrahını önlemek için devir tutarını veya devir başlangıç dönemini düzeltin.`
+      );
     }
+    cumulativeMatrah = personel.devirKumulatifGvMatrahi;
   }
 
   if (!bordrolar || !donemler || !aktifDonem) return cumulativeMatrah;
 
-  const startMonth =
-    personel?.devirKumulatifGvMatrahiYili === aktifDonem.yil &&
-    personel?.devirKumulatifGvMatrahiBaslangicAyi
-      ? personel.devirKumulatifGvMatrahiBaslangicAyi
+  // Açılış varsa başlangıç vergi ayı legacy çalışma ayından türetilir; yoksa yıl başından.
+  const startTaxMonth =
+    hasOpeningForYear && personel?.devirKumulatifGvMatrahiBaslangicAyi
+      ? (personel.devirKumulatifGvMatrahiBaslangicAyi === 12
+          ? 1
+          : personel.devirKumulatifGvMatrahiBaslangicAyi + 1)
       : 1;
 
-  // Filter periods in the same year that occur AT OR AFTER startMonth and PRIOR to active period
+  // Aynı vergi yılında başlangıç vergi ayından aktif vergi ayına kadar olan gerçek bordrolar.
   const priorPeriodIds = new Set(
     donemler
-      .filter((d) => d.yil === aktifDonem.yil && d.ay >= startMonth && d.ay < aktifDonem.ay)
+      .filter((d) => {
+        const t = effectiveTaxOf(d);
+        return t.taxYear === effTaxYear && t.taxMonth >= startTaxMonth && t.taxMonth < effTaxMonth;
+      })
       .map((d) => d.id)
   );
 
@@ -1167,7 +1201,8 @@ export function calculatePreviousCumulativeAsgariUcretGvMatrah(
   let cumulativeAsgariMatrah = 0;
 
   if (personel && personel.devirKumulatifAsgariGvMatrahi) {
-    if (personel.devirKumulatifAsgariGvMatrahiYili === aktifDonem.yil || !personel.devirKumulatifAsgariGvMatrahiYili) {
+    const effTaxYear = effectiveTaxOf(aktifDonem).taxYear;
+    if (personel.devirKumulatifAsgariGvMatrahiYili === effTaxYear || !personel.devirKumulatifAsgariGvMatrahiYili) {
       cumulativeAsgariMatrah = personel.devirKumulatifAsgariGvMatrahi;
     }
   }
@@ -1177,15 +1212,12 @@ export function calculatePreviousCumulativeAsgariUcretGvMatrah(
   // Referans kümülatif, dönemin "başlangıç ayı" (ay) DEĞİL vergi (ödeme/tahakkuk)
   // yılı/ayı (taxYear/taxMonth) takvim konumuna dayanır (GİB 7349 S.K.). Eski
   // kayıtlarda alan yoksa bitiş ayı varsayımına geri dönülür (ay + 1; Aralık → Ocak).
-  const effTaxYear =
-    aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil);
-  const effTaxMonth =
-    aktifDonem.taxMonth ?? (aktifDonem.ay === 12 ? 1 : aktifDonem.ay + 1);
+  const effTaxYear = effectiveTaxOf(aktifDonem).taxYear;
+  const effTaxMonth = effectiveTaxOf(aktifDonem).taxMonth;
 
   const priorPeriods = donemler.filter((d) => {
-    const dTaxYear = d.taxYear ?? (d.ay === 12 ? d.yil + 1 : d.yil);
-    const dTaxMonth = d.taxMonth ?? (d.ay === 12 ? 1 : d.ay + 1);
-    return dTaxYear === effTaxYear && dTaxMonth < effTaxMonth;
+    const t = effectiveTaxOf(d);
+    return t.taxYear === effTaxYear && t.taxMonth < effTaxMonth;
   });
 
   for (const period of priorPeriods) {

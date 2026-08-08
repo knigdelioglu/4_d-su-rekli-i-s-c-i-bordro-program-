@@ -1610,8 +1610,372 @@ mod tests {
             ..aktif_tax7
         };
         let prev_6 = CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax6)?;
-        assert_eq!(prev_6, dec!(140377.50)); // 5 × 28.075,50
+        assert_eq!(prev_6, dec!(140377.50)); // 168.453,00 − 28.075,50 (Aralık + Ocak..Nisan = 5 ay)
+
         Ok(())
+    }
+
+    // ===== Test A: Yıl geçişi — 15.12.2026–14.01.2027 (taxYear=2027/taxMonth=1)
+    //     2026 vergi yılı kümülatifi 2027'ye taşınmamalı.
+    #[test]
+    fn test_a_yil_gecisi_2026_kumulatif_tasinmaz() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-yil-gecis");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let aralik2026 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+        PeriodRepository::save(&conn, &aralik2026)?;
+
+        // 2026 vergi yılı açılışı 300.000 TL → 2027 dönemine taşınmamalı
+        let opening2026 = PersonelTaxOpening {
+            id: "opt_2026".into(),
+            personnelId: "test-yil-gecis".into(),
+            year: 2026,
+            gvCumulativeOpening: dec!(300000),
+            effectiveFromPeriodId: "2026-12".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        TaxOpeningRepository::save(&conn, &opening2026)?;
+
+        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-yil-gecis", &aralik2026)?;
+        assert_eq!(prev, dec!(0));
+
+        Ok(())
+    }
+
+    // ===== Test B: 2027 opening varsa 2027 açılışı kullanılır
+    #[test]
+    fn test_b_2027_opening_kullanilir() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-2027-opening");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let aralik2026 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+        PeriodRepository::save(&conn, &aralik2026)?;
+
+        // 2027 açılışı 120.000 TL, effective_from aynı Aralık dönemi (taxYear=2027, taxMonth=1)
+        let opening2027 = PersonelTaxOpening {
+            id: "opt_2027".into(),
+            personnelId: "test-2027-opening".into(),
+            year: 2027,
+            gvCumulativeOpening: dec!(120000),
+            effectiveFromPeriodId: "2026-12".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        TaxOpeningRepository::save(&conn, &opening2027)?;
+
+        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-2027-opening", &aralik2026)?;
+        assert_eq!(prev, dec!(120000));
+
+        Ok(())
+    }
+
+    // ===== Test C: Aynı vergi yılında taxMonth sıralaması authoritative
+    #[test]
+    fn test_c_ayni_vergi_yili_tax_month_siralamasi() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-tax-month");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let tm1 = BordroDonemi { id: "2027-01".into(), yil: 2027, ay: 1, baslangicTarihi: "2027-01-15".into(), bitisTarihi: "2027-02-14".into(), donemAdi: "Ocak 2027".into(), taxYear: 2027, taxMonth: 1 };
+        let tm2 = BordroDonemi { id: "2027-02".into(), yil: 2027, ay: 2, baslangicTarihi: "2027-02-15".into(), bitisTarihi: "2027-03-14".into(), donemAdi: "Şubat 2027".into(), taxYear: 2027, taxMonth: 2 };
+        let tm3 = BordroDonemi { id: "2027-03".into(), yil: 2027, ay: 3, baslangicTarihi: "2027-03-15".into(), bitisTarihi: "2027-04-14".into(), donemAdi: "Mart 2027".into(), taxYear: 2027, taxMonth: 3 };
+        PeriodRepository::save(&conn, &tm1)?;
+        PeriodRepository::save(&conn, &tm2)?;
+        PeriodRepository::save(&conn, &tm3)?;
+
+        PayrollRepository::save(&conn, &bordro_kaydi("test-tax-month", "2027-01", dec!(50000)))?;
+        PayrollRepository::save(&conn, &bordro_kaydi("test-tax-month", "2027-02", dec!(60000)))?;
+
+        // taxMonth 3'ün önceki kümülatifi = 50.000 + 60.000 = 110.000
+        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-tax-month", &tm3)?;
+        assert_eq!(prev, dec!(110000));
+
+        Ok(())
+    }
+
+    // ===== Test D: çalışma ayı farklı olsa bile taxMonth authoritative
+    //     ay=12, taxYear=2027, taxMonth=1 → geçmiş araması 2027/1 semantiği kullanır.
+    #[test]
+    fn test_d_calisma_ayi_12_tax_month_authoritative() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-cal-12");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let aralik2026 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+        PeriodRepository::save(&conn, &aralik2026)?;
+
+        // 2026 vergi yılına ait gerçek bordro (taxMonth=12) — 2027/1 dönemine sayılmamalı
+        let kasim2026 = BordroDonemi { id: "2026-11".into(), yil: 2026, ay: 11, baslangicTarihi: "2026-11-15".into(), bitisTarihi: "2026-12-14".into(), donemAdi: "Kasım 2026".into(), taxYear: 2026, taxMonth: 12 };
+        PeriodRepository::save(&conn, &kasim2026)?;
+        PayrollRepository::save(&conn, &bordro_kaydi("test-cal-12", "2026-11", dec!(40000)))?;
+
+        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-cal-12", &aralik2026)?;
+        assert_eq!(prev, dec!(0));
+
+        Ok(())
+    }
+
+    // ===== Test E: FINALIZED bordro varken taxMonth değişikliği ERROR
+    #[test]
+    fn test_e_finalized_payroll_metadata_locked() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::services::period_service::PeriodService;
+
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-meta-finalized");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-07".into(),
+            yil: 2026,
+            ay: 7,
+            baslangicTarihi: "2026-07-15".into(),
+            bitisTarihi: "2026-08-14".into(),
+            donemAdi: "Temmuz 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        let bordro = bordro_kaydi("test-meta-finalized", "2026-07", dec!(0));
+        let bordro = BordroKaydi { status: BordroStatus::FINALIZED, ..bordro };
+        PayrollRepository::save(&conn, &bordro)?;
+
+        // taxMonth 7 → 6 değişikliği ERROR olmalı
+        let changed = BordroDonemi { taxMonth: 6, ..donem };
+        let res = PeriodService::save_period(&conn, &changed);
+        assert!(matches!(res, Err(DomainError::ValidationError(_))));
+
+        // DB'deki period taxYear/taxMonth değişmemeli
+        let stored = PeriodRepository::get_by_id(&conn, "2026-07")?.unwrap();
+        assert_eq!(stored.taxYear, 2026);
+        assert_eq!(stored.taxMonth, 7);
+
+        Ok(())
+    }
+
+    // ===== Test F: CALCULATED bordro varken taxMonth değişikliği ERROR
+    #[test]
+    fn test_f_calculated_payroll_metadata_locked() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::services::period_service::PeriodService;
+
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-meta-calculated");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-07".into(),
+            yil: 2026,
+            ay: 7,
+            baslangicTarihi: "2026-07-15".into(),
+            bitisTarihi: "2026-08-14".into(),
+            donemAdi: "Temmuz 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        let bordro = bordro_kaydi("test-meta-calculated", "2026-07", dec!(0));
+        PayrollRepository::save(&conn, &bordro)?;
+
+        let changed = BordroDonemi { taxMonth: 6, ..donem };
+        let res = PeriodService::save_period(&conn, &changed);
+        assert!(matches!(res, Err(DomainError::ValidationError(_))));
+
+        let stored = PeriodRepository::get_by_id(&conn, "2026-07")?.unwrap();
+        assert_eq!(stored.taxMonth, 7);
+
+        Ok(())
+    }
+
+    // ===== Test G: Bordrosuz dönemde taxYear/taxMonth değişikliği başarılı
+    #[test]
+    fn test_g_no_payroll_tax_update_allowed() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::services::period_service::PeriodService;
+
+        let conn = create_in_memory_connection()?;
+
+        let donem = BordroDonemi {
+            id: "2026-07".into(),
+            yil: 2026,
+            ay: 7,
+            baslangicTarihi: "2026-07-15".into(),
+            bitisTarihi: "2026-08-14".into(),
+            donemAdi: "Temmuz 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        // Bordro kaydı yok → taxYear/taxMonth güncellemesi başarılı
+        let changed = BordroDonemi { taxYear: 2026, taxMonth: 8, ..donem };
+        assert!(PeriodService::save_period(&conn, &changed).is_ok());
+
+        let stored = PeriodRepository::get_by_id(&conn, "2026-07")?.unwrap();
+        assert_eq!(stored.taxYear, 2026);
+        assert_eq!(stored.taxMonth, 8);
+
+        Ok(())
+    }
+
+    // ===== Test H: GV snapshot save → DB close/open → kümülatif/istisna alanları aynı
+    //     oncekiKumulatifAsgariGvMatrahi snapshot'tan kayıpsız geri türetilir.
+    #[test]
+    fn test_h_gv_snapshot_reload_kumulatif_korunur() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::db::create_connection;
+        use std::fs;
+        use std::path::PathBuf;
+
+        let temp_dir = std::env::temp_dir();
+        let db_path: PathBuf = temp_dir.join(format!("gv_snapshot_reload_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(54321)));
+        if db_path.exists() {
+            let _ = fs::remove_file(&db_path);
+        }
+
+        // 1. Kaydet
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let person = setup_test_person("p-gv-reload");
+            PersonnelRepository::save(&conn, &person)?;
+
+            let donem = BordroDonemi {
+                id: "2026-05".into(),
+                yil: 2026,
+                ay: 5,
+                baslangicTarihi: "2026-05-15".into(),
+                bitisTarihi: "2026-06-14".into(),
+                donemAdi: "Mayıs 2026".into(),
+                taxYear: 2026,
+                taxMonth: 6,
+            };
+            PeriodRepository::save(&conn, &donem)?;
+
+            let gv_detay = GvHesapDetayi {
+                cariGvMatrahi: dec!(28075.50),
+                yeniKumulatifGvMatrahi: dec!(336906.00),
+                brutGelirVergisi: dec!(4211.33),
+                asgariUcretGvMatrahi: dec!(28075.50),
+                asgariUcretReferansKumulatifMatrahi: dec!(168453.00),
+                asgariUcretGvIstisnasi: dec!(4211.33),
+                uygulananGvIstisnasi: dec!(4211.33),
+                kesilenGelirVergisi: dec!(0),
+            };
+
+            let bordro = BordroKaydi {
+                id: "p-gv-reload_2026-05".into(),
+                personelId: "p-gv-reload".into(),
+                donemId: "2026-05".into(),
+                puantajOzeti: PuantajOzeti::default(),
+                gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(28075.50)), ..Default::default() },
+                gelirToplam: dec!(28075.50),
+                kesintiler: KesintiKalemleri::default(),
+                kesintiToplam: dec!(0),
+                netOdeme: dec!(28075.50),
+                status: BordroStatus::FINALIZED,
+                olusturulmaTarihi: "".into(),
+                sonGuncellemeTarihi: "".into(),
+                notlar: None,
+                oncekiKumulatifGvMatrahi: Some(dec!(0)),
+                oncekiKumulatifAsgariGvMatrahi: Some(dec!(140377.50)),
+                manuelKumulatifGvMatrahi: None,
+                devredenPekGelen: None,
+                sonrakiDevredenPek: None,
+                pekDetay: None,
+                isPrimiDetay: None,
+                gvDetay: Some(gv_detay),
+                odenenRaporluGun: None,
+                raporluGun: None,
+            };
+            PayrollRepository::save(&conn, &bordro)?;
+
+            drop(conn);
+        }
+
+        // 2. DB close/open sonrası alanlar aynı olmalı
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+            let payrolls = PayrollRepository::get_all(&conn)?;
+            assert_eq!(payrolls.len(), 1);
+            let restored = &payrolls[0];
+
+            let gv = restored.gvDetay.as_ref().expect("gvDetay persist edilmedi");
+            assert_eq!(gv.brutGelirVergisi, dec!(4211.33));
+            assert_eq!(gv.asgariUcretGvIstisnasi, dec!(4211.33));
+            assert_eq!(gv.kesilenGelirVergisi, dec!(0));
+            assert_eq!(gv.asgariUcretReferansKumulatifMatrahi, dec!(168453.00));
+
+            // oncekiKumulatifAsgariGvMatrahi = referans - cari aylık matrah (kayıpsız)
+            assert_eq!(restored.oncekiKumulatifAsgariGvMatrahi, Some(dec!(140377.50)));
+
+            drop(conn);
+        }
+
+        let _ = fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    fn bordro_kaydi(personel_id: &str, donem_id: &str, gelir_toplam: rust_decimal::Decimal) -> BordroKaydi {
+        BordroKaydi {
+            id: format!("{}_{}", personel_id, donem_id),
+            personelId: personel_id.to_string(),
+            donemId: donem_id.to_string(),
+            puantajOzeti: PuantajOzeti::default(),
+            gelirler: GelirKalemleri { tabanBrutAylik: Some(gelir_toplam), ..Default::default() },
+            gelirToplam: gelir_toplam,
+            kesintiler: KesintiKalemleri::default(),
+            kesintiToplam: dec!(0),
+            netOdeme: gelir_toplam,
+            status: BordroStatus::CALCULATED,
+            olusturulmaTarihi: "".into(),
+            sonGuncellemeTarihi: "".into(),
+            notlar: None,
+            oncekiKumulatifGvMatrahi: None,
+            oncekiKumulatifAsgariGvMatrahi: None,
+            manuelKumulatifGvMatrahi: None,
+            devredenPekGelen: None,
+            sonrakiDevredenPek: None,
+            pekDetay: None,
+            isPrimiDetay: None,
+            gvDetay: None,
+            odenenRaporluGun: None,
+            raporluGun: None,
+        }
     }
 }
 

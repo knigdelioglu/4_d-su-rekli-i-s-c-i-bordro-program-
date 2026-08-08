@@ -2,6 +2,7 @@ use crate::db::DbState;
 use crate::domain::models::*;
 use crate::domain::Result;
 use crate::repositories::period_repo::PeriodRepository;
+use crate::services::period_service::PeriodService;
 use tauri::State;
 
 #[tauri::command]
@@ -13,5 +14,5 @@ pub fn get_periods(db: State<'_, DbState>) -> Result<Vec<BordroDonemi>> {
 #[tauri::command]
 pub fn save_period(db: State<'_, DbState>, period: BordroDonemi) -> Result<()> {
     let conn = db.lock().unwrap();
-    PeriodRepository::save(&conn, &period)
+    PeriodService::save_period(&conn, &period)
 }

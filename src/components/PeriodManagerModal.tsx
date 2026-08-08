@@ -176,6 +176,13 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
 
   // Preview generated dates
   const previewDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
+  const previewExists = donemler.some((d) => d.id === previewDonem.id);
+  const existingPreview = donemler.find((d) => d.id === previewDonem.id);
+  const previewTaxChanged =
+    previewExists &&
+    existingPreview !== undefined &&
+    (existingPreview.taxYear !== previewDonem.taxYear ||
+      existingPreview.taxMonth !== previewDonem.taxMonth);
 
   if (!isOpen) return null;
 
@@ -1610,6 +1617,18 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                   Ödeme/Tahakkuk Ayı: {AY_ISIMLERI[previewDonem.taxMonth - 1]} {previewDonem.taxYear}
                 </div>
               </div>
+
+              {previewExists && (
+                <div className="bg-orange-50 border border-orange-300 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-orange-900">
+                  <Info className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
+                  <div className="leading-relaxed">
+                    <strong>{previewDonem.id}</strong> dönemi zaten mevcut; bu kayıt güncelleme olarak işlenecek.
+                    {previewTaxChanged && (
+                      <> Vergi Yılı/Ayı değişikliği yalnız bu dönemde hiç bordro kaydı yoksa kaydedilir; bordro kaydı varsa sistem bu iki alanı kilitleyecektir.</>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-4 space-y-3">
                 <div className="text-[10px] uppercase font-bold text-amber-700 tracking-wider">

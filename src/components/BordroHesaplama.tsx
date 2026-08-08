@@ -154,7 +154,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
     const sessionManual = manualKumulatifGvMap[person.id];
     const kumulatifGvOnceki = sessionManual ?? autoGvOnceki;
-    const hasManualGv = sessionManual !== undefined || (person.devirKumulatifGvMatrahi !== undefined && person.devirKumulatifGvMatrahiYili === aktifDonem.yil);
+    const hasManualGv = sessionManual !== undefined || (person.devirKumulatifGvMatrahi !== undefined && person.devirKumulatifGvMatrahiYili === (aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil)));
 
     const devredenPekGelen = calculateIncomingDevredenPek(
       person.id,
@@ -880,22 +880,22 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           await onSavePersonel({
                             ...person,
                             devirKumulatifGvMatrahi: val,
-                            devirKumulatifGvMatrahiYili: aktifDonem.yil,
+                            devirKumulatifGvMatrahiYili: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
                             devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
                           });
                           // In Tauri runtime the Rust cumulative engine reads from
                           // personnel_tax_opening. Persist the same opening there so the
-                          // authoritative calc and the UI stay in sync.
+                          // authoritative calc and the UI stay in sync. Opening yılı vergi
+                          // yılıdır (Aralık dönemi → yıl +1), böylece yıl geçişinde devir
+                          // 2027 kümülatifine doğru bağlanır.
                           if (tauriBridge.isTauriAvailable()) {
                             try {
                               await tauriBridge.saveTaxOpening({
-                                id: `${person.id}_${aktifDonem.yil}`,
+                                id: `${person.id}_${aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil)}`,
                                 personnelId: person.id,
-                                year: aktifDonem.yil,
+                                year: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
                                 gvCumulativeOpening: val,
-                                effectiveFromPeriodId: `${aktifDonem.yil}-${String(
-                                  aktifDonem.ay
-                                ).padStart(2, '0')}`,
+                                effectiveFromPeriodId: aktifDonem.id,
                               });
                             } catch (taxErr) {
                               console.error(

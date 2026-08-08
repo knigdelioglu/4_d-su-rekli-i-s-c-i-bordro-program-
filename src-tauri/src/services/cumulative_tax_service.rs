@@ -10,6 +10,14 @@ use rust_decimal_macros::dec;
 pub struct CumulativeTaxService;
 
 impl CumulativeTaxService {
+    /// Çalışanın gerçek kümülatif GV matrahı vergi yılı/ayı (taxYear/taxMonth)
+    /// domaini üzerinden hesaplanır:
+    ///   = ilgili vergi yılına ait geçerli personnel_tax_opening
+    ///     + aynı vergi yılı içinde taxMonth < aktif.taxMonth olan gerçek bordrolar
+    ///
+    /// Çalışma yılı/ayı (yil/ay) bu sıralamada authoritative değildir. Aralık dönemi
+    /// (15.12.2026–14.01.2027, taxYear=2027/taxMonth=1) 2027 vergi yılının Ocak
+    /// bordrosu olarak ele alınır; önceki takvim yılının kümülatifi otomatik taşınmaz.
     pub fn get_previous_cumulative_gv(
         conn: &Connection,
         personnel_id: &str,
@@ -18,7 +26,7 @@ impl CumulativeTaxService {
         let tax_opening = TaxOpeningRepository::get_by_personnel_and_year(
             conn,
             personnel_id,
-            active_period.yil,
+            active_period.taxYear,
         )?;
 
         let all_periods = PeriodRepository::get_all(conn)?;
@@ -28,17 +36,23 @@ impl CumulativeTaxService {
 
         if let Some(opening) = tax_opening {
             if opening.gvCumulativeOpening > dec!(0) {
-                // Find effective_from_period
+                // effective_from_period: devrin uygulanmaya başladığı dönem.
+                // Başlangıç anahtarı vergi yılı/ayı (taxYear, taxMonth) üzerinden alınır;
+                // devir açılış yılından farklı bir vergi yılına aitse yıl başından başlar.
                 let effective_period = all_periods
                     .iter()
                     .find(|p| p.id == opening.effectiveFromPeriodId);
 
-                let start_month = effective_period.map_or(1, |p| p.ay);
+                let start_tax_month = match effective_period {
+                    Some(p) if p.taxYear == opening.year => p.taxMonth,
+                    _ => 1,
+                };
 
-                // Collision Check: Find if there are saved payroll records in the SAME year for months PRIOR to start_month
+                // Collision Check: devir başlangıcından ÖNCE aynı vergi yılında kayıtlı
+                // bordro varsa mükerrer matrah oluşur → açık hata.
                 let prior_period_ids: Vec<String> = all_periods
                     .iter()
-                    .filter(|p| p.yil == active_period.yil && p.ay < start_month)
+                    .filter(|p| p.taxYear == opening.year && p.taxMonth < start_tax_month)
                     .map(|p| p.id.clone())
                     .collect();
 
@@ -54,10 +68,14 @@ impl CumulativeTaxService {
 
                 cumulative_matrah = opening.gvCumulativeOpening;
 
-                // Add payrolls in same year with month >= start_month AND < active_period.ay
+                // Aynı vergi yılında devir başlangıcından aktif döneme kadar olan gerçek bordrolar.
                 let valid_prior_period_ids: Vec<String> = all_periods
                     .iter()
-                    .filter(|p| p.yil == active_period.yil && p.ay >= start_month && p.ay < active_period.ay)
+                    .filter(|p| {
+                        p.taxYear == opening.year
+                            && p.taxMonth >= start_tax_month
+                            && p.taxMonth < active_period.taxMonth
+                    })
                     .map(|p| p.id.clone())
                     .collect();
 
@@ -74,10 +92,11 @@ impl CumulativeTaxService {
             }
         }
 
-        // If no tax opening for active_period.yil: add payrolls in same year < active_period.ay
+        // Aktif vergi yılına ait açılış yoksa: aynı vergi yılı içinde
+        // taxMonth < aktif.taxMonth olan gerçek bordroları topla.
         let prior_period_ids: Vec<String> = all_periods
             .iter()
-            .filter(|p| p.yil == active_period.yil && p.ay < active_period.ay)
+            .filter(|p| p.taxYear == active_period.taxYear && p.taxMonth < active_period.taxMonth)
             .map(|p| p.id.clone())
             .collect();
 

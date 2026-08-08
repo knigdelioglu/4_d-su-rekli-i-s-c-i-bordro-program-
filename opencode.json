@@ -1,0 +1,13 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "*": "allow",
+    "bash": "deny",
+    "webfetch": "deny",
+    "external_directory": {
+      "/Users/kadir/.local/share/opencode/tool-output/*": "allow",
+      "/var/folders/*/T/opencode/*": "allow",
+      "*": "deny"
+    }
+  }
+}

@@ -145,7 +145,13 @@ impl PayrollRepository {
                 sonGuncellemeTarihi: updated_at,
                 notlar: None,
                 oncekiKumulatifGvMatrahi: Some(kurus_to_dec(previous_cumulative_gv)),
-                oncekiKumulatifAsgariGvMatrahi: None,
+                // `oncekiKumulatifAsgariGvMatrahi` ayrı bir kolonda saklanmaz; gv_snapshot_json
+                // içinde kayıtlı asgari referans kümülatifinden kayıpsız geri türetilir:
+                //   önceki = referansKümülatif - cariAylıkMatrah
+                // (her iki alan 2 haneli Decimal olduğundan çıkarma birebir sonucu verir).
+                oncekiKumulatifAsgariGvMatrahi: gv_detay.as_ref().map(|g| {
+                    (g.asgariUcretReferansKumulatifMatrahi - g.asgariUcretGvMatrahi).max(rust_decimal_macros::dec!(0))
+                }),
                 manuelKumulatifGvMatrahi: None,
                 devredenPekGelen: devreden_pek_gelen,
                 sonrakiDevredenPek: sonraki_devreden_pek,
