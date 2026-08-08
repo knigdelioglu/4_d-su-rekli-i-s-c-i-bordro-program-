@@ -3,13 +3,18 @@ mod tests {
     use bordro_programi_lib::db::create_in_memory_connection;
     use bordro_programi_lib::domain::models::*;
     use bordro_programi_lib::domain::DomainError;
+    use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
     use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
     use bordro_programi_lib::repositories::period_repo::PeriodRepository;
     use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
+    use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
     use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
     use bordro_programi_lib::services::cumulative_tax_service::CumulativeTaxService;
     use bordro_programi_lib::services::migration_service::MigrationService;
+    use bordro_programi_lib::services::payroll_service::PayrollService;
+    use rust_decimal::Decimal;
     use rust_decimal_macros::dec;
+    use std::collections::HashMap;
 
     fn setup_test_person(id: &str) -> Personel {
         Personel {
@@ -695,6 +700,364 @@ mod tests {
 
         // Mayıs period pays 0 days (May 15-18 are days 3..6 of the SAME single episode -> no duplicate payment)
         assert_eq!(mayis_paid, 0);
+
+        Ok(())
+    }
+
+    // ==========================================
+    // CALENDAR YEAR BOUNDARY SICK LEAVE TESTS (A - E + PERSISTENCE)
+    // ==========================================
+
+    #[test]
+    fn test_year_crossing_sick_leave_test_a_dec_29_start() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-year-a");
+        PersonnelRepository::save(&conn, &person)?;
+
+        // 29.12.2026–03.01.2027 (1st episode of 2026)
+        let rec = SickLeaveRecord {
+            id: "sick_year_a".into(),
+            personnelId: "p-year-a".into(),
+            startDate: "2026-12-29".into(),
+            endDate: "2027-01-03".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        SickLeaveRepository::save(&conn, &rec)?;
+
+        let donem_2026_12 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
+
+        let donem_2027_01 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+
+        let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-a")?;
+        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+
+        assert_eq!(paid_2026_12, 2);
+        assert_eq!(paid_2027_01, 0);
+        assert_eq!(paid_2026_12 + paid_2027_01, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_year_crossing_sick_leave_test_b_dec_31_start() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-year-b");
+        PersonnelRepository::save(&conn, &person)?;
+
+        // 31.12.2026–03.01.2027 (1st episode of 2026)
+        // Global paid dates: 31.12.2026 and 01.01.2027
+        let rec = SickLeaveRecord {
+            id: "sick_year_b".into(),
+            personnelId: "p-year-b".into(),
+            startDate: "2026-12-31".into(),
+            endDate: "2027-01-03".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        SickLeaveRepository::save(&conn, &rec)?;
+
+        let donem_2026_12 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
+
+        let donem_2027_01 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+
+        let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-b")?;
+        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+
+        // 31.12.2026 and 01.01.2027 both fall into 2026-12 period (15.12.2026 - 14.01.2027)
+        assert_eq!(paid_2026_12, 2);
+        assert_eq!(paid_2027_01, 0);
+        assert_eq!(paid_2026_12 + paid_2027_01, 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_year_crossing_sick_leave_test_c_jan_01_start() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-year-c");
+        PersonnelRepository::save(&conn, &person)?;
+
+        // 01.01.2027–04.01.2027 (1st episode of 2027)
+        // Global paid dates: 01.01.2027 and 02.01.2027
+        let rec = SickLeaveRecord {
+            id: "sick_year_c".into(),
+            personnelId: "p-year-c".into(),
+            startDate: "2027-01-01".into(),
+            endDate: "2027-01-04".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        SickLeaveRepository::save(&conn, &rec)?;
+
+        let donem_2026_12 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
+
+        let donem_2027_01 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+
+        let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-c")?;
+        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+
+        // 01.01.2027 and 02.01.2027 fall into 2026-12 period range (15.12.2026 - 14.01.2027)
+        assert_eq!(paid_2026_12, 2);
+        assert_eq!(paid_2027_01, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_year_crossing_sick_leave_test_d_sixth_episode_unpaid() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-year-d");
+        PersonnelRepository::save(&conn, &person)?;
+
+        // Add 5 prior episodes in 2026
+        for i in 1..=5 {
+            let rec = SickLeaveRecord {
+                id: format!("sick_year_d_{}", i),
+                personnelId: "p-year-d".into(),
+                startDate: format!("2026-0{}-01", i),
+                endDate: format!("2026-0{}-03", i),
+                createdAt: None,
+                updatedAt: None,
+            };
+            SickLeaveRepository::save(&conn, &rec)?;
+        }
+
+        // 6th episode starting 31.12.2026 to 02.01.2027
+        let rec6 = SickLeaveRecord {
+            id: "sick_year_d_6".into(),
+            personnelId: "p-year-d".into(),
+            startDate: "2026-12-31".into(),
+            endDate: "2027-01-02".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        SickLeaveRepository::save(&conn, &rec6)?;
+
+        let donem_2026_12 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
+
+        let donem_2027_01 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+
+        let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-d")?;
+        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+
+        assert_eq!(paid_2026_12, 0);
+        assert_eq!(paid_2027_01, 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_year_crossing_sick_leave_test_e_single_day_year_end() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-year-e");
+        PersonnelRepository::save(&conn, &person)?;
+
+        // 31.12.2026–31.12.2026 (1-day episode)
+        let rec = SickLeaveRecord {
+            id: "sick_year_e".into(),
+            personnelId: "p-year-e".into(),
+            startDate: "2026-12-31".into(),
+            endDate: "2026-12-31".into(),
+            createdAt: None,
+            updatedAt: None,
+        };
+        SickLeaveRepository::save(&conn, &rec)?;
+
+        let donem_2026_12 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
+
+        let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-e")?;
+        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+
+        assert_eq!(paid_2026_12, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_year_crossing_sick_leave_persistence_and_finalized_reload() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::db::create_connection;
+        use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
+        use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+        use bordro_programi_lib::services::payroll_service::PayrollService;
+        use std::collections::HashMap;
+        use std::fs;
+        use std::path::PathBuf;
+
+        let temp_dir = std::env::temp_dir();
+        let db_path: PathBuf = temp_dir.join(format!("year_crossing_rapor_test_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(98765)));
+
+        if db_path.exists() {
+            let _ = fs::remove_file(&db_path);
+        }
+
+        // 1. Calculate, save, and finalize payroll for year-crossing sick leave
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let person = setup_test_person("p-yc-persistence");
+            PersonnelRepository::save(&conn, &person)?;
+
+            let donem = BordroDonemi {
+                id: "2026-12".into(),
+                yil: 2026,
+                ay: 12,
+                baslangicTarihi: "2026-12-15".into(),
+                bitisTarihi: "2027-01-14".into(),
+                donemAdi: "Aralık 2026".into(),
+                taxYear: 2026,
+                taxMonth: 12,
+            };
+            PeriodRepository::save(&conn, &donem)?;
+
+            let rec = SickLeaveRecord {
+                id: "sick_yc_p".into(),
+                personnelId: "p-yc-persistence".into(),
+                startDate: "2026-12-31".into(),
+                endDate: "2027-01-03".into(),
+                createdAt: None,
+                updatedAt: None,
+            };
+            SickLeaveRepository::save(&conn, &rec)?;
+
+            let mut gunler = HashMap::new();
+            for d in 15..=30 {
+                gunler.insert(format!("2026-12-{:02}", d), "Ç".to_string());
+            }
+            gunler.insert("2026-12-31".to_string(), "R".to_string());
+            gunler.insert("2027-01-01".to_string(), "R".to_string());
+            gunler.insert("2027-01-02".to_string(), "R".to_string());
+            gunler.insert("2027-01-03".to_string(), "R".to_string());
+
+            let puantaj = PersonelPuantaj {
+                id: "p-yc-persistence_2026-12".into(),
+                personelId: "p-yc-persistence".into(),
+                donemId: "2026-12".into(),
+                gunler,
+            };
+            AttendanceRepository::save(&conn, &puantaj)?;
+
+            let bordro = PayrollService::calculate_payroll_for_personnel(&conn, "p-yc-persistence", "2026-12")?;
+            assert_eq!(bordro.odenenRaporluGun, Some(2));
+            assert_eq!(bordro.raporluGun, Some(4));
+
+            PayrollRepository::save(&conn, &bordro)?;
+            PayrollService::set_payroll_status(&conn, "p-yc-persistence", "2026-12", BordroStatus::FINALIZED)?;
+        }
+
+        // 2. Re-open database connection and reload finalized payroll
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+            let payrolls = PayrollRepository::get_all(&conn)?;
+            assert_eq!(payrolls.len(), 1);
+            let loaded = &payrolls[0];
+
+            assert_eq!(loaded.status, BordroStatus::FINALIZED);
+            assert_eq!(loaded.odenenRaporluGun, Some(2));
+            assert_eq!(loaded.raporluGun, Some(4));
+        }
+
+        let _ = fs::remove_file(&db_path);
 
         Ok(())
     }
@@ -1976,6 +2339,302 @@ mod tests {
             odenenRaporluGun: None,
             raporluGun: None,
         }
+    }
+
+    // ==========================================
+    // Devreden PEK Yıl Geçişi Tests (5510 m.80/d)
+    // ==========================================
+
+    fn make_test_kurum_degerleri(
+        donem_id: &str,
+        gunluk_taban_ucret: Decimal,
+        ek_odeme: Decimal,
+        gunluk_asgari_ucret: Decimal,
+        pek_tavan_katsayisi: Decimal,
+    ) -> DonemselKurumDegerleri {
+        DonemselKurumDegerleri {
+            donemId: donem_id.to_string(),
+            gunlukTabanUcret: gunluk_taban_ucret,
+            gunlukYemek: dec!(0),
+            birlestirilmisSosyalYardim: dec!(0),
+            gunlukVasitaYol: dec!(0),
+            giyimYardimi: dec!(0),
+            hizmetZammiBirimi: dec!(0),
+            isPrimiGruplari: Some(vec![
+                IsPrimiGrupItem { id: "g1".into(), ad: "1. Grup".into(), oran: dec!(0), aktif: true },
+                IsPrimiGrupItem { id: "g2".into(), ad: "2. Grup".into(), oran: dec!(0), aktif: true },
+                IsPrimiGrupItem { id: "g3".into(), ad: "3. Grup".into(), oran: dec!(0), aktif: true },
+                IsPrimiGrupItem { id: "g4".into(), ad: "4. Grup".into(), oran: dec!(0), aktif: true },
+                IsPrimiGrupItem { id: "g5".into(), ad: "5. Grup".into(), oran: dec!(0), aktif: true },
+            ]),
+            ekOdeme: Some(ek_odeme),
+            gunlukAsgariUcret: Some(gunluk_asgari_ucret),
+            pekTavanKatsayisi: Some(pek_tavan_katsayisi),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_devreden_pek_aralik_ocak_gecisi() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-pek-a");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let aralik2026 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
+
+        let ocak2027 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+
+        PeriodRepository::save(&conn, &aralik2026)?;
+        PeriodRepository::save(&conn, &ocak2027)?;
+
+        let aralik_settings = make_test_kurum_degerleri("2026-12", dec!(3333.33333333), dec!(250000.00), dec!(1101.00), dec!(9.00));
+        SettingsRepository::save_institution_settings(&conn, &aralik_settings)?;
+
+        let ocak_settings = make_test_kurum_degerleri("2027-01", dec!(3333.33333333), dec!(0), dec!(1101.00), dec!(9.00));
+        SettingsRepository::save_institution_settings(&conn, &ocak_settings)?;
+
+        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 {
+            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
+        }
+
+        AttendanceRepository::save(&conn, &PersonelPuantaj {
+            id: "p-pek-a_2026-12".into(),
+            personelId: "p-pek-a".into(),
+            donemId: "2026-12".into(),
+            gunler: gunler_30.clone(),
+        })?;
+
+        AttendanceRepository::save(&conn, &PersonelPuantaj {
+            id: "p-pek-a_2027-01".into(),
+            personelId: "p-pek-a".into(),
+            donemId: "2027-01".into(),
+            gunler: gunler_30.clone(),
+        })?;
+
+        let bordro_aralik = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2026-12")?;
+        let sonraki_aralik = bordro_aralik.sonrakiDevredenPek.as_ref().unwrap();
+        assert_eq!(sonraki_aralik.len(), 1);
+        assert_eq!(sonraki_aralik[0].tutar, dec!(52730.00));
+        assert_eq!(sonraki_aralik[0].kalanAySayisi, 2);
+
+        let bordro_ocak = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2027-01")?;
+        let gelen_ocak = bordro_ocak.devredenPekGelen.as_ref().unwrap();
+        assert_eq!(gelen_ocak.len(), 1);
+        assert_eq!(gelen_ocak[0].tutar, dec!(52730.00));
+
+        let pek_ocak = bordro_ocak.pekDetay.as_ref().unwrap();
+        assert_eq!(pek_ocak.finalPek, dec!(152730.00));
+
+        let sonraki_ocak = bordro_ocak.sonrakiDevredenPek.as_ref().unwrap();
+        assert!(sonraki_ocak.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_devreden_pek_aralik_ocak_subat_iki_ay_omur() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-pek-b");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let periods = vec![
+            BordroDonemi { id: "2026-12".into(), yil: 2026, ay: 12, baslangicTarihi: "2026-12-15".into(), bitisTarihi: "2027-01-14".into(), donemAdi: "Aralık 2026".into(), taxYear: 2026, taxMonth: 12 },
+            BordroDonemi { id: "2027-01".into(), yil: 2027, ay: 1, baslangicTarihi: "2027-01-15".into(), bitisTarihi: "2027-02-14".into(), donemAdi: "Ocak 2027".into(), taxYear: 2027, taxMonth: 1 },
+            BordroDonemi { id: "2027-02".into(), yil: 2027, ay: 2, baslangicTarihi: "2027-02-15".into(), bitisTarihi: "2027-03-14".into(), donemAdi: "Şubat 2027".into(), taxYear: 2027, taxMonth: 2 },
+            BordroDonemi { id: "2027-03".into(), yil: 2027, ay: 3, baslangicTarihi: "2027-03-15".into(), bitisTarihi: "2027-04-14".into(), donemAdi: "Mart 2027".into(), taxYear: 2027, taxMonth: 3 },
+        ];
+        for p in &periods {
+            PeriodRepository::save(&conn, p)?;
+        }
+
+        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
+
+        for p in &periods {
+            AttendanceRepository::save(&conn, &PersonelPuantaj {
+                id: format!("p-pek-b_{}", p.id),
+                personelId: "p-pek-b".into(),
+                donemId: p.id.clone(),
+                gunler: gunler_30.clone(),
+            })?;
+        }
+
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-12", dec!(8333.33333333), dec!(100000.00), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-01", dec!(9333.33333333), dec!(0), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-02", dec!(9500.00), dec!(0), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-03", dec!(6666.66666667), dec!(0), dec!(1101.00), dec!(9.00)))?;
+
+        let b1 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2026-12")?;
+        assert_eq!(b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(52730.00));
+        assert_eq!(b1.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 2);
+
+        let b2 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2027-01")?;
+        assert_eq!(b2.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(52730.00));
+        assert_eq!(b2.pekDetay.as_ref().unwrap().finalPek, dec!(297270.00));
+        assert_eq!(b2.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert_eq!(b2.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 1);
+
+        let b3 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2027-02")?;
+        assert_eq!(b3.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert_eq!(b3.pekDetay.as_ref().unwrap().finalPek, dec!(297270.00));
+        assert!(b3.sonrakiDevredenPek.as_ref().unwrap().is_empty());
+
+        let b4 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2027-03")?;
+        assert!(b4.devredenPekGelen.as_ref().unwrap().is_empty());
+        assert_eq!(b4.pekDetay.as_ref().unwrap().finalPek, dec!(200000.00));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_devreden_pek_yeni_yil_ocak_tavani() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-pek-c");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let aralik2026 = BordroDonemi {
+            id: "2026-12".into(), yil: 2026, ay: 12, baslangicTarihi: "2026-12-15".into(), bitisTarihi: "2027-01-14".into(), donemAdi: "Aralık 2026".into(), taxYear: 2026, taxMonth: 12
+        };
+        let ocak2027 = BordroDonemi {
+            id: "2027-01".into(), yil: 2027, ay: 1, baslangicTarihi: "2027-01-15".into(), bitisTarihi: "2027-02-14".into(), donemAdi: "Ocak 2027".into(), taxYear: 2027, taxMonth: 1
+        };
+        PeriodRepository::save(&conn, &aralik2026)?;
+        PeriodRepository::save(&conn, &ocak2027)?;
+
+        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
+
+        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-c_2026-12".into(), personelId: "p-pek-c".into(), donemId: "2026-12".into(), gunler: gunler_30.clone() })?;
+        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-c_2027-01".into(), personelId: "p-pek-c".into(), donemId: "2027-01".into(), gunler: gunler_30.clone() })?;
+
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-12", dec!(6666.66666667), dec!(120000.00), dec!(1000.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-01", dec!(10000.00), dec!(0), dec!(1200.00), dec!(9.00)))?;
+
+        PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2026-12")?;
+        let b_ocak = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2027-01")?;
+
+        let pek = b_ocak.pekDetay.as_ref().unwrap();
+        assert_eq!(pek.finalPek, dec!(324000.00));
+
+        let sonraki = b_ocak.sonrakiDevredenPek.as_ref().unwrap();
+        assert_eq!(sonraki.len(), 1);
+        assert_eq!(sonraki[0].tutar, dec!(26000.00));
+        assert_eq!(sonraki[0].kalanAySayisi, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_devreden_pek_yil_ici_haziran_temmuz_agustos() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-pek-d");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let periods = vec![
+            BordroDonemi { id: "2026-06".into(), yil: 2026, ay: 6, baslangicTarihi: "2026-06-15".into(), bitisTarihi: "2026-07-14".into(), donemAdi: "Haziran 2026".into(), taxYear: 2026, taxMonth: 7 },
+            BordroDonemi { id: "2026-07".into(), yil: 2026, ay: 7, baslangicTarihi: "2026-07-15".into(), bitisTarihi: "2026-08-14".into(), donemAdi: "Temmuz 2026".into(), taxYear: 2026, taxMonth: 8 },
+            BordroDonemi { id: "2026-08".into(), yil: 2026, ay: 8, baslangicTarihi: "2026-08-15".into(), bitisTarihi: "2026-09-14".into(), donemAdi: "Ağustos 2026".into(), taxYear: 2026, taxMonth: 9 },
+        ];
+        for p in &periods { PeriodRepository::save(&conn, p)?; }
+
+        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
+
+        for p in &periods {
+            AttendanceRepository::save(&conn, &PersonelPuantaj { id: format!("p-pek-d_{}", p.id), personelId: "p-pek-d".into(), donemId: p.id.clone(), gunler: gunler_30.clone() })?;
+        }
+
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-06", dec!(8333.33333333), dec!(100000.00), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-07", dec!(9333.33333333), dec!(0), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-08", dec!(9500.00), dec!(0), dec!(1101.00), dec!(9.00)))?;
+
+        let b1 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-06")?;
+        assert_eq!(b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(52730.00));
+
+        let b2 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-07")?;
+        assert_eq!(b2.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(52730.00));
+        assert_eq!(b2.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(35460.00));
+
+        let b3 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-08")?;
+        assert_eq!(b3.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert!(b3.sonrakiDevredenPek.as_ref().unwrap().is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_devreden_pek_tax_year_bagimsizligi() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("p-pek-e");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let aralik2026 = BordroDonemi {
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+
+        let ocak2027 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 2,
+        };
+
+        PeriodRepository::save(&conn, &aralik2026)?;
+        PeriodRepository::save(&conn, &ocak2027)?;
+
+        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
+
+        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-e_2026-12".into(), personelId: "p-pek-e".into(), donemId: "2026-12".into(), gunler: gunler_30.clone() })?;
+        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-e_2027-01".into(), personelId: "p-pek-e".into(), donemId: "2027-01".into(), gunler: gunler_30.clone() })?;
+
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-12", dec!(3333.33333333), dec!(250000.00), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-01", dec!(3333.33333333), dec!(0), dec!(1101.00), dec!(9.00)))?;
+
+        PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-e", "2026-12")?;
+
+        let devreden_gelen = PayrollService::calculate_incoming_devreden_pek(&conn, "p-pek-e", &ocak2027)?;
+
+        assert_eq!(devreden_gelen.len(), 1);
+        assert_eq!(devreden_gelen[0].tutar, dec!(52730.00));
+        assert_eq!(devreden_gelen[0].kalanAySayisi, 2);
+
+        Ok(())
     }
 }
 

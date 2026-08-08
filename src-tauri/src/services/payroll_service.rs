@@ -169,7 +169,7 @@ let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_i
         }
     }
 
-    fn calculate_incoming_devreden_pek(
+    pub fn calculate_incoming_devreden_pek(
         conn: &Connection,
         personnel_id: &str,
         active_period: &BordroDonemi,

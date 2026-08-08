@@ -3,6 +3,7 @@ use crate::domain::Result;
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
+use std::collections::BTreeMap;
 
 pub struct SickLeaveService;
 
@@ -10,13 +11,12 @@ impl SickLeaveService {
     /// Calculates the number of institution-paid sick days for a personnel in a given payroll period.
     ///
     /// Rules:
-    /// - For the calendar year of the payroll period, sick leave records for the personnel
-    ///   are sorted chronologically by `startDate`.
-    /// - Each record represents a distinct sick leave occurrence (episode: 1st, 2nd, ...).
-    /// - For the first 5 episodes in the calendar year, up to the first 2 days of each episode are paid by the institution.
-    /// - For the 6th and subsequent episodes in the calendar year, 0 days are paid.
-    /// - If an episode spans across two payroll periods (e.g. 15th-14th boundary),
-    ///   the first 2 payable days are counted only once across periods.
+    /// - Sick leave records are grouped by the calendar year of their `startDate`.
+    /// - Each record represents a distinct sick leave occurrence (episode: 1st, 2nd, ... in that calendar year).
+    /// - For the first 5 episodes starting in a calendar year, up to the first 2 days of each episode are paid by the institution globally.
+    /// - For the 6th and subsequent episodes starting in a calendar year, 0 days are paid.
+    /// - For episodes spanning across calendar years or payroll periods, the global payable days (first 2 days of the episode)
+    ///   are counted in whichever payroll period range (`baslangicTarihi`..=`bitisTarihi`) they fall into.
     pub fn calculate_paid_sick_days_for_period(
         conn: &Connection,
         personnel_id: &str,
@@ -39,58 +39,50 @@ impl SickLeaveService {
             Err(_) => return 0,
         };
 
-        // Filter and sort records for the calendar year
-        // We consider records whose start_date is in period.yil, or whose date range overlaps with period.yil
-        let mut year_records: Vec<&SickLeaveRecord> = records
-            .iter()
-            .filter(|r| {
-                if let Ok(start) = NaiveDate::parse_from_str(&r.startDate, "%Y-%m-%d") {
-                    start.year() == period.yil
-                } else {
-                    false
-                }
-            })
-            .collect();
+        // Group valid records by their start_date's calendar year
+        let mut year_groups: BTreeMap<i32, Vec<(NaiveDate, NaiveDate)>> = BTreeMap::new();
 
-        year_records.sort_by(|a, b| a.startDate.cmp(&b.startDate));
+        for r in records {
+            if let (Ok(start), Ok(end)) = (
+                NaiveDate::parse_from_str(&r.startDate, "%Y-%m-%d"),
+                NaiveDate::parse_from_str(&r.endDate, "%Y-%m-%d"),
+            ) {
+                if end >= start {
+                    year_groups
+                        .entry(start.year())
+                        .or_default()
+                        .push((start, end));
+                }
+            }
+        }
 
         let mut total_paid_in_period = 0;
 
-        for (idx, record) in year_records.iter().enumerate() {
-            let episode_index = idx + 1; // 1-indexed (1st, 2nd, ... episode)
-            let start = match NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d") {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-            let end = match NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d") {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
+        for (_year, mut recs) in year_groups {
+            recs.sort_by(|a, b| a.0.cmp(&b.0));
 
-            if end < start {
-                continue;
-            }
+            for (idx, (start, end)) in recs.iter().enumerate() {
+                let episode_index = idx + 1; // 1-indexed (1st, 2nd, ... episode of this calendar year)
 
-            let mut curr = start;
-            let mut day_index_in_episode = 1; // 1st day, 2nd day, 3rd day of this episode
+                if episode_index <= 5 {
+                    // Global Day 1 of episode: start_date
+                    if *start >= period_start && *start <= period_end {
+                        total_paid_in_period += 1;
+                    }
 
-            while curr <= end {
-                let is_day_paid_by_institution = episode_index <= 5 && day_index_in_episode <= 2;
-                let is_day_in_period = curr >= period_start && curr <= period_end;
-
-                if is_day_paid_by_institution && is_day_in_period {
-                    total_paid_in_period += 1;
+                    // Global Day 2 of episode: start_date + 1 day (if episode length > 1 day)
+                    if *end > *start {
+                        if let Some(day2) = start.succ_opt() {
+                            if day2 >= period_start && day2 <= period_end {
+                                total_paid_in_period += 1;
+                            }
+                        }
+                    }
                 }
-
-                if let Some(next_day) = curr.succ_opt() {
-                    curr = next_day;
-                } else {
-                    break;
-                }
-                day_index_in_episode += 1;
             }
         }
 
         total_paid_in_period
     }
 }
+
