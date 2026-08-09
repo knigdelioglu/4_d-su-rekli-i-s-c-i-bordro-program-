@@ -1,20 +1,61 @@
 {
-  "modules": {
-    "rust_domain": ["src-tauri/src/domain/models.rs", "src-tauri/src/domain/calculations.rs", "src-tauri/src/domain/errors.rs"],
-    "rust_services": ["src-tauri/src/services/payroll_service.rs", "src-tauri/src/services/cumulative_tax_service.rs", "src-tauri/src/services/sick_leave_service.rs"],
-    "rust_repos": ["src-tauri/src/repositories/payroll_repo.rs", "src-tauri/src/repositories/settings_repo.rs", "src-tauri/src/repositories/tax_opening_repo.rs", "src-tauri/src/repositories/period_repo.rs", "src-tauri/src/repositories/personnel_repo.rs"],
-    "rust_db": ["src-tauri/src/db/migrations.rs", "src-tauri/src/db/connection.rs"],
-    "rust_commands": ["src-tauri/src/commands/payroll_cmd.rs", "src-tauri/src/commands/period_cmd.rs", "src-tauri/src/commands/settings_cmd.rs"],
-    "rust_tests": ["src-tauri/tests/domain_tests.rs", "src-tauri/tests/native_smoke_test.rs"],
-    "ts_types": ["src/types/payroll.ts"],
-    "ts_utils": ["src/utils/payrollUtils.ts", "src/utils/cumulativeGv.test.ts", "src/utils/excelExport.ts"],
-    "ts_components": ["src/components/BordroHesaplama.tsx", "src/components/PaySlipModal.tsx", "src/components/PeriodManagerModal.tsx", "src/components/PuantajGrid.tsx"]
-  },
-  "test_commands": {
-    "lint": "bun run lint",
-    "build": "bun run build",
-    "rust_tests": "cd src-tauri && cargo test",
-    "ts_unit": "bun test src/utils/"
-  },
-  "last_updated": "2026-08-07"
+ "modules": {
+  "rust_domain": [
+   "src-tauri/src/domain/models.rs",
+   "src-tauri/src/domain/calculations.rs",
+   "src-tauri/src/domain/errors.rs"
+  ],
+  "rust_services": [
+   "src-tauri/src/services/payroll_service.rs",
+   "src-tauri/src/services/cumulative_tax_service.rs",
+   "src-tauri/src/services/sick_leave_service.rs"
+  ],
+  "rust_repos": [
+   "src-tauri/src/repositories/payroll_repo.rs",
+   "src-tauri/src/repositories/settings_repo.rs",
+   "src-tauri/src/repositories/tax_opening_repo.rs",
+   "src-tauri/src/repositories/period_repo.rs",
+   "src-tauri/src/repositories/personnel_repo.rs",
+   "src-tauri/src/repositories/attendance_repo.rs"
+  ],
+  "rust_db": [
+   "src-tauri/src/db/migrations.rs",
+   "src-tauri/src/db/connection.rs"
+  ],
+  "rust_commands": [
+   "src-tauri/src/commands/payroll_cmd.rs",
+   "src-tauri/src/commands/period_cmd.rs",
+   "src-tauri/src/commands/settings_cmd.rs",
+   "src-tauri/src/commands/attendance_cmd.rs"
+  ],
+  "rust_tests": [
+   "src-tauri/tests/domain_tests.rs",
+   "src-tauri/tests/native_smoke_test.rs"
+  ],
+  "ts_types": [
+   "src/types/payroll.ts"
+  ],
+  "ts_utils": [
+   "src/utils/payrollUtils.ts",
+   "src/utils/cumulativeGv.test.ts",
+   "src/utils/excelExport.ts"
+  ],
+  "ts_components": [
+   "src/components/BordroHesaplama.tsx",
+   "src/components/PaySlipModal.tsx",
+   "src/components/PeriodManagerModal.tsx",
+   "src/components/PuantajGrid.tsx"
+  ],
+  "ts_services": [
+   "src/services/tauriBridge.ts",
+   "src/services/tauriBridge.test.ts"
+  ]
+ },
+ "test_commands": {
+  "lint": "bun run lint",
+  "build": "bun run build",
+  "rust_tests": "cd src-tauri && cargo test",
+  "ts_unit": "bun test src/"
+ },
+ "last_updated": "2026-08-08"
 }

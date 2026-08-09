@@ -103,7 +103,7 @@ export const tauriBridge = {
   },
 
   async getSickLeaveRecords(personnelId?: string): Promise<SickLeaveRecord[]> {
-    return invokeTauri<SickLeaveRecord[]>('get_sick_leave_records', { personnel_id: personnelId || null });
+    return invokeTauri<SickLeaveRecord[]>('get_sick_leave_records', { personnelId: personnelId || null });
   },
 
   async saveSickLeaveRecord(record: SickLeaveRecord): Promise<void> {

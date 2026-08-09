@@ -1578,6 +1578,27 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_db_missing_sick_leave_table_is_repaired() -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = create_in_memory_connection()?;
+
+        // Simulate a database that reached migration 5 before the table was
+        // added to the initial schema definition.
+        conn.execute("DROP TABLE sick_leave_records", [])?;
+        conn.pragma_update(None, "user_version", 5u32)?;
+
+        bordro_programi_lib::db::migrations::initialize_db(&mut conn)?;
+
+        let table_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sick_leave_records'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(table_count, 1);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_pek_alt_sinir_tamamlama_isveren_prim_ayrimi() {
         use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
 
@@ -2636,6 +2657,221 @@ mod tests {
 
         Ok(())
     }
-}
 
+    // ==========================================
+    // PUANTAJ (ATTENDANCE) SOURCE-OF-TRUTH REGRESSION TESTS A-D
+    // Zincir: UI edit -> save_attendance -> attendance_records
+    //         -> get_by_personnel_and_period -> calculate_payroll_for_personnel.
+    // Invariant: "Puantaj Girildi" rozeti ile hesaplama katmanı AYNI
+    // (personnel_id, period_id) anahtarını kullanmalıdır.
+    // ==========================================
+
+    // Test A — save -> calculate: yeni personel + dönem oluştur, puantaj kaydet,
+    // aynı personnel_id + period_id ile hesapla -> attendance bulunur, hesaplama başlar.
+    #[test]
+    fn test_a_save_attendance_then_calculate_same_personnel_period() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-att-a");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-05".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        let mut gunler = HashMap::new();
+        for d in 1..=30 {
+            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
+        }
+        AttendanceRepository::save(&conn, &PersonelPuantaj {
+            id: "test-att-a_2026-05".into(),
+            personelId: "test-att-a".into(),
+            donemId: "2026-05".into(),
+            gunler,
+        })?;
+
+        // Aynı personnel_id + period_id ile bordro hesaplama puantajı BULMALI.
+        let bordro = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-a", "2026-05")?;
+        assert_eq!(bordro.personelId, "test-att-a");
+        assert_eq!(bordro.donemId, "2026-05");
+        assert_eq!(bordro.puantajOzeti.c, 30, "30 gün Ç özetlenmeli");
+
+        Ok(())
+    }
+
+    // Test B — reconnect: puantajı kaydet, DB kapat/aç, aynı dönem/personel için
+    // hesapla -> attendance hâlâ bulunur (frontend memory yanılsamasını engeller).
+    #[test]
+    fn test_b_attendance_survives_db_close_reopen_and_calculation() -> Result<(), Box<dyn std::error::Error>> {
+        use bordro_programi_lib::db::create_connection;
+        use std::fs;
+        use std::path::PathBuf;
+
+        let temp_dir = std::env::temp_dir();
+        let db_path: PathBuf = temp_dir.join(format!("att_reconnect_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(11111)));
+        if db_path.exists() {
+            let _ = fs::remove_file(&db_path);
+        }
+
+        // 1. Puantajı kaydet, sonra bağlantıyı kapat (uygulama kapanışı).
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let person = setup_test_person("test-att-b");
+            PersonnelRepository::save(&conn, &person)?;
+
+            let donem = BordroDonemi {
+                id: "2026-06".into(),
+                yil: 2026,
+                ay: 6,
+                baslangicTarihi: "2026-06-15".into(),
+                bitisTarihi: "2026-07-14".into(),
+                donemAdi: "Haziran 2026".into(),
+                taxYear: 2026,
+                taxMonth: 7,
+            };
+            PeriodRepository::save(&conn, &donem)?;
+
+            let mut gunler = HashMap::new();
+            for d in 1..=30 {
+                gunler.insert(format!("2026-06-{:02}", d), "Ç".to_string());
+            }
+            AttendanceRepository::save(&conn, &PersonelPuantaj {
+                id: "test-att-b_2026-06".into(),
+                personelId: "test-att-b".into(),
+                donemId: "2026-06".into(),
+                gunler,
+            })?;
+
+            drop(conn);
+        }
+
+        // 2. DB yeniden açılışı: attendance hâlâ mevcut ve hesaplama başarılı.
+        {
+            let conn = create_connection(Some(db_path.clone()))?;
+
+            let att = AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-b", "2026-06")?
+                .expect("attendance, DB yeniden açılışında hâlâ mevcut olmalı");
+            assert!(!att.gunler.is_empty(), "kayıtlı puantaj günleri boş olmamalı");
+
+            let bordro = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-b", "2026-06")?;
+            assert_eq!(bordro.donemId, "2026-06");
+            assert_eq!(bordro.puantajOzeti.c, 30);
+        }
+
+        let _ = fs::remove_file(&db_path);
+        Ok(())
+    }
+
+    // Test C — yanlış period_id: aynı tarih aralığı/benzer dönem olsa bile başka
+    // period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli.
+    #[test]
+    fn test_c_attendance_bound_to_period_id_not_date_range() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-att-c");
+        PersonnelRepository::save(&conn, &person)?;
+
+        // AYNI tarih aralığına sahip iki ayrı period ID (kopya dönem senaryosu).
+        let donem_a = BordroDonemi {
+            id: "2026-05".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
+        };
+        let donem_b = BordroDonemi {
+            id: "2026-05-alt".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026 (kopya)".into(),
+            taxYear: 2026,
+            taxMonth: 6,
+        };
+        PeriodRepository::save(&conn, &donem_a)?;
+        PeriodRepository::save(&conn, &donem_b)?;
+
+        // Puantaj yalnız A'ya kaydedildi; B aynı tarih aralığını paylaşsa bile puantajsız.
+        let mut gunler = HashMap::new();
+        for d in 1..=30 {
+            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
+        }
+        AttendanceRepository::save(&conn, &PersonelPuantaj {
+            id: "test-att-c_2026-05".into(),
+            personelId: "test-att-c".into(),
+            donemId: "2026-05".into(),
+            gunler,
+        })?;
+
+        // A için hesaplama başarılı.
+        assert!(PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05").is_ok());
+
+        // B için hesaplama, tarih aralığı aynı olsa bile puantaj bulamadığı için başarısız olmalı.
+        let res = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05-alt");
+        assert!(
+            matches!(res, Err(DomainError::NotFound(msg)) if msg.contains("puantaj")),
+            "Başka period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli"
+        );
+
+        Ok(())
+    }
+
+    // Test D — UI/native aynı semantik: "Puantaj Girildi" rozet koşulu
+    // (personelId + donemId eşleşmesi + boş olmayan gunler) native
+    // get_by_personnel_and_period lookup'ı ile birebir örtüşmelidir.
+    #[test]
+    fn test_d_badge_semantics_match_native_attendance_lookup() -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-att-d");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let donem = BordroDonemi {
+            id: "2026-05".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
+        };
+        PeriodRepository::save(&conn, &donem)?;
+
+        // Rozet koşulu true (kayıt + boş olmayan gunler) -> native lookup Some döndürmeli.
+        let mut gunler = HashMap::new();
+        for d in 1..=30 {
+            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
+        }
+        AttendanceRepository::save(&conn, &PersonelPuantaj {
+            id: "test-att-d_2026-05".into(),
+            personelId: "test-att-d".into(),
+            donemId: "2026-05".into(),
+            gunler,
+        })?;
+
+        let found = AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d", "2026-05")?
+            .expect("rozet koşulu true iken native lookup da kaydı bulmalı");
+        assert!(!found.gunler.is_empty());
+
+        // Rozet koşulu false (yanlış dönem / yanlış personel) -> native lookup None.
+        assert!(AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d", "2026-06")?.is_none());
+        assert!(AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d-x", "2026-05")?.is_none());
+
+        Ok(())
+    }
+}
 

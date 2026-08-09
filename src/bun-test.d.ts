@@ -10,5 +10,15 @@ declare module 'bun:test' {
     toBeCloseTo(expected: number, precision?: number): void;
     toBeGreaterThan(expected: number): void;
     toBeLessThan(expected: number): void;
+    not: {
+      toBe(expected: unknown): void;
+      toEqual(expected: unknown): void;
+      toThrow(expected?: string | RegExp): void;
+      toBeTruthy(): void;
+      toBeFalsy(): void;
+      toBeCloseTo(expected: number, precision?: number): void;
+      toBeGreaterThan(expected: number): void;
+      toBeLessThan(expected: number): void;
+    };
   };
 }
