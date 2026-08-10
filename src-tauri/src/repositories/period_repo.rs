@@ -1,43 +1,150 @@
 use crate::domain::models::*;
 use crate::domain::Result;
-use rusqlite::{params, Connection};
+use chrono::NaiveDate;
 use chrono::Utc;
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct PeriodRepository;
 
 impl PeriodRepository {
-    pub fn get_all(conn: &Connection) -> Result<Vec<BordroDonemi>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
-             FROM payroll_periods ORDER BY yil ASC, ay ASC",
-        ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<BordroDonemi> {
+        Ok(BordroDonemi {
+            id: row.get(0)?,
+            yil: row.get(1)?,
+            ay: row.get(2)?,
+            baslangicTarihi: row.get(3)?,
+            bitisTarihi: row.get(4)?,
+            donemAdi: row.get(5)?,
+            taxYear: row.get(6)?,
+            taxMonth: row.get(7)?,
+        })
+    }
 
-        let rows = stmt.query_map([], |row| {
-            Ok(BordroDonemi {
-                id: row.get(0)?,
-                yil: row.get(1)?,
-                ay: row.get(2)?,
-                baslangicTarihi: row.get(3)?,
-                bitisTarihi: row.get(4)?,
-                donemAdi: row.get(5)?,
-                taxYear: row.get(6)?,
-                taxMonth: row.get(7)?,
-            })
-        }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+    pub fn validate_period(period: &BordroDonemi) -> Result<()> {
+        if period.yil <= 0 || !(1..=12).contains(&period.ay) {
+            return Err(crate::domain::DomainError::ValidationError(
+                "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),
+            ));
+        }
+        if period.taxYear <= 0 || !(1..=12).contains(&period.taxMonth) {
+            return Err(crate::domain::DomainError::ValidationError(
+                "Vergi yılı geçerli olmalı ve vergi ayı 1-12 arasında olmalıdır.".into(),
+            ));
+        }
+
+        let start =
+            NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+                crate::domain::DomainError::ValidationError(format!(
+                    "Dönem başlangıç tarihi geçersiz: {}.",
+                    period.baslangicTarihi
+                ))
+            })?;
+        let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
+            crate::domain::DomainError::ValidationError(format!(
+                "Dönem bitiş tarihi geçersiz: {}.",
+                period.bitisTarihi
+            ))
+        })?;
+        if start > end {
+            return Err(crate::domain::DomainError::ValidationError(
+                "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn get_all(conn: &Connection) -> Result<Vec<BordroDonemi>> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+             FROM payroll_periods ORDER BY yil ASC, ay ASC",
+            )
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], Self::from_row)
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
         let mut result = Vec::new();
         for r in rows {
-            result.push(r.map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?);
+            let period = r.map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_period(&period)?;
+            result.push(period);
         }
         Ok(result)
     }
 
     pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<BordroDonemi>> {
-        let all = Self::get_all(conn)?;
-        Ok(all.into_iter().find(|d| d.id == id))
+        let period = conn
+            .query_row(
+                "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+             FROM payroll_periods WHERE id = ?1",
+                params![id],
+                Self::from_row,
+            )
+            .optional()
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+
+        period
+            .map(|period| {
+                Self::validate_period(&period)?;
+                Ok(period)
+            })
+            .transpose()
+    }
+
+    pub fn get_by_tax_year_before_month(
+        conn: &Connection,
+        tax_year: i32,
+        tax_month: i32,
+    ) -> Result<Vec<BordroDonemi>> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+                 FROM payroll_periods
+                 WHERE tax_year = ?1 AND tax_month < ?2
+                 ORDER BY tax_month ASC, id ASC",
+            )
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![tax_year, tax_month], Self::from_row)
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        let mut periods = Vec::new();
+        for row in rows {
+            let period =
+                row.map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_period(&period)?;
+            periods.push(period);
+        }
+        Ok(periods)
+    }
+
+    pub fn get_previous_by_work_period(
+        conn: &Connection,
+        active_period: &BordroDonemi,
+    ) -> Result<Option<BordroDonemi>> {
+        let period = conn
+            .query_row(
+                "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+                 FROM payroll_periods
+                 WHERE yil < ?1 OR (yil = ?1 AND ay < ?2)
+                 ORDER BY yil DESC, ay DESC, id DESC
+                 LIMIT 1",
+                params![active_period.yil, active_period.ay],
+                Self::from_row,
+            )
+            .optional()
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        period
+            .map(|period| {
+                Self::validate_period(&period)?;
+                Ok(period)
+            })
+            .transpose()
     }
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
+        Self::validate_period(d)?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO payroll_periods (id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month, created_at)

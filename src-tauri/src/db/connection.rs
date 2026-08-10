@@ -16,7 +16,9 @@ fn dirs_next() -> Option<PathBuf> {
     std::env::home_dir().map(|h| h.join(".4d_bordro"))
 }
 
-pub fn create_connection(db_path: Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
+pub fn create_connection(
+    db_path: Option<PathBuf>,
+) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = match db_path {
         Some(p) => p,
         None => {

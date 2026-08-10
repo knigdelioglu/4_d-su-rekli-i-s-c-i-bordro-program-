@@ -4,18 +4,12 @@
 
 import {
   BordroDonemi,
-  BordroKaydi,
   DönemselKurumDegerleri,
+  AnnualPayrollParameters,
   Personel,
   PersonelPuantaj,
 } from '../types/payroll';
 import {
-  autoFillGelirlerFromPuantaj,
-  calculateGelirToplam,
-  calculateKesintiToplam,
-  calculateNetOdeme,
-  calculatePuantajOzeti,
-  calculateStatutoryDeductions,
   createBordroDonemi,
   DEFAULT_KURUM_DEGERLERI,
   generateDefaultPuantajGunler,
@@ -124,26 +118,16 @@ export function getInitialDataset() {
     };
   }
 
-  // Active period: Temmuz 2026 (15 Temmuz - 14 Ağustos)
+  // Active period: July in the generated sample year.
   const activeDonem = donemler.find((d) => d.ay === 7) || donemler[donemler.length - 1];
 
   const puantajlar: PersonelPuantaj[] = [];
-  const bordrolar: BordroKaydi[] = [];
 
-  // Track cumulative tax bases and devreden PEK across months for sample data
-  const kumulatifGvMap: Record<string, number> = {};
-  const kumulatifAsgariGvMap: Record<string, number> = {};
-  const devredenPekMap: Record<string, any[]> = {};
-
-  // Populate puantaj and bordro for all periods, particularly August
+  // Örnek veri yalnızca personel, dönem, kurum ayarı ve puantaj yükler.
+  // Bordro sonucu Rust motoru tarafından üretilmelidir; reset/import akışı
+  // TypeScript hesap sonucu üreterek native veritabanına yazmaz.
   donemler.forEach((donem) => {
-    const kDegerleri = kurumDegerleriMap[donem.id];
-
     INITIAL_PERSONELLER.forEach((p, idx) => {
-      if (!kumulatifGvMap[p.id]) kumulatifGvMap[p.id] = 0;
-      if (!kumulatifAsgariGvMap[p.id]) kumulatifAsgariGvMap[p.id] = 0;
-      if (!devredenPekMap[p.id]) devredenPekMap[p.id] = [];
-
       // Generate default puantaj days
       const gunler = generateDefaultPuantajGunler(
         donem.baslangicTarihi,
@@ -165,106 +149,12 @@ export function getInitialDataset() {
       }
 
       const puantajId = `${p.id}_${donem.id}`;
-      const puantajOzeti = calculatePuantajOzeti(gunler);
 
       puantajlar.push({
         id: puantajId,
         personelId: p.id,
         donemId: donem.id,
         gunler,
-      });
-
-      // Auto calculate income
-      const gelirler = autoFillGelirlerFromPuantaj(
-        puantajOzeti,
-        kDegerleri,
-        p.hizmetYili,
-        p.grup
-      );
-
-      // Current cumulative bases and incoming PEK carryover before this month
-      const prevGvMatrah = kumulatifGvMap[p.id];
-      const prevAsgariGvMatrah = kumulatifAsgariGvMap[p.id];
-      const devredenPekGelen = devredenPekMap[p.id] || [];
-
-      // Auto calculate deductions using actual cumulative tax bases and devreden PEK
-      const statutory = calculateStatutoryDeductions(
-        gelirler,
-        kDegerleri,
-        p,
-        puantajOzeti,
-        prevGvMatrah,
-        devredenPekGelen,
-        prevAsgariGvMatrah
-      );
-
-      const kesintiler = {
-        isciSgkPrimi: statutory.isciSgkPrimi ?? null,
-        isciIssizlikPrimi: statutory.isciIssizlikPrimi ?? null,
-        gelirVergisi: statutory.gelirVergisi ?? null,
-        damgaVergisi: statutory.damgaVergisi ?? null,
-        sendikaAidati: statutory.sendikaAidati ?? null,
-        bes: statutory.bes ?? null,
-        icra: statutory.icra ?? null,
-        kisiBorcu: statutory.kisiBorcu ?? null,
-        dogumAskerlikBorclanmasi: statutory.dogumAskerlikBorclanmasi ?? null,
-        hayatSaglikSigortasi: statutory.hayatSaglikSigortasi ?? null,
-        digerKesinti: statutory.digerKesinti ?? null,
-      };
-
-      const gelirToplam = calculateGelirToplam(gelirler);
-      const kesintiToplam = calculateKesintiToplam(kesintiler);
-      const netOdeme = calculateNetOdeme(gelirToplam, kesintiToplam);
-
-      // Update cumulative tax bases for next month
-      const isciSgk = kesintiler.isciSgkPrimi || 0;
-      const isciIssizlik = kesintiler.isciIssizlikPrimi || 0;
-      const curGvMatrah = Math.max(0, gelirToplam - isciSgk - isciIssizlik);
-      kumulatifGvMap[p.id] += curGvMatrah;
-
-      const gunlukAsgariUcret = kDegerleri.gunlukAsgariUcret ?? 1101.00;
-      const primGun = Math.min(
-        30,
-        (puantajOzeti.Ç || 0) +
-          (puantajOzeti.T || 0) +
-          (puantajOzeti.G || 0) +
-          (puantajOzeti.İ || 0) +
-          (puantajOzeti.R || 0)
-      );
-      const asgariBrut = gunlukAsgariUcret * primGun;
-      const asgariSgk = asgariBrut * 0.15;
-      const curAsgariGvMatrah = Math.max(0, asgariBrut - asgariSgk);
-      kumulatifAsgariGvMap[p.id] += curAsgariGvMatrah;
-
-      // Update PEK carryover list for next month
-      devredenPekMap[p.id] = statutory.pekResult?.sonrakiDevredenList || [];
-
-      bordrolar.push({
-        id: `${p.id}_${donem.id}`,
-        personelId: p.id,
-        donemId: donem.id,
-        puantajOzeti,
-        gelirler,
-        gelirToplam,
-        kesintiler,
-        kesintiToplam,
-        netOdeme,
-        olusturulmaTarihi: new Date().toISOString(),
-        sonGuncellemeTarihi: new Date().toISOString(),
-        notlar: `${donem.donemAdi} bordro kaydı.`,
-        devredenPekGelen,
-        sonrakiDevredenPek: statutory.pekResult?.sonrakiDevredenList || [],
-        pekDetay: statutory.pekResult
-          ? {
-              hesaplananPek: statutory.pekResult.hesaplananPek,
-              finalPek: statutory.pekResult.finalPek,
-              devredenPekAşanTutar: statutory.pekResult.devredenPekAşanTutar,
-              pekAltSinir: statutory.pekResult.pekAltSinir,
-              pekUstSinir: statutory.pekResult.pekUstSinir,
-              fiiliYemekGunu: statutory.pekResult.fiiliYemekGunu,
-              yemekIstisnasiTutar: statutory.pekResult.yemekIstisnasiTutar,
-            }
-          : undefined,
       });
     });
   });
@@ -275,6 +165,20 @@ export function getInitialDataset() {
     personeller: INITIAL_PERSONELLER,
     kurumDegerleriMap,
     puantajlar,
-    bordrolar,
+    bordrolar: [],
+    taxOpenings: [],
+    sickLeaveRecords: [],
+    annualPayrollParameters: [
+      {
+        year: currentYear,
+        gelirVergisiDilimleri: [
+          { limit: 190000, oran: 0.15 },
+          { limit: 400000, oran: 0.2 },
+          { limit: 1500000, oran: 0.27 },
+          { limit: 5300000, oran: 0.35 },
+          { limit: 1_000_000_000_000_000, oran: 0.4 },
+        ],
+      } satisfies AnnualPayrollParameters,
+    ],
   };
 }

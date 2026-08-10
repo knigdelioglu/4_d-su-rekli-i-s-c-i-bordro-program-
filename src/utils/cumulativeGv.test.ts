@@ -46,6 +46,7 @@ describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => 
       kesintiler: { isciSgkPrimi: 4500, isciIssizlikPrimi: 500 } as any, // 70000 - 5000 = 65000 net GV matrahı
       kesintiToplam: 5000,
       netOdeme: 65000,
+      status: 'CALCULATED',
       olusturulmaTarihi: '',
       sonGuncellemeTarihi: '',
     };
@@ -66,6 +67,7 @@ describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => 
       kesintiler: { isciSgkPrimi: 4500, isciIssizlikPrimi: 500 } as any, // 65000 matrah
       kesintiToplam: 5000,
       netOdeme: 65000,
+      status: 'CALCULATED',
       olusturulmaTarihi: '',
       sonGuncellemeTarihi: '',
     };
@@ -80,6 +82,7 @@ describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => 
       kesintiler: { isciSgkPrimi: 4500, isciIssizlikPrimi: 500 } as any, // 75000 - 5000 = 70000 matrah
       kesintiToplam: 5000,
       netOdeme: 70000,
+      status: 'CALCULATED',
       olusturulmaTarihi: '',
       sonGuncellemeTarihi: '',
     };
@@ -100,6 +103,7 @@ describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => 
       kesintiler: { isciSgkPrimi: 4500, isciIssizlikPrimi: 500 } as any,
       kesintiToplam: 5000,
       netOdeme: 65000,
+      status: 'CALCULATED',
       olusturulmaTarihi: '',
       sonGuncellemeTarihi: '',
     };
@@ -123,6 +127,7 @@ describe('Kümülatif GV Matrahı Devri ve İlerlemesi Regression Testi', () => 
       kesintiler: { isciSgkPrimi: 3000, isciIssizlikPrimi: 300 } as any,
       kesintiToplam: 3300,
       netOdeme: 36700,
+      status: 'CALCULATED',
       olusturulmaTarihi: '',
       sonGuncellemeTarihi: '',
     };

@@ -2,7 +2,7 @@
  * 4/D Sürekli İşçi Bordro Programı — Main App Component
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Navbar, TabType } from './components/Navbar';
 import { PersonelList } from './components/PersonelList';
 import { PuantajGrid } from './components/PuantajGrid';
@@ -11,17 +11,78 @@ import { BankaListesi } from './components/Listeler/BankaListesi';
 import { KesintiListesi } from './components/Listeler/KesintiListesi';
 import { PeriodManagerModal } from './components/PeriodManagerModal';
 import {
+  AnnualPayrollParameters,
+  BACKUP_FORMAT_VERSION,
+  BackupPayload,
   BordroDonemi,
   BordroKaydi,
   DönemselKurumDegerleri,
   Personel,
   PersonelPuantaj,
+  PersonelTaxOpening,
+  SickLeaveRecord,
 } from './types/payroll';
 import { tauriBridge } from './services/tauriBridge';
 import { getInitialDataset } from './utils/sampleData';
-import { createBordroDonemi, DEFAULT_KURUM_DEGERLERI } from './utils/payrollUtils';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
+
+type DatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
+
+function makeBackupPayload(data: DatasetFields): BackupPayload {
+  return {
+    backupVersion: BACKUP_FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    ...data,
+  };
+}
+
+function parseBackupPayload(json: string): BackupPayload {
+  const parsed: Partial<BackupPayload> & Record<string, unknown> = JSON.parse(json);
+  const version = typeof parsed.backupVersion === 'number' ? parsed.backupVersion : 1;
+  if (version <= 0 || version > BACKUP_FORMAT_VERSION) {
+    throw new Error(`Desteklenmeyen yedek sürümü: ${version}`);
+  }
+  if (!Array.isArray(parsed.donemler) || !Array.isArray(parsed.personeller)) {
+    throw new Error('Yedek dosyasında dönem veya personel listesi bulunamadı.');
+  }
+  if (
+    version >= 2 &&
+    (!Array.isArray(parsed.puantajlar) ||
+      !Array.isArray(parsed.bordrolar) ||
+      !Array.isArray(parsed.taxOpenings) ||
+      !Array.isArray(parsed.sickLeaveRecords) ||
+      !Array.isArray(parsed.annualPayrollParameters))
+  ) {
+    throw new Error('V2 yedek dosyasında tüm domain kayıt listeleri bulunmalıdır.');
+  }
+  const periods = parsed.donemler as BordroDonemi[];
+  const bordrolar = ((parsed.bordrolar as Array<Partial<BordroKaydi>> | undefined) || []).map(
+    (bordro) => ({
+      ...bordro,
+      // V1 localStorage kayıtlarında durum alanı yoktu. Sınırda bir kez
+      // normalize edilir; uygulama içindeki sözleşme Rust ile aynıdır.
+      status: bordro.status || 'CALCULATED',
+    })
+  ) as BordroKaydi[];
+
+  return makeBackupPayload({
+    donemler: periods,
+    aktifDonemId:
+      typeof parsed.aktifDonemId === 'string'
+        ? parsed.aktifDonemId
+        : periods[0]?.id || '',
+    personeller: parsed.personeller as Personel[],
+    kurumDegerleriMap:
+      (parsed.kurumDegerleriMap as Record<string, DönemselKurumDegerleri> | undefined) || {},
+    puantajlar: (parsed.puantajlar as PersonelPuantaj[] | undefined) || [],
+    bordrolar,
+    taxOpenings: (parsed.taxOpenings as PersonelTaxOpening[] | undefined) || [],
+    sickLeaveRecords: (parsed.sickLeaveRecords as SickLeaveRecord[] | undefined) || [],
+    annualPayrollParameters:
+      (parsed.annualPayrollParameters as AnnualPayrollParameters[] | undefined) || [],
+  });
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>(() => {
@@ -34,20 +95,11 @@ export default function App() {
         return saved as TabType;
       }
     } catch {
-      // fallback
+      // localStorage may be unavailable in a restricted browser context.
     }
     return 'personel';
   });
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('4d_bordro_active_tab', activeTab);
-    } catch {
-      // ignore
-    }
-  }, [activeTab]);
-  
-  // Data State
   const [donemler, setDonemler] = useState<BordroDonemi[]>([]);
   const [aktifDonemId, setAktifDonemId] = useState<string>('');
   const [personeller, setPersoneller] = useState<Personel[]>([]);
@@ -56,214 +108,269 @@ export default function App() {
   >({});
   const [puantajlar, setPuantajlar] = useState<PersonelPuantaj[]>([]);
   const [bordrolar, setBordrolar] = useState<BordroKaydi[]>([]);
+  const [taxOpenings, setTaxOpenings] = useState<PersonelTaxOpening[]>([]);
+  const [sickLeaveRecords, setSickLeaveRecords] = useState<SickLeaveRecord[]>([]);
+  const [annualPayrollParameters, setAnnualPayrollParameters] = useState<
+    AnnualPayrollParameters[]
+  >([]);
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Navigation state
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
     string | undefined
   >(undefined);
+  const [isPeriodManagerOpen, setIsPeriodManagerOpen] = useState(false);
 
-  // Modals state
-  const [isPeriodManagerOpen, setIsPeriodManagerOpen] = useState<boolean>(false);
+  useEffect(() => {
+    try {
+      localStorage.setItem('4d_bordro_active_tab', activeTab);
+    } catch {
+      // Ignore navigation preference write errors.
+    }
+  }, [activeTab]);
 
-  // Load data from Tauri IPC or fallback
+  const applyDataset = useCallback((data: DatasetFields) => {
+    setDonemler(data.donemler);
+    setAktifDonemId(data.aktifDonemId || data.donemler[0]?.id || '');
+    setPersoneller(data.personeller);
+    setKurumDegerleriMap(data.kurumDegerleriMap);
+    setPuantajlar(data.puantajlar);
+    setBordrolar(data.bordrolar);
+    setTaxOpenings(data.taxOpenings);
+    setSickLeaveRecords(data.sickLeaveRecords);
+    setAnnualPayrollParameters(data.annualPayrollParameters);
+  }, []);
+
   const loadData = useCallback(async () => {
-    if (tauriBridge.isTauriAvailable()) {
-      try {
-        // 1. Check legacy migration status
+    setLoadError(null);
+    const isNative = tauriBridge.isTauriAvailable();
+
+    try {
+      if (isNative) {
         const isMigrated = await tauriBridge.checkLegacyMigrated();
         if (!isMigrated) {
           const legacyStr = localStorage.getItem(STORAGE_KEY);
           if (legacyStr) {
-            try {
-              await tauriBridge.migrateLegacyPayload(legacyStr);
-            } catch (err) {
-              console.error('Legacy migration failed:', err);
-            }
+            // Migration errors intentionally abort native loading. A failed
+            // database write must never be presented as a browser-only success.
+            await tauriBridge.migrateLegacyPayload(legacyStr);
           }
         }
 
-        // 2. Fetch data from SQLite via Rust IPC
-        let fetchedPeriods = await tauriBridge.getPeriods();
-        const fetchedPersonnel = await tauriBridge.getPersonnelList();
-        const fetchedAttendance = await tauriBridge.getAttendanceList();
-        const fetchedPayrolls = await tauriBridge.getPayrollList();
-        const fetchedSettings = await tauriBridge.getInstitutionSettings();
-        let savedActivePeriodId = await tauriBridge.getAppSetting('active_period_id');
+        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId] =
+          await Promise.all([
+            tauriBridge.getPeriods(),
+            tauriBridge.getPersonnelList(),
+            tauriBridge.getAttendanceList(),
+            tauriBridge.getPayrollList(),
+            tauriBridge.getInstitutionSettings(),
+            tauriBridge.getTaxOpenings(),
+            tauriBridge.getSickLeaveRecords(),
+            tauriBridge.getAnnualPayrollParameters(),
+            tauriBridge.getAppSetting('active_period_id'),
+          ]);
 
-        // If database has no periods yet, start clean without pre-populating periods
-        const activeId = savedActivePeriodId || fetchedPeriods[0]?.id || '';
-
-        setDonemler(fetchedPeriods);
-        setPersoneller(fetchedPersonnel);
-        setPuantajlar(fetchedAttendance);
-        setBordrolar(fetchedPayrolls);
-        setKurumDegerleriMap(fetchedSettings);
-        setAktifDonemId(activeId);
+        applyDataset({
+          donemler: fetchedPeriods,
+          aktifDonemId: savedActivePeriodId || fetchedPeriods[0]?.id || '',
+          personeller: fetchedPersonnel,
+          kurumDegerleriMap: fetchedSettings,
+          puantajlar: fetchedAttendance,
+          bordrolar: fetchedPayrolls,
+          taxOpenings: fetchedTaxOpenings,
+          sickLeaveRecords: fetchedSickLeaves,
+          annualPayrollParameters: fetchedAnnualParameters,
+        });
+        setIsDataLoaded(true);
         return;
-      } catch (err) {
-        console.error('Tauri IPC load error, falling back to local memory:', err);
       }
-    }
 
-    // Fallback load for standalone browser / testing
-    let loadedDonemler: BordroDonemi[] = [];
-    let loadedAktifDonemId = '';
-    let loadedPersoneller: Personel[] = [];
-    let loadedKurumMap: Record<string, DönemselKurumDegerleri> = {};
-    let loadedPuantajlar: PersonelPuantaj[] = [];
-    let loadedBordrolar: BordroKaydi[] = [];
-
-    try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved);
-        loadedDonemler = parsed.donemler || [];
-        loadedAktifDonemId = parsed.aktifDonemId || '';
-        loadedPersoneller = parsed.personeller || [];
-        loadedKurumMap = parsed.kurumDegerleriMap || {};
-        loadedPuantajlar = parsed.puantajlar || [];
-        loadedBordrolar = parsed.bordrolar || [];
+        const payload = parseBackupPayload(saved);
+        applyDataset(payload);
+      } else {
+        applyDataset({
+          donemler: [],
+          aktifDonemId: '',
+          personeller: [],
+          kurumDegerleriMap: {},
+          puantajlar: [],
+          bordrolar: [],
+          taxOpenings: [],
+          sickLeaveRecords: [],
+          annualPayrollParameters: [],
+        });
       }
+      setIsDataLoaded(true);
     } catch (err) {
-      console.error('Local storage load error:', err);
+      const message = `Veri yüklenemedi: ${String(err)}`;
+      console.error(message, err);
+      setLoadError(message);
+      // Native failures stop here. Browser failures also remain visible rather
+      // than being replaced with an empty, apparently valid dataset.
+      setIsDataLoaded(false);
     }
-
-    setDonemler(loadedDonemler);
-    setAktifDonemId(loadedAktifDonemId || loadedDonemler[0]?.id || '');
-    setPersoneller(loadedPersoneller);
-    setKurumDegerleriMap(loadedKurumMap);
-    setPuantajlar(loadedPuantajlar);
-    setBordrolar(loadedBordrolar);
-  }, []);
+  }, [applyDataset]);
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, [loadData]);
 
-  // Handle active period change
-  const handleSelectDonem = async (id: string) => {
-    setAktifDonemId(id);
-    if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.setAppSetting('active_period_id', id);
-      } catch (err) {
-        console.error('Failed to set active_period_id in app_settings:', err);
-      }
-    }
-  };
-
-  const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
-
-  // Seed sample data explicitly ONLY when user clicks seed button
-  const handleResetSampleData = async () => {
-    if (
-      window.confirm(
-        'Tüm mevcut veriler sıfırlanıp örnek 4/D bordro verileri yüklenecek. Emin misiniz?'
-      )
-    ) {
-      const initialData = getInitialDataset();
-      if (tauriBridge.isTauriAvailable()) {
-        const payloadStr = JSON.stringify(initialData);
-        try {
-          await tauriBridge.setAppSetting('legacy_migrated', 'false');
-          await tauriBridge.migrateLegacyPayload(payloadStr);
-          await loadData();
-          return;
-        } catch (err) {
-          console.error('Tauri seed error:', err);
-        }
-      }
-      setDonemler(initialData.donemler);
-      setAktifDonemId(initialData.aktifDonemId);
-      setPersoneller(initialData.personeller);
-      setKurumDegerleriMap(initialData.kurumDegerleriMap);
-      setPuantajlar(initialData.puantajlar);
-      setBordrolar(initialData.bordrolar);
-    }
-  };
-
-  // Export JSON backup
-  const handleExportBackup = () => {
-    const dataObj = {
+  // Standalone browser mode has the same versioned backup contract as native
+  // mode. The loaded guard prevents the initial empty state from overwriting a
+  // real saved dataset before the first read completes.
+  useEffect(() => {
+    if (!isDataLoaded || tauriBridge.isTauriAvailable()) return;
+    const payload = makeBackupPayload({
       donemler,
       aktifDonemId,
       personeller,
       kurumDegerleriMap,
       puantajlar,
       bordrolar,
-      exportedAt: new Date().toISOString(),
-    };
-    const jsonStr = JSON.stringify(dataObj, null, 2);
+      taxOpenings,
+      sickLeaveRecords,
+      annualPayrollParameters,
+    });
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    } catch (err) {
+      console.error('Tarayıcı yedek kaydı başarısız:', err);
+    }
+  }, [
+    isDataLoaded,
+    donemler,
+    aktifDonemId,
+    personeller,
+    kurumDegerleriMap,
+    puantajlar,
+    bordrolar,
+    taxOpenings,
+    sickLeaveRecords,
+    annualPayrollParameters,
+  ]);
+
+  const handleSelectDonem = async (id: string) => {
+    try {
+      if (tauriBridge.isTauriAvailable()) {
+        await tauriBridge.setAppSetting('active_period_id', id);
+      }
+      setAktifDonemId(id);
+    } catch (err) {
+      const message = `Aktif dönem kaydedilemedi: ${String(err)}`;
+      console.error(message, err);
+      setLoadError(message);
+    }
+  };
+
+  const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
+
+  const handleResetSampleData = async () => {
+    if (
+      !window.confirm(
+        'Tüm mevcut veriler sıfırlanıp örnek 4/D bordro verileri yüklenecek. Emin misiniz?'
+      )
+    ) {
+      return;
+    }
+
+    const initialData = getInitialDataset();
+    const payload = makeBackupPayload({
+      ...initialData,
+      taxOpenings: initialData.taxOpenings || [],
+      sickLeaveRecords: initialData.sickLeaveRecords || [],
+      annualPayrollParameters: initialData.annualPayrollParameters || [],
+    });
+
+    try {
+      if (tauriBridge.isTauriAvailable()) {
+        await tauriBridge.replaceBackupPayload(JSON.stringify(payload));
+        await loadData();
+        return;
+      }
+
+      applyDataset(payload);
+      setIsDataLoaded(true);
+    } catch (err) {
+      const message = `Örnek veriler yüklenemedi: ${String(err)}`;
+      console.error(message, err);
+      setLoadError(message);
+      alert(message);
+    }
+  };
+
+  const handleExportBackup = () => {
+    const payload = makeBackupPayload({
+      donemler,
+      aktifDonemId,
+      personeller,
+      kurumDegerleriMap,
+      puantajlar,
+      bordrolar,
+      taxOpenings,
+      sickLeaveRecords,
+      annualPayrollParameters,
+    });
+    const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `4D_Bordro_Yedek_${aktifDonemId}_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `4D_Bordro_Yedek_${aktifDonemId || 'bos'}_${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
 
-  // Import JSON backup
   const handleImportBackup = async (jsonStr: string) => {
     try {
+      const payload = parseBackupPayload(jsonStr);
       if (tauriBridge.isTauriAvailable()) {
-        await tauriBridge.setAppSetting('legacy_migrated', 'false');
-        await tauriBridge.migrateLegacyPayload(jsonStr);
+        await tauriBridge.replaceBackupPayload(JSON.stringify(payload));
         await loadData();
-        alert('Yedek başarıyla yüklendi!');
-        return;
-      }
-      const parsed = JSON.parse(jsonStr);
-      if (parsed.personeller && parsed.donemler) {
-        setDonemler(parsed.donemler);
-        setAktifDonemId(parsed.aktifDonemId);
-        setPersoneller(parsed.personeller);
-        setKurumDegerleriMap(parsed.kurumDegerleriMap || {});
-        setPuantajlar(parsed.puantajlar || []);
-        setBordrolar(parsed.bordrolar || []);
-        alert('Yedek başarıyla yüklendi!');
       } else {
-        alert('Geçersiz yedek dosyası formatı.');
+        applyDataset(payload);
+        setIsDataLoaded(true);
       }
+      alert('Yedek başarıyla yüklendi!');
     } catch (err) {
-      alert('Yedek dosyası okunamadı.');
+      console.error('Yedek yükleme başarısız:', err);
+      alert(`Yedek yüklenemedi: ${String(err)}`);
     }
   };
 
-  // Handlers
-  const handleSavePersonel = async (newP: Personel) => {
+  const handleSavePersonel = async (newPersonel: Personel) => {
     if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.savePersonnel(newP);
-        setPersoneller(await tauriBridge.getPersonnelList());
-        return;
-      } catch (err) {
-        console.error('Save personnel error:', err);
-      }
+      await tauriBridge.savePersonnel(newPersonel);
+      setPersoneller(await tauriBridge.getPersonnelList());
+      setTaxOpenings(await tauriBridge.getTaxOpenings());
+      return;
     }
-    const exists = personeller.some((p) => p.id === newP.id);
-    if (exists) {
-      setPersoneller(personeller.map((p) => (p.id === newP.id ? newP : p)));
-    } else {
-      setPersoneller([...personeller, newP]);
-    }
+    setPersoneller((previous) => {
+      const exists = previous.some((p) => p.id === newPersonel.id);
+      return exists
+        ? previous.map((p) => (p.id === newPersonel.id ? newPersonel : p))
+        : [...previous, newPersonel];
+    });
   };
 
-  const handleDeletePersonel = async (pId: string) => {
+  const handleDeletePersonel = async (personelId: string) => {
     if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.deletePersonnel(pId);
-        setPersoneller(await tauriBridge.getPersonnelList());
-        setBordrolar(await tauriBridge.getPayrollList());
-        setPuantajlar(await tauriBridge.getAttendanceList());
-        return;
-      } catch (err) {
-        console.error('Delete personnel error:', err);
-      }
+      await tauriBridge.deletePersonnel(personelId);
+      setPersoneller(await tauriBridge.getPersonnelList());
+      setBordrolar(await tauriBridge.getPayrollList());
+      setPuantajlar(await tauriBridge.getAttendanceList());
+      setTaxOpenings(await tauriBridge.getTaxOpenings());
+      setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
+      return;
     }
-    setPersoneller(personeller.filter((p) => p.id !== pId));
-    setBordrolar(bordrolar.filter((b) => b.personelId !== pId));
-    setPuantajlar(puantajlar.filter((pj) => pj.personelId !== pId));
+    setPersoneller((previous) => previous.filter((p) => p.id !== personelId));
+    setBordrolar((previous) => previous.filter((b) => b.personelId !== personelId));
+    setPuantajlar((previous) => previous.filter((p) => p.personelId !== personelId));
+    setTaxOpenings((previous) => previous.filter((o) => o.personnelId !== personelId));
+    setSickLeaveRecords((previous) => previous.filter((r) => r.personnelId !== personelId));
   };
 
   const handleCreateDonem = async (
@@ -271,72 +378,96 @@ export default function App() {
     kurumDegerleri: DönemselKurumDegerleri
   ) => {
     if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.savePeriod(newDonem);
-        await tauriBridge.saveInstitutionSettings(kurumDegerleri);
-        setDonemler(await tauriBridge.getPeriods());
-        setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
-        return;
-      } catch (err) {
-        console.error('Create donem error:', err);
-      }
+      await tauriBridge.savePeriodWithSettings(newDonem, kurumDegerleri);
+      setDonemler(await tauriBridge.getPeriods());
+      setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
+      return;
     }
-    setDonemler((prev) => {
-      const exists = prev.some((d) => d.id === newDonem.id);
-      return exists ? prev : [...prev, newDonem];
-    });
-    setKurumDegerleriMap((prev) => ({
-      ...prev,
-      [newDonem.id]: kurumDegerleri,
-    }));
+    setDonemler((previous) =>
+      previous.some((d) => d.id === newDonem.id) ? previous : [...previous, newDonem]
+    );
+    setKurumDegerleriMap((previous) => ({ ...previous, [newDonem.id]: kurumDegerleri }));
   };
 
-  const handleSaveKurumDegerleri = async (kDegerleri: DönemselKurumDegerleri) => {
+  const handleSaveKurumDegerleri = async (settings: DönemselKurumDegerleri) => {
     if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.saveInstitutionSettings(kDegerleri);
-        setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
-        return;
-      } catch (err) {
-        console.error('Save institution settings error:', err);
-      }
+      await tauriBridge.saveInstitutionSettings(settings);
+      setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
+      return;
     }
-    setKurumDegerleriMap((prev) => ({
-      ...prev,
-      [kDegerleri.donemId]: kDegerleri,
-    }));
+    setKurumDegerleriMap((previous) => ({ ...previous, [settings.donemId]: settings }));
   };
 
   const handleSavePuantaj = async (updatedPuantaj: PersonelPuantaj) => {
     if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.saveAttendance(updatedPuantaj);
-        setPuantajlar(await tauriBridge.getAttendanceList());
-        return;
-      } catch (err) {
-        console.error('Save attendance error:', err);
-      }
+      await tauriBridge.saveAttendance(updatedPuantaj);
+      setPuantajlar(await tauriBridge.getAttendanceList());
+      return;
     }
-    setPuantajlar((prev) => {
-      const idx = prev.findIndex((pj) => pj.id === updatedPuantaj.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = updatedPuantaj;
-        return next;
-      }
-      return [...prev, updatedPuantaj];
+    setPuantajlar((previous) => {
+      const index = previous.findIndex((p) => p.id === updatedPuantaj.id);
+      if (index < 0) return [...previous, updatedPuantaj];
+      const next = [...previous];
+      next[index] = updatedPuantaj;
+      return next;
     });
   };
 
+  const handleSaveTaxOpening = async (opening: PersonelTaxOpening) => {
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.saveTaxOpening(opening);
+      setTaxOpenings(await tauriBridge.getTaxOpenings());
+      return;
+    }
+    setTaxOpenings((previous) => {
+      const index = previous.findIndex((item) => item.id === opening.id);
+      if (index < 0) return [...previous, opening];
+      const next = [...previous];
+      next[index] = opening;
+      return next;
+    });
+  };
+
+  const handleSaveSickLeaveRecord = async (record: SickLeaveRecord) => {
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.saveSickLeaveRecord(record);
+      setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
+      return;
+    }
+    setSickLeaveRecords((previous) => [...previous, record]);
+  };
+
+  const handleSaveAnnualPayrollParameters = async (parameters: AnnualPayrollParameters) => {
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.saveAnnualPayrollParameters(parameters);
+      setAnnualPayrollParameters(await tauriBridge.getAnnualPayrollParameters());
+      return;
+    }
+    setAnnualPayrollParameters((previous) => {
+      const index = previous.findIndex((item) => item.year === parameters.year);
+      if (index < 0) return [...previous, parameters].sort((a, b) => a.year - b.year);
+      const next = [...previous];
+      next[index] = parameters;
+      return next;
+    });
+  };
+
+  const handleDeleteSickLeaveRecord = async (id: string) => {
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.deleteSickLeaveRecord(id);
+      setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
+      return;
+    }
+    setSickLeaveRecords((previous) => previous.filter((record) => record.id !== id));
+  };
+
   const handleSaveBordro = async (updatedBordro: BordroKaydi) => {
-    setBordrolar((prev) => {
-      const idx = prev.findIndex((b) => b.id === updatedBordro.id);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = updatedBordro;
-        return next;
-      }
-      return [...prev, updatedBordro];
+    setBordrolar((previous) => {
+      const index = previous.findIndex((b) => b.id === updatedBordro.id);
+      if (index < 0) return [...previous, updatedBordro];
+      const next = [...previous];
+      next[index] = updatedBordro;
+      return next;
     });
   };
 
@@ -347,15 +478,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
-      {/* Navbar */}
       <Navbar
         activeTab={activeTab}
         onTabChange={(tab) => {
-          if (tab === 'parametrelar') {
-            setIsPeriodManagerOpen(true);
-          } else {
-            setActiveTab(tab);
-          }
+          if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
+          else setActiveTab(tab);
         }}
         donemler={donemler}
         aktifDonemId={aktifDonemId}
@@ -366,8 +493,13 @@ export default function App() {
         onResetSampleData={handleResetSampleData}
       />
 
-      {/* Main Content Body */}
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
+        {loadError && (
+          <div className="mb-5 p-4 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold">
+            {loadError} Native veritabanı yüklenemedi; ekrandaki veriler değiştirilmedi.
+          </div>
+        )}
+
         {activeTab === 'personel' && (
           <PersonelList
             personeller={personeller}
@@ -380,28 +512,14 @@ export default function App() {
 
         {!aktifDonem && activeTab !== 'personel' && (
           <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm text-center max-w-xl mx-auto my-12 space-y-4">
-            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">
-              !
-            </div>
+            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">!</div>
             <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
             <p className="text-xs text-slate-600 leading-relaxed">
-              Veritabanında aktif bir bordro dönemi mevcut değil. İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
+              İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
             </p>
             <div className="flex items-center justify-center gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setIsPeriodManagerOpen(true)}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors"
-              >
-                Yeni Dönem Aç
-              </button>
-              <button
-                type="button"
-                onClick={handleResetSampleData}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors"
-              >
-                Örnek Verileri Yükle
-              </button>
+              <button type="button" onClick={() => setIsPeriodManagerOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors">Yeni Dönem Aç</button>
+              <button type="button" onClick={handleResetSampleData} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors">Örnek Verileri Yükle</button>
             </div>
           </div>
         )}
@@ -426,34 +544,19 @@ export default function App() {
             bordrolar={bordrolar}
             onSaveBordro={handleSaveBordro}
             onSavePersonel={handleSavePersonel}
+            onSaveTaxOpening={handleSaveTaxOpening}
             initialPersonelId={targetPersonelIdForBordro}
             onGoToPuantaj={(personelId) => {
-              if (personelId) {
-                setTargetPersonelIdForBordro(personelId);
-              }
+              if (personelId) setTargetPersonelIdForBordro(personelId);
               setActiveTab('puantaj');
             }}
           />
         )}
 
-        {aktifDonem && activeTab === 'banka' && (
-          <BankaListesi
-            aktifDonem={aktifDonem}
-            personeller={personeller}
-            bordrolar={bordrolar}
-          />
-        )}
-
-        {aktifDonem && activeTab === 'kesintiler' && (
-          <KesintiListesi
-            aktifDonem={aktifDonem}
-            personeller={personeller}
-            bordrolar={bordrolar}
-          />
-        )}
+        {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+        {aktifDonem && activeTab === 'kesintiler' && <KesintiListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
       </main>
 
-      {/* Modals */}
       <PeriodManagerModal
         isOpen={isPeriodManagerOpen}
         onClose={() => setIsPeriodManagerOpen(false)}
@@ -464,6 +567,11 @@ export default function App() {
         kurumDegerleriMap={kurumDegerleriMap}
         onSaveKurumDegerleri={handleSaveKurumDegerleri}
         personeller={personeller}
+        annualPayrollParameters={annualPayrollParameters}
+        onSaveAnnualPayrollParameters={handleSaveAnnualPayrollParameters}
+        sickLeaveRecords={sickLeaveRecords}
+        onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
+        onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
       />
     </div>
   );

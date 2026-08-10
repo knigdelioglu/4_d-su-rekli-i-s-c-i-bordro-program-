@@ -170,21 +170,17 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                   <span>İşveren SGK ve İşsizlik Prim Maliyeti (Kurum Maliyet Kalemleri):</span>
                 </div>
                 <span className="text-indigo-900 font-mono font-bold">
-                  Toplam İşveren Primi: {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100)) + (bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0)))}
+                  Toplam İşveren Primi: {formatTL(bordro.pekDetay.isverenPrimToplami)}
                 </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-[11px] text-slate-700 pt-1 border-t border-indigo-200 font-mono">
                 <div>
-                  <span className="text-slate-500 font-sans">SSK Primi — İşveren Payı (%{bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75}): </span>
-                  <span className="font-bold text-indigo-900">
-                    {formatTL(bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100))}
-                  </span>
+                  <span className="text-slate-500 font-sans">SSK Primi — İşveren Payı{bordro.pekDetay.sgkIsverenOraniYuzde !== undefined ? ` (%${bordro.pekDetay.sgkIsverenOraniYuzde})` : ''}: </span>
+                  <span className="font-bold text-indigo-900">{formatTL(bordro.pekDetay.isverenSgkPrimi)}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 font-sans">İşsizlik Primi — İşveren Payı (%{bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2}): </span>
-                  <span className="font-bold text-indigo-900">
-                    {formatTL(bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100))}
-                  </span>
+                  <span className="text-slate-500 font-sans">İşsizlik Primi — İşveren Payı{bordro.pekDetay.isverenIssizlikOraniYuzde !== undefined ? ` (%${bordro.pekDetay.isverenIssizlikOraniYuzde})` : ''}: </span>
+                  <span className="font-bold text-indigo-900">{formatTL(bordro.pekDetay.isverenIssizlikPrimi)}</span>
                 </div>
                 {(bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0) > 0 && (
                   <div>
@@ -197,7 +193,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                 <div>
                   <span className="text-slate-500 font-sans">Toplam İşveren Prim Maliyeti: </span>
                   <span className="font-black text-indigo-950">
-                    {formatTL(bordro.pekDetay.isverenPrimToplami ?? ((bordro.pekDetay.isverenSgkPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100)) + (bordro.pekDetay.isverenIssizlikPrimi ?? (bordro.pekDetay.finalPek * (bordro.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100)) + (bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0)))}
+                    {formatTL(bordro.pekDetay.isverenPrimToplami)}
                   </span>
                 </div>
               </div>
@@ -208,6 +204,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
           )}
 
           {/* Gelir Vergisi Kümülatif Matrah Bilgilendirme Kartı */}
+          {bordro.gvDetay && (
           <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 text-xs space-y-1">
             <div className="flex items-center justify-between text-[11px] font-bold text-amber-900">
               <span>Gelir Vergisi Kümülatif Matrah Bilgileri:</span>
@@ -220,22 +217,23 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-700 pt-1 border-t border-amber-200 font-mono">
               <div>
                 <span className="text-slate-500 font-sans">Önceki Küm. GV Matrahı: </span>
-                <span className="font-bold text-slate-900">{formatTL(bordro.oncekiKumulatifGvMatrahi || 0)}</span>
+                <span className="font-bold text-slate-900">{formatTL(bordro.oncekiKumulatifGvMatrahi)}</span>
               </div>
               <div>
                 <span className="text-slate-500 font-sans">Cari Dönem GV Matrahı: </span>
                 <span className="font-bold text-slate-900">
-                  {formatTL(Math.max(0, bordro.gelirToplam - (bordro.kesintiler.isciSgkPrimi || 0) - (bordro.kesintiler.isciIssizlikPrimi || 0)))}
+                  {formatTL(bordro.gvDetay.cariGvMatrahi)}
                 </span>
               </div>
               <div>
                 <span className="text-slate-500 font-sans">Dönem Sonu Küm. Matrah: </span>
                 <span className="font-bold text-indigo-900">
-                  {formatTL((bordro.oncekiKumulatifGvMatrahi || 0) + Math.max(0, bordro.gelirToplam - (bordro.kesintiler.isciSgkPrimi || 0) - (bordro.kesintiler.isciIssizlikPrimi || 0)))}
+                  {formatTL(bordro.gvDetay.yeniKumulatifGvMatrahi)}
                 </span>
               </div>
             </div>
           </div>
+          )}
 
           {/* Asgari Ücret Gelir Vergisi İstisnası Detay Kartı (GİB 7349 S.K.) */}
           {bordro.gvDetay && (
@@ -320,10 +318,10 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
               </div>
               <table className="w-full text-left border-collapse border border-slate-200">
                 <tbody className="divide-y divide-slate-200 font-mono">
-                  <tr><td className="p-1.5 font-sans">İşçi SGK Primi (%14)</td><td className="p-1.5 text-right font-bold">{formatTL(bordro.kesintiler.isciSgkPrimi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">İşçi İşsizlik Primi (%1)</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.isciIssizlikPrimi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Gelir Vergisi (%15)</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.gelirVergisi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Damga Vergisi (0.00759)</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.damgaVergisi)}</td></tr>
+                  <tr><td className="p-1.5 font-sans">İşçi SGK Primi</td><td className="p-1.5 text-right font-bold">{formatTL(bordro.kesintiler.isciSgkPrimi)}</td></tr>
+                  <tr><td className="p-1.5 font-sans">İşçi İşsizlik Primi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.isciIssizlikPrimi)}</td></tr>
+                  <tr><td className="p-1.5 font-sans">Gelir Vergisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.gelirVergisi)}</td></tr>
+                  <tr><td className="p-1.5 font-sans">Damga Vergisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.damgaVergisi)}</td></tr>
                   <tr><td className="p-1.5 font-sans">Sendika Aidatı</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.sendikaAidati)}</td></tr>
                   <tr><td className="p-1.5 font-sans">BES Kesintisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.bes)}</td></tr>
                   <tr><td className="p-1.5 font-sans">İcra Kesintisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.icra)}</td></tr>

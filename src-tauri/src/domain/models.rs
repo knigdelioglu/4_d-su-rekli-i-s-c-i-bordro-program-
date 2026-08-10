@@ -1,6 +1,14 @@
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// SQLite/JSON-safe upper boundary used to represent the open-ended final
+/// income-tax bracket. The calculation layer treats the final bracket as
+/// unbounded, so this is only a persistence-safe sentinel.
+pub const OPEN_ENDED_TAX_BRACKET_LIMIT: i64 = 1_000_000_000_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,6 +38,11 @@ pub struct Personel {
     pub iban: String,
     pub hizmetYili: i32,
     pub aciklama: Option<String>,
+    pub devirKumulatifGvMatrahi: Option<Decimal>,
+    pub devirKumulatifGvMatrahiYili: Option<i32>,
+    pub devirKumulatifGvMatrahiBaslangicAyi: Option<i32>,
+    pub devirKumulatifAsgariGvMatrahi: Option<Decimal>,
+    pub devirKumulatifAsgariGvMatrahiYili: Option<i32>,
     pub kesintiler: Option<PersonelKesintileri>,
 }
 
@@ -38,7 +51,7 @@ pub struct Personel {
 pub struct BordroDonemi {
     pub id: String, // e.g. "2026-05"
     pub yil: i32,   // e.g. 2026
-    pub ay: i32,    // 1-12 DÖNEM BAŞLANGIÇ AYI (15'in bulunduğu ay). Dönem adı/id bundan türetilir, anlamı DEĞİŞMEZ.
+    pub ay: i32, // 1-12 DÖNEM BAŞLANGIÇ AYI (15'in bulunduğu ay). Dönem adı/id bundan türetilir, anlamı DEĞİŞMEZ.
     pub baslangicTarihi: String,
     pub bitisTarihi: String,
     pub donemAdi: String,
@@ -64,6 +77,55 @@ pub struct PersonelTaxOpening {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TaxBracket {
+    pub limit: Decimal,
+    /// 0-1 arası oran (örn. %15 için 0.15).
+    pub oran: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnualPayrollParameters {
+    pub year: i32,
+    pub gelirVergisiDilimleri: Vec<TaxBracket>,
+    pub updatedAt: Option<String>,
+}
+
+impl AnnualPayrollParameters {
+    pub fn default_for_2026() -> Self {
+        Self {
+            year: 2026,
+            gelirVergisiDilimleri: vec![
+                TaxBracket {
+                    limit: Decimal::from(190000),
+                    oran: Decimal::new(15, 2),
+                },
+                TaxBracket {
+                    limit: Decimal::from(400000),
+                    oran: Decimal::new(20, 2),
+                },
+                TaxBracket {
+                    limit: Decimal::from(1500000),
+                    oran: Decimal::new(27, 2),
+                },
+                TaxBracket {
+                    limit: Decimal::from(5300000),
+                    oran: Decimal::new(35, 2),
+                },
+                // Keep the open-ended final bracket JSON/SQLite-safe. The
+                // calculation layer gives the last bracket unlimited semantics.
+                TaxBracket {
+                    limit: Decimal::from(OPEN_ENDED_TAX_BRACKET_LIMIT),
+                    oran: Decimal::new(40, 2),
+                },
+            ],
+            updatedAt: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PersonelPuantaj {
     pub id: String, // `${personelId}_${donemId}`
     pub personelId: String,
@@ -72,6 +134,7 @@ pub struct PersonelPuantaj {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct PuantajOzeti {
     #[serde(rename = "Ç")]
     pub c: i32,
@@ -162,17 +225,13 @@ pub struct PekDetayi {
     pub isverenIssizlikOraniYuzde: Option<Decimal>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum BordroStatus {
     DRAFT,
+    #[default]
     CALCULATED,
     FINALIZED,
-}
-
-impl Default for BordroStatus {
-    fn default() -> Self {
-        BordroStatus::CALCULATED
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +268,7 @@ pub struct BordroKaydi {
     pub kesintiler: KesintiKalemleri,
     pub kesintiToplam: Decimal,
     pub netOdeme: Decimal,
+    #[serde(default)]
     pub status: BordroStatus,
     pub olusturulmaTarihi: String,
     pub sonGuncellemeTarihi: String,
@@ -334,14 +394,20 @@ pub struct DonemselKurumDegerleri {
     pub besOraniYuzde: Option<Decimal>,
     pub sabitBesTutar: Option<Decimal>,
 
-    #[serde(alias = "sgk_yemek_istisnasi_gunluk", alias = "sgkYemekIstisnasiGunluk")]
+    #[serde(
+        alias = "sgk_yemek_istisnasi_gunluk",
+        alias = "sgkYemekIstisnasiGunluk"
+    )]
     pub gunlukYemekIstisnasiSGK: Option<Decimal>,
     pub pekTavanKatsayisi: Option<Decimal>,
     pub gunlukAsgariUcret: Option<Decimal>,
 
     #[serde(alias = "sgk_isveren_prim_orani", alias = "sgkIsverenPrimOrani")]
     pub sgkIsverenOraniYuzde: Option<Decimal>,
-    #[serde(alias = "isveren_issizlik_prim_orani", alias = "isverenIssizlikPrimOrani")]
+    #[serde(
+        alias = "isveren_issizlik_prim_orani",
+        alias = "isverenIssizlikPrimOrani"
+    )]
     pub issizlikIsverenOraniYuzde: Option<Decimal>,
 }
 
@@ -358,9 +424,24 @@ impl Default for DonemselKurumDegerleri {
             hizmetZammiBirimi: dec!(24.67),
             isPrimiYuzde: Some(dec!(0)),
             isPrimiGruplari: Some(vec![
-                IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9), aktif: true },
-                IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8), aktif: true },
-                IsPrimiGrupItem { id: "3. Grup".into(), ad: "3. Grup".into(), oran: dec!(7), aktif: true },
+                IsPrimiGrupItem {
+                    id: "1. Grup".into(),
+                    ad: "1. Grup".into(),
+                    oran: dec!(9),
+                    aktif: true,
+                },
+                IsPrimiGrupItem {
+                    id: "2. Grup".into(),
+                    ad: "2. Grup".into(),
+                    oran: dec!(8),
+                    aktif: true,
+                },
+                IsPrimiGrupItem {
+                    id: "3. Grup".into(),
+                    ad: "3. Grup".into(),
+                    oran: dec!(7),
+                    aktif: true,
+                },
             ]),
             geceCalismaPrimiYuzde: Some(dec!(0)),
             geceCalismaTatiliPrimiYuzde: Some(dec!(0)),

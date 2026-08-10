@@ -26,10 +26,7 @@ pub fn save_sick_leave_record(
 }
 
 #[tauri::command]
-pub fn delete_sick_leave_record(
-    state: State<'_, DbState>,
-    id: String,
-) -> Result<(), String> {
+pub fn delete_sick_leave_record(state: State<'_, DbState>, id: String) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
     SickLeaveRepository::delete(&conn, &id).map_err(|e| e.to_string())
 }

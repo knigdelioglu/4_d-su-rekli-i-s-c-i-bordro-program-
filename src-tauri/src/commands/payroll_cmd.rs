@@ -1,13 +1,15 @@
 use crate::db::DbState;
 use crate::domain::models::*;
-use crate::domain::Result;
+use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::services::payroll_service::PayrollService;
 use tauri::State;
 
 #[tauri::command]
 pub fn get_payroll_list(db: State<'_, DbState>) -> Result<Vec<BordroKaydi>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
     PayrollRepository::get_all(&conn)
 }
 
@@ -17,7 +19,9 @@ pub fn calculate_payroll(
     personnel_id: String,
     period_id: String,
 ) -> Result<BordroKaydi> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
     PayrollService::calculate_payroll_for_personnel(&conn, &personnel_id, &period_id)
 }
 
@@ -28,6 +32,8 @@ pub fn set_payroll_status(
     period_id: String,
     status: BordroStatus,
 ) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
     PayrollService::set_payroll_status(&conn, &personnel_id, &period_id, status)
 }

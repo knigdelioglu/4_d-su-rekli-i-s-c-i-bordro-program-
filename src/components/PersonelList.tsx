@@ -20,8 +20,8 @@ import { PersonelFormModal } from './PersonelFormModal';
 
 interface PersonelListProps {
   personeller: Personel[];
-  onSavePersonel: (personel: Personel) => void;
-  onDeletePersonel: (personelId: string) => void;
+  onSavePersonel: (personel: Personel) => Promise<void> | void;
+  onDeletePersonel: (personelId: string) => Promise<void> | void;
   onSelectPersonelForBordro?: (personelId: string) => void;
   isPrimiGruplari?: IsPrimiGrupItem[];
 }
@@ -61,9 +61,13 @@ export const PersonelList: React.FC<PersonelListProps> = ({
     setIsModalOpen(true);
   };
 
-  const handleDelete = (id: string) => {
-    onDeletePersonel(id);
-    setConfirmDeleteId(null);
+  const handleDelete = async (id: string) => {
+    try {
+      await onDeletePersonel(id);
+      setConfirmDeleteId(null);
+    } catch (err) {
+      alert(`Personel silinemedi: ${String(err)}`);
+    }
   };
 
   return (
@@ -368,4 +372,3 @@ export const PersonelList: React.FC<PersonelListProps> = ({
     </div>
   );
 };
-

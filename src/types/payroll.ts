@@ -142,6 +142,20 @@ export interface Personel {
   kesintiler?: PersonelKesintiBilgileri;
 }
 
+/** Yıllık kümülatif gelir vergisi tarifesindeki tek dilim. */
+export interface TaxBracket {
+  limit: number;
+  /** 0-1 arası oran (örn. %15 için 0.15). */
+  oran: number;
+}
+
+/** Vergi yılına bağlı, değiştirilebilir bordro parametreleri. */
+export interface AnnualPayrollParameters {
+  year: number;
+  gelirVergisiDilimleri: TaxBracket[];
+  updatedAt?: string;
+}
+
 export interface PersonelTaxOpening {
   id: string;
   personnelId: string;
@@ -227,6 +241,23 @@ export interface SickLeaveRecord {
   updatedAt?: string;
 }
 
+export const BACKUP_FORMAT_VERSION = 2;
+
+/** JSON yedek sözleşmesi. V2, SQLite'daki tüm kullanıcı verisini kapsar. */
+export interface BackupPayload {
+  backupVersion: number;
+  exportedAt: string;
+  donemler: BordroDonemi[];
+  aktifDonemId: string;
+  personeller: Personel[];
+  kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
+  puantajlar: PersonelPuantaj[];
+  bordrolar: BordroKaydi[];
+  taxOpenings: PersonelTaxOpening[];
+  sickLeaveRecords: SickLeaveRecord[];
+  annualPayrollParameters: AnnualPayrollParameters[];
+}
+
 export type PuantajOzeti = Record<PuantajKodu, number>;
 
 export interface PersonelPuantaj {
@@ -301,7 +332,7 @@ export interface BordroKaydi {
   kesintiler: KesintiKalemleri;
   kesintiToplam: number;
   netOdeme: number;
-  status?: BordroStatus;
+  status: BordroStatus;
   olusturulmaTarihi: string;
   sonGuncellemeTarihi: string;
   notlar?: string;

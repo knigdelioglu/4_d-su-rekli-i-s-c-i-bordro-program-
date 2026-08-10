@@ -2,6 +2,7 @@ use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
+use crate::repositories::settings_repo::SettingsRepository;
 use rusqlite::Connection;
 
 pub struct PeriodService;
@@ -18,18 +19,52 @@ impl PeriodService {
 
         if let Some(old) = existing {
             if old.taxYear != period.taxYear || old.taxMonth != period.taxMonth {
-                let has_payroll = PayrollRepository::get_all(conn)?
-                    .into_iter()
-                    .any(|b| b.donemId == period.id);
+                let has_payroll = PayrollRepository::exists_for_period(conn, &period.id)?;
 
                 if has_payroll {
                     return Err(DomainError::ValidationError(
-                        "Bu dönem için bordro kaydı bulunduğundan Vergi Yılı/Ayı değiştirilemez.".into(),
+                        "Bu dönem için bordro kaydı bulunduğundan Vergi Yılı/Ayı değiştirilemez."
+                            .into(),
                     ));
                 }
             }
         }
 
         PeriodRepository::save(conn, period)
+    }
+
+    /// Yeni dönem ve onun kurum ayarı tek SQLite transaction'ında yazılır.
+    /// Kurum ayarı doğrulanamazsa dönem insert/update'i de geri alınır.
+    pub fn save_period_with_settings(
+        conn: &mut Connection,
+        period: &BordroDonemi,
+        settings: &DonemselKurumDegerleri,
+    ) -> Result<()> {
+        if settings.donemId != period.id {
+            return Err(DomainError::ValidationError(
+                "Dönem ile kurum ayarı aynı dönem kimliğini taşımalıdır.".into(),
+            ));
+        }
+
+        let tx = conn
+            .transaction()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        let existing = PeriodRepository::get_by_id(&tx, &period.id)?;
+        if let Some(old) = existing {
+            if (old.taxYear != period.taxYear || old.taxMonth != period.taxMonth)
+                && PayrollRepository::exists_for_period(&tx, &period.id)?
+            {
+                return Err(DomainError::ValidationError(
+                    "Bu dönem için bordro kaydı bulunduğundan Vergi Yılı/Ayı değiştirilemez."
+                        .into(),
+                ));
+            }
+        }
+
+        PeriodRepository::save(&tx, period)?;
+        SettingsRepository::save_institution_settings(&tx, settings)?;
+        tx.commit()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
 }

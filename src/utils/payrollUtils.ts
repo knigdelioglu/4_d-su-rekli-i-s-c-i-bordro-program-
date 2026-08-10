@@ -563,6 +563,12 @@ export function autoFillGelirlerFromPuantaj(
 }
 
 /**
+ * Legacy TypeScript payroll fixture engine.
+ *
+ * The production payroll path is Rust and reads annual parameters from SQLite.
+ * These functions remain only for the existing TypeScript regression fixtures;
+ * application components must not use them to create or persist payrolls.
+ *
  * 2026 Gelir Vergisi Kümülatif Vergi Tarifesi
  * 1. Dilim: 190.000 TL'ye kadar %15
  * 2. Dilim: 190.000 - 400.000 TL arası %20

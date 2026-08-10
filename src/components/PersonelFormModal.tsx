@@ -11,7 +11,7 @@ interface PersonelFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   personelToEdit?: Personel | null;
-  onSave: (personel: Personel) => void;
+  onSave: (personel: Personel) => Promise<void> | void;
   isPrimiGruplari?: IsPrimiGrupItem[];
 }
 
@@ -41,6 +41,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     if (personelToEdit) {
@@ -92,7 +93,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
 
@@ -112,6 +113,9 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       aciklama: formData.aciklama?.trim() || '',
       devirKumulatifGvMatrahi: Number(formData.devirKumulatifGvMatrahi) || 0,
       devirKumulatifGvMatrahiYili: formData.devirKumulatifGvMatrahiYili || (Number(formData.devirKumulatifGvMatrahi) ? new Date().getFullYear() : undefined),
+      devirKumulatifGvMatrahiBaslangicAyi: Number(formData.devirKumulatifGvMatrahi) > 0
+        ? formData.devirKumulatifGvMatrahiBaslangicAyi || 1
+        : undefined,
       devirKumulatifAsgariGvMatrahi: Number(formData.devirKumulatifAsgariGvMatrahi) || 0,
       devirKumulatifAsgariGvMatrahiYili: formData.devirKumulatifAsgariGvMatrahiYili || (Number(formData.devirKumulatifAsgariGvMatrahi) ? new Date().getFullYear() : undefined),
       kesintiler: formData.kesintiler ? {
@@ -124,8 +128,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       },
     };
 
-    onSave(newPersonel);
-    onClose();
+    setIsSaving(true);
+    try {
+      await onSave(newPersonel);
+      onClose();
+    } catch (err) {
+      setErrors({ form: `Kayıt başarısız: ${String(err)}` });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -163,6 +174,11 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
           <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {errors.form && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold">
+              {errors.form}
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* T.C. Kimlik No */}
             <div>
@@ -572,7 +588,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                   <span>Yıl İçi Devir / Başlangıç Kümülatif GV Matrahı</span>
                   <span className="text-[10px] font-normal text-amber-700">Yıl ortası katılan veya geçmiş aydan devreden</span>
                 </div>
-                <div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <label className="block text-[10px] font-semibold text-amber-800 mb-0.5">
                     Önceki Kümülatif Gelir Vergisi Matrahı (TL)
                   </label>
@@ -590,6 +606,58 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     }
                     className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
                   />
+                  <div>
+                    <label className="block text-[10px] font-semibold text-amber-800 mb-0.5">
+                      GV Devir Yılı
+                    </label>
+                    <input
+                      type="number"
+                      min={2000}
+                      value={formData.devirKumulatifGvMatrahiYili ?? ''}
+                      onChange={(e) => setFormData({ ...formData, devirKumulatifGvMatrahiYili: parseInt(e.target.value, 10) || undefined })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-amber-800 mb-0.5">
+                      Başlangıç Vergi Ayı
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={formData.devirKumulatifGvMatrahiBaslangicAyi ?? ''}
+                      onChange={(e) => setFormData({ ...formData, devirKumulatifGvMatrahiBaslangicAyi: parseInt(e.target.value, 10) || undefined })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-amber-800 mb-0.5">
+                      Önceki Kümülatif Asgari Ücret GV Matrahı (TL)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={formData.devirKumulatifAsgariGvMatrahi ?? ''}
+                      onChange={(e) => setFormData({ ...formData, devirKumulatifAsgariGvMatrahi: parseFloat(e.target.value) || 0 })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-amber-800 mb-0.5">
+                      Asgari GV Devir Yılı
+                    </label>
+                    <input
+                      type="number"
+                      min={2000}
+                      value={formData.devirKumulatifAsgariGvMatrahiYili ?? ''}
+                      onChange={(e) => setFormData({ ...formData, devirKumulatifAsgariGvMatrahiYili: parseInt(e.target.value, 10) || undefined })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
@@ -607,10 +675,11 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
             </button>
             <button
               type="submit"
+              disabled={isSaving}
               className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
             >
               <Save className="w-4 h-4" />
-              <span>Kaydet</span>
+              <span>{isSaving ? 'Kaydediliyor…' : 'Kaydet'}</span>
             </button>
           </div>
         </form>

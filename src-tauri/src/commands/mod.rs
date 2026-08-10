@@ -1,3 +1,4 @@
+pub mod annual_parameters_cmd;
 pub mod attendance_cmd;
 pub mod migration_cmd;
 pub mod payroll_cmd;
@@ -6,6 +7,7 @@ pub mod personnel_cmd;
 pub mod settings_cmd;
 pub mod sick_leave_cmd;
 
+pub use annual_parameters_cmd::*;
 pub use attendance_cmd::*;
 pub use migration_cmd::*;
 pub use payroll_cmd::*;
@@ -13,4 +15,3 @@ pub use period_cmd::*;
 pub use personnel_cmd::*;
 pub use settings_cmd::*;
 pub use sick_leave_cmd::*;
-

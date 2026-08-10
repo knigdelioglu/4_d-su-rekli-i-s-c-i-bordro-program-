@@ -1,24 +1,46 @@
+#![allow(non_snake_case)]
+
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::settings_repo::SettingsRepository;
+use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use rusqlite::Connection;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+pub const CURRENT_BACKUP_VERSION: u32 = 2;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyPayload {
+    #[serde(default)]
+    pub backupVersion: Option<u32>,
+    #[serde(default)]
+    pub exportedAt: Option<String>,
+    #[serde(default)]
     pub donemler: Option<Vec<BordroDonemi>>,
+    #[serde(default)]
     pub aktifDonemId: Option<String>,
+    #[serde(default)]
     pub personeller: Option<Vec<LegacyPersonel>>,
+    #[serde(default)]
     pub kurumDegerleriMap: Option<HashMap<String, DonemselKurumDegerleri>>,
+    #[serde(default)]
     pub puantajlar: Option<Vec<PersonelPuantaj>>,
+    #[serde(default)]
     pub bordrolar: Option<Vec<BordroKaydi>>,
+    #[serde(default)]
+    pub taxOpenings: Option<Vec<PersonelTaxOpening>>,
+    #[serde(default)]
+    pub sickLeaveRecords: Option<Vec<SickLeaveRecord>>,
+    #[serde(default)]
+    pub annualPayrollParameters: Option<Vec<AnnualPayrollParameters>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,14 +51,27 @@ pub struct LegacyPersonel {
     pub ad: String,
     pub soyad: String,
     pub grup: String,
+    #[serde(default)]
     pub unvan: Option<String>,
+    #[serde(default)]
     pub sgkSicilNo: Option<String>,
+    #[serde(default)]
     pub iban: Option<String>,
+    #[serde(default)]
     pub hizmetYili: Option<i32>,
+    #[serde(default)]
     pub aciklama: Option<String>,
+    #[serde(default)]
     pub devirKumulatifGvMatrahi: Option<rust_decimal::Decimal>,
+    #[serde(default)]
     pub devirKumulatifGvMatrahiYili: Option<i32>,
+    #[serde(default)]
     pub devirKumulatifGvMatrahiBaslangicAyi: Option<i32>,
+    #[serde(default)]
+    pub devirKumulatifAsgariGvMatrahi: Option<rust_decimal::Decimal>,
+    #[serde(default)]
+    pub devirKumulatifAsgariGvMatrahiYili: Option<i32>,
+    #[serde(default)]
     pub kesintiler: Option<PersonelKesintileri>,
 }
 
@@ -48,98 +83,209 @@ impl MigrationService {
         Ok(flag.as_deref() == Some("true"))
     }
 
-    pub fn migrate_legacy_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
-        if Self::is_migrated(conn)? {
-            return Ok(()); // Idempotent: already migrated
-        }
-
+    fn parse_payload(payload_json: &str) -> Result<LegacyPayload> {
         let payload: LegacyPayload = serde_json::from_str(payload_json)
             .map_err(|e| DomainError::InvalidData(format!("Geçersiz yedek payload: {}", e)))?;
 
-        // Start SQLite Transaction
-        let tx = conn.transaction()
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some(version) = payload.backupVersion {
+            if version == 0 || version > CURRENT_BACKUP_VERSION {
+                return Err(DomainError::InvalidData(format!(
+                    "Desteklenmeyen yedek sürümü: {} (desteklenen en yeni sürüm: {}).",
+                    version, CURRENT_BACKUP_VERSION
+                )));
+            }
 
-        // 1. Import Periods
-        if let Some(periods) = payload.donemler {
-            for p in periods {
-                PeriodRepository::save(&tx, &p)?;
+            if version >= 2
+                && (payload.taxOpenings.is_none()
+                    || payload.sickLeaveRecords.is_none()
+                    || payload.annualPayrollParameters.is_none())
+            {
+                return Err(DomainError::InvalidData(
+                    "V2 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
+                        .into(),
+                ));
+            }
+        }
+        Ok(payload)
+    }
+
+    fn import_payload(conn: &Connection, payload: LegacyPayload) -> Result<()> {
+        let LegacyPayload {
+            backupVersion: _,
+            exportedAt: _,
+            donemler,
+            aktifDonemId,
+            personeller,
+            kurumDegerleriMap,
+            puantajlar,
+            bordrolar,
+            taxOpenings,
+            sickLeaveRecords,
+            annualPayrollParameters,
+        } = payload;
+
+        if let Some(periods) = donemler {
+            for period in periods {
+                PeriodRepository::save(conn, &period)?;
             }
         }
 
-        // 2. Import Institution Settings
-        if let Some(inst_map) = payload.kurumDegerleriMap {
+        if let Some(inst_map) = kurumDegerleriMap {
             for (period_id, mut settings) in inst_map {
                 settings.donemId = period_id;
-                SettingsRepository::save_institution_settings(&tx, &settings)?;
+                SettingsRepository::save_institution_settings(conn, &settings)?;
             }
         }
 
-        // 3. Import Personnel & Tax Opening
-        if let Some(personnel_list) = payload.personeller {
-            for lp in personnel_list {
-                let p = Personel {
-                    id: lp.id.clone(),
-                    tcNo: lp.tcNo,
-                    ad: lp.ad,
-                    soyad: lp.soyad,
-                    grup: lp.grup,
-                    unvan: lp.unvan,
-                    sgkSicilNo: lp.sgkSicilNo.unwrap_or_default(),
-                    iban: lp.iban.unwrap_or_default(),
-                    hizmetYili: lp.hizmetYili.unwrap_or(1),
-                    aciklama: lp.aciklama,
-                    kesintiler: lp.kesintiler,
+        if let Some(personnel_list) = personeller {
+            for legacy_personel in personnel_list {
+                let personel = Personel {
+                    id: legacy_personel.id.clone(),
+                    tcNo: legacy_personel.tcNo,
+                    ad: legacy_personel.ad,
+                    soyad: legacy_personel.soyad,
+                    grup: legacy_personel.grup,
+                    unvan: legacy_personel.unvan,
+                    sgkSicilNo: legacy_personel.sgkSicilNo.unwrap_or_default(),
+                    iban: legacy_personel.iban.unwrap_or_default(),
+                    hizmetYili: legacy_personel.hizmetYili.unwrap_or(1),
+                    aciklama: legacy_personel.aciklama,
+                    devirKumulatifGvMatrahi: legacy_personel.devirKumulatifGvMatrahi,
+                    devirKumulatifGvMatrahiYili: legacy_personel.devirKumulatifGvMatrahiYili,
+                    devirKumulatifGvMatrahiBaslangicAyi: legacy_personel
+                        .devirKumulatifGvMatrahiBaslangicAyi,
+                    devirKumulatifAsgariGvMatrahi: legacy_personel.devirKumulatifAsgariGvMatrahi,
+                    devirKumulatifAsgariGvMatrahiYili: legacy_personel
+                        .devirKumulatifAsgariGvMatrahiYili,
+                    kesintiler: legacy_personel.kesintiler,
                 };
-                PersonnelRepository::save(&tx, &p)?;
+                PersonnelRepository::save(conn, &personel)?;
 
-                // If tax opening devir exists in legacy payload
-                if let Some(opening_val) = lp.devirKumulatifGvMatrahi {
-                    if opening_val > rust_decimal_macros::dec!(0) {
-                        let year = lp.devirKumulatifGvMatrahiYili.unwrap_or(2026);
-                        let start_month = lp.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(5);
-                        let effective_period_id = format!("{}-{:02}", year, start_month);
-
+                // Eski localStorage sözleşmesindeki GV devir alanını yeni, ayrı
+                // açılış tablosuna da yazarak native kümülatif motorla eşitleriz.
+                if let Some(opening_value) = personel.devirKumulatifGvMatrahi {
+                    if opening_value > rust_decimal_macros::dec!(0) {
+                        let year = personel.devirKumulatifGvMatrahiYili.unwrap_or(2026);
+                        let start_month = personel.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(1);
                         let tax_opening = PersonelTaxOpening {
-                            id: format!("{}_{}", lp.id, year),
-                            personnelId: lp.id.clone(),
+                            id: format!("{}_{}", personel.id, year),
+                            personnelId: personel.id.clone(),
                             year,
-                            gvCumulativeOpening: opening_val,
-                            effectiveFromPeriodId: effective_period_id,
+                            gvCumulativeOpening: opening_value,
+                            effectiveFromPeriodId: format!("{}-{:02}", year, start_month),
                             createdAt: None,
                             updatedAt: None,
                         };
-                        TaxOpeningRepository::save(&tx, &tax_opening)?;
+                        // Devir alanı personel kaydında zaten saklanır ve native
+                        // hesap motoru gerektiğinde oradan okuyabilir. Eski
+                        // payload'da başlangıç dönemi bulunmuyorsa FK hatasıyla
+                        // tüm legacy migration'ı bozmayalım; yalnızca gerçek bir
+                        // dönem karşılığı varsa ayrı açılış tablosunu doldur.
+                        if PeriodRepository::get_by_id(conn, &tax_opening.effectiveFromPeriodId)?
+                            .is_some()
+                        {
+                            TaxOpeningRepository::save(conn, &tax_opening)?;
+                        }
                     }
                 }
             }
         }
 
-        // 4. Import Attendance
-        if let Some(attendance_list) = payload.puantajlar {
-            for att in attendance_list {
-                AttendanceRepository::save(&tx, &att)?;
+        if let Some(openings) = taxOpenings {
+            for opening in openings {
+                TaxOpeningRepository::save(conn, &opening)?;
             }
         }
 
-        // 5. Import Payroll Records
-        if let Some(payroll_list) = payload.bordrolar {
-            for b in payroll_list {
-                PayrollRepository::save(&tx, &b)?;
+        if let Some(attendance_list) = puantajlar {
+            for attendance in attendance_list {
+                AttendanceRepository::save(conn, &attendance)?;
             }
         }
 
-        // 6. Set Active Period
-        if let Some(active_id) = payload.aktifDonemId {
-            SettingsRepository::set_app_setting(&tx, "active_period_id", &active_id)?;
+        if let Some(payroll_list) = bordrolar {
+            for payroll in payroll_list {
+                PayrollRepository::save_in_transaction(conn, &payroll)?;
+            }
         }
 
-        // 7. Mark Migrated
+        if let Some(sick_records) = sickLeaveRecords {
+            for record in sick_records {
+                SickLeaveRepository::save(conn, &record)?;
+            }
+        }
+
+        // V1 yedeklerinde yıllık tarife alanı bulunmayabilir; V2 sözleşmesiyle
+        // aynı authoritative üretim yolunu korumak için içe aktarılan
+        // dönemlerin vergi yıllarına JSON/SQLite-safe varsayılan tarife ekle.
+        // Payload'da açıkça verilen yıllık parametreler her zaman önceliklidir.
+        if let Some(parameters) = annualPayrollParameters {
+            for parameter in parameters {
+                AnnualPayrollParametersRepository::save(conn, &parameter)?;
+            }
+        }
+        let imported_tax_years: BTreeSet<i32> = PeriodRepository::get_all(conn)?
+            .into_iter()
+            .map(|period| period.taxYear)
+            .collect();
+        for year in imported_tax_years {
+            if AnnualPayrollParametersRepository::get_by_year(conn, year)?.is_none() {
+                let mut defaults = AnnualPayrollParameters::default_for_2026();
+                defaults.year = year;
+                AnnualPayrollParametersRepository::save(conn, &defaults)?;
+            }
+        }
+
+        if let Some(active_id) = aktifDonemId {
+            SettingsRepository::set_app_setting(conn, "active_period_id", &active_id)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn migrate_legacy_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
+        if Self::is_migrated(conn)? {
+            return Ok(());
+        }
+
+        let payload = Self::parse_payload(payload_json)?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Self::import_payload(&tx, payload)?;
         SettingsRepository::set_app_setting(&tx, "legacy_migrated", "true")?;
+        tx.commit()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
 
-        // Commit transaction
-        tx.commit().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    /// Kullanıcı tarafından çağrılan import/reset akışı: mevcut domain verisini
+    /// aynı transaction içinde siler ve yedek içeriğini eksiksiz yükler.
+    pub fn replace_backup_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
+        let payload = Self::parse_payload(payload_json)?;
+        let tx = conn
+            .transaction()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
+        tx.execute_batch(
+            "DELETE FROM payroll_income_items;
+             DELETE FROM payroll_deduction_items;
+             DELETE FROM payroll_records;
+             DELETE FROM attendance_records;
+             DELETE FROM sick_leave_records;
+             DELETE FROM personnel_tax_opening;
+             DELETE FROM institution_settings;
+             DELETE FROM personnel;
+             DELETE FROM payroll_periods;
+             DELETE FROM annual_payroll_parameters;
+             DELETE FROM app_settings;",
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        Self::import_payload(&tx, payload)?;
+        SettingsRepository::set_app_setting(&tx, "legacy_migrated", "true")?;
+        tx.commit()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         Ok(())
     }
 }

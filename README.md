@@ -1,20 +1,29 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# 4/D Sürekli İşçi Bordro Programı
 
-# Run and deploy your AI Studio app
+React + TypeScript arayüzü, Tauri/Rust servisleri ve SQLite yerel veritabanı kullanan 4/D sürekli işçi bordro uygulamasıdır. Üretim bordro hesabı Rust tarafındaki tek hesap motorunda yapılır; tarayıcı modu kayıtları saklama, içe/dışa aktarma ve inceleme için kullanılabilir.
 
-This contains everything you need to run your app locally.
+## Gereksinimler
 
-View your app in AI Studio: https://ai.studio/apps/91f0f40d-a0de-4cc2-98c3-589c46d6a640
+- Bun
+- Rust toolchain ve Cargo
+- Tauri geliştirme bağımlılıkları
 
-## Run Locally
+## Geliştirme ve doğrulama
 
-**Prerequisites:**  Node.js
+```bash
+bun install
+bun run dev
+bun test
+bun run lint
+bun run build
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+```
 
+Tauri geliştirme akışı için `bun tauri dev` kullanılabilir. SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Veri güvenliği
+
+JSON yedekleri sürüm 2 sözleşmesiyle dönem, personel, kurum ayarları, puantaj, bordro, vergi açılışları, hastalık raporu kayıtları ve yıllık bordro parametrelerini birlikte içerir. İçe aktarma ve örnek veri sıfırlama, mevcut domain verisini tek SQLite transaction içinde silip yükler. Kesinleştirilen (`FINALIZED`) bordrolar yeniden hesaplanamaz veya geriye alınamaz.
+
+Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.

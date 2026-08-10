@@ -1,134 +1,394 @@
+use super::{dec_to_kurus, kurus_to_dec};
 use crate::domain::models::*;
-use crate::domain::Result;
-use super::{dec_to_kurus, kurus_to_dec, opt_dec_to_kurus, opt_kurus_to_dec};
-use rusqlite::{params, Connection};
+use crate::domain::{DomainError, Result};
 use chrono::Utc;
+use rusqlite::{params, Connection, OptionalExtension};
+use rust_decimal::Decimal;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 pub struct PayrollRepository;
 
 impl PayrollRepository {
+    fn status_to_str(status: BordroStatus) -> &'static str {
+        match status {
+            BordroStatus::DRAFT => "DRAFT",
+            BordroStatus::CALCULATED => "CALCULATED",
+            BordroStatus::FINALIZED => "FINALIZED",
+        }
+    }
+
+    fn parse_status(id: &str, status: &str) -> Result<BordroStatus> {
+        match status {
+            "DRAFT" => Ok(BordroStatus::DRAFT),
+            "CALCULATED" => Ok(BordroStatus::CALCULATED),
+            "FINALIZED" => Ok(BordroStatus::FINALIZED),
+            _ => Err(DomainError::InvalidData(format!(
+                "{} bordrosunun durumu geçersiz: {}",
+                id, status
+            ))),
+        }
+    }
+
+    pub fn get_status_and_created_at(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<Option<(BordroStatus, String)>> {
+        let row = conn
+            .query_row(
+                "SELECT id, status, calculated_at
+                 FROM payroll_records
+                 WHERE personnel_id = ?1 AND period_id = ?2",
+                params![personnel_id, period_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        row.map(|(id, status, calculated_at)| {
+            Ok((Self::parse_status(&id, &status)?, calculated_at))
+        })
+        .transpose()
+    }
+
+    pub fn update_status(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        status: BordroStatus,
+    ) -> Result<()> {
+        let updated_at = Utc::now().to_rfc3339();
+        let changed = conn
+            .execute(
+                "UPDATE payroll_records
+                 SET status = ?1, updated_at = ?2
+                 WHERE personnel_id = ?3 AND period_id = ?4",
+                params![
+                    Self::status_to_str(status),
+                    updated_at,
+                    personnel_id,
+                    period_id
+                ],
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if changed == 0 {
+            return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
+        }
+        Ok(())
+    }
+
+    pub fn exists_for_period(conn: &Connection, period_id: &str) -> Result<bool> {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM payroll_records WHERE period_id = ?1
+                 )",
+                params![period_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(exists != 0)
+    }
+
+    pub fn has_personnel_tax_month_before(
+        conn: &Connection,
+        personnel_id: &str,
+        tax_year: i32,
+        tax_month: i32,
+    ) -> Result<bool> {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payroll_records AS pr
+                    JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                    WHERE pr.personnel_id = ?1
+                      AND pp.tax_year = ?2
+                      AND pp.tax_month < ?3
+                 )",
+                params![personnel_id, tax_year, tax_month],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(exists != 0)
+    }
+
+    pub fn sum_gv_base_for_tax_month_range(
+        conn: &Connection,
+        personnel_id: &str,
+        tax_year: i32,
+        start_tax_month: i32,
+        end_tax_month_exclusive: i32,
+    ) -> Result<Decimal> {
+        let sum_kurus: i64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(pr.gv_base), 0)
+                 FROM payroll_records AS pr
+                 JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                 WHERE pr.personnel_id = ?1
+                   AND pp.tax_year = ?2
+                   AND pp.tax_month >= ?3
+                   AND pp.tax_month < ?4",
+                params![
+                    personnel_id,
+                    tax_year,
+                    start_tax_month,
+                    end_tax_month_exclusive
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(kurus_to_dec(sum_kurus))
+    }
+
+    pub fn get_next_devreden_pek(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<Option<Vec<DevredenPekKaydi>>> {
+        let json = conn
+            .query_row(
+                "SELECT sonraki_devreden_pek_json
+                 FROM payroll_records
+                 WHERE personnel_id = ?1 AND period_id = ?2",
+                params![personnel_id, period_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?
+            .flatten();
+        Self::parse_optional_json(
+            json.as_deref(),
+            &format!("{} {} sonraki devreden PEK", personnel_id, period_id),
+        )
+    }
+
+    fn parse_json<T: DeserializeOwned>(json: &str, field: &str) -> Result<T> {
+        serde_json::from_str(json)
+            .map_err(|e| DomainError::InvalidData(format!("{} bozuk JSON içeriyor: {}", field, e)))
+    }
+
+    fn parse_optional_json<T: DeserializeOwned>(
+        json: Option<&str>,
+        field: &str,
+    ) -> Result<Option<T>> {
+        json.map(|value| Self::parse_json(value, field)).transpose()
+    }
+
+    fn serialize_json<T: Serialize>(value: &T, field: &str) -> Result<String> {
+        serde_json::to_string(value)
+            .map_err(|e| DomainError::InvalidData(format!("{} serileştirilemedi: {}", field, e)))
+    }
+
+    fn serialize_optional_json<T: Serialize>(
+        value: Option<&T>,
+        field: &str,
+    ) -> Result<Option<String>> {
+        value
+            .map(|item| Self::serialize_json(item, field))
+            .transpose()
+    }
+
+    fn set_income_item(
+        gelirler: &mut GelirKalemleri,
+        item_type: &str,
+        amount: Decimal,
+    ) -> Result<()> {
+        match item_type {
+            "tabanBrutAylik" => gelirler.tabanBrutAylik = Some(amount),
+            "tediye" => gelirler.tediye = Some(amount),
+            "tisIkramiyesi" => gelirler.tisIkramiyesi = Some(amount),
+            "ekOdeme" => gelirler.ekOdeme = Some(amount),
+            "yemek" => gelirler.yemek = Some(amount),
+            "birlestirilmisSosyalYardim" => gelirler.birlestirilmisSosyalYardim = Some(amount),
+            "vasitaYol" => gelirler.vasitaYol = Some(amount),
+            "giyimYardimi" => gelirler.giyimYardimi = Some(amount),
+            "isPrimi" => gelirler.isPrimi = Some(amount),
+            "geceCalismasiUcreti" => gelirler.geceCalismasiUcreti = Some(amount),
+            "geceCalismasiTatiliUcreti" => gelirler.geceCalismasiTatiliUcreti = Some(amount),
+            "hizmetZammi" => gelirler.hizmetZammi = Some(amount),
+            "digerGelir" => gelirler.digerGelir = Some(amount),
+            _ => {
+                return Err(DomainError::InvalidData(format!(
+                    "Bilinmeyen bordro gelir kalemi: {}",
+                    item_type
+                )))
+            }
+        }
+        Ok(())
+    }
+
+    fn set_deduction_item(
+        kesintiler: &mut KesintiKalemleri,
+        item_type: &str,
+        amount: Decimal,
+    ) -> Result<()> {
+        match item_type {
+            "isciSgkPrimi" => kesintiler.isciSgkPrimi = Some(amount),
+            "isciIssizlikPrimi" => kesintiler.isciIssizlikPrimi = Some(amount),
+            "gelirVergisi" => kesintiler.gelirVergisi = Some(amount),
+            "damgaVergisi" => kesintiler.damgaVergisi = Some(amount),
+            "sendikaAidati" => kesintiler.sendikaAidati = Some(amount),
+            "bes" => kesintiler.bes = Some(amount),
+            "icra" => kesintiler.icra = Some(amount),
+            "kisiBorcu" => kesintiler.kisiBorcu = Some(amount),
+            "dogumAskerlikBorclanmasi" => kesintiler.dogumAskerlikBorclanmasi = Some(amount),
+            "hayatSaglikSigortasi" => kesintiler.hayatSaglikSigortasi = Some(amount),
+            "digerKesinti" => kesintiler.digerKesinti = Some(amount),
+            _ => {
+                return Err(DomainError::InvalidData(format!(
+                    "Bilinmeyen bordro kesinti kalemi: {}",
+                    item_type
+                )))
+            }
+        }
+        Ok(())
+    }
+
     pub fn get_all(conn: &Connection) -> Result<Vec<BordroKaydi>> {
-        let mut stmt = conn.prepare(
-            "SELECT id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
-                    new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
-                    puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                    calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json,
-                    gv_snapshot_json
-             FROM payroll_records",
-        ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, personnel_id, period_id, gross_total, sgk_base, gv_base,
+                        previous_cumulative_gv, new_cumulative_gv, income_tax, stamp_tax,
+                        total_deductions, net_payment, status, puantaj_summary_json,
+                        pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
+                        calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
+                        is_primi_snapshot_json, gv_snapshot_json, notlar
+                 FROM payroll_records ORDER BY calculated_at ASC, id ASC",
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        let rows = stmt.query_map([], |row| {
-            let id: String = row.get(0)?;
-            let personnel_id: String = row.get(1)?;
-            let period_id: String = row.get(2)?;
-            let gross_total: i64 = row.get(3)?;
-            let _sgk_base: i64 = row.get(4)?;
-            let _gv_base: i64 = row.get(5)?;
-            let previous_cumulative_gv: i64 = row.get(6)?;
-            let _new_cumulative_gv: i64 = row.get(7)?;
-            let _income_tax: i64 = row.get(8)?;
-            let _stamp_tax: i64 = row.get(9)?;
-            let total_deductions: i64 = row.get(10)?;
-            let net_payment: i64 = row.get(11)?;
-            let status_str: String = row.get(12)?;
-            let puantaj_summary_json: String = row.get(13)?;
-            let pek_detail_json: Option<String> = row.get(14)?;
-            let devreden_pek_gelen_json: Option<String> = row.get(15)?;
-            let sonraki_devreden_pek_json: Option<String> = row.get(16)?;
-            let calculated_at: String = row.get(17)?;
-            let updated_at: String = row.get(18)?;
-            let raporlu_gun: Option<i32> = row.get(19)?;
-            let odenen_raporlu_gun: Option<i32> = row.get(20)?;
-            let is_primi_snapshot_json: Option<String> = row.get(21)?;
-            let gv_snapshot_json: Option<String> = row.get(22)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, String>(17)?,
+                    row.get::<_, String>(18)?,
+                    row.get::<_, Option<i32>>(19)?,
+                    row.get::<_, Option<i32>>(20)?,
+                    row.get::<_, Option<String>>(21)?,
+                    row.get::<_, Option<String>>(22)?,
+                    row.get::<_, Option<String>>(23)?,
+                ))
+            })
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-            let status = match status_str.as_str() {
-                "DRAFT" => BordroStatus::DRAFT,
-                "FINALIZED" => BordroStatus::FINALIZED,
-                _ => BordroStatus::CALCULATED,
-            };
-
-            let puantaj_summary: PuantajOzeti = serde_json::from_str(&puantaj_summary_json).unwrap_or_default();
-            let pek_detay: Option<PekDetayi> = pek_detail_json.and_then(|j| serde_json::from_str(&j).ok());
-            let devreden_pek_gelen: Option<Vec<DevredenPekKaydi>> = devreden_pek_gelen_json.and_then(|j| serde_json::from_str(&j).ok());
-            let sonraki_devreden_pek: Option<Vec<DevredenPekKaydi>> = sonraki_devreden_pek_json.and_then(|j| serde_json::from_str(&j).ok());
-            let is_primi_detay: Option<IsPrimiHesapDetayi> = is_primi_snapshot_json.and_then(|j| serde_json::from_str(&j).ok());
-            let gv_detay: Option<GvHesapDetayi> = gv_snapshot_json.and_then(|j| serde_json::from_str(&j).ok());
-
-            Ok((id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_detay, gv_detay))
-        }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
-
-        let mut record_tuples = Vec::new();
-        for r in rows {
-            record_tuples.push(r.map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?);
+        let mut raw_records = Vec::new();
+        for row in rows {
+            raw_records.push(row.map_err(|e| DomainError::DatabaseError(e.to_string()))?);
         }
 
-        let mut result = Vec::new();
+        // Kalemler iki toplu sorgu ile okunur; her bordro için ayrı SELECT yapılmaz.
+        let mut income_stmt = conn
+            .prepare("SELECT payroll_id, item_type, amount FROM payroll_income_items ORDER BY payroll_id, item_type")
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let mut deduction_stmt = conn
+            .prepare("SELECT payroll_id, item_type, amount FROM payroll_deduction_items ORDER BY payroll_id, item_type")
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        for (id, personnel_id, period_id, gross_total, previous_cumulative_gv, total_deductions, net_payment, status, puantaj_summary, pek_detay, devreden_pek_gelen, sonraki_devreden_pek, calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun, is_primi_detay, gv_detay) in record_tuples {
-            // Load income items
-            let mut inc_stmt = conn.prepare(
-                "SELECT item_type, amount FROM payroll_income_items WHERE payroll_id = ?1",
-            ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        let mut income_by_payroll: std::collections::HashMap<String, GelirKalemleri> =
+            std::collections::HashMap::new();
+        let income_rows = income_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        for row in income_rows {
+            let (payroll_id, item_type, amount) =
+                row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            let entry = income_by_payroll.entry(payroll_id).or_default();
+            Self::set_income_item(entry, &item_type, kurus_to_dec(amount))?;
+        }
 
-            let inc_rows = inc_stmt.query_map(params![id], |row| {
-                let item_type: String = row.get(0)?;
-                let amount: i64 = row.get(1)?;
-                Ok((item_type, kurus_to_dec(amount)))
-            }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        let mut deductions_by_payroll: std::collections::HashMap<String, KesintiKalemleri> =
+            std::collections::HashMap::new();
+        let deduction_rows = deduction_stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        for row in deduction_rows {
+            let (payroll_id, item_type, amount) =
+                row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            let entry = deductions_by_payroll.entry(payroll_id).or_default();
+            Self::set_deduction_item(entry, &item_type, kurus_to_dec(amount))?;
+        }
 
-            let mut gelirler = GelirKalemleri::default();
-            for r in inc_rows {
-                if let Ok((t, amt)) = r {
-                    match t.as_str() {
-                        "tabanBrutAylik" => gelirler.tabanBrutAylik = Some(amt),
-                        "tediye" => gelirler.tediye = Some(amt),
-                        "tisIkramiyesi" => gelirler.tisIkramiyesi = Some(amt),
-                        "ekOdeme" => gelirler.ekOdeme = Some(amt),
-                        "yemek" => gelirler.yemek = Some(amt),
-                        "birlestirilmisSosyalYardim" => gelirler.birlestirilmisSosyalYardim = Some(amt),
-                        "vasitaYol" => gelirler.vasitaYol = Some(amt),
-                        "giyimYardimi" => gelirler.giyimYardimi = Some(amt),
-                        "isPrimi" => gelirler.isPrimi = Some(amt),
-                        "geceCalismasiUcreti" => gelirler.geceCalismasiUcreti = Some(amt),
-                        "geceCalismasiTatiliUcreti" => gelirler.geceCalismasiTatiliUcreti = Some(amt),
-                        "hizmetZammi" => gelirler.hizmetZammi = Some(amt),
-                        "digerGelir" => gelirler.digerGelir = Some(amt),
-                        _ => {}
-                    }
-                }
-            }
+        let mut result = Vec::with_capacity(raw_records.len());
+        for (
+            id,
+            personnel_id,
+            period_id,
+            gross_total,
+            previous_cumulative_gv,
+            total_deductions,
+            net_payment,
+            status_str,
+            puantaj_summary_json,
+            pek_detail_json,
+            devreden_pek_gelen_json,
+            sonraki_devreden_pek_json,
+            calculated_at,
+            updated_at,
+            raporlu_gun,
+            odenen_raporlu_gun,
+            is_primi_snapshot_json,
+            gv_snapshot_json,
+            notlar,
+        ) in raw_records
+        {
+            let status = Self::parse_status(&id, &status_str)?;
 
-            // Load deduction items
-            let mut ded_stmt = conn.prepare(
-                "SELECT item_type, amount FROM payroll_deduction_items WHERE payroll_id = ?1",
-            ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
-
-            let ded_rows = ded_stmt.query_map(params![id], |row| {
-                let item_type: String = row.get(0)?;
-                let amount: i64 = row.get(1)?;
-                Ok((item_type, kurus_to_dec(amount)))
-            }).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
-
-            let mut kesintiler = KesintiKalemleri::default();
-            for r in ded_rows {
-                if let Ok((t, amt)) = r {
-                    match t.as_str() {
-                        "isciSgkPrimi" => kesintiler.isciSgkPrimi = Some(amt),
-                        "isciIssizlikPrimi" => kesintiler.isciIssizlikPrimi = Some(amt),
-                        "gelirVergisi" => kesintiler.gelirVergisi = Some(amt),
-                        "damgaVergisi" => kesintiler.damgaVergisi = Some(amt),
-                        "sendikaAidati" => kesintiler.sendikaAidati = Some(amt),
-                        "bes" => kesintiler.bes = Some(amt),
-                        "icra" => kesintiler.icra = Some(amt),
-                        "kisiBorcu" => kesintiler.kisiBorcu = Some(amt),
-                        "dogumAskerlikBorclanmasi" => kesintiler.dogumAskerlikBorclanmasi = Some(amt),
-                        "hayatSaglikSigortasi" => kesintiler.hayatSaglikSigortasi = Some(amt),
-                        "digerKesinti" => kesintiler.digerKesinti = Some(amt),
-                        _ => {}
-                    }
-                }
-            }
+            let puantaj_summary: PuantajOzeti =
+                Self::parse_json(&puantaj_summary_json, &format!("{} puantaj özeti", id))?;
+            let pek_detay = Self::parse_optional_json(
+                pek_detail_json.as_deref(),
+                &format!("{} PEK detayı", id),
+            )?;
+            let devreden_pek_gelen = Self::parse_optional_json(
+                devreden_pek_gelen_json.as_deref(),
+                &format!("{} gelen devreden PEK", id),
+            )?;
+            let sonraki_devreden_pek = Self::parse_optional_json(
+                sonraki_devreden_pek_json.as_deref(),
+                &format!("{} sonraki devreden PEK", id),
+            )?;
+            let is_primi_detay = Self::parse_optional_json(
+                is_primi_snapshot_json.as_deref(),
+                &format!("{} iş primi snapshot'ı", id),
+            )?;
+            let gv_detay = Self::parse_optional_json(
+                gv_snapshot_json.as_deref(),
+                &format!("{} GV snapshot'ı", id),
+            )?;
+            let gelirler = income_by_payroll.remove(&id).unwrap_or_default();
+            let kesintiler = deductions_by_payroll.remove(&id).unwrap_or_default();
 
             result.push(BordroKaydi {
                 id,
@@ -143,14 +403,11 @@ impl PayrollRepository {
                 status,
                 olusturulmaTarihi: calculated_at,
                 sonGuncellemeTarihi: updated_at,
-                notlar: None,
+                notlar,
                 oncekiKumulatifGvMatrahi: Some(kurus_to_dec(previous_cumulative_gv)),
-                // `oncekiKumulatifAsgariGvMatrahi` ayrı bir kolonda saklanmaz; gv_snapshot_json
-                // içinde kayıtlı asgari referans kümülatifinden kayıpsız geri türetilir:
-                //   önceki = referansKümülatif - cariAylıkMatrah
-                // (her iki alan 2 haneli Decimal olduğundan çıkarma birebir sonucu verir).
-                oncekiKumulatifAsgariGvMatrahi: gv_detay.as_ref().map(|g| {
-                    (g.asgariUcretReferansKumulatifMatrahi - g.asgariUcretGvMatrahi).max(rust_decimal_macros::dec!(0))
+                oncekiKumulatifAsgariGvMatrahi: gv_detay.as_ref().map(|g: &GvHesapDetayi| {
+                    (g.asgariUcretReferansKumulatifMatrahi - g.asgariUcretGvMatrahi)
+                        .max(rust_decimal_macros::dec!(0))
                 }),
                 manuelKumulatifGvMatrahi: None,
                 devredenPekGelen: devreden_pek_gelen,
@@ -166,19 +423,27 @@ impl PayrollRepository {
         Ok(result)
     }
 
-    pub fn save(conn: &Connection, b: &BordroKaydi) -> Result<()> {
+    pub fn save(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Self::save_in_transaction(&tx, bordro)?;
+        tx.commit()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))
+    }
+
+    /// MigrationService transaction'ı içinden çağrılır; yeni transaction açmaz.
+    pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let status_str = match b.status {
-            BordroStatus::DRAFT => "DRAFT",
-            BordroStatus::FINALIZED => "FINALIZED",
-            _ => "CALCULATED",
-        };
+        let status_str = Self::status_to_str(b.status);
 
         let gross_total = dec_to_kurus(Some(b.gelirToplam));
         let sgk_base = dec_to_kurus(b.pekDetay.as_ref().map(|p| p.finalPek));
         let isci_sgk = b.kesintiler.isciSgkPrimi.unwrap_or_default();
         let isci_issizlik = b.kesintiler.isciIssizlikPrimi.unwrap_or_default();
-        let gv_base = dec_to_kurus(Some((b.gelirToplam - isci_sgk - isci_issizlik).max(rust_decimal_macros::dec!(0))));
+        let gv_base = dec_to_kurus(Some(
+            (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO),
+        ));
         let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi);
         let new_gv = prev_gv + gv_base;
         let income_tax = dec_to_kurus(b.kesintiler.gelirVergisi);
@@ -186,75 +451,117 @@ impl PayrollRepository {
         let total_deductions = dec_to_kurus(Some(b.kesintiToplam));
         let net_payment = dec_to_kurus(Some(b.netOdeme));
 
-        let puantaj_summary_json = serde_json::to_string(&b.puantajOzeti).unwrap_or_default();
-        let pek_detail_json = b.pekDetay.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
-        let devreden_pek_gelen_json = b.devredenPekGelen.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
-        let sonraki_devreden_pek_json = b.sonrakiDevredenPek.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
-        let is_primi_snapshot_json = b.isPrimiDetay.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
-        let gv_snapshot_json = b.gvDetay.as_ref().map(|p| serde_json::to_string(p).unwrap_or_default());
+        let puantaj_summary_json = Self::serialize_json(&b.puantajOzeti, "Puantaj özeti")?;
+        let pek_detail_json = Self::serialize_optional_json(b.pekDetay.as_ref(), "PEK detayı")?;
+        let devreden_pek_gelen_json =
+            Self::serialize_optional_json(b.devredenPekGelen.as_ref(), "Gelen devreden PEK")?;
+        let sonraki_devreden_pek_json =
+            Self::serialize_optional_json(b.sonrakiDevredenPek.as_ref(), "Sonraki devreden PEK")?;
+        let is_primi_snapshot_json =
+            Self::serialize_optional_json(b.isPrimiDetay.as_ref(), "İş primi snapshot'ı")?;
+        let gv_snapshot_json = Self::serialize_optional_json(b.gvDetay.as_ref(), "GV snapshot'ı")?;
 
         conn.execute(
-"INSERT INTO payroll_records (
+            "INSERT INTO payroll_records (
                 id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                 new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json, calculated_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
-            ON CONFLICT(personnel_id, period_id) DO UPDATE SET
+                raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json, notlar,
+                calculated_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+             ON CONFLICT(personnel_id, period_id) DO UPDATE SET
                 gross_total=?4, sgk_base=?5, gv_base=?6, previous_cumulative_gv=?7, new_cumulative_gv=?8,
                 income_tax=?9, stamp_tax=?10, total_deductions=?11, net_payment=?12, status=?13,
                 puantaj_summary_json=?14, pek_detail_json=?15, devreden_pek_gelen_json=?16,
                 sonraki_devreden_pek_json=?17, raporlu_gun=?18, odenen_raporlu_gun=?19,
-                is_primi_snapshot_json=?20, gv_snapshot_json=?21, updated_at=?23",
+                is_primi_snapshot_json=?20, gv_snapshot_json=?21, notlar=?22, updated_at=?24",
             params![
-                b.id, b.personelId, b.donemId, gross_total, sgk_base, gv_base, prev_gv, new_gv,
-                income_tax, stamp_tax, total_deductions, net_payment, status_str,
-                puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                b.raporluGun, b.odenenRaporluGun,
+                b.id,
+                b.personelId,
+                b.donemId,
+                gross_total,
+                sgk_base,
+                gv_base,
+                prev_gv,
+                new_gv,
+                income_tax,
+                stamp_tax,
+                total_deductions,
+                net_payment,
+                status_str,
+                puantaj_summary_json,
+                pek_detail_json,
+                devreden_pek_gelen_json,
+                sonraki_devreden_pek_json,
+                b.raporluGun,
+                b.odenenRaporluGun,
                 is_primi_snapshot_json,
                 gv_snapshot_json,
-                now, now
+                b.notlar,
+                now,
+                now,
             ],
-        ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        // Replace income items
-        conn.execute("DELETE FROM payroll_income_items WHERE payroll_id = ?1", params![b.id])
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM payroll_income_items WHERE payroll_id = ?1",
+            params![b.id],
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        let income_map: Vec<(&str, Option<rust_decimal::Decimal>)> = vec![
+        let income_map: [(&str, Option<Decimal>); 13] = [
             ("tabanBrutAylik", b.gelirler.tabanBrutAylik),
             ("tediye", b.gelirler.tediye),
             ("tisIkramiyesi", b.gelirler.tisIkramiyesi),
             ("ekOdeme", b.gelirler.ekOdeme),
             ("yemek", b.gelirler.yemek),
-            ("birlestirilmisSosyalYardim", b.gelirler.birlestirilmisSosyalYardim),
+            (
+                "birlestirilmisSosyalYardim",
+                b.gelirler.birlestirilmisSosyalYardim,
+            ),
             ("vasitaYol", b.gelirler.vasitaYol),
             ("giyimYardimi", b.gelirler.giyimYardimi),
             ("isPrimi", b.gelirler.isPrimi),
             ("geceCalismasiUcreti", b.gelirler.geceCalismasiUcreti),
-            ("geceCalismasiTatiliUcreti", b.gelirler.geceCalismasiTatiliUcreti),
+            (
+                "geceCalismasiTatiliUcreti",
+                b.gelirler.geceCalismasiTatiliUcreti,
+            ),
             ("hizmetZammi", b.gelirler.hizmetZammi),
             ("digerGelir", b.gelirler.digerGelir),
         ];
-
-        for (item_type, amt_opt) in income_map {
-            if let Some(amt) = amt_opt {
-                let item_id = format!("{}_{}", b.id, item_type);
-                let amt_kurus = dec_to_kurus(Some(amt));
-                let src = if item_type == "tediye" || item_type == "tisIkramiyesi" { "MANUAL" } else { "CALCULATED" };
-                conn.execute(
-                    "INSERT INTO payroll_income_items (id, payroll_id, item_type, description, amount, source)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![item_id, b.id, item_type, item_type, amt_kurus, src],
-                ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
-            }
+        for (item_type, amount) in income_map
+            .into_iter()
+            .filter_map(|(kind, value)| value.map(|v| (kind, v)))
+        {
+            let source = if item_type == "tediye" || item_type == "tisIkramiyesi" {
+                "MANUAL"
+            } else {
+                "CALCULATED"
+            };
+            conn.execute(
+                "INSERT INTO payroll_income_items (id, payroll_id, item_type, description, amount, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    format!("{}_{}", b.id, item_type),
+                    b.id,
+                    item_type,
+                    item_type,
+                    dec_to_kurus(Some(amount)),
+                    source,
+                ],
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         }
 
-        // Replace deduction items
-        conn.execute("DELETE FROM payroll_deduction_items WHERE payroll_id = ?1", params![b.id])
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM payroll_deduction_items WHERE payroll_id = ?1",
+            params![b.id],
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        let ded_map: Vec<(&str, Option<rust_decimal::Decimal>)> = vec![
+        let deduction_map: [(&str, Option<Decimal>); 11] = [
             ("isciSgkPrimi", b.kesintiler.isciSgkPrimi),
             ("isciIssizlikPrimi", b.kesintiler.isciIssizlikPrimi),
             ("gelirVergisi", b.kesintiler.gelirVergisi),
@@ -263,22 +570,30 @@ impl PayrollRepository {
             ("bes", b.kesintiler.bes),
             ("icra", b.kesintiler.icra),
             ("kisiBorcu", b.kesintiler.kisiBorcu),
-            ("dogumAskerlikBorclanmasi", b.kesintiler.dogumAskerlikBorclanmasi),
+            (
+                "dogumAskerlikBorclanmasi",
+                b.kesintiler.dogumAskerlikBorclanmasi,
+            ),
             ("hayatSaglikSigortasi", b.kesintiler.hayatSaglikSigortasi),
             ("digerKesinti", b.kesintiler.digerKesinti),
         ];
-
-        for (item_type, amt_opt) in ded_map {
-            if let Some(amt) = amt_opt {
-                let item_id = format!("{}_{}", b.id, item_type);
-                let amt_kurus = dec_to_kurus(Some(amt));
-                let src = "CALCULATED";
-                conn.execute(
-                    "INSERT INTO payroll_deduction_items (id, payroll_id, item_type, description, amount, source)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![item_id, b.id, item_type, item_type, amt_kurus, src],
-                ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
-            }
+        for (item_type, amount) in deduction_map
+            .into_iter()
+            .filter_map(|(kind, value)| value.map(|v| (kind, v)))
+        {
+            conn.execute(
+                "INSERT INTO payroll_deduction_items (id, payroll_id, item_type, description, amount, source)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    format!("{}_{}", b.id, item_type),
+                    b.id,
+                    item_type,
+                    item_type,
+                    dec_to_kurus(Some(amount)),
+                    "CALCULATED",
+                ],
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         }
 
         Ok(())

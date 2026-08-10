@@ -1,8 +1,11 @@
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::field_reassign_with_default)]
+
     use bordro_programi_lib::db::create_in_memory_connection;
     use bordro_programi_lib::domain::models::*;
     use bordro_programi_lib::domain::DomainError;
+    use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
     use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
     use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
     use bordro_programi_lib::repositories::period_repo::PeriodRepository;
@@ -28,8 +31,39 @@ mod tests {
             iban: "TR00".to_string(),
             hizmetYili: 5,
             aciklama: None,
+            devirKumulatifGvMatrahi: None,
+            devirKumulatifGvMatrahiYili: None,
+            devirKumulatifGvMatrahiBaslangicAyi: None,
+            devirKumulatifAsgariGvMatrahi: None,
+            devirKumulatifAsgariGvMatrahiYili: None,
             kesintiler: None,
         }
+    }
+
+    fn ensure_test_annual_parameters(
+        conn: &rusqlite::Connection,
+        years: &[i32],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for year in years {
+            let mut parameters = AnnualPayrollParameters::default_for_2026();
+            parameters.year = *year;
+            AnnualPayrollParametersRepository::save(conn, &parameters)?;
+        }
+        Ok(())
+    }
+
+    fn ensure_test_institution_settings(
+        conn: &rusqlite::Connection,
+        period_ids: &[&str],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for period_id in period_ids {
+            let settings = DonemselKurumDegerleri {
+                donemId: (*period_id).to_string(),
+                ..DonemselKurumDegerleri::default()
+            };
+            SettingsRepository::save_institution_settings(conn, &settings)?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -101,7 +135,8 @@ mod tests {
         TaxOpeningRepository::save(&conn, &tax_opening)?;
 
         // 1. May 2026 previous cumulative should be 120,000 TL
-        let prev_mayis = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &mayis2026)?;
+        let prev_mayis =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &mayis2026)?;
         assert_eq!(prev_mayis, dec!(120000));
 
         // Save May payroll (net GV matrah = 65,000 TL)
@@ -110,9 +145,16 @@ mod tests {
             personelId: "test-p1".into(),
             donemId: "2026-05".into(),
             puantajOzeti: PuantajOzeti::default(),
-            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(70000)), ..Default::default() },
+            gelirler: GelirKalemleri {
+                tabanBrutAylik: Some(dec!(70000)),
+                ..Default::default()
+            },
             gelirToplam: dec!(70000),
-            kesintiler: KesintiKalemleri { isciSgkPrimi: Some(dec!(4500)), isciIssizlikPrimi: Some(dec!(500)), ..Default::default() },
+            kesintiler: KesintiKalemleri {
+                isciSgkPrimi: Some(dec!(4500)),
+                isciIssizlikPrimi: Some(dec!(500)),
+                ..Default::default()
+            },
             kesintiToplam: dec!(5000),
             netOdeme: dec!(65000),
             status: BordroStatus::CALCULATED,
@@ -133,7 +175,8 @@ mod tests {
         PayrollRepository::save(&conn, &mayis_bordro)?;
 
         // 2. June 2026 previous cumulative should be 120,000 + 65,000 = 185,000 TL
-        let prev_haziran = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &haziran2026)?;
+        let prev_haziran =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &haziran2026)?;
         assert_eq!(prev_haziran, dec!(185000));
 
         // Save June payroll (net GV matrah = 70,000 TL)
@@ -142,9 +185,16 @@ mod tests {
             personelId: "test-p1".into(),
             donemId: "2026-06".into(),
             puantajOzeti: PuantajOzeti::default(),
-            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(75000)), ..Default::default() },
+            gelirler: GelirKalemleri {
+                tabanBrutAylik: Some(dec!(75000)),
+                ..Default::default()
+            },
             gelirToplam: dec!(75000),
-            kesintiler: KesintiKalemleri { isciSgkPrimi: Some(dec!(4500)), isciIssizlikPrimi: Some(dec!(500)), ..Default::default() },
+            kesintiler: KesintiKalemleri {
+                isciSgkPrimi: Some(dec!(4500)),
+                isciIssizlikPrimi: Some(dec!(500)),
+                ..Default::default()
+            },
             kesintiToplam: dec!(5000),
             netOdeme: dec!(70000),
             status: BordroStatus::CALCULATED,
@@ -165,11 +215,13 @@ mod tests {
         PayrollRepository::save(&conn, &haziran_bordro)?;
 
         // 3. July 2026 previous cumulative should be 120,000 + 65,000 + 70,000 = 255,000 TL
-        let prev_temmuz = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &temmuz2026)?;
+        let prev_temmuz =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &temmuz2026)?;
         assert_eq!(prev_temmuz, dec!(255000));
 
         // 4. January 2027 previous cumulative should be 0 TL (2026 devri 2027'ye taşınmaz)
-        let prev_ocak2027 = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &ocak2027)?;
+        let prev_ocak2027 =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &ocak2027)?;
         assert_eq!(prev_ocak2027, dec!(0));
 
         // 5. Collision scenario test: Add Jan 2026 period & payroll before May 2026 start month
@@ -190,9 +242,16 @@ mod tests {
             personelId: "test-p1".into(),
             donemId: "2026-01".into(),
             puantajOzeti: PuantajOzeti::default(),
-            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(40000)), ..Default::default() },
+            gelirler: GelirKalemleri {
+                tabanBrutAylik: Some(dec!(40000)),
+                ..Default::default()
+            },
             gelirToplam: dec!(40000),
-            kesintiler: KesintiKalemleri { isciSgkPrimi: Some(dec!(3000)), isciIssizlikPrimi: Some(dec!(300)), ..Default::default() },
+            kesintiler: KesintiKalemleri {
+                isciSgkPrimi: Some(dec!(3000)),
+                isciIssizlikPrimi: Some(dec!(300)),
+                ..Default::default()
+            },
             kesintiToplam: dec!(3300),
             netOdeme: dec!(36700),
             status: BordroStatus::CALCULATED,
@@ -213,8 +272,12 @@ mod tests {
         PayrollRepository::save(&conn, &ocak_bordro)?;
 
         // Calculating for May 2026 now MUST trigger TaxOpeningConflict error!
-        let collision_result = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &mayis2026);
-        assert!(matches!(collision_result, Err(DomainError::TaxOpeningConflict(_))));
+        let collision_result =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-p1", &mayis2026);
+        assert!(matches!(
+            collision_result,
+            Err(DomainError::TaxOpeningConflict(_))
+        ));
 
         Ok(())
     }
@@ -245,7 +308,10 @@ mod tests {
             personelId: "test-finalize".into(),
             donemId: "2026-08".into(),
             puantajOzeti: PuantajOzeti::default(),
-            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(100000)), ..Default::default() },
+            gelirler: GelirKalemleri {
+                tabanBrutAylik: Some(dec!(100000)),
+                ..Default::default()
+            },
             gelirToplam: dec!(100000),
             kesintiler: KesintiKalemleri::default(),
             kesintiToplam: dec!(0),
@@ -268,19 +334,35 @@ mod tests {
         PayrollRepository::save(&conn, &bordro)?;
 
         // 1. Downgrading from FINALIZED must fail
-        let res = PayrollService::set_payroll_status(&conn, "test-finalize", "2026-08", BordroStatus::CALCULATED);
+        let res = PayrollService::set_payroll_status(
+            &conn,
+            "test-finalize",
+            "2026-08",
+            BordroStatus::CALCULATED,
+        );
         assert!(matches!(res, Err(DomainError::PayrollFinalized(_))));
 
         // 2. Re-setting FINALIZED is idempotent / allowed
-        let res = PayrollService::set_payroll_status(&conn, "test-finalize", "2026-08", BordroStatus::FINALIZED);
+        let res = PayrollService::set_payroll_status(
+            &conn,
+            "test-finalize",
+            "2026-08",
+            BordroStatus::FINALIZED,
+        );
         assert!(res.is_ok());
 
         // 3. Re-calculating a FINALIZED payroll must fail
-        let res = PayrollService::calculate_payroll_for_personnel(&conn, "test-finalize", "2026-08");
+        let res =
+            PayrollService::calculate_payroll_for_personnel(&conn, "test-finalize", "2026-08");
         assert!(matches!(res, Err(DomainError::PayrollFinalized(_))));
 
         // 4. Status change for a nonexistent payroll errors with NotFound
-        let res = PayrollService::set_payroll_status(&conn, "test-finalize", "2026-09", BordroStatus::CALCULATED);
+        let res = PayrollService::set_payroll_status(
+            &conn,
+            "test-finalize",
+            "2026-09",
+            BordroStatus::CALCULATED,
+        );
         assert!(matches!(res, Err(DomainError::NotFound(_))));
 
         Ok(())
@@ -329,10 +411,17 @@ mod tests {
         kurum.gunlukTabanUcret = dec!(1000);
         kurum.gunlukYemek = dec!(100);
         kurum.gunlukVasitaYol = dec!(50);
-        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(10), aktif: true }]);
+        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem {
+            id: "1. Grup".into(),
+            ad: "1. Grup".into(),
+            oran: dec!(10),
+            aktif: true,
+        }]);
         kurum.geceCalismaPrimiYuzde = Some(dec!(8));
 
-        let (gelirler, _is_primi_detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).expect("grup cozumlenmeli");
+        let (gelirler, _is_primi_detay) =
+            auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup"))
+                .expect("grup cozumlenmeli");
 
         // 27 Ç + 3 GÇ = 30 Hakediş Günü
         // 30 * 1000 = 30,000 TL Taban Aylık
@@ -364,11 +453,18 @@ mod tests {
         kurum.gunlukTabanUcret = dec!(1000);
         kurum.gunlukYemek = dec!(100);
         kurum.gunlukVasitaYol = dec!(50);
-        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(10), aktif: true }]);
+        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem {
+            id: "1. Grup".into(),
+            ad: "1. Grup".into(),
+            oran: dec!(10),
+            aktif: true,
+        }]);
         kurum.geceCalismaPrimiYuzde = Some(dec!(8));
         kurum.geceCalismaTatiliPrimiYuzde = Some(dec!(10));
 
-        let (gelirler, _is_primi_detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).expect("grup cozumlenmeli");
+        let (gelirler, _is_primi_detay) =
+            auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup"))
+                .expect("grup cozumlenmeli");
 
         // 24 + 2 + 2 + 2 = 30 Hakediş Günü -> 30,000 TL
         assert_eq!(gelirler.tabanBrutAylik, Some(dec!(30000)));
@@ -394,7 +490,8 @@ mod tests {
         let rate_percent = dec!(8);
         let days = 3;
 
-        let premium = NightWorkPolicy::calculate_gece_calismasi_primi(daily_base, rate_percent, days);
+        let premium =
+            NightWorkPolicy::calculate_gece_calismasi_primi(daily_base, rate_percent, days);
         // 2443.28 * 0.08 * 3 = 586.3872 TL -> rounded to 2 decimals = 586.39 TL
         assert_eq!(premium, dec!(586.39));
     }
@@ -411,7 +508,9 @@ mod tests {
         kurum.geceCalismaPrimiYuzde = Some(dec!(0));
         kurum.geceCalismaTatiliPrimiYuzde = Some(dec!(0));
 
-        let (gelirler, _is_primi_detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).expect("grup cozumlenmeli");
+        let (gelirler, _is_primi_detay) =
+            auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup"))
+                .expect("grup cozumlenmeli");
 
         // 25 + 5 = 30 Hakediş günü -> 60,000 TL taban ücret (günler kaybolmaz)
         assert_eq!(gelirler.tabanBrutAylik, Some(dec!(60000)));
@@ -420,7 +519,7 @@ mod tests {
         assert_eq!(gelirler.geceCalismasiTatiliUcreti, Some(dec!(0)));
     }
 
-#[test]
+    #[test]
     fn test_is_prime_group_is_authoritative_not_fallback() {
         use bordro_programi_lib::domain::calculations::auto_fill_gelirler_from_puantaj;
 
@@ -433,12 +532,16 @@ mod tests {
         // Even if the institution-wide single rate is 50, the authoritative
         // source is the personnel group (2. Grup = 8%).
         kurum.isPrimiYuzde = Some(dec!(50));
-        kurum.isPrimiGruplari = Some(vec![
-            IsPrimiGrupItem { id: "2. Grup".into(), ad: "2. Grup".into(), oran: dec!(8), aktif: true },
-        ]);
+        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem {
+            id: "2. Grup".into(),
+            ad: "2. Grup".into(),
+            oran: dec!(8),
+            aktif: true,
+        }]);
 
-        let (gelirler, detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("2. Grup"))
-            .expect("grup cozumlenmeli");
+        let (gelirler, detay) =
+            auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("2. Grup"))
+                .expect("grup cozumlenmeli");
         // Hak gunu = C + GC = 26 + 4 = 30; 1000 * 0.08 * 30 = 2400
         assert_eq!(gelirler.isPrimi, Some(dec!(2400)));
         assert_eq!(detay.tutar, dec!(2400));
@@ -449,9 +552,12 @@ mod tests {
     fn test_is_prime_single_final_math() {
         use bordro_programi_lib::domain::calculations::calculate_is_primi_detayi;
 
-        let gruplar = vec![
-            IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(3), aktif: true },
-        ];
+        let gruplar = vec![IsPrimiGrupItem {
+            id: "1. Grup".into(),
+            ad: "1. Grup".into(),
+            oran: dec!(3),
+            aktif: true,
+        }];
 
         let detay = calculate_is_primi_detayi(dec!(27.55), 3, Some("1. Grup"), Some(&gruplar))
             .expect("grup cozumlenmeli");
@@ -467,10 +573,15 @@ mod tests {
 
     #[test]
     fn test_is_prime_tanimsiz_grup_err() {
-        use bordro_programi_lib::domain::DomainError;
         use bordro_programi_lib::domain::calculations::calculate_is_primi_detayi;
+        use bordro_programi_lib::domain::DomainError;
 
-        let gruplar = vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9), aktif: true }];
+        let gruplar = vec![IsPrimiGrupItem {
+            id: "1. Grup".into(),
+            ad: "1. Grup".into(),
+            oran: dec!(9),
+            aktif: true,
+        }];
 
         // Personnel group missing -> ValidationError
         let e1 = calculate_is_primi_detayi(dec!(1000), 30, None, Some(&gruplar)).unwrap_err();
@@ -481,12 +592,19 @@ mod tests {
         assert!(matches!(e2, DomainError::ValidationError(_)));
 
         // Group not found in list -> ValidationError
-        let e3 = calculate_is_primi_detayi(dec!(1000), 30, Some("5. Grup"), Some(&gruplar)).unwrap_err();
+        let e3 =
+            calculate_is_primi_detayi(dec!(1000), 30, Some("5. Grup"), Some(&gruplar)).unwrap_err();
         assert!(matches!(e3, DomainError::ValidationError(_)));
 
         // Inactive group -> ValidationError
-        let pasif = vec![IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(9), aktif: false }];
-        let e4 = calculate_is_primi_detayi(dec!(1000), 30, Some("1. Grup"), Some(&pasif)).unwrap_err();
+        let pasif = vec![IsPrimiGrupItem {
+            id: "1. Grup".into(),
+            ad: "1. Grup".into(),
+            oran: dec!(9),
+            aktif: false,
+        }];
+        let e4 =
+            calculate_is_primi_detayi(dec!(1000), 30, Some("1. Grup"), Some(&pasif)).unwrap_err();
         assert!(matches!(e4, DomainError::ValidationError(_)));
     }
 
@@ -502,11 +620,15 @@ mod tests {
 
         let mut kurum = DonemselKurumDegerleri::default();
         kurum.gunlukTabanUcret = dec!(1000);
-        kurum.isPrimiGruplari = Some(vec![
-            IsPrimiGrupItem { id: "1. Grup".into(), ad: "1. Grup".into(), oran: dec!(10), aktif: true },
-        ]);
+        kurum.isPrimiGruplari = Some(vec![IsPrimiGrupItem {
+            id: "1. Grup".into(),
+            ad: "1. Grup".into(),
+            oran: dec!(10),
+            aktif: true,
+        }]);
 
-        let (gelirler, detay) = auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).unwrap();
+        let (gelirler, detay) =
+            auto_fill_gelirler_from_puantaj(&puantaj, &kurum, 0, Some("1. Grup")).unwrap();
         // Is primi hak gunu: only C + GC = 26. GCT and T are NOT included.
         assert_eq!(detay.hakGunu, 26);
         // 1000 * 0.10 * 26 = 2600
@@ -644,7 +766,8 @@ mod tests {
     }
 
     #[test]
-    fn test_h_split_period_single_sick_leave_no_duplicate() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_h_split_period_single_sick_leave_no_duplicate() -> Result<(), Box<dyn std::error::Error>>
+    {
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
         let conn = create_in_memory_connection()?;
@@ -692,8 +815,10 @@ mod tests {
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-test")?;
-        let nisan_paid = SickLeaveService::calculate_paid_sick_days_from_records(&records, &nisan_period);
-        let mayis_paid = SickLeaveService::calculate_paid_sick_days_from_records(&records, &mayis_period);
+        let nisan_paid =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &nisan_period);
+        let mayis_paid =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &mayis_period);
 
         // Nisan period pays the 2 days (May 13, May 14)
         assert_eq!(nisan_paid, 2);
@@ -709,7 +834,8 @@ mod tests {
     // ==========================================
 
     #[test]
-    fn test_year_crossing_sick_leave_test_a_dec_29_start() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_year_crossing_sick_leave_test_a_dec_29_start() -> Result<(), Box<dyn std::error::Error>>
+    {
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
         let conn = create_in_memory_connection()?;
@@ -751,8 +877,10 @@ mod tests {
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-a")?;
-        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
-        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+        let paid_2026_12 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
 
         assert_eq!(paid_2026_12, 2);
         assert_eq!(paid_2027_01, 0);
@@ -762,7 +890,8 @@ mod tests {
     }
 
     #[test]
-    fn test_year_crossing_sick_leave_test_b_dec_31_start() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_year_crossing_sick_leave_test_b_dec_31_start() -> Result<(), Box<dyn std::error::Error>>
+    {
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
         let conn = create_in_memory_connection()?;
@@ -805,8 +934,10 @@ mod tests {
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-b")?;
-        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
-        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+        let paid_2026_12 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
 
         // 31.12.2026 and 01.01.2027 both fall into 2026-12 period (15.12.2026 - 14.01.2027)
         assert_eq!(paid_2026_12, 2);
@@ -817,7 +948,8 @@ mod tests {
     }
 
     #[test]
-    fn test_year_crossing_sick_leave_test_c_jan_01_start() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_year_crossing_sick_leave_test_c_jan_01_start() -> Result<(), Box<dyn std::error::Error>>
+    {
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
         let conn = create_in_memory_connection()?;
@@ -860,8 +992,10 @@ mod tests {
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-c")?;
-        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
-        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+        let paid_2026_12 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
 
         // 01.01.2027 and 02.01.2027 fall into 2026-12 period range (15.12.2026 - 14.01.2027)
         assert_eq!(paid_2026_12, 2);
@@ -871,7 +1005,8 @@ mod tests {
     }
 
     #[test]
-    fn test_year_crossing_sick_leave_test_d_sixth_episode_unpaid() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_year_crossing_sick_leave_test_d_sixth_episode_unpaid(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
         let conn = create_in_memory_connection()?;
@@ -926,8 +1061,10 @@ mod tests {
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-d")?;
-        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
-        let paid_2027_01 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
+        let paid_2026_12 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2027_01 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2027_01);
 
         assert_eq!(paid_2026_12, 0);
         assert_eq!(paid_2027_01, 0);
@@ -936,7 +1073,8 @@ mod tests {
     }
 
     #[test]
-    fn test_year_crossing_sick_leave_test_e_single_day_year_end() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_year_crossing_sick_leave_test_e_single_day_year_end(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
         let conn = create_in_memory_connection()?;
@@ -967,7 +1105,8 @@ mod tests {
         };
 
         let records = SickLeaveRepository::get_by_personnel(&conn, "p-year-e")?;
-        let paid_2026_12 = SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
+        let paid_2026_12 =
+            SickLeaveService::calculate_paid_sick_days_from_records(&records, &donem_2026_12);
 
         assert_eq!(paid_2026_12, 1);
 
@@ -975,7 +1114,8 @@ mod tests {
     }
 
     #[test]
-    fn test_year_crossing_sick_leave_persistence_and_finalized_reload() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_year_crossing_sick_leave_persistence_and_finalized_reload(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use bordro_programi_lib::db::create_connection;
         use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
@@ -985,7 +1125,10 @@ mod tests {
         use std::path::PathBuf;
 
         let temp_dir = std::env::temp_dir();
-        let db_path: PathBuf = temp_dir.join(format!("year_crossing_rapor_test_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(98765)));
+        let db_path: PathBuf = temp_dir.join(format!(
+            "year_crossing_rapor_test_{}.sqlite",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(98765)
+        ));
 
         if db_path.exists() {
             let _ = fs::remove_file(&db_path);
@@ -1009,6 +1152,7 @@ mod tests {
                 taxMonth: 12,
             };
             PeriodRepository::save(&conn, &donem)?;
+            ensure_test_institution_settings(&conn, &["2026-12"])?;
 
             let rec = SickLeaveRecord {
                 id: "sick_yc_p".into(),
@@ -1037,12 +1181,21 @@ mod tests {
             };
             AttendanceRepository::save(&conn, &puantaj)?;
 
-            let bordro = PayrollService::calculate_payroll_for_personnel(&conn, "p-yc-persistence", "2026-12")?;
+            let bordro = PayrollService::calculate_payroll_for_personnel(
+                &conn,
+                "p-yc-persistence",
+                "2026-12",
+            )?;
             assert_eq!(bordro.odenenRaporluGun, Some(2));
             assert_eq!(bordro.raporluGun, Some(4));
 
             PayrollRepository::save(&conn, &bordro)?;
-            PayrollService::set_payroll_status(&conn, "p-yc-persistence", "2026-12", BordroStatus::FINALIZED)?;
+            PayrollService::set_payroll_status(
+                &conn,
+                "p-yc-persistence",
+                "2026-12",
+                BordroStatus::FINALIZED,
+            )?;
         }
 
         // 2. Re-open database connection and reload finalized payroll
@@ -1083,7 +1236,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(gelirler.yemek, Some(dec!(6616.50)));
         assert_eq!(pek_detay.fiiliYemekGunu, 22);
@@ -1108,7 +1262,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.yemekIstisnasiTutar, dec!(5500.00));
         assert_eq!(pek_detay.hesaplananPek, dec!(0.00));
@@ -1128,7 +1283,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.finalPek, dec!(100000.00));
         assert_eq!(pek_detay.isverenSgkPrimi, Some(dec!(21750.00)));
@@ -1148,7 +1304,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.finalPek, dec!(100000.00));
         assert_eq!(pek_detay.isverenIssizlikPrimi, Some(dec!(2000.00)));
@@ -1169,14 +1326,17 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.isverenPrimToplami, Some(dec!(23750.00)));
     }
 
     #[test]
     fn test_net_odeme_degismez_isveren_maliyeti_etkisizdir_test_f() {
-        use bordro_programi_lib::domain::calculations::{calculate_statutory_deductions, calculate_gelir_toplam, calculate_kesinti_toplam};
+        use bordro_programi_lib::domain::calculations::{
+            calculate_gelir_toplam, calculate_kesinti_toplam, calculate_statutory_deductions,
+        };
         let mut puantaj = PuantajOzeti::default();
         puantaj.c = 30;
 
@@ -1231,7 +1391,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum_ozel), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum_ozel), &[]);
 
         // 100,000 * %22 = 22,000 TL
         assert_eq!(pek_detay.isverenSgkPrimi, Some(dec!(22000.00)));
@@ -1258,7 +1419,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.fiiliYemekGunu, 22);
         assert_eq!(pek_detay.yemekIstisnasiTutar, dec!(6600.00));
@@ -1266,7 +1428,8 @@ mod tests {
     }
 
     #[test]
-    fn test_raporlu_gun_persistence_and_finalized_reload() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_raporlu_gun_persistence_and_finalized_reload() -> Result<(), Box<dyn std::error::Error>>
+    {
         use bordro_programi_lib::db::create_connection;
         use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
@@ -1276,7 +1439,10 @@ mod tests {
         use std::path::PathBuf;
 
         let temp_dir = std::env::temp_dir();
-        let db_path: PathBuf = temp_dir.join(format!("raporlu_test_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(54321)));
+        let db_path: PathBuf = temp_dir.join(format!(
+            "raporlu_test_{}.sqlite",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(54321)
+        ));
 
         if db_path.exists() {
             let _ = fs::remove_file(&db_path);
@@ -1300,6 +1466,7 @@ mod tests {
                 taxMonth: 6,
             };
             PeriodRepository::save(&conn, &donem)?;
+            ensure_test_institution_settings(&conn, &["2026-05"])?;
 
             // 6 days of "R" + 24 days of "Ç" = 30 days
             let mut gunler = HashMap::new();
@@ -1330,7 +1497,8 @@ mod tests {
             SickLeaveRepository::save(&conn, &sick)?;
 
             // Calculate payroll
-            let calculated = PayrollService::calculate_payroll_for_personnel(&conn, "p-rapor-test", "2026-05")?;
+            let calculated =
+                PayrollService::calculate_payroll_for_personnel(&conn, "p-rapor-test", "2026-05")?;
             assert_eq!(calculated.raporluGun, Some(6));
             assert_eq!(calculated.odenenRaporluGun, Some(2));
 
@@ -1346,11 +1514,24 @@ mod tests {
             assert_eq!(payrolls.len(), 1);
             let restored = &payrolls[0];
 
-            assert_eq!(restored.raporluGun, Some(6), "raporluGun must be 6 after reloading from SQLite");
-            assert_eq!(restored.odenenRaporluGun, Some(2), "odenenRaporluGun must be 2 after reloading from SQLite");
+            assert_eq!(
+                restored.raporluGun,
+                Some(6),
+                "raporluGun must be 6 after reloading from SQLite"
+            );
+            assert_eq!(
+                restored.odenenRaporluGun,
+                Some(2),
+                "odenenRaporluGun must be 2 after reloading from SQLite"
+            );
 
             // Finalize payroll
-            PayrollService::set_payroll_status(&conn, "p-rapor-test", "2026-05", BordroStatus::FINALIZED)?;
+            PayrollService::set_payroll_status(
+                &conn,
+                "p-rapor-test",
+                "2026-05",
+                BordroStatus::FINALIZED,
+            )?;
 
             drop(conn);
         }
@@ -1364,8 +1545,16 @@ mod tests {
             let finalized = &payrolls[0];
 
             assert_eq!(finalized.status, BordroStatus::FINALIZED);
-            assert_eq!(finalized.raporluGun, Some(6), "FINALIZED payroll must keep raporluGun = 6");
-            assert_eq!(finalized.odenenRaporluGun, Some(2), "FINALIZED payroll must keep odenenRaporluGun = 2");
+            assert_eq!(
+                finalized.raporluGun,
+                Some(6),
+                "FINALIZED payroll must keep raporluGun = 6"
+            );
+            assert_eq!(
+                finalized.odenenRaporluGun,
+                Some(2),
+                "FINALIZED payroll must keep odenenRaporluGun = 2"
+            );
 
             drop(conn);
         }
@@ -1377,7 +1566,8 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_db_migration_payroll_records_nullable_columns() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_legacy_db_migration_payroll_records_nullable_columns(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use rusqlite::Connection;
         use rusqlite_migration::{Migrations, M};
 
@@ -1385,9 +1575,8 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
 
         // Run ONLY migration 1 (the initial schema before migration 2)
-        let v1_migration = Migrations::new(vec![
-            M::up(
-                r#"
+        let v1_migration = Migrations::new(vec![M::up(
+            r#"
                 CREATE TABLE IF NOT EXISTS personnel (
                     id TEXT PRIMARY KEY,
                     tc_no TEXT UNIQUE NOT NULL,
@@ -1511,8 +1700,7 @@ mod tests {
                     updated_at TEXT NOT NULL
                 );
                 "#,
-            ),
-        ]);
+        )]);
         v1_migration.to_latest(&mut conn)?;
 
         // Insert dummy personnel & period
@@ -1548,9 +1736,22 @@ mod tests {
                 puantaj_summary_json, calculated_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             rusqlite::params![
-                "p-old_2026-01", "p-old", "2026-01", 5000000, 5000000, 4250000, 0,
-                4250000, 637500, 37950, 1425450, 3574550, "CALCULATED",
-                "{}", "2026-01-15T00:00:00Z", "2026-01-15T00:00:00Z"
+                "p-old_2026-01",
+                "p-old",
+                "2026-01",
+                5000000,
+                5000000,
+                4250000,
+                0,
+                4250000,
+                637500,
+                37950,
+                1425450,
+                3574550,
+                "CALCULATED",
+                "{}",
+                "2026-01-15T00:00:00Z",
+                "2026-01-15T00:00:00Z"
             ],
         )?;
 
@@ -1578,12 +1779,23 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_db_missing_sick_leave_table_is_repaired() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_legacy_db_missing_sick_leave_table_is_repaired(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut conn = create_in_memory_connection()?;
 
         // Simulate a database that reached migration 5 before the table was
         // added to the initial schema definition.
         conn.execute("DROP TABLE sick_leave_records", [])?;
+        for column in [
+            "devir_kumulatif_gv_matrahi",
+            "devir_kumulatif_gv_matrahi_yili",
+            "devir_kumulatif_gv_matrahi_baslangic_ayi",
+            "devir_kumulatif_asgari_gv_matrahi",
+            "devir_kumulatif_asgari_gv_matrahi_yili",
+        ] {
+            conn.execute(&format!("ALTER TABLE personnel DROP COLUMN {column}"), [])?;
+        }
+        conn.execute("ALTER TABLE payroll_records DROP COLUMN notlar", [])?;
         conn.pragma_update(None, "user_version", 5u32)?;
 
         bordro_programi_lib::db::migrations::initialize_db(&mut conn)?;
@@ -1600,7 +1812,9 @@ mod tests {
 
     #[test]
     fn test_pek_alt_sinir_tamamlama_isveren_prim_ayrimi() {
-        use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
+        use bordro_programi_lib::domain::calculations::{
+            calculate_prime_esas_kazanc, calculate_statutory_deductions,
+        };
 
         let mut puantaj = PuantajOzeti::default();
         puantaj.c = 30; // 30 prim günü -> Alt Sınır = 33.030 TL
@@ -1613,7 +1827,8 @@ mod tests {
         };
 
         // 1. PEK Hesaplaması
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.hesaplananPek, dec!(25000.00)); // ham PEK
         assert_eq!(pek_detay.pekAltSinir, dec!(33030.00)); // 30 * 1101 = 33.030 TL
@@ -1630,7 +1845,10 @@ mod tests {
         // 8.030 * %14 (SGK işçi payı farkı) = 1.124,20 TL
         // 8.030 * %1 (İşsizlik işçi payı farkı) = 80,30 TL
         // Toplam Alt Sınır İşveren Yükü = 1.204,50 TL
-        assert_eq!(pek_detay.pekAltSinirTamamlamaIsverenPrimi, Some(dec!(1204.50)));
+        assert_eq!(
+            pek_detay.pekAltSinirTamamlamaIsverenPrimi,
+            Some(dec!(1204.50))
+        );
 
         // Toplam İşveren Primi = 7.184,03 + 660,60 + 1.204,50 = 9.049,13 TL
         assert_eq!(pek_detay.isverenPrimToplami, Some(dec!(9049.13)));
@@ -1660,7 +1878,8 @@ mod tests {
         // + İşveren Alt Sınır Yükü (1.204,50 TL)
         // = 12.799,13 TL
         // SGK'ya Bildirilecek Toplam Prim: 33.030 * %38,75 (%14+%1+%21.75+%2) = 12.799,125 -> 12.799,13 TL
-        let isci_toplam_prim = kesintiler.isciSgkPrimi.unwrap() + kesintiler.isciIssizlikPrimi.unwrap();
+        let isci_toplam_prim =
+            kesintiler.isciSgkPrimi.unwrap() + kesintiler.isciIssizlikPrimi.unwrap();
         let isveren_toplam_prim = pek_detay.isverenPrimToplami.unwrap();
         let genel_sgk_tahakkuk = isci_toplam_prim + isveren_toplam_prim;
 
@@ -1669,13 +1888,18 @@ mod tests {
 
     #[test]
     fn test_sgk_resmi_2026_ornegi_midpoint_away_from_zero() {
-        use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
+        use bordro_programi_lib::domain::calculations::{
+            calculate_prime_esas_kazanc, calculate_statutory_deductions,
+        };
         use rust_decimal::RoundingStrategy;
 
         // Rounding policy: 33.030 × %21,75 = 7.184,025 -> 7.184,03 (MidpointAwayFromZero, SGK resmî örneği)
         let topla = dec!(33030.00) * (dec!(21.75) / dec!(100));
         assert_eq!(topla, dec!(7184.025));
-        assert_eq!(topla.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero), dec!(7184.03));
+        assert_eq!(
+            topla.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero),
+            dec!(7184.03)
+        );
 
         let mut puantaj = PuantajOzeti::default();
         puantaj.c = 30; // 30 prim günü, PEK = 33.030 TL
@@ -1687,7 +1911,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
         let (kesintiler, _, _) = calculate_statutory_deductions(
             &gelirler,
             Some(&kurum),
@@ -1710,14 +1935,17 @@ mod tests {
 
         // Toplam değerlendirme: %38,75 toplam tahakkuk = 12.799,13 TL
         let isci_toplam = kesintiler.isciSgkPrimi.unwrap() + kesintiler.isciIssizlikPrimi.unwrap();
-        let isveren_toplam = pek_detay.isverenSgkPrimi.unwrap() + pek_detay.isverenIssizlikPrimi.unwrap();
+        let isveren_toplam =
+            pek_detay.isverenSgkPrimi.unwrap() + pek_detay.isverenIssizlikPrimi.unwrap();
         let toplam_tahakkuk = isci_toplam + isveren_toplam;
         assert_eq!(toplam_tahakkuk, dec!(12799.13));
     }
 
     #[test]
     fn test_pek_alt_sinir_ustunde_normal_bordro() {
-        use bordro_programi_lib::domain::calculations::{calculate_prime_esas_kazanc, calculate_statutory_deductions};
+        use bordro_programi_lib::domain::calculations::{
+            calculate_prime_esas_kazanc, calculate_statutory_deductions,
+        };
 
         let mut puantaj = PuantajOzeti::default();
         puantaj.c = 30;
@@ -1729,7 +1957,8 @@ mod tests {
             ..Default::default()
         };
 
-        let (pek_detay, _) = calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
+        let (pek_detay, _) =
+            calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
 
         assert_eq!(pek_detay.hesaplananPek, dec!(100000.00));
         assert_eq!(pek_detay.finalPek, dec!(100000.00));
@@ -1759,13 +1988,19 @@ mod tests {
     // ===== Test A: Ocak — asgari ücret GV istisnası = 4.211,33 TL + aylık matrah = 28.075,50 TL
     #[test]
     fn test_gv_istisna_ocak() {
-        let aylik_asgari_gv_matrah = bordro_programi_lib::domain::calculations::calculate_aylik_asgari_ucret_gv_matrahi(
-            dec!(1101.00), dec!(0.14), dec!(0.01),
-        );
+        let aylik_asgari_gv_matrah =
+            bordro_programi_lib::domain::calculations::calculate_aylik_asgari_ucret_gv_matrahi(
+                dec!(1101.00),
+                dec!(0.14),
+                dec!(0.01),
+            );
         assert_eq!(aylik_asgari_gv_matrah, dec!(28075.50));
 
         let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
-            dec!(28075.50), dec!(0), aylik_asgari_gv_matrah, dec!(0),
+            dec!(28075.50),
+            dec!(0),
+            aylik_asgari_gv_matrah,
+            dec!(0),
         );
         assert_eq!(det.asgariUcretGvMatrahi, dec!(28075.50));
         assert_eq!(det.asgariUcretReferansKumulatifMatrahi, dec!(28075.50));
@@ -1781,7 +2016,10 @@ mod tests {
         let aylik = dec!(28075.50);
         let ref_prev = aylik * dec!(6); // Ocak..Haziran
         let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
-            aylik, dec!(0), aylik, ref_prev,
+            aylik,
+            dec!(0),
+            aylik,
+            ref_prev,
         );
         assert_eq!(det.asgariUcretReferansKumulatifMatrahi, dec!(196528.50));
         assert_eq!(det.asgariUcretGvIstisnasi, dec!(4537.75));
@@ -1793,7 +2031,10 @@ mod tests {
         let aylik = dec!(28075.50);
         let ref_prev = aylik * dec!(7); // Ocak..Temmuz
         let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
-            aylik, dec!(0), aylik, ref_prev,
+            aylik,
+            dec!(0),
+            aylik,
+            ref_prev,
         );
         assert_eq!(det.asgariUcretReferansKumulatifMatrahi, dec!(224604.00));
         assert_eq!(det.asgariUcretGvIstisnasi, dec!(5615.10));
@@ -1805,13 +2046,22 @@ mod tests {
         let aylik = dec!(28075.50);
         let ref_prev = aylik * dec!(0); // Ocak
         let det_low = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
-            dec!(65000), dec!(5000), aylik, ref_prev,
+            dec!(65000),
+            dec!(5000),
+            aylik,
+            ref_prev,
         );
         let det_high = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
-            dec!(65000), dec!(300000), aylik, ref_prev,
+            dec!(65000),
+            dec!(300000),
+            aylik,
+            ref_prev,
         );
         // İstisna, gerçek kümülatiften matematiksel olarak bağımsızdır (referans takvim matrahı):
-        assert_eq!(det_low.asgariUcretGvIstisnasi, det_high.asgariUcretGvIstisnasi);
+        assert_eq!(
+            det_low.asgariUcretGvIstisnasi,
+            det_high.asgariUcretGvIstisnasi
+        );
         assert!(det_low.brutGelirVergisi < det_high.brutGelirVergisi);
     }
 
@@ -1822,7 +2072,10 @@ mod tests {
         // Mayıs takvim konumu 4 → önceki referans = 4 ay
         let ref_prev_def = aylik * dec!(4);
         let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
-            dec!(65000), dec!(120000), aylik, ref_prev_def,
+            dec!(65000),
+            dec!(120000),
+            aylik,
+            ref_prev_def,
         );
         assert_eq!(det.yeniKumulatifGvMatrahi, dec!(185000));
         assert_eq!(det.asgariUcretGvIstisnasi, dec!(4211.33));
@@ -1832,7 +2085,12 @@ mod tests {
     #[test]
     fn test_gv_istisna_brut_alti() {
         let aylik = dec!(28075.50);
-        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(dec!(10000), dec!(0), aylik, dec!(0));
+        let det = bordro_programi_lib::domain::calculations::calculate_gv_hesap_detayi(
+            dec!(10000),
+            dec!(0),
+            aylik,
+            dec!(0),
+        );
         // brüt GV = 10.000 * %15 = 1.500; istisna hakkı 4.211,33
         assert_eq!(det.brutGelirVergisi, dec!(1500));
         assert_eq!(det.uygulananGvIstisnasi, dec!(1500));
@@ -1849,8 +2107,19 @@ mod tests {
             digerGelir: Some(dec!(5000)),
             ..Default::default()
         };
-        let puantaj = PuantajOzeti { c: 30, ..Default::default() };
-        let (kesintiler, _, _) = calculate_statutory_deductions(&gelirler, None, None, Some(&puantaj), dec!(0), &[], dec!(0));
+        let puantaj = PuantajOzeti {
+            c: 30,
+            ..Default::default()
+        };
+        let (kesintiler, _, _) = calculate_statutory_deductions(
+            &gelirler,
+            None,
+            None,
+            Some(&puantaj),
+            dec!(0),
+            &[],
+            dec!(0),
+        );
         // matrah = 65.000 - SGK(9.100) - işsizlik(650) = 55.250 → brüt GV 8.287,50
         // istisna (Ocak) 4.211,33 → kesilen = 8.287,50 - 4.211,33 = 4.076,17
         assert_eq!(kesintiler.gelirVergisi, Some(dec!(4076.17)));
@@ -1864,8 +2133,11 @@ mod tests {
         PersonnelRepository::save(&conn, &person)?;
 
         let donem = BordroDonemi {
-            id: "2026-01".into(), yil: 2026, ay: 1,
-            baslangicTarihi: "2026-01-01".into(), bitisTarihi: "2026-01-31".into(),
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-01".into(),
+            bitisTarihi: "2026-01-31".into(),
             donemAdi: "Ocak 2026".into(),
             taxYear: 2026,
             taxMonth: 1,
@@ -1888,7 +2160,10 @@ mod tests {
             personelId: "test-gv".into(),
             donemId: "2026-01".into(),
             puantajOzeti: PuantajOzeti::default(),
-            gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(28075.50)), ..Default::default() },
+            gelirler: GelirKalemleri {
+                tabanBrutAylik: Some(dec!(28075.50)),
+                ..Default::default()
+            },
             gelirToplam: dec!(28075.50),
             kesintiler: KesintiKalemleri::default(),
             kesintiToplam: dec!(0),
@@ -1911,7 +2186,9 @@ mod tests {
         PayrollRepository::save(&conn, &kall)?;
 
         let reloaded = PayrollRepository::get_all(&conn)?
-            .into_iter().find(|b| b.donemId == "2026-01").expect("kayit yok");
+            .into_iter()
+            .find(|b| b.donemId == "2026-01")
+            .expect("kayit yok");
         let gv = reloaded.gvDetay.expect("gvDetay persist edilmedi");
         assert_eq!(gv.brutGelirVergisi, dec!(4211.33));
         assert_eq!(gv.asgariUcretGvIstisnasi, dec!(4211.33));
@@ -1985,7 +2262,8 @@ mod tests {
             taxYear: 2026,
             taxMonth: 7,
         };
-        let prev_7 = CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax7)?;
+        let prev_7 =
+            CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax7)?;
         assert_eq!(prev_7, dec!(168453.00)); // 196.528,50 − 28.075,50
 
         let aktif_tax6 = BordroDonemi {
@@ -1993,7 +2271,8 @@ mod tests {
             taxMonth: 6,
             ..aktif_tax7
         };
-        let prev_6 = CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax6)?;
+        let prev_6 =
+            CumulativeTaxService::get_previous_cumulative_asgari_gv(&conn, "x", &aktif_tax6)?;
         assert_eq!(prev_6, dec!(140377.50)); // 168.453,00 − 28.075,50 (Aralık + Ocak..Nisan = 5 ay)
 
         Ok(())
@@ -2032,7 +2311,8 @@ mod tests {
         };
         TaxOpeningRepository::save(&conn, &opening2026)?;
 
-        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-yil-gecis", &aralik2026)?;
+        let prev =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-yil-gecis", &aralik2026)?;
         assert_eq!(prev, dec!(0));
 
         Ok(())
@@ -2070,7 +2350,11 @@ mod tests {
         };
         TaxOpeningRepository::save(&conn, &opening2027)?;
 
-        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-2027-opening", &aralik2026)?;
+        let prev = CumulativeTaxService::get_previous_cumulative_gv(
+            &conn,
+            "test-2027-opening",
+            &aralik2026,
+        )?;
         assert_eq!(prev, dec!(120000));
 
         Ok(())
@@ -2084,15 +2368,48 @@ mod tests {
         let person = setup_test_person("test-tax-month");
         PersonnelRepository::save(&conn, &person)?;
 
-        let tm1 = BordroDonemi { id: "2027-01".into(), yil: 2027, ay: 1, baslangicTarihi: "2027-01-15".into(), bitisTarihi: "2027-02-14".into(), donemAdi: "Ocak 2027".into(), taxYear: 2027, taxMonth: 1 };
-        let tm2 = BordroDonemi { id: "2027-02".into(), yil: 2027, ay: 2, baslangicTarihi: "2027-02-15".into(), bitisTarihi: "2027-03-14".into(), donemAdi: "Şubat 2027".into(), taxYear: 2027, taxMonth: 2 };
-        let tm3 = BordroDonemi { id: "2027-03".into(), yil: 2027, ay: 3, baslangicTarihi: "2027-03-15".into(), bitisTarihi: "2027-04-14".into(), donemAdi: "Mart 2027".into(), taxYear: 2027, taxMonth: 3 };
+        let tm1 = BordroDonemi {
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
+        };
+        let tm2 = BordroDonemi {
+            id: "2027-02".into(),
+            yil: 2027,
+            ay: 2,
+            baslangicTarihi: "2027-02-15".into(),
+            bitisTarihi: "2027-03-14".into(),
+            donemAdi: "Şubat 2027".into(),
+            taxYear: 2027,
+            taxMonth: 2,
+        };
+        let tm3 = BordroDonemi {
+            id: "2027-03".into(),
+            yil: 2027,
+            ay: 3,
+            baslangicTarihi: "2027-03-15".into(),
+            bitisTarihi: "2027-04-14".into(),
+            donemAdi: "Mart 2027".into(),
+            taxYear: 2027,
+            taxMonth: 3,
+        };
         PeriodRepository::save(&conn, &tm1)?;
         PeriodRepository::save(&conn, &tm2)?;
         PeriodRepository::save(&conn, &tm3)?;
 
-        PayrollRepository::save(&conn, &bordro_kaydi("test-tax-month", "2027-01", dec!(50000)))?;
-        PayrollRepository::save(&conn, &bordro_kaydi("test-tax-month", "2027-02", dec!(60000)))?;
+        PayrollRepository::save(
+            &conn,
+            &bordro_kaydi("test-tax-month", "2027-01", dec!(50000)),
+        )?;
+        PayrollRepository::save(
+            &conn,
+            &bordro_kaydi("test-tax-month", "2027-02", dec!(60000)),
+        )?;
 
         // taxMonth 3'ün önceki kümülatifi = 50.000 + 60.000 = 110.000
         let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-tax-month", &tm3)?;
@@ -2123,11 +2440,21 @@ mod tests {
         PeriodRepository::save(&conn, &aralik2026)?;
 
         // 2026 vergi yılına ait gerçek bordro (taxMonth=12) — 2027/1 dönemine sayılmamalı
-        let kasim2026 = BordroDonemi { id: "2026-11".into(), yil: 2026, ay: 11, baslangicTarihi: "2026-11-15".into(), bitisTarihi: "2026-12-14".into(), donemAdi: "Kasım 2026".into(), taxYear: 2026, taxMonth: 12 };
+        let kasim2026 = BordroDonemi {
+            id: "2026-11".into(),
+            yil: 2026,
+            ay: 11,
+            baslangicTarihi: "2026-11-15".into(),
+            bitisTarihi: "2026-12-14".into(),
+            donemAdi: "Kasım 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
+        };
         PeriodRepository::save(&conn, &kasim2026)?;
         PayrollRepository::save(&conn, &bordro_kaydi("test-cal-12", "2026-11", dec!(40000)))?;
 
-        let prev = CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-cal-12", &aralik2026)?;
+        let prev =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-cal-12", &aralik2026)?;
         assert_eq!(prev, dec!(0));
 
         Ok(())
@@ -2156,11 +2483,17 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
 
         let bordro = bordro_kaydi("test-meta-finalized", "2026-07", dec!(0));
-        let bordro = BordroKaydi { status: BordroStatus::FINALIZED, ..bordro };
+        let bordro = BordroKaydi {
+            status: BordroStatus::FINALIZED,
+            ..bordro
+        };
         PayrollRepository::save(&conn, &bordro)?;
 
         // taxMonth 7 → 6 değişikliği ERROR olmalı
-        let changed = BordroDonemi { taxMonth: 6, ..donem };
+        let changed = BordroDonemi {
+            taxMonth: 6,
+            ..donem
+        };
         let res = PeriodService::save_period(&conn, &changed);
         assert!(matches!(res, Err(DomainError::ValidationError(_))));
 
@@ -2197,7 +2530,10 @@ mod tests {
         let bordro = bordro_kaydi("test-meta-calculated", "2026-07", dec!(0));
         PayrollRepository::save(&conn, &bordro)?;
 
-        let changed = BordroDonemi { taxMonth: 6, ..donem };
+        let changed = BordroDonemi {
+            taxMonth: 6,
+            ..donem
+        };
         let res = PeriodService::save_period(&conn, &changed);
         assert!(matches!(res, Err(DomainError::ValidationError(_))));
 
@@ -2227,7 +2563,11 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
 
         // Bordro kaydı yok → taxYear/taxMonth güncellemesi başarılı
-        let changed = BordroDonemi { taxYear: 2026, taxMonth: 8, ..donem };
+        let changed = BordroDonemi {
+            taxYear: 2026,
+            taxMonth: 8,
+            ..donem
+        };
         assert!(PeriodService::save_period(&conn, &changed).is_ok());
 
         let stored = PeriodRepository::get_by_id(&conn, "2026-07")?.unwrap();
@@ -2246,7 +2586,10 @@ mod tests {
         use std::path::PathBuf;
 
         let temp_dir = std::env::temp_dir();
-        let db_path: PathBuf = temp_dir.join(format!("gv_snapshot_reload_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(54321)));
+        let db_path: PathBuf = temp_dir.join(format!(
+            "gv_snapshot_reload_{}.sqlite",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(54321)
+        ));
         if db_path.exists() {
             let _ = fs::remove_file(&db_path);
         }
@@ -2286,7 +2629,10 @@ mod tests {
                 personelId: "p-gv-reload".into(),
                 donemId: "2026-05".into(),
                 puantajOzeti: PuantajOzeti::default(),
-                gelirler: GelirKalemleri { tabanBrutAylik: Some(dec!(28075.50)), ..Default::default() },
+                gelirler: GelirKalemleri {
+                    tabanBrutAylik: Some(dec!(28075.50)),
+                    ..Default::default()
+                },
                 gelirToplam: dec!(28075.50),
                 kesintiler: KesintiKalemleri::default(),
                 kesintiToplam: dec!(0),
@@ -2325,7 +2671,10 @@ mod tests {
             assert_eq!(gv.asgariUcretReferansKumulatifMatrahi, dec!(168453.00));
 
             // oncekiKumulatifAsgariGvMatrahi = referans - cari aylık matrah (kayıpsız)
-            assert_eq!(restored.oncekiKumulatifAsgariGvMatrahi, Some(dec!(140377.50)));
+            assert_eq!(
+                restored.oncekiKumulatifAsgariGvMatrahi,
+                Some(dec!(140377.50))
+            );
 
             drop(conn);
         }
@@ -2334,13 +2683,20 @@ mod tests {
         Ok(())
     }
 
-    fn bordro_kaydi(personel_id: &str, donem_id: &str, gelir_toplam: rust_decimal::Decimal) -> BordroKaydi {
+    fn bordro_kaydi(
+        personel_id: &str,
+        donem_id: &str,
+        gelir_toplam: rust_decimal::Decimal,
+    ) -> BordroKaydi {
         BordroKaydi {
             id: format!("{}_{}", personel_id, donem_id),
             personelId: personel_id.to_string(),
             donemId: donem_id.to_string(),
             puantajOzeti: PuantajOzeti::default(),
-            gelirler: GelirKalemleri { tabanBrutAylik: Some(gelir_toplam), ..Default::default() },
+            gelirler: GelirKalemleri {
+                tabanBrutAylik: Some(gelir_toplam),
+                ..Default::default()
+            },
             gelirToplam: gelir_toplam,
             kesintiler: KesintiKalemleri::default(),
             kesintiToplam: dec!(0),
@@ -2382,11 +2738,36 @@ mod tests {
             giyimYardimi: dec!(0),
             hizmetZammiBirimi: dec!(0),
             isPrimiGruplari: Some(vec![
-                IsPrimiGrupItem { id: "g1".into(), ad: "1. Grup".into(), oran: dec!(0), aktif: true },
-                IsPrimiGrupItem { id: "g2".into(), ad: "2. Grup".into(), oran: dec!(0), aktif: true },
-                IsPrimiGrupItem { id: "g3".into(), ad: "3. Grup".into(), oran: dec!(0), aktif: true },
-                IsPrimiGrupItem { id: "g4".into(), ad: "4. Grup".into(), oran: dec!(0), aktif: true },
-                IsPrimiGrupItem { id: "g5".into(), ad: "5. Grup".into(), oran: dec!(0), aktif: true },
+                IsPrimiGrupItem {
+                    id: "g1".into(),
+                    ad: "1. Grup".into(),
+                    oran: dec!(0),
+                    aktif: true,
+                },
+                IsPrimiGrupItem {
+                    id: "g2".into(),
+                    ad: "2. Grup".into(),
+                    oran: dec!(0),
+                    aktif: true,
+                },
+                IsPrimiGrupItem {
+                    id: "g3".into(),
+                    ad: "3. Grup".into(),
+                    oran: dec!(0),
+                    aktif: true,
+                },
+                IsPrimiGrupItem {
+                    id: "g4".into(),
+                    ad: "4. Grup".into(),
+                    oran: dec!(0),
+                    aktif: true,
+                },
+                IsPrimiGrupItem {
+                    id: "g5".into(),
+                    ad: "5. Grup".into(),
+                    oran: dec!(0),
+                    aktif: true,
+                },
             ]),
             ekOdeme: Some(ek_odeme),
             gunlukAsgariUcret: Some(gunluk_asgari_ucret),
@@ -2398,6 +2779,7 @@ mod tests {
     #[test]
     fn test_devreden_pek_aralik_ocak_gecisi() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
+        ensure_test_annual_parameters(&conn, &[2027])?;
 
         let person = setup_test_person("p-pek-a");
         PersonnelRepository::save(&conn, &person)?;
@@ -2427,10 +2809,22 @@ mod tests {
         PeriodRepository::save(&conn, &aralik2026)?;
         PeriodRepository::save(&conn, &ocak2027)?;
 
-        let aralik_settings = make_test_kurum_degerleri("2026-12", dec!(3333.33333333), dec!(250000.00), dec!(1101.00), dec!(9.00));
+        let aralik_settings = make_test_kurum_degerleri(
+            "2026-12",
+            dec!(3333.33333333),
+            dec!(250000.00),
+            dec!(1101.00),
+            dec!(9.00),
+        );
         SettingsRepository::save_institution_settings(&conn, &aralik_settings)?;
 
-        let ocak_settings = make_test_kurum_degerleri("2027-01", dec!(3333.33333333), dec!(0), dec!(1101.00), dec!(9.00));
+        let ocak_settings = make_test_kurum_degerleri(
+            "2027-01",
+            dec!(3333.33333333),
+            dec!(0),
+            dec!(1101.00),
+            dec!(9.00),
+        );
         SettingsRepository::save_institution_settings(&conn, &ocak_settings)?;
 
         let mut gunler_30 = HashMap::new();
@@ -2438,27 +2832,35 @@ mod tests {
             gunler_30.insert(format!("day_{}", d), "Ç".to_string());
         }
 
-        AttendanceRepository::save(&conn, &PersonelPuantaj {
-            id: "p-pek-a_2026-12".into(),
-            personelId: "p-pek-a".into(),
-            donemId: "2026-12".into(),
-            gunler: gunler_30.clone(),
-        })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "p-pek-a_2026-12".into(),
+                personelId: "p-pek-a".into(),
+                donemId: "2026-12".into(),
+                gunler: gunler_30.clone(),
+            },
+        )?;
 
-        AttendanceRepository::save(&conn, &PersonelPuantaj {
-            id: "p-pek-a_2027-01".into(),
-            personelId: "p-pek-a".into(),
-            donemId: "2027-01".into(),
-            gunler: gunler_30.clone(),
-        })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "p-pek-a_2027-01".into(),
+                personelId: "p-pek-a".into(),
+                donemId: "2027-01".into(),
+                gunler: gunler_30.clone(),
+            },
+        )?;
 
-        let bordro_aralik = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2026-12")?;
+        let bordro_aralik =
+            PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2026-12")?;
         let sonraki_aralik = bordro_aralik.sonrakiDevredenPek.as_ref().unwrap();
         assert_eq!(sonraki_aralik.len(), 1);
         assert_eq!(sonraki_aralik[0].tutar, dec!(52730.00));
         assert_eq!(sonraki_aralik[0].kalanAySayisi, 2);
 
-        let bordro_ocak = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2027-01")?;
+        let bordro_ocak =
+            PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2027-01")?;
         let gelen_ocak = bordro_ocak.devredenPekGelen.as_ref().unwrap();
         assert_eq!(gelen_ocak.len(), 1);
         assert_eq!(gelen_ocak[0].tutar, dec!(52730.00));
@@ -2475,49 +2877,139 @@ mod tests {
     #[test]
     fn test_devreden_pek_aralik_ocak_subat_iki_ay_omur() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
+        ensure_test_annual_parameters(&conn, &[2027])?;
 
         let person = setup_test_person("p-pek-b");
         PersonnelRepository::save(&conn, &person)?;
 
         let periods = vec![
-            BordroDonemi { id: "2026-12".into(), yil: 2026, ay: 12, baslangicTarihi: "2026-12-15".into(), bitisTarihi: "2027-01-14".into(), donemAdi: "Aralık 2026".into(), taxYear: 2026, taxMonth: 12 },
-            BordroDonemi { id: "2027-01".into(), yil: 2027, ay: 1, baslangicTarihi: "2027-01-15".into(), bitisTarihi: "2027-02-14".into(), donemAdi: "Ocak 2027".into(), taxYear: 2027, taxMonth: 1 },
-            BordroDonemi { id: "2027-02".into(), yil: 2027, ay: 2, baslangicTarihi: "2027-02-15".into(), bitisTarihi: "2027-03-14".into(), donemAdi: "Şubat 2027".into(), taxYear: 2027, taxMonth: 2 },
-            BordroDonemi { id: "2027-03".into(), yil: 2027, ay: 3, baslangicTarihi: "2027-03-15".into(), bitisTarihi: "2027-04-14".into(), donemAdi: "Mart 2027".into(), taxYear: 2027, taxMonth: 3 },
+            BordroDonemi {
+                id: "2026-12".into(),
+                yil: 2026,
+                ay: 12,
+                baslangicTarihi: "2026-12-15".into(),
+                bitisTarihi: "2027-01-14".into(),
+                donemAdi: "Aralık 2026".into(),
+                taxYear: 2026,
+                taxMonth: 12,
+            },
+            BordroDonemi {
+                id: "2027-01".into(),
+                yil: 2027,
+                ay: 1,
+                baslangicTarihi: "2027-01-15".into(),
+                bitisTarihi: "2027-02-14".into(),
+                donemAdi: "Ocak 2027".into(),
+                taxYear: 2027,
+                taxMonth: 1,
+            },
+            BordroDonemi {
+                id: "2027-02".into(),
+                yil: 2027,
+                ay: 2,
+                baslangicTarihi: "2027-02-15".into(),
+                bitisTarihi: "2027-03-14".into(),
+                donemAdi: "Şubat 2027".into(),
+                taxYear: 2027,
+                taxMonth: 2,
+            },
+            BordroDonemi {
+                id: "2027-03".into(),
+                yil: 2027,
+                ay: 3,
+                baslangicTarihi: "2027-03-15".into(),
+                bitisTarihi: "2027-04-14".into(),
+                donemAdi: "Mart 2027".into(),
+                taxYear: 2027,
+                taxMonth: 3,
+            },
         ];
         for p in &periods {
             PeriodRepository::save(&conn, p)?;
         }
 
         let mut gunler_30 = HashMap::new();
-        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
-
-        for p in &periods {
-            AttendanceRepository::save(&conn, &PersonelPuantaj {
-                id: format!("p-pek-b_{}", p.id),
-                personelId: "p-pek-b".into(),
-                donemId: p.id.clone(),
-                gunler: gunler_30.clone(),
-            })?;
+        for d in 1..=30 {
+            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
         }
 
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-12", dec!(8333.33333333), dec!(100000.00), dec!(1101.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-01", dec!(9333.33333333), dec!(0), dec!(1101.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-02", dec!(9500.00), dec!(0), dec!(1101.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-03", dec!(6666.66666667), dec!(0), dec!(1101.00), dec!(9.00)))?;
+        for p in &periods {
+            AttendanceRepository::save(
+                &conn,
+                &PersonelPuantaj {
+                    id: format!("p-pek-b_{}", p.id),
+                    personelId: "p-pek-b".into(),
+                    donemId: p.id.clone(),
+                    gunler: gunler_30.clone(),
+                },
+            )?;
+        }
+
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2026-12",
+                dec!(8333.33333333),
+                dec!(100000.00),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2027-01",
+                dec!(9333.33333333),
+                dec!(0),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2027-02",
+                dec!(9500.00),
+                dec!(0),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2027-03",
+                dec!(6666.66666667),
+                dec!(0),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
 
         let b1 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2026-12")?;
-        assert_eq!(b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(52730.00));
+        assert_eq!(
+            b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar,
+            dec!(52730.00)
+        );
         assert_eq!(b1.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 2);
 
         let b2 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2027-01")?;
-        assert_eq!(b2.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(52730.00));
+        assert_eq!(
+            b2.devredenPekGelen.as_ref().unwrap()[0].tutar,
+            dec!(52730.00)
+        );
         assert_eq!(b2.pekDetay.as_ref().unwrap().finalPek, dec!(297270.00));
-        assert_eq!(b2.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert_eq!(
+            b2.sonrakiDevredenPek.as_ref().unwrap()[0].tutar,
+            dec!(35460.00)
+        );
         assert_eq!(b2.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 1);
 
         let b3 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2027-02")?;
-        assert_eq!(b3.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert_eq!(
+            b3.devredenPekGelen.as_ref().unwrap()[0].tutar,
+            dec!(35460.00)
+        );
         assert_eq!(b3.pekDetay.as_ref().unwrap().finalPek, dec!(297270.00));
         assert!(b3.sonrakiDevredenPek.as_ref().unwrap().is_empty());
 
@@ -2531,27 +3023,78 @@ mod tests {
     #[test]
     fn test_devreden_pek_yeni_yil_ocak_tavani() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
+        ensure_test_annual_parameters(&conn, &[2027])?;
 
         let person = setup_test_person("p-pek-c");
         PersonnelRepository::save(&conn, &person)?;
 
         let aralik2026 = BordroDonemi {
-            id: "2026-12".into(), yil: 2026, ay: 12, baslangicTarihi: "2026-12-15".into(), bitisTarihi: "2027-01-14".into(), donemAdi: "Aralık 2026".into(), taxYear: 2026, taxMonth: 12
+            id: "2026-12".into(),
+            yil: 2026,
+            ay: 12,
+            baslangicTarihi: "2026-12-15".into(),
+            bitisTarihi: "2027-01-14".into(),
+            donemAdi: "Aralık 2026".into(),
+            taxYear: 2026,
+            taxMonth: 12,
         };
         let ocak2027 = BordroDonemi {
-            id: "2027-01".into(), yil: 2027, ay: 1, baslangicTarihi: "2027-01-15".into(), bitisTarihi: "2027-02-14".into(), donemAdi: "Ocak 2027".into(), taxYear: 2027, taxMonth: 1
+            id: "2027-01".into(),
+            yil: 2027,
+            ay: 1,
+            baslangicTarihi: "2027-01-15".into(),
+            bitisTarihi: "2027-02-14".into(),
+            donemAdi: "Ocak 2027".into(),
+            taxYear: 2027,
+            taxMonth: 1,
         };
         PeriodRepository::save(&conn, &aralik2026)?;
         PeriodRepository::save(&conn, &ocak2027)?;
 
         let mut gunler_30 = HashMap::new();
-        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
+        for d in 1..=30 {
+            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
+        }
 
-        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-c_2026-12".into(), personelId: "p-pek-c".into(), donemId: "2026-12".into(), gunler: gunler_30.clone() })?;
-        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-c_2027-01".into(), personelId: "p-pek-c".into(), donemId: "2027-01".into(), gunler: gunler_30.clone() })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "p-pek-c_2026-12".into(),
+                personelId: "p-pek-c".into(),
+                donemId: "2026-12".into(),
+                gunler: gunler_30.clone(),
+            },
+        )?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "p-pek-c_2027-01".into(),
+                personelId: "p-pek-c".into(),
+                donemId: "2027-01".into(),
+                gunler: gunler_30.clone(),
+            },
+        )?;
 
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-12", dec!(6666.66666667), dec!(120000.00), dec!(1000.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-01", dec!(10000.00), dec!(0), dec!(1200.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2026-12",
+                dec!(6666.66666667),
+                dec!(120000.00),
+                dec!(1000.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2027-01",
+                dec!(10000.00),
+                dec!(0),
+                dec!(1200.00),
+                dec!(9.00),
+            ),
+        )?;
 
         PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2026-12")?;
         let b_ocak = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2027-01")?;
@@ -2568,39 +3111,118 @@ mod tests {
     }
 
     #[test]
-    fn test_devreden_pek_yil_ici_haziran_temmuz_agustos() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_devreden_pek_yil_ici_haziran_temmuz_agustos() -> Result<(), Box<dyn std::error::Error>>
+    {
         let conn = create_in_memory_connection()?;
 
         let person = setup_test_person("p-pek-d");
         PersonnelRepository::save(&conn, &person)?;
 
         let periods = vec![
-            BordroDonemi { id: "2026-06".into(), yil: 2026, ay: 6, baslangicTarihi: "2026-06-15".into(), bitisTarihi: "2026-07-14".into(), donemAdi: "Haziran 2026".into(), taxYear: 2026, taxMonth: 7 },
-            BordroDonemi { id: "2026-07".into(), yil: 2026, ay: 7, baslangicTarihi: "2026-07-15".into(), bitisTarihi: "2026-08-14".into(), donemAdi: "Temmuz 2026".into(), taxYear: 2026, taxMonth: 8 },
-            BordroDonemi { id: "2026-08".into(), yil: 2026, ay: 8, baslangicTarihi: "2026-08-15".into(), bitisTarihi: "2026-09-14".into(), donemAdi: "Ağustos 2026".into(), taxYear: 2026, taxMonth: 9 },
+            BordroDonemi {
+                id: "2026-06".into(),
+                yil: 2026,
+                ay: 6,
+                baslangicTarihi: "2026-06-15".into(),
+                bitisTarihi: "2026-07-14".into(),
+                donemAdi: "Haziran 2026".into(),
+                taxYear: 2026,
+                taxMonth: 7,
+            },
+            BordroDonemi {
+                id: "2026-07".into(),
+                yil: 2026,
+                ay: 7,
+                baslangicTarihi: "2026-07-15".into(),
+                bitisTarihi: "2026-08-14".into(),
+                donemAdi: "Temmuz 2026".into(),
+                taxYear: 2026,
+                taxMonth: 8,
+            },
+            BordroDonemi {
+                id: "2026-08".into(),
+                yil: 2026,
+                ay: 8,
+                baslangicTarihi: "2026-08-15".into(),
+                bitisTarihi: "2026-09-14".into(),
+                donemAdi: "Ağustos 2026".into(),
+                taxYear: 2026,
+                taxMonth: 9,
+            },
         ];
-        for p in &periods { PeriodRepository::save(&conn, p)?; }
-
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
-
         for p in &periods {
-            AttendanceRepository::save(&conn, &PersonelPuantaj { id: format!("p-pek-d_{}", p.id), personelId: "p-pek-d".into(), donemId: p.id.clone(), gunler: gunler_30.clone() })?;
+            PeriodRepository::save(&conn, p)?;
         }
 
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-06", dec!(8333.33333333), dec!(100000.00), dec!(1101.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-07", dec!(9333.33333333), dec!(0), dec!(1101.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-08", dec!(9500.00), dec!(0), dec!(1101.00), dec!(9.00)))?;
+        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 {
+            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
+        }
+
+        for p in &periods {
+            AttendanceRepository::save(
+                &conn,
+                &PersonelPuantaj {
+                    id: format!("p-pek-d_{}", p.id),
+                    personelId: "p-pek-d".into(),
+                    donemId: p.id.clone(),
+                    gunler: gunler_30.clone(),
+                },
+            )?;
+        }
+
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2026-06",
+                dec!(8333.33333333),
+                dec!(100000.00),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2026-07",
+                dec!(9333.33333333),
+                dec!(0),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2026-08",
+                dec!(9500.00),
+                dec!(0),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
 
         let b1 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-06")?;
-        assert_eq!(b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(52730.00));
+        assert_eq!(
+            b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar,
+            dec!(52730.00)
+        );
 
         let b2 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-07")?;
-        assert_eq!(b2.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(52730.00));
-        assert_eq!(b2.sonrakiDevredenPek.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert_eq!(
+            b2.devredenPekGelen.as_ref().unwrap()[0].tutar,
+            dec!(52730.00)
+        );
+        assert_eq!(
+            b2.sonrakiDevredenPek.as_ref().unwrap()[0].tutar,
+            dec!(35460.00)
+        );
 
         let b3 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-08")?;
-        assert_eq!(b3.devredenPekGelen.as_ref().unwrap()[0].tutar, dec!(35460.00));
+        assert_eq!(
+            b3.devredenPekGelen.as_ref().unwrap()[0].tutar,
+            dec!(35460.00)
+        );
         assert!(b3.sonrakiDevredenPek.as_ref().unwrap().is_empty());
 
         Ok(())
@@ -2609,6 +3231,7 @@ mod tests {
     #[test]
     fn test_devreden_pek_tax_year_bagimsizligi() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
+        ensure_test_annual_parameters(&conn, &[2027])?;
 
         let person = setup_test_person("p-pek-e");
         PersonnelRepository::save(&conn, &person)?;
@@ -2639,17 +3262,54 @@ mod tests {
         PeriodRepository::save(&conn, &ocak2027)?;
 
         let mut gunler_30 = HashMap::new();
-        for d in 1..=30 { gunler_30.insert(format!("day_{}", d), "Ç".to_string()); }
+        for d in 1..=30 {
+            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
+        }
 
-        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-e_2026-12".into(), personelId: "p-pek-e".into(), donemId: "2026-12".into(), gunler: gunler_30.clone() })?;
-        AttendanceRepository::save(&conn, &PersonelPuantaj { id: "p-pek-e_2027-01".into(), personelId: "p-pek-e".into(), donemId: "2027-01".into(), gunler: gunler_30.clone() })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "p-pek-e_2026-12".into(),
+                personelId: "p-pek-e".into(),
+                donemId: "2026-12".into(),
+                gunler: gunler_30.clone(),
+            },
+        )?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "p-pek-e_2027-01".into(),
+                personelId: "p-pek-e".into(),
+                donemId: "2027-01".into(),
+                gunler: gunler_30.clone(),
+            },
+        )?;
 
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2026-12", dec!(3333.33333333), dec!(250000.00), dec!(1101.00), dec!(9.00)))?;
-        SettingsRepository::save_institution_settings(&conn, &make_test_kurum_degerleri("2027-01", dec!(3333.33333333), dec!(0), dec!(1101.00), dec!(9.00)))?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2026-12",
+                dec!(3333.33333333),
+                dec!(250000.00),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
+        SettingsRepository::save_institution_settings(
+            &conn,
+            &make_test_kurum_degerleri(
+                "2027-01",
+                dec!(3333.33333333),
+                dec!(0),
+                dec!(1101.00),
+                dec!(9.00),
+            ),
+        )?;
 
         PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-e", "2026-12")?;
 
-        let devreden_gelen = PayrollService::calculate_incoming_devreden_pek(&conn, "p-pek-e", &ocak2027)?;
+        let devreden_gelen =
+            PayrollService::calculate_incoming_devreden_pek(&conn, "p-pek-e", &ocak2027)?;
 
         assert_eq!(devreden_gelen.len(), 1);
         assert_eq!(devreden_gelen[0].tutar, dec!(52730.00));
@@ -2669,7 +3329,8 @@ mod tests {
     // Test A — save -> calculate: yeni personel + dönem oluştur, puantaj kaydet,
     // aynı personnel_id + period_id ile hesapla -> attendance bulunur, hesaplama başlar.
     #[test]
-    fn test_a_save_attendance_then_calculate_same_personnel_period() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_a_save_attendance_then_calculate_same_personnel_period(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
 
         let person = setup_test_person("test-att-a");
@@ -2686,20 +3347,25 @@ mod tests {
             taxMonth: 6,
         };
         PeriodRepository::save(&conn, &donem)?;
+        ensure_test_institution_settings(&conn, &["2026-05"])?;
 
         let mut gunler = HashMap::new();
         for d in 1..=30 {
             gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
         }
-        AttendanceRepository::save(&conn, &PersonelPuantaj {
-            id: "test-att-a_2026-05".into(),
-            personelId: "test-att-a".into(),
-            donemId: "2026-05".into(),
-            gunler,
-        })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "test-att-a_2026-05".into(),
+                personelId: "test-att-a".into(),
+                donemId: "2026-05".into(),
+                gunler,
+            },
+        )?;
 
         // Aynı personnel_id + period_id ile bordro hesaplama puantajı BULMALI.
-        let bordro = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-a", "2026-05")?;
+        let bordro =
+            PayrollService::calculate_payroll_for_personnel(&conn, "test-att-a", "2026-05")?;
         assert_eq!(bordro.personelId, "test-att-a");
         assert_eq!(bordro.donemId, "2026-05");
         assert_eq!(bordro.puantajOzeti.c, 30, "30 gün Ç özetlenmeli");
@@ -2710,13 +3376,17 @@ mod tests {
     // Test B — reconnect: puantajı kaydet, DB kapat/aç, aynı dönem/personel için
     // hesapla -> attendance hâlâ bulunur (frontend memory yanılsamasını engeller).
     #[test]
-    fn test_b_attendance_survives_db_close_reopen_and_calculation() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_b_attendance_survives_db_close_reopen_and_calculation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         use bordro_programi_lib::db::create_connection;
         use std::fs;
         use std::path::PathBuf;
 
         let temp_dir = std::env::temp_dir();
-        let db_path: PathBuf = temp_dir.join(format!("att_reconnect_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(11111)));
+        let db_path: PathBuf = temp_dir.join(format!(
+            "att_reconnect_{}.sqlite",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(11111)
+        ));
         if db_path.exists() {
             let _ = fs::remove_file(&db_path);
         }
@@ -2739,17 +3409,21 @@ mod tests {
                 taxMonth: 7,
             };
             PeriodRepository::save(&conn, &donem)?;
+            ensure_test_institution_settings(&conn, &["2026-06"])?;
 
             let mut gunler = HashMap::new();
             for d in 1..=30 {
                 gunler.insert(format!("2026-06-{:02}", d), "Ç".to_string());
             }
-            AttendanceRepository::save(&conn, &PersonelPuantaj {
-                id: "test-att-b_2026-06".into(),
-                personelId: "test-att-b".into(),
-                donemId: "2026-06".into(),
-                gunler,
-            })?;
+            AttendanceRepository::save(
+                &conn,
+                &PersonelPuantaj {
+                    id: "test-att-b_2026-06".into(),
+                    personelId: "test-att-b".into(),
+                    donemId: "2026-06".into(),
+                    gunler,
+                },
+            )?;
 
             drop(conn);
         }
@@ -2758,11 +3432,16 @@ mod tests {
         {
             let conn = create_connection(Some(db_path.clone()))?;
 
-            let att = AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-b", "2026-06")?
-                .expect("attendance, DB yeniden açılışında hâlâ mevcut olmalı");
-            assert!(!att.gunler.is_empty(), "kayıtlı puantaj günleri boş olmamalı");
+            let att =
+                AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-b", "2026-06")?
+                    .expect("attendance, DB yeniden açılışında hâlâ mevcut olmalı");
+            assert!(
+                !att.gunler.is_empty(),
+                "kayıtlı puantaj günleri boş olmamalı"
+            );
 
-            let bordro = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-b", "2026-06")?;
+            let bordro =
+                PayrollService::calculate_payroll_for_personnel(&conn, "test-att-b", "2026-06")?;
             assert_eq!(bordro.donemId, "2026-06");
             assert_eq!(bordro.puantajOzeti.c, 30);
         }
@@ -2774,7 +3453,8 @@ mod tests {
     // Test C — yanlış period_id: aynı tarih aralığı/benzer dönem olsa bile başka
     // period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli.
     #[test]
-    fn test_c_attendance_bound_to_period_id_not_date_range() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_c_attendance_bound_to_period_id_not_date_range(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
 
         let person = setup_test_person("test-att-c");
@@ -2803,24 +3483,31 @@ mod tests {
         };
         PeriodRepository::save(&conn, &donem_a)?;
         PeriodRepository::save(&conn, &donem_b)?;
+        ensure_test_institution_settings(&conn, &["2026-05", "2026-05-alt"])?;
 
         // Puantaj yalnız A'ya kaydedildi; B aynı tarih aralığını paylaşsa bile puantajsız.
         let mut gunler = HashMap::new();
         for d in 1..=30 {
             gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
         }
-        AttendanceRepository::save(&conn, &PersonelPuantaj {
-            id: "test-att-c_2026-05".into(),
-            personelId: "test-att-c".into(),
-            donemId: "2026-05".into(),
-            gunler,
-        })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "test-att-c_2026-05".into(),
+                personelId: "test-att-c".into(),
+                donemId: "2026-05".into(),
+                gunler,
+            },
+        )?;
 
         // A için hesaplama başarılı.
-        assert!(PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05").is_ok());
+        assert!(
+            PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05").is_ok()
+        );
 
         // B için hesaplama, tarih aralığı aynı olsa bile puantaj bulamadığı için başarısız olmalı.
-        let res = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05-alt");
+        let res =
+            PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05-alt");
         assert!(
             matches!(res, Err(DomainError::NotFound(msg)) if msg.contains("puantaj")),
             "Başka period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli"
@@ -2833,7 +3520,8 @@ mod tests {
     // (personelId + donemId eşleşmesi + boş olmayan gunler) native
     // get_by_personnel_and_period lookup'ı ile birebir örtüşmelidir.
     #[test]
-    fn test_d_badge_semantics_match_native_attendance_lookup() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_d_badge_semantics_match_native_attendance_lookup(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
 
         let person = setup_test_person("test-att-d");
@@ -2856,22 +3544,33 @@ mod tests {
         for d in 1..=30 {
             gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
         }
-        AttendanceRepository::save(&conn, &PersonelPuantaj {
-            id: "test-att-d_2026-05".into(),
-            personelId: "test-att-d".into(),
-            donemId: "2026-05".into(),
-            gunler,
-        })?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: "test-att-d_2026-05".into(),
+                personelId: "test-att-d".into(),
+                donemId: "2026-05".into(),
+                gunler,
+            },
+        )?;
 
-        let found = AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d", "2026-05")?
-            .expect("rozet koşulu true iken native lookup da kaydı bulmalı");
+        let found =
+            AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d", "2026-05")?
+                .expect("rozet koşulu true iken native lookup da kaydı bulmalı");
         assert!(!found.gunler.is_empty());
 
         // Rozet koşulu false (yanlış dönem / yanlış personel) -> native lookup None.
-        assert!(AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d", "2026-06")?.is_none());
-        assert!(AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d-x", "2026-05")?.is_none());
+        assert!(
+            AttendanceRepository::get_by_personnel_and_period(&conn, "test-att-d", "2026-06")?
+                .is_none()
+        );
+        assert!(AttendanceRepository::get_by_personnel_and_period(
+            &conn,
+            "test-att-d-x",
+            "2026-05"
+        )?
+        .is_none());
 
         Ok(())
     }
 }
-

@@ -31,22 +31,37 @@ fn floor_dec(val: Decimal) -> Decimal {
     val.floor()
 }
 
-pub struct TaxBracket {
-    pub limit: Decimal,
-    pub oran: Decimal,
-}
-
-pub fn get_gelir_vergisi_dilimleri_2026() -> Vec<TaxBracket> {
+/// Test/geriye dönük fixture için 2026 tarifesi. Üretim hesaplaması bu değeri
+/// doğrudan kullanmaz; `annual_payroll_parameters` tablosundaki tarife kullanılır.
+pub fn default_gelir_vergisi_dilimleri_2026() -> Vec<TaxBracket> {
     vec![
-        TaxBracket { limit: dec!(190000), oran: dec!(0.15) },
-        TaxBracket { limit: dec!(400000), oran: dec!(0.20) },
-        TaxBracket { limit: dec!(1500000), oran: dec!(0.27) },
-        TaxBracket { limit: dec!(5300000), oran: dec!(0.35) },
-        TaxBracket { limit: dec!(79228162514264337593543950335), oran: dec!(0.40) }, // Decimal::MAX
+        TaxBracket {
+            limit: dec!(190000),
+            oran: dec!(0.15),
+        },
+        TaxBracket {
+            limit: dec!(400000),
+            oran: dec!(0.20),
+        },
+        TaxBracket {
+            limit: dec!(1500000),
+            oran: dec!(0.27),
+        },
+        TaxBracket {
+            limit: dec!(5300000),
+            oran: dec!(0.35),
+        },
+        TaxBracket {
+            limit: Decimal::from(OPEN_ENDED_TAX_BRACKET_LIMIT),
+            oran: dec!(0.40),
+        },
     ]
 }
 
-pub fn calculate_total_tax_for_cumulative_matrah(kumulatif: Decimal) -> Decimal {
+pub fn calculate_total_tax_for_cumulative_matrah_with_brackets(
+    kumulatif: Decimal,
+    brackets: &[TaxBracket],
+) -> Decimal {
     if kumulatif <= dec!(0) {
         return dec!(0);
     }
@@ -54,7 +69,7 @@ pub fn calculate_total_tax_for_cumulative_matrah(kumulatif: Decimal) -> Decimal 
     let mut total_tax = dec!(0);
     let mut previous_limit = dec!(0);
 
-    for bracket in get_gelir_vergisi_dilimleri_2026() {
+    for bracket in brackets {
         let bracket_size = bracket.limit - previous_limit;
         let taxable_in_bracket = remaining.min(bracket_size);
         if taxable_in_bracket > dec!(0) {
@@ -66,20 +81,58 @@ pub fn calculate_total_tax_for_cumulative_matrah(kumulatif: Decimal) -> Decimal 
             break;
         }
     }
+
+    // Son dilim, kullanıcı arayüzünde pratik bir üst limit ile girilmiş olsa
+    // bile, bu limitin üzerindeki matrahı da kendi oranıyla kapsar. Böylece
+    // eksik/sonu sonsuz olmayan bir tarife yanlışlıkla matrahın kalanını
+    // vergisiz bırakmaz.
+    match brackets.last() {
+        Some(last) if remaining > dec!(0) => total_tax += remaining * last.oran,
+        _ => {}
+    }
     total_tax
 }
 
-pub fn calculate_gelir_vergisi_2026(matrah: Decimal, kumulatif_onceki: Decimal) -> Decimal {
+/// Test fixture/geriye dönük API. Üretim yolu yıllık parametre tablosunu kullanır.
+pub fn calculate_total_tax_for_cumulative_matrah(kumulatif: Decimal) -> Decimal {
+    calculate_total_tax_for_cumulative_matrah_with_brackets(
+        kumulatif,
+        &default_gelir_vergisi_dilimleri_2026(),
+    )
+}
+
+pub fn calculate_gelir_vergisi_with_brackets(
+    matrah: Decimal,
+    kumulatif_onceki: Decimal,
+    brackets: &[TaxBracket],
+) -> Decimal {
     if matrah <= dec!(0) {
         return dec!(0);
     }
-    let total_tax_current = calculate_total_tax_for_cumulative_matrah(kumulatif_onceki + matrah);
-    let total_tax_previous = calculate_total_tax_for_cumulative_matrah(kumulatif_onceki);
+    let total_tax_current = calculate_total_tax_for_cumulative_matrah_with_brackets(
+        kumulatif_onceki + matrah,
+        brackets,
+    );
+    let total_tax_previous =
+        calculate_total_tax_for_cumulative_matrah_with_brackets(kumulatif_onceki, brackets);
     round_gv_amount(total_tax_current - total_tax_previous)
 }
 
+/// Test fixture/geriye dönük API. Üretim yolu yıllık parametre tablosunu kullanır.
+pub fn calculate_gelir_vergisi_2026(matrah: Decimal, kumulatif_onceki: Decimal) -> Decimal {
+    calculate_gelir_vergisi_with_brackets(
+        matrah,
+        kumulatif_onceki,
+        &default_gelir_vergisi_dilimleri_2026(),
+    )
+}
+
 /// GV matrahı = brüt gelir - işçi SGK - işçi işsizlik (negatif olamaz).
-pub fn calculate_gv_matrah(brut_gelir: Decimal, isci_sgk: Decimal, isci_issizlik: Decimal) -> Decimal {
+pub fn calculate_gv_matrah(
+    brut_gelir: Decimal,
+    isci_sgk: Decimal,
+    isci_issizlik: Decimal,
+) -> Decimal {
     (brut_gelir - isci_sgk - isci_issizlik).max(dec!(0))
 }
 
@@ -98,27 +151,53 @@ pub fn calculate_aylik_asgari_ucret_gv_matrahi(
 /// Gelir vergisi bloğunun tam, denetlenebilir hesap detayını döndürür.
 /// İstisna BİR kez toplam cari matraha uygulanır (matrah indirimi değil, vergi
 /// düşümü); kesilecek GV negatif olamaz; GV kalemlerinde round_gv_amount kullanılır.
+pub fn calculate_gv_hesap_detayi_with_brackets(
+    cari_gv_matrahi: Decimal,
+    kumulatif_gv_matrahi_onceki: Decimal,
+    asgari_ucret_aylik_gv_matrahi: Decimal,
+    kumulatif_asgari_gv_onceki: Decimal,
+    brackets: &[TaxBracket],
+) -> GvHesapDetayi {
+    let brut_gelir_vergisi = calculate_gelir_vergisi_with_brackets(
+        cari_gv_matrahi,
+        kumulatif_gv_matrahi_onceki,
+        brackets,
+    );
+    let asgari_ucret_gv_istisnasi = calculate_gelir_vergisi_with_brackets(
+        asgari_ucret_aylik_gv_matrahi,
+        kumulatif_asgari_gv_onceki,
+        brackets,
+    );
+    let uygulanan_gv_istisnasi = min(brut_gelir_vergisi, asgari_ucret_gv_istisnasi);
+    let kesilen_gelir_vergisi = (brut_gelir_vergisi - uygulanan_gv_istisnasi).max(dec!(0));
+
+    GvHesapDetayi {
+        cariGvMatrahi: cari_gv_matrahi,
+        yeniKumulatifGvMatrahi: kumulatif_gv_matrahi_onceki + cari_gv_matrahi,
+        brutGelirVergisi: brut_gelir_vergisi,
+        asgariUcretGvMatrahi: asgari_ucret_aylik_gv_matrahi,
+        asgariUcretReferansKumulatifMatrahi: kumulatif_asgari_gv_onceki
+            + asgari_ucret_aylik_gv_matrahi,
+        asgariUcretGvIstisnasi: asgari_ucret_gv_istisnasi,
+        uygulananGvIstisnasi: uygulanan_gv_istisnasi,
+        kesilenGelirVergisi: kesilen_gelir_vergisi,
+    }
+}
+
+/// Test fixture/geriye dönük API. Üretim yolu yıllık parametre tablosunu kullanır.
 pub fn calculate_gv_hesap_detayi(
     cari_gv_matrahi: Decimal,
     kumulatif_gv_matrahi_onceki: Decimal,
     asgari_ucret_aylik_gv_matrahi: Decimal,
     kumulatif_asgari_gv_onceki: Decimal,
 ) -> GvHesapDetayi {
-    let brut_gelir_vergisi = calculate_gelir_vergisi_2026(cari_gv_matrahi, kumulatif_gv_matrahi_onceki);
-    let asgari_ucret_gv_istisnasi = calculate_gelir_vergisi_2026(asgari_ucret_aylik_gv_matrahi, kumulatif_asgari_gv_onceki);
-    let uygulanan_gv_istisnasi = min(brut_gelir_vergisi, asgari_ucret_gv_istisnasi);
-    let kesilen_gelir_vergisi = (brut_gelir_vergisi - uygulanan_gv_istisnasi).max(dec!(0));
-
-GvHesapDetayi {
-        cariGvMatrahi: cari_gv_matrahi,
-        yeniKumulatifGvMatrahi: kumulatif_gv_matrahi_onceki + cari_gv_matrahi,
-        brutGelirVergisi: brut_gelir_vergisi,
-        asgariUcretGvMatrahi: asgari_ucret_aylik_gv_matrahi,
-        asgariUcretReferansKumulatifMatrahi: kumulatif_asgari_gv_onceki + asgari_ucret_aylik_gv_matrahi,
-        asgariUcretGvIstisnasi: asgari_ucret_gv_istisnasi,
-        uygulananGvIstisnasi: uygulanan_gv_istisnasi,
-        kesilenGelirVergisi: kesilen_gelir_vergisi,
-    }
+    calculate_gv_hesap_detayi_with_brackets(
+        cari_gv_matrahi,
+        kumulatif_gv_matrahi_onceki,
+        asgari_ucret_aylik_gv_matrahi,
+        kumulatif_asgari_gv_onceki,
+        &default_gelir_vergisi_dilimleri_2026(),
+    )
 }
 
 pub struct NightWorkPolicy;
@@ -132,7 +211,11 @@ impl NightWorkPolicy {
         if gc_gun_sayisi <= 0 || gece_calisma_orani_yuzde <= dec!(0) {
             return dec!(0);
         }
-        round2(gunluk_taban_ucret * (gece_calisma_orani_yuzde / dec!(100)) * Decimal::from(gc_gun_sayisi))
+        round2(
+            gunluk_taban_ucret
+                * (gece_calisma_orani_yuzde / dec!(100))
+                * Decimal::from(gc_gun_sayisi),
+        )
     }
 
     pub fn calculate_gece_calismasi_tatili_primi(
@@ -143,41 +226,93 @@ impl NightWorkPolicy {
         if gct_gun_sayisi <= 0 || gece_calisma_tatili_orani_yuzde <= dec!(0) {
             return dec!(0);
         }
-        round2(gunluk_taban_ucret * (gece_calisma_tatili_orani_yuzde / dec!(100)) * Decimal::from(gct_gun_sayisi))
+        round2(
+            gunluk_taban_ucret
+                * (gece_calisma_tatili_orani_yuzde / dec!(100))
+                * Decimal::from(gct_gun_sayisi),
+        )
     }
 }
 
 pub fn calculate_gelir_toplam(gelirler: &GelirKalemleri) -> Decimal {
     let mut sum = dec!(0);
-    if let Some(v) = gelirler.tabanBrutAylik { sum += v; }
-    if let Some(v) = gelirler.tediye { sum += v; }
-    if let Some(v) = gelirler.tisIkramiyesi { sum += v; }
-    if let Some(v) = gelirler.ekOdeme { sum += v; }
-    if let Some(v) = gelirler.yemek { sum += v; }
-    if let Some(v) = gelirler.birlestirilmisSosyalYardim { sum += v; }
-    if let Some(v) = gelirler.vasitaYol { sum += v; }
-    if let Some(v) = gelirler.giyimYardimi { sum += v; }
-    if let Some(v) = gelirler.isPrimi { sum += v; }
-    if let Some(v) = gelirler.geceCalismasiUcreti { sum += v; }
-    if let Some(v) = gelirler.geceCalismasiTatiliUcreti { sum += v; }
-    if let Some(v) = gelirler.hizmetZammi { sum += v; }
-    if let Some(v) = gelirler.digerGelir { sum += v; }
+    if let Some(v) = gelirler.tabanBrutAylik {
+        sum += v;
+    }
+    if let Some(v) = gelirler.tediye {
+        sum += v;
+    }
+    if let Some(v) = gelirler.tisIkramiyesi {
+        sum += v;
+    }
+    if let Some(v) = gelirler.ekOdeme {
+        sum += v;
+    }
+    if let Some(v) = gelirler.yemek {
+        sum += v;
+    }
+    if let Some(v) = gelirler.birlestirilmisSosyalYardim {
+        sum += v;
+    }
+    if let Some(v) = gelirler.vasitaYol {
+        sum += v;
+    }
+    if let Some(v) = gelirler.giyimYardimi {
+        sum += v;
+    }
+    if let Some(v) = gelirler.isPrimi {
+        sum += v;
+    }
+    if let Some(v) = gelirler.geceCalismasiUcreti {
+        sum += v;
+    }
+    if let Some(v) = gelirler.geceCalismasiTatiliUcreti {
+        sum += v;
+    }
+    if let Some(v) = gelirler.hizmetZammi {
+        sum += v;
+    }
+    if let Some(v) = gelirler.digerGelir {
+        sum += v;
+    }
     round2(sum)
 }
 
 pub fn calculate_kesinti_toplam(kesintiler: &KesintiKalemleri) -> Decimal {
     let mut sum = dec!(0);
-    if let Some(v) = kesintiler.isciSgkPrimi { sum += v; }
-    if let Some(v) = kesintiler.isciIssizlikPrimi { sum += v; }
-    if let Some(v) = kesintiler.gelirVergisi { sum += v; }
-    if let Some(v) = kesintiler.damgaVergisi { sum += v; }
-    if let Some(v) = kesintiler.sendikaAidati { sum += v; }
-    if let Some(v) = kesintiler.bes { sum += v; }
-    if let Some(v) = kesintiler.icra { sum += v; }
-    if let Some(v) = kesintiler.kisiBorcu { sum += v; }
-    if let Some(v) = kesintiler.dogumAskerlikBorclanmasi { sum += v; }
-    if let Some(v) = kesintiler.hayatSaglikSigortasi { sum += v; }
-    if let Some(v) = kesintiler.digerKesinti { sum += v; }
+    if let Some(v) = kesintiler.isciSgkPrimi {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.isciIssizlikPrimi {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.gelirVergisi {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.damgaVergisi {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.sendikaAidati {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.bes {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.icra {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.kisiBorcu {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.dogumAskerlikBorclanmasi {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.hayatSaglikSigortasi {
+        sum += v;
+    }
+    if let Some(v) = kesintiler.digerKesinti {
+        sum += v;
+    }
     round2(sum)
 }
 
@@ -210,7 +345,10 @@ pub fn resolve_is_primi_grubu(
         }
     };
 
-    if let Some(found) = list.iter().find(|g| (g.ad == grp || g.id == grp) && g.aktif) {
+    if let Some(found) = list
+        .iter()
+        .find(|g| (g.ad == grp || g.id == grp) && g.aktif)
+    {
         if found.oran < dec!(0) {
             Err(DomainError::ValidationError(format!(
                 "Is primi grubu '{}' orani gecersiz (negatif).",
@@ -230,6 +368,138 @@ pub fn resolve_is_primi_grubu(
             grp
         )))
     }
+}
+
+/// Production bordro hesabında sessiz yasal parametre varsayılanlarına izin
+/// vermez. UI/test kolaylığı için kullanılan düşük seviyeli hesap fonksiyonları
+/// bu doğrulamayı kendileri çağırmaz; authoritative servis yolu çağırır.
+pub fn validate_kurum_degerleri_for_payroll(
+    kurum_degerleri: &DonemselKurumDegerleri,
+) -> Result<()> {
+    let required_non_negative = [
+        ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
+        (
+            "issizlikIsciOraniYuzde",
+            kurum_degerleri.issizlikIsciOraniYuzde,
+        ),
+        ("sendikaAidatiYuzde", kurum_degerleri.sendikaAidatiYuzde),
+        ("besOraniYuzde", kurum_degerleri.besOraniYuzde),
+        (
+            "geceCalismaPrimiYuzde",
+            kurum_degerleri.geceCalismaPrimiYuzde,
+        ),
+        (
+            "geceCalismaTatiliPrimiYuzde",
+            kurum_degerleri.geceCalismaTatiliPrimiYuzde,
+        ),
+        (
+            "gunlukYemekIstisnasiSGK",
+            kurum_degerleri.gunlukYemekIstisnasiSGK,
+        ),
+        ("gunlukAsgariUcret", kurum_degerleri.gunlukAsgariUcret),
+        ("pekTavanKatsayisi", kurum_degerleri.pekTavanKatsayisi),
+        ("sgkIsverenOraniYuzde", kurum_degerleri.sgkIsverenOraniYuzde),
+        (
+            "issizlikIsverenOraniYuzde",
+            kurum_degerleri.issizlikIsverenOraniYuzde,
+        ),
+    ];
+
+    for (field, value) in required_non_negative {
+        let value = value.ok_or_else(|| {
+            DomainError::ValidationError(format!(
+                "{} dönemi için zorunlu yasal parametre eksik: {}.",
+                kurum_degerleri.donemId, field
+            ))
+        })?;
+        if value < Decimal::ZERO {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi yasal parametresi negatif olamaz: {}.",
+                kurum_degerleri.donemId, field
+            )));
+        }
+    }
+
+    let percent_fields = [
+        ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
+        (
+            "issizlikIsciOraniYuzde",
+            kurum_degerleri.issizlikIsciOraniYuzde,
+        ),
+        ("sendikaAidatiYuzde", kurum_degerleri.sendikaAidatiYuzde),
+        ("besOraniYuzde", kurum_degerleri.besOraniYuzde),
+        (
+            "geceCalismaPrimiYuzde",
+            kurum_degerleri.geceCalismaPrimiYuzde,
+        ),
+        (
+            "geceCalismaTatiliPrimiYuzde",
+            kurum_degerleri.geceCalismaTatiliPrimiYuzde,
+        ),
+        ("sgkIsverenOraniYuzde", kurum_degerleri.sgkIsverenOraniYuzde),
+        (
+            "issizlikIsverenOraniYuzde",
+            kurum_degerleri.issizlikIsverenOraniYuzde,
+        ),
+    ];
+    for (field, value) in percent_fields {
+        if let Some(value) = value {
+            if value > dec!(100) {
+                return Err(DomainError::ValidationError(format!(
+                    "{} dönemi yasal parametresi %0-%100 arasında olmalıdır: {}.",
+                    kurum_degerleri.donemId, field
+                )));
+            }
+        }
+    }
+
+    let damga = kurum_degerleri.damgaVergisiOraniBinde.ok_or_else(|| {
+        DomainError::ValidationError(format!(
+            "{} dönemi için zorunlu yasal parametre eksik: damgaVergisiOraniBinde.",
+            kurum_degerleri.donemId
+        ))
+    })?;
+    if !(Decimal::ZERO..=dec!(1000)).contains(&damga) {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi damga vergisi oranı binde 0-1000 arasında olmalıdır.",
+            kurum_degerleri.donemId
+        )));
+    }
+
+    if kurum_degerleri
+        .gunlukAsgariUcret
+        .is_some_and(|value| value <= Decimal::ZERO)
+        || kurum_degerleri.pekTavanKatsayisi == Some(Decimal::ZERO)
+    {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi asgari ücret ve PEK tavan katsayısı sıfırdan büyük olmalıdır.",
+            kurum_degerleri.donemId
+        )));
+    }
+
+    let groups = match kurum_degerleri.isPrimiGruplari.as_deref() {
+        Some(groups) if !groups.is_empty() => groups,
+        _ => {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi iş primi grupları eksik.",
+                kurum_degerleri.donemId
+            )))
+        }
+    };
+    for group in groups {
+        if group.id.trim().is_empty()
+            || group.ad.trim().is_empty()
+            || group.oran < Decimal::ZERO
+            || group.oran > dec!(100)
+        {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi iş primi gruplarında geçersiz tanım/oran var.",
+                kurum_degerleri.donemId
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Is primi hesap detayi: tek-final-rounding uygular.
@@ -270,9 +540,12 @@ pub fn auto_fill_gelirler_from_puantaj(
     hizmet_yili: i32,
     grup: Option<&str>,
 ) -> Result<(GelirKalemleri, IsPrimiHesapDetayi)> {
-    let hakedis_gun =
-        puantaj_ozeti.c + puantaj_ozeti.t + puantaj_ozeti.g + puantaj_ozeti.i
-            + puantaj_ozeti.gc + puantaj_ozeti.gct;
+    let hakedis_gun = puantaj_ozeti.c
+        + puantaj_ozeti.t
+        + puantaj_ozeti.g
+        + puantaj_ozeti.i
+        + puantaj_ozeti.gc
+        + puantaj_ozeti.gct;
     let hakedis_dec = Decimal::from(hakedis_gun);
     let fiili_calisma_gun = Decimal::from(puantaj_ozeti.c + puantaj_ozeti.gc);
 
@@ -294,7 +567,9 @@ pub fn auto_fill_gelirler_from_puantaj(
     let is_primi = is_primi_detay.tutar;
 
     let gc_orani = kurum_degerleri.geceCalismaPrimiYuzde.unwrap_or(dec!(0));
-    let gct_orani = kurum_degerleri.geceCalismaTatiliPrimiYuzde.unwrap_or(dec!(0));
+    let gct_orani = kurum_degerleri
+        .geceCalismaTatiliPrimiYuzde
+        .unwrap_or(dec!(0));
 
     let gece_calismasi_ucreti = NightWorkPolicy::calculate_gece_calismasi_primi(
         kurum_degerleri.gunlukTabanUcret,
@@ -362,7 +637,8 @@ pub fn calculate_prime_esas_kazanc(
 
     let gunluk_yemek_istisnasi = k.gunlukYemekIstisnasiSGK.unwrap_or(dec!(300.00));
     let brut_yemek = gelirler.yemek.unwrap_or(dec!(0));
-    let yemek_istisnasi_tutar = brut_yemek.min(gunluk_yemek_istisnasi * Decimal::from(fiili_yemek_gunu));
+    let yemek_istisnasi_tutar =
+        brut_yemek.min(gunluk_yemek_istisnasi * Decimal::from(fiili_yemek_gunu));
     let sgk_tabi_yemek = (brut_yemek - yemek_istisnasi_tutar).max(dec!(0));
 
     let vasita_yol = gelirler.vasitaYol.unwrap_or(dec!(0));
@@ -424,9 +700,11 @@ pub fn calculate_prime_esas_kazanc(
 
     let mut devreden_pek_asan_tutar = dec!(0);
     if pek_matrah_adayi > pek_ust_sinir {
-        let ucret_tavan_kapasitesi = (pek_ust_sinir - ucretler - eklenecek_devreden_toplam).max(dec!(0));
+        let ucret_tavan_kapasitesi =
+            (pek_ust_sinir - ucretler - eklenecek_devreden_toplam).max(dec!(0));
         let ucret_disi_kullanilan = ucret_disi_odemeler.min(ucret_tavan_kapasitesi);
-        devreden_pek_asan_tutar = round2((ucret_disi_odemeler - ucret_disi_kullanilan).max(dec!(0)));
+        devreden_pek_asan_tutar =
+            round2((ucret_disi_odemeler - ucret_disi_kullanilan).max(dec!(0)));
         pek_matrah_adayi = pek_ust_sinir;
     }
 
@@ -458,10 +736,13 @@ pub fn calculate_prime_esas_kazanc(
     let isveren_issizlik_primi = round_sgk_amount(final_pek * isveren_issizlik_rate);
 
     let isveren_alt_sinir_sgk_farki = round_sgk_amount(alt_sinir_tamamlama_farki * isci_sgk_rate);
-    let isveren_alt_sinir_issizlik_farki = round_sgk_amount(alt_sinir_tamamlama_farki * isci_issizlik_rate);
-    let pek_alt_sinir_tamamlama_isveren_primi = isveren_alt_sinir_sgk_farki + isveren_alt_sinir_issizlik_farki;
+    let isveren_alt_sinir_issizlik_farki =
+        round_sgk_amount(alt_sinir_tamamlama_farki * isci_issizlik_rate);
+    let pek_alt_sinir_tamamlama_isveren_primi =
+        isveren_alt_sinir_sgk_farki + isveren_alt_sinir_issizlik_farki;
 
-    let isveren_prim_toplami = isveren_sgk_primi + isveren_issizlik_primi + pek_alt_sinir_tamamlama_isveren_primi;
+    let isveren_prim_toplami =
+        isveren_sgk_primi + isveren_issizlik_primi + pek_alt_sinir_tamamlama_isveren_primi;
 
     let det = PekDetayi {
         hesaplananPek: round2(ham_pek),
@@ -483,25 +764,40 @@ pub fn calculate_prime_esas_kazanc(
     (det, sonraki_devreden_list)
 }
 
-pub fn calculate_statutory_deductions(
+pub struct StatutoryDeductionTaxInputs<'a> {
+    pub previous_cumulative_gv: Decimal,
+    pub incoming_devreden_pek: &'a [DevredenPekKaydi],
+    pub previous_cumulative_asgari_gv: Decimal,
+    pub tax_brackets: &'a [TaxBracket],
+}
+
+pub fn calculate_statutory_deductions_with_tax_brackets(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     personel: Option<&Personel>,
     puantaj_ozeti: Option<&PuantajOzeti>,
-    kumulatif_gv_matrahi_onceki: Decimal,
-    devreden_pek_gelen: &[DevredenPekKaydi],
-    kumulatif_asgari_gv_onceki: Decimal,
+    tax_inputs: &StatutoryDeductionTaxInputs<'_>,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
     let brut_gelir = calculate_gelir_toplam(gelirler);
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     if brut_gelir <= dec!(0) {
-        let (pek_detay, sonraki) = calculate_prime_esas_kazanc(gelirler, puantaj_ozeti, kurum_degerleri, devreden_pek_gelen);
+        let (pek_detay, sonraki) = calculate_prime_esas_kazanc(
+            gelirler,
+            puantaj_ozeti,
+            kurum_degerleri,
+            tax_inputs.incoming_devreden_pek,
+        );
         return (KesintiKalemleri::default(), pek_detay, sonraki);
     }
 
-    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc(gelirler, puantaj_ozeti, kurum_degerleri, devreden_pek_gelen);
+    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc(
+        gelirler,
+        puantaj_ozeti,
+        kurum_degerleri,
+        tax_inputs.incoming_devreden_pek,
+    );
     // Worker deductions must be calculated over real earnings (hesaplananPek / ham_pek) capped at ceiling,
     // NOT on the artificially inflated floor finalPek (5510 m.82 & 4447 m.49).
     let worker_pek_matrah = pek_detay.hesaplananPek.min(pek_detay.pekUstSinir);
@@ -520,11 +816,12 @@ pub fn calculate_statutory_deductions(
     let aylik_asgari_sgk = round2(aylik_brut_asgari * (sgk_rate + issizlik_rate));
     let asgari_ucret_gv_matrah = (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0));
 
-    let gv_detay = calculate_gv_hesap_detayi(
+    let gv_detay = calculate_gv_hesap_detayi_with_brackets(
         gelir_vergisi_matrah,
-        kumulatif_gv_matrahi_onceki,
+        tax_inputs.previous_cumulative_gv,
         asgari_ucret_gv_matrah,
-        kumulatif_asgari_gv_onceki,
+        tax_inputs.previous_cumulative_asgari_gv,
+        tax_inputs.tax_brackets,
     );
     let gelir_vergisi = gv_detay.kesilenGelirVergisi;
 
@@ -536,42 +833,49 @@ pub fn calculate_statutory_deductions(
 
     let is_sendika = p_kesintiler.and_then(|pk| pk.sendikaUyesi).unwrap_or(false);
     let sendika_aidati = if is_sendika {
-        if let Some(sabit) = p_kesintiler.and_then(|pk| pk.sabitSendikaAidati) {
-            if sabit > dec!(0) { Some(sabit) } else { None }
-        } else if let Some(sabit) = k.sabitSendikaAidati {
-            if sabit > dec!(0) { Some(sabit) } else { None }
-        } else {
-            None
-        }.unwrap_or_else(|| {
-            let sendika_orani = k.sendikaAidatiYuzde.unwrap_or(dec!(65)) / dec!(100);
-            round2(k.gunlukTabanUcret * sendika_orani)
-        })
+        p_kesintiler
+            .and_then(|pk| pk.sabitSendikaAidati)
+            .filter(|&sabit| sabit > dec!(0))
+            .or_else(|| k.sabitSendikaAidati.filter(|&sabit| sabit > dec!(0)))
+            .unwrap_or_else(|| {
+                let sendika_orani = k.sendikaAidatiYuzde.unwrap_or(dec!(65)) / dec!(100);
+                round2(k.gunlukTabanUcret * sendika_orani)
+            })
     } else {
         dec!(0)
     };
 
     let is_oks = p_kesintiler.and_then(|pk| pk.besUyesi).unwrap_or(false);
     let bes = if is_oks {
-        if let Some(sabit) = p_kesintiler.and_then(|pk| pk.sabitBesTutar) {
-            if sabit > dec!(0) { Some(sabit) } else { None }
-        } else if let Some(sabit) = k.sabitBesTutar {
-            if sabit > dec!(0) { Some(sabit) } else { None }
-        } else {
-            None
-        }.unwrap_or_else(|| {
-            let custom_oran = p_kesintiler.and_then(|pk| pk.oksOraniYuzde);
-            let oks_orani = custom_oran.unwrap_or_else(|| k.besOraniYuzde.unwrap_or(dec!(3))) / dec!(100);
-            floor_dec(worker_pek_matrah * oks_orani)
-        })
+        p_kesintiler
+            .and_then(|pk| pk.sabitBesTutar)
+            .filter(|&sabit| sabit > dec!(0))
+            .or_else(|| k.sabitBesTutar.filter(|&sabit| sabit > dec!(0)))
+            .unwrap_or_else(|| {
+                let custom_oran = p_kesintiler.and_then(|pk| pk.oksOraniYuzde);
+                let oks_orani =
+                    custom_oran.unwrap_or_else(|| k.besOraniYuzde.unwrap_or(dec!(3))) / dec!(100);
+                floor_dec(worker_pek_matrah * oks_orani)
+            })
     } else {
         dec!(0)
     };
 
-    let icra = p_kesintiler.and_then(|pk| pk.icraTutar).filter(|v| *v > dec!(0));
-    let kisi_borcu = p_kesintiler.and_then(|pk| pk.kisiBorcuTutar).filter(|v| *v > dec!(0));
-    let dogum_askerlik = p_kesintiler.and_then(|pk| pk.dogumAskerlikBorclanmasiTutar).filter(|v| *v > dec!(0));
-    let hayat_saglik = p_kesintiler.and_then(|pk| pk.hayatSaglikSigortasiTutar).filter(|v| *v > dec!(0));
-    let diger_kesinti = p_kesintiler.and_then(|pk| pk.digerKesintiTutar).filter(|v| *v > dec!(0));
+    let icra = p_kesintiler
+        .and_then(|pk| pk.icraTutar)
+        .filter(|v| *v > dec!(0));
+    let kisi_borcu = p_kesintiler
+        .and_then(|pk| pk.kisiBorcuTutar)
+        .filter(|v| *v > dec!(0));
+    let dogum_askerlik = p_kesintiler
+        .and_then(|pk| pk.dogumAskerlikBorclanmasiTutar)
+        .filter(|v| *v > dec!(0));
+    let hayat_saglik = p_kesintiler
+        .and_then(|pk| pk.hayatSaglikSigortasiTutar)
+        .filter(|v| *v > dec!(0));
+    let diger_kesinti = p_kesintiler
+        .and_then(|pk| pk.digerKesintiTutar)
+        .filter(|v| *v > dec!(0));
 
     let kesintiler = KesintiKalemleri {
         isciSgkPrimi: Some(isci_sgk_primi),
@@ -588,4 +892,30 @@ pub fn calculate_statutory_deductions(
     };
 
     (kesintiler, pek_detay, sonraki_devreden)
+}
+
+/// Test fixture/geriye dönük API. Üretim yolu yıllık parametre tablosunu kullanır.
+pub fn calculate_statutory_deductions(
+    gelirler: &GelirKalemleri,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    personel: Option<&Personel>,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    kumulatif_gv_matrahi_onceki: Decimal,
+    devreden_pek_gelen: &[DevredenPekKaydi],
+    kumulatif_asgari_gv_onceki: Decimal,
+) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
+    let tax_inputs = StatutoryDeductionTaxInputs {
+        previous_cumulative_gv: kumulatif_gv_matrahi_onceki,
+        incoming_devreden_pek: devreden_pek_gelen,
+        previous_cumulative_asgari_gv: kumulatif_asgari_gv_onceki,
+        tax_brackets: &default_gelir_vergisi_dilimleri_2026(),
+    };
+
+    calculate_statutory_deductions_with_tax_brackets(
+        gelirler,
+        kurum_degerleri,
+        personel,
+        puantaj_ozeti,
+        &tax_inputs,
+    )
 }

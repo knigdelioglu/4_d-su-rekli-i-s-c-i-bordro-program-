@@ -32,7 +32,7 @@ interface PuantajGridProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
-  onSavePuantaj: (puantaj: PersonelPuantaj) => void;
+  onSavePuantaj: (puantaj: PersonelPuantaj) => Promise<void> | void;
   onSelectPersonelForBordro?: (personelId: string) => void;
 }
 
@@ -68,7 +68,15 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     ),
   };
 
-  const handleCellClick = (dateStr: string) => {
+  const persistPuantaj = async (updated: PersonelPuantaj) => {
+    try {
+      await onSavePuantaj(updated);
+    } catch (err) {
+      alert(`Puantaj kaydedilemedi: ${String(err)}`);
+    }
+  };
+
+  const handleCellClick = async (dateStr: string) => {
     const currentCode = activePuantaj.gunler[dateStr] || 'Ç';
     const codes: PuantajKodu[] = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'];
     const nextIndex = (codes.indexOf(currentCode) + 1) % codes.length;
@@ -79,41 +87,41 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       [dateStr]: nextCode,
     };
 
-    onSavePuantaj({
+    await persistPuantaj({
       ...activePuantaj,
       gunler: updatedGunler,
     });
   };
 
-  const handleSetDayCode = (dateStr: string, code: PuantajKodu) => {
+  const handleSetDayCode = async (dateStr: string, code: PuantajKodu) => {
     const updatedGunler = {
       ...activePuantaj.gunler,
       [dateStr]: code,
     };
 
-    onSavePuantaj({
+    await persistPuantaj({
       ...activePuantaj,
       gunler: updatedGunler,
     });
   };
 
-  const handleResetDefault = () => {
+  const handleResetDefault = async () => {
     const defaultGunler = generateDefaultPuantajGunler(
       aktifDonem.baslangicTarihi,
       aktifDonem.bitisTarihi
     );
-    onSavePuantaj({
+    await persistPuantaj({
       ...activePuantaj,
       gunler: defaultGunler,
     });
   };
 
-  const handleApplyBulkCodeToAll = () => {
+  const handleApplyBulkCodeToAll = async () => {
     const newGunler: Record<string, PuantajKodu> = {};
     periodDays.forEach((d) => {
       newGunler[d.dateStr] = activeBulkCode;
     });
-    onSavePuantaj({
+    await persistPuantaj({
       ...activePuantaj,
       gunler: newGunler,
     });

@@ -19,7 +19,10 @@ mod smoke_tests {
     fn test_full_payroll_smoke_flow_on_clean_sqlite() -> Result<(), Box<dyn std::error::Error>> {
         // 1. Setup temporary disk SQLite file path
         let temp_dir = std::env::temp_dir();
-        let db_path: PathBuf = temp_dir.join(format!("smoke_test_{}.sqlite", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(12345)));
+        let db_path: PathBuf = temp_dir.join(format!(
+            "smoke_test_{}.sqlite",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(12345)
+        ));
 
         if db_path.exists() {
             let _ = fs::remove_file(&db_path);
@@ -34,8 +37,16 @@ mod smoke_tests {
             // Verify clean DB has 0 periods, 0 personnel
             let initial_periods = PeriodRepository::get_all(&conn)?;
             let initial_personnel = PersonnelRepository::get_all(&conn)?;
-            assert_eq!(initial_periods.len(), 0, "Clean DB must start with 0 periods!");
-            assert_eq!(initial_personnel.len(), 0, "Clean DB must start with 0 personnel!");
+            assert_eq!(
+                initial_periods.len(),
+                0,
+                "Clean DB must start with 0 periods!"
+            );
+            assert_eq!(
+                initial_personnel.len(),
+                0,
+                "Clean DB must start with 0 personnel!"
+            );
 
             println!("==> Verified clean SQLite DB initialized with 0 periods & 0 personnel.");
 
@@ -51,6 +62,11 @@ mod smoke_tests {
                 iban: "TR120006200000012345678901".to_string(),
                 hizmetYili: 5,
                 aciklama: Some("Destek Hizmetleri".to_string()),
+                devirKumulatifGvMatrahi: None,
+                devirKumulatifGvMatrahiYili: None,
+                devirKumulatifGvMatrahiBaslangicAyi: None,
+                devirKumulatifAsgariGvMatrahi: None,
+                devirKumulatifAsgariGvMatrahiYili: None,
                 kesintiler: Some(PersonelKesintileri {
                     sendikaUyesi: Some(true),
                     besUyesi: Some(true),
@@ -161,11 +177,15 @@ mod smoke_tests {
             println!("==> 2. Setup personnel, periods, puantaj and 120,000 TL tax opening.");
 
             // 6. Calculate May 2026 Payroll
-            let mayis_bordro = PayrollService::calculate_payroll_for_personnel(&conn, "p-smoke-1", "2026-05")?;
+            let mayis_bordro =
+                PayrollService::calculate_payroll_for_personnel(&conn, "p-smoke-1", "2026-05")?;
 
             println!("==> 3. Calculated May 2026 Payroll:");
             println!("     Gelir Toplam: {} TL", mayis_bordro.gelirToplam);
-            println!("     Önceki Küm. GV: {:?} TL", mayis_bordro.oncekiKumulatifGvMatrahi);
+            println!(
+                "     Önceki Küm. GV: {:?} TL",
+                mayis_bordro.oncekiKumulatifGvMatrahi
+            );
             println!("     Kesintiler Toplam: {} TL", mayis_bordro.kesintiToplam);
             println!("     Net Ödeme: {} TL", mayis_bordro.netOdeme);
 
@@ -173,14 +193,20 @@ mod smoke_tests {
             assert_eq!(mayis_bordro.oncekiKumulatifGvMatrahi, Some(dec!(120000)));
 
             // Verify employer premiums in May payroll
-            let mayis_pek = mayis_bordro.pekDetay.as_ref().expect("May payroll must have pekDetay");
+            let mayis_pek = mayis_bordro
+                .pekDetay
+                .as_ref()
+                .expect("May payroll must have pekDetay");
             assert!(mayis_pek.isverenSgkPrimi.is_some());
             assert!(mayis_pek.isverenIssizlikPrimi.is_some());
             assert!(mayis_pek.isverenPrimToplami.is_some());
             let mayis_isveren_sgk = mayis_pek.isverenSgkPrimi.unwrap();
             let mayis_isveren_issizlik = mayis_pek.isverenIssizlikPrimi.unwrap();
             let mayis_isveren_toplam = mayis_pek.isverenPrimToplami.unwrap();
-            assert_eq!(mayis_isveren_toplam, mayis_isveren_sgk + mayis_isveren_issizlik);
+            assert_eq!(
+                mayis_isveren_toplam,
+                mayis_isveren_sgk + mayis_isveren_issizlik
+            );
 
             // Explicitly drop connection to simulate shutting down the app
             drop(conn);
@@ -206,7 +232,10 @@ mod smoke_tests {
             assert_eq!(restored_payrolls[0].raporluGun, Some(0));
             assert_eq!(restored_payrolls[0].odenenRaporluGun, Some(0));
 
-            let restored_mayis_pek = restored_payrolls[0].pekDetay.as_ref().expect("Restored payroll must have pekDetay");
+            let restored_mayis_pek = restored_payrolls[0]
+                .pekDetay
+                .as_ref()
+                .expect("Restored payroll must have pekDetay");
             assert!(restored_mayis_pek.isverenSgkPrimi.is_some());
             assert!(restored_mayis_pek.isverenIssizlikPrimi.is_some());
             assert!(restored_mayis_pek.isverenPrimToplami.is_some());
@@ -220,21 +249,31 @@ mod smoke_tests {
             println!("     Restored May GV Base: {} TL", mayis_gv_base);
 
             // 7. Calculate June 2026 Payroll
-            let haziran_bordro = PayrollService::calculate_payroll_for_personnel(&conn, "p-smoke-1", "2026-06")?;
+            let haziran_bordro =
+                PayrollService::calculate_payroll_for_personnel(&conn, "p-smoke-1", "2026-06")?;
 
             println!("==> 6. Calculated June 2026 Payroll after app restart:");
-            println!("     Önceki Küm. GV Matrahı: {:?} TL", haziran_bordro.oncekiKumulatifGvMatrahi);
+            println!(
+                "     Önceki Küm. GV Matrahı: {:?} TL",
+                haziran_bordro.oncekiKumulatifGvMatrahi
+            );
             println!("     June Net Payment: {} TL", haziran_bordro.netOdeme);
 
             // Verify June employer costs
-            let haziran_pek = haziran_bordro.pekDetay.as_ref().expect("June payroll must have pekDetay");
+            let haziran_pek = haziran_bordro
+                .pekDetay
+                .as_ref()
+                .expect("June payroll must have pekDetay");
             assert!(haziran_pek.isverenSgkPrimi.is_some());
             assert!(haziran_pek.isverenIssizlikPrimi.is_some());
             assert!(haziran_pek.isverenPrimToplami.is_some());
 
             // Calculate cumulative GV for June: Opening (120,000 TL) + May GV Base
             let expected_june_prev_gv = dec!(120000) + mayis_gv_base;
-            println!("     Expected June Previous Cumulative GV: {} TL", expected_june_prev_gv);
+            println!(
+                "     Expected June Previous Cumulative GV: {} TL",
+                expected_june_prev_gv
+            );
 
             // Verify previous cumulative GV for June matches expectations (120,000 + May GV Base)
             assert_eq!(
@@ -243,16 +282,20 @@ mod smoke_tests {
                 "June previous cumulative GV must match 120,000 + May GV base!"
             );
 
-            let service_prev_gv = CumulativeTaxService::get_previous_cumulative_gv(&conn, "p-smoke-1", &BordroDonemi {
-                id: "2026-06".into(),
-                yil: 2026,
-                ay: 6,
-                baslangicTarihi: "2026-06-15".into(),
-                bitisTarihi: "2026-07-14".into(),
-                donemAdi: "Haziran 2026".into(),
-                taxYear: 2026,
-                taxMonth: 7,
-            })?;
+            let service_prev_gv = CumulativeTaxService::get_previous_cumulative_gv(
+                &conn,
+                "p-smoke-1",
+                &BordroDonemi {
+                    id: "2026-06".into(),
+                    yil: 2026,
+                    ay: 6,
+                    baslangicTarihi: "2026-06-15".into(),
+                    bitisTarihi: "2026-07-14".into(),
+                    donemAdi: "Haziran 2026".into(),
+                    taxYear: 2026,
+                    taxMonth: 7,
+                },
+            )?;
 
             assert_eq!(service_prev_gv, expected_june_prev_gv);
         }

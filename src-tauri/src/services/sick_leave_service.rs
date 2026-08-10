@@ -1,5 +1,6 @@
 use crate::domain::models::{BordroDonemi, SickLeaveRecord};
 use crate::domain::Result;
+use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
@@ -22,8 +23,12 @@ impl SickLeaveService {
         personnel_id: &str,
         period: &BordroDonemi,
     ) -> Result<i32> {
+        PeriodRepository::validate_period(period)?;
         let all_records = SickLeaveRepository::get_by_personnel(conn, personnel_id)?;
-        Ok(Self::calculate_paid_sick_days_from_records(&all_records, period))
+        Ok(Self::calculate_paid_sick_days_from_records(
+            &all_records,
+            period,
+        ))
     }
 
     pub fn calculate_paid_sick_days_from_records(
@@ -85,4 +90,3 @@ impl SickLeaveService {
         total_paid_in_period
     }
 }
-

@@ -25,22 +25,13 @@ import {
 import {
   BordroDonemi,
   BordroKaydi,
+  BordroStatus,
   DönemselKurumDegerleri,
-  KesintiKalemleri,
   Personel,
   PersonelPuantaj,
+  PersonelTaxOpening,
 } from '../types/payroll';
 import {
-  autoFillGelirlerFromPuantaj,
-  calculateGelirToplam,
-  calculateKesintiToplam,
-  calculateNetOdeme,
-  calculatePuantajOzeti,
-  calculateStatutoryDeductions,
-  calculatePreviousCumulativeGvMatrah,
-  calculatePreviousCumulativeAsgariUcretGvMatrah,
-  calculateIncomingDevredenPek,
-  DEFAULT_KURUM_DEGERLERI,
   formatTL,
 } from '../utils/payrollUtils';
 import { PaySlipModal } from './PaySlipModal';
@@ -53,21 +44,22 @@ interface BordroHesaplamaProps {
   kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
   puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
-  onSaveBordro: (bordro: BordroKaydi) => void;
+  onSaveBordro: (bordro: BordroKaydi) => Promise<void> | void;
   onSavePersonel?: (personel: Personel) => Promise<void> | void;
+  onSaveTaxOpening?: (opening: PersonelTaxOpening) => Promise<void> | void;
   initialPersonelId?: string;
   onGoToPuantaj?: (personelId?: string) => void;
 }
 
 export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   aktifDonem,
-  donemler,
   personeller,
   kurumDegerleriMap,
   puantajlar,
   bordrolar,
   onSaveBordro,
   onSavePersonel,
+  onSaveTaxOpening,
   onGoToPuantaj,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -85,14 +77,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   >({});
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState<boolean>(false);
 
-  // Active institution defaults for current period
-  const activeKurumDegerleri =
-    kurumDegerleriMap[aktifDonem.id] || {
-      donemId: aktifDonem.id,
-      ...DEFAULT_KURUM_DEGERLERI,
-    };
+  const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
 
-  // Helper to calculate and save bordro for a person ONLY IF saved puantaj exists
+  const getDevirGvMatrahiForActiveYear = (person: Personel): number => {
+    const activeTaxYear = aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil);
+    const openingYear = person.devirKumulatifGvMatrahiYili;
+    const opening = person.devirKumulatifGvMatrahi ?? 0;
+    return opening > 0 && (!openingYear || openingYear === activeTaxYear) ? opening : 0;
+  };
+
+  // Rust is the sole production payroll calculation engine. Browser mode can
+  // inspect/import/export records, but it cannot manufacture a payroll result.
   const calculateAndSaveForPerson = async (
     person: Personel
   ): Promise<BordroKaydi | null> => {
@@ -105,134 +100,37 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return null;
     }
 
-    // In Tauri runtime the Rust engine is the authoritative calculator and persists
-    // the result to SQLite. This keeps a single source of truth for payroll math.
-    if (tauriBridge.isTauriAvailable()) {
-      try {
-        const rustBordro = await tauriBridge.calculatePayroll(
-          person.id,
-          aktifDonem.id
-        );
-        onSaveBordro(rustBordro);
-        return rustBordro;
-      } catch (err) {
-        console.error('Rust calculate_payroll failed:', err);
-        setErrorMessage(`Hesaplama hatası: ${String(err)}`);
-        return null;
-      }
-    }
-
-    const puantajOzeti = calculatePuantajOzeti(pPuantaj.gunler);
-    const gelirler = autoFillGelirlerFromPuantaj(
-      puantajOzeti,
-      activeKurumDegerleri,
-      person.hizmetYili,
-      person.grup
-    );
-
     const existingBordro = bordrolar.find(
       (b) => b.personelId === person.id && b.donemId === aktifDonem.id
     );
+    if (existingBordro?.status === 'FINALIZED') {
+      setErrorMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildiği için yeniden hesaplanamaz.`);
+      return null;
+    }
 
-    // Calculate auto cumulative from previous saved bordros + person devir
-    const autoGvOnceki = calculatePreviousCumulativeGvMatrah(
-      person.id,
-      aktifDonem,
-      bordrolar,
-      donemler,
-      person
-    );
+    if (!tauriBridge.isTauriAvailable()) {
+      setErrorMessage('Bordro hesaplama yalnızca Tauri masaüstü uygulamasında yapılabilir.');
+      return null;
+    }
 
-    const kumulatifAsgariGvOnceki = calculatePreviousCumulativeAsgariUcretGvMatrah(
-      person.id,
-      aktifDonem,
-      bordrolar,
-      donemler,
-      kurumDegerleriMap,
-      person
-    );
-
-    const sessionManual = manualKumulatifGvMap[person.id];
-    const kumulatifGvOnceki = sessionManual ?? autoGvOnceki;
-    const hasManualGv = sessionManual !== undefined || (person.devirKumulatifGvMatrahi !== undefined && person.devirKumulatifGvMatrahiYili === (aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil)));
-
-    const devredenPekGelen = calculateIncomingDevredenPek(
-      person.id,
-      aktifDonem,
-      bordrolar,
-      donemler
-    );
-
-    const statutory = calculateStatutoryDeductions(
-      gelirler,
-      activeKurumDegerleri,
-      person,
-      puantajOzeti,
-      kumulatifGvOnceki,
-      devredenPekGelen,
-      kumulatifAsgariGvOnceki
-    );
-
-    const kesintiler: KesintiKalemleri = {
-      isciSgkPrimi: statutory.isciSgkPrimi ?? null,
-      isciIssizlikPrimi: statutory.isciIssizlikPrimi ?? null,
-      gelirVergisi: statutory.gelirVergisi ?? null,
-      damgaVergisi: statutory.damgaVergisi ?? null,
-      sendikaAidati: statutory.sendikaAidati ?? null,
-      bes: statutory.bes ?? null,
-      icra: statutory.icra ?? null,
-      kisiBorcu: statutory.kisiBorcu ?? null,
-      dogumAskerlikBorclanmasi: statutory.dogumAskerlikBorclanmasi ?? null,
-      hayatSaglikSigortasi: statutory.hayatSaglikSigortasi ?? null,
-      digerKesinti: statutory.digerKesinti ?? null,
-    };
-
-    const gelirToplam = calculateGelirToplam(gelirler);
-    const kesintiToplam = calculateKesintiToplam(kesintiler);
-    const netOdeme = calculateNetOdeme(gelirToplam, kesintiToplam);
-
-    const newBordro: BordroKaydi = {
-      id: `${person.id}_${aktifDonem.id}`,
-      personelId: person.id,
-      donemId: aktifDonem.id,
-      puantajOzeti,
-      gelirler,
-      gelirToplam,
-      kesintiler,
-      kesintiToplam,
-      netOdeme,
-      olusturulmaTarihi: new Date().toISOString(),
-      sonGuncellemeTarihi: new Date().toISOString(),
-      notlar: `${aktifDonem.donemAdi} hesaplandı.`,
-      oncekiKumulatifGvMatrahi: kumulatifGvOnceki,
-      oncekiKumulatifAsgariGvMatrahi: kumulatifAsgariGvOnceki,
-      manuelKumulatifGvMatrahi: hasManualGv ? kumulatifGvOnceki : undefined,
-      devredenPekGelen,
-      sonrakiDevredenPek: statutory.pekResult?.sonrakiDevredenList || [],
-      pekDetay: statutory.pekResult
-        ? {
-            hesaplananPek: statutory.pekResult.hesaplananPek,
-            finalPek: statutory.pekResult.finalPek,
-            devredenPekAşanTutar: statutory.pekResult.devredenPekAşanTutar,
-            pekAltSinir: statutory.pekResult.pekAltSinir,
-            pekUstSinir: statutory.pekResult.pekUstSinir,
-            fiiliYemekGunu: statutory.pekResult.fiiliYemekGunu,
-            yemekIstisnasiTutar: statutory.pekResult.yemekIstisnasiTutar,
-            isverenSgkPrimi: statutory.pekResult.isverenSgkPrimi,
-            isverenIssizlikPrimi: statutory.pekResult.isverenIssizlikPrimi,
-            isverenPrimToplami: statutory.pekResult.isverenPrimToplami,
-            sgkIsverenOraniYuzde: statutory.pekResult.sgkIsverenOraniYuzde,
-            isverenIssizlikOraniYuzde: statutory.pekResult.isverenIssizlikOraniYuzde,
-          }
-        : undefined,
-    };
-
-    onSaveBordro(newBordro);
-    return newBordro;
+    try {
+      const rustBordro = await tauriBridge.calculatePayroll(person.id, aktifDonem.id);
+      await onSaveBordro(rustBordro);
+      return rustBordro;
+    } catch (err) {
+      console.error('Rust calculate_payroll failed:', err);
+      setErrorMessage(`Hesaplama hatası: ${String(err)}`);
+      return null;
+    }
   };
 
   // Batch calculation handler
   const handleCalculateAll = async () => {
+    if (!tauriBridge.isTauriAvailable()) {
+      setSuccessMessage(null);
+      setErrorMessage('Bordro hesaplama yalnızca Tauri masaüstü uygulamasında yapılabilir.');
+      return;
+    }
     setIsBatchProcessing(true);
     let successCount = 0;
     let failCount = 0;
@@ -257,12 +155,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     } else if (successCount > 0) {
       setSuccessMessage(`${successCount} personelin bordrosu hesaplandı.`);
       setErrorMessage(
-        `${failCount} personelin kayıtlı puantajı bulunmadığı için bordrosu HESAPLANAMADI (${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '...' : ''}). Lütfen önce Puantaj Cetvelinden puantaj girişi yapın.`
+        `${failCount} personelin bordrosu hesaplanamadı (${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '...' : ''}). Hata ayrıntısı için ilgili personelin kaydını ve dönem parametrelerini kontrol edin.`
       );
     } else {
       setSuccessMessage(null);
       setErrorMessage(
-        `Hiçbir personelin kayıtlı puantajı bulunamadığı için bordro hesaplanamadı! Lütfen önce Puantaj Cetveli ekranından personellerin puantajını girip kaydedin.`
+        `Hiçbir personelin bordrosu hesaplanamadı. Kayıtlı puantaj, dönem kurum ayarları ve yıllık vergi parametrelerini kontrol edin.`
       );
     }
   };
@@ -316,6 +214,33 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     }
   };
 
+  const handleFinalize = async (person: Personel, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const bordro = bordrolar.find(
+      (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+    );
+    if (!bordro) {
+      setErrorMessage('Kesinleştirme için önce bordroyu hesaplayın.');
+      return;
+    }
+    if (bordro.status === 'FINALIZED') return;
+    if (!window.confirm(`${person.ad} ${person.soyad} bordrosu kesinleştirilsin mi? Kesinleştirilen bordro değiştirilemez.`)) {
+      return;
+    }
+
+    try {
+      if (tauriBridge.isTauriAvailable()) {
+        await tauriBridge.setPayrollStatus(person.id, aktifDonem.id, 'FINALIZED');
+      }
+      await onSaveBordro({ ...bordro, status: 'FINALIZED' as BordroStatus });
+      setErrorMessage(null);
+      setSuccessMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildi.`);
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err) {
+      setErrorMessage(`Bordro kesinleştirilemedi: ${String(err)}`);
+    }
+  };
+
   // Filtered personnel list
   const filteredPersoneller = personeller.filter(
     (p) =>
@@ -331,12 +256,10 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const totalGross = activePeriodBordrolar.reduce((acc, b) => acc + (b.gelirToplam || 0), 0);
   const totalNet = activePeriodBordrolar.reduce((acc, b) => acc + (b.netOdeme || 0), 0);
   const totalDeductions = activePeriodBordrolar.reduce((acc, b) => acc + (b.kesintiToplam || 0), 0);
-  const totalEmployerCost = activePeriodBordrolar.reduce((acc, b) => {
-    const isverenSgk = b.pekDetay?.isverenSgkPrimi ?? (b.pekDetay ? Math.round(b.pekDetay.finalPek * (b.pekDetay.sgkIsverenOraniYuzde ?? 21.75) / 100 * 100) / 100 : 0);
-    const isverenIssizlik = b.pekDetay?.isverenIssizlikPrimi ?? (b.pekDetay ? Math.round(b.pekDetay.finalPek * (b.pekDetay.isverenIssizlikOraniYuzde ?? 2) / 100 * 100) / 100 : 0);
-    const isverenAltSinirFark = b.pekDetay?.pekAltSinirTamamlamaIsverenPrimi ?? 0;
-    return acc + (b.pekDetay?.isverenPrimToplami ?? (isverenSgk + isverenIssizlik + isverenAltSinirFark));
-  }, 0);
+  const totalEmployerCost = activePeriodBordrolar.reduce(
+    (acc, b) => acc + (b.pekDetay?.isverenPrimToplami ?? 0),
+    0
+  );
 
   return (
     <div className="space-y-6">
@@ -531,6 +454,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   );
 
                   const isCalculated = !!bordro;
+                  const isFinalized = bordro?.status === 'FINALIZED';
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
@@ -623,7 +547,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         {(() => {
                           const sessionManual = manualKumulatifGvMap[person.id];
                           const isManual = sessionManual !== undefined || bordro?.manuelKumulatifGvMatrahi !== undefined;
-                          const val = sessionManual ?? bordro?.oncekiKumulatifGvMatrahi ?? bordro?.manuelKumulatifGvMatrahi ?? calculatePreviousCumulativeGvMatrah(person.id, aktifDonem, bordrolar, donemler, person);
+                          const val =
+                            sessionManual ??
+                            bordro?.oncekiKumulatifGvMatrahi ??
+                            bordro?.manuelKumulatifGvMatrahi ??
+                            getDevirGvMatrahiForActiveYear(person);
 
                           if (val > 0) {
                             return (
@@ -671,7 +599,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
                       {/* Durum */}
                       <td className="py-3 px-4 text-center">
-                        {isCalculated ? (
+                        {isFinalized ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-200 text-slate-800 border border-slate-300">
+                            <CheckCircle2 className="w-3 h-3 text-slate-700" />
+                            <span>Kesinleştirildi</span>
+                          </span>
+                        ) : isCalculated ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             <span>Hesaplandı</span>
@@ -694,14 +627,16 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         <div className="flex items-center justify-center gap-1.5">
                           {hasPuantaj ? (
                             <>
-                              <button
-                                onClick={(e) => handleCalculateSingle(person, e)}
-                                title="Bordroyu Hesapla/Yeniden Hesapla"
-                                className="p-1.5 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
-                              >
-                                <RefreshCw className="w-3.5 h-3.5" />
-                                <span>Hesapla</span>
-                              </button>
+                              {!isFinalized && (
+                                <button
+                                  onClick={(e) => handleCalculateSingle(person, e)}
+                                  title="Bordroyu Hesapla/Yeniden Hesapla"
+                                  className="p-1.5 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                >
+                                  <RefreshCw className="w-3.5 h-3.5" />
+                                  <span>Hesapla</span>
+                                </button>
+                              )}
 
                               <button
                                 onClick={(e) => {
@@ -714,6 +649,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                 <FileText className="w-3.5 h-3.5" />
                                 <span>Bordro Gör</span>
                               </button>
+
+                              {isCalculated && !isFinalized && (
+                                <button
+                                  onClick={(e) => handleFinalize(person, e)}
+                                  title="Bordroyu kesinleştir"
+                                  className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  <span>Kesinleştir</span>
+                                </button>
+                              )}
                             </>
                           ) : (
                             <button
@@ -747,7 +693,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           personel={activePaySlip.personel}
           bordro={activePaySlip.bordro}
           donem={aktifDonem}
-          isPrimiGruplari={activeKurumDegerleri.isPrimiGruplari}
+          isPrimiGruplari={activeKurumDegerleri?.isPrimiGruplari}
         />
       )}
 
@@ -804,13 +750,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       const bordro = bordrolar.find(
                         (b) => b.personelId === person.id && b.donemId === aktifDonem.id
                       );
-                      const autoGv = calculatePreviousCumulativeGvMatrah(
-                        person.id,
-                        aktifDonem,
-                        bordrolar,
-                        donemler,
-                        person
-                      );
+                      const autoGv =
+                        bordro?.oncekiKumulatifGvMatrahi ??
+                        getDevirGvMatrahiForActiveYear(person);
 
                       const currentSession = manualKumulatifGvMap[person.id];
                       const displayGv = currentSession ?? bordro?.manuelKumulatifGvMatrahi ?? autoGv;
@@ -872,47 +814,41 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   <button
                     type="button"
                     onClick={async () => {
-                      let updatedAny = false;
-                      for (const pId of Object.keys(manualKumulatifGvMap)) {
-                        const person = personeller.find((p) => p.id === pId);
-                        if (person && onSavePersonel) {
-                          const val = manualKumulatifGvMap[pId];
-                          await onSavePersonel({
-                            ...person,
-                            devirKumulatifGvMatrahi: val,
-                            devirKumulatifGvMatrahiYili: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
-                            devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
-                          });
-                          // In Tauri runtime the Rust cumulative engine reads from
-                          // personnel_tax_opening. Persist the same opening there so the
-                          // authoritative calc and the UI stay in sync. Opening yılı vergi
-                          // yılıdır (Aralık dönemi → yıl +1), böylece yıl geçişinde devir
-                          // 2027 kümülatifine doğru bağlanır.
-                          if (tauriBridge.isTauriAvailable()) {
-                            try {
-                              await tauriBridge.saveTaxOpening({
+                      try {
+                        let updatedAny = false;
+                        for (const pId of Object.keys(manualKumulatifGvMap)) {
+                          const person = personeller.find((p) => p.id === pId);
+                          if (person && onSavePersonel) {
+                            const val = manualKumulatifGvMap[pId];
+                            await onSavePersonel({
+                              ...person,
+                              devirKumulatifGvMatrahi: val,
+                              devirKumulatifGvMatrahiYili: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
+                              devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
+                            });
+                            // The App owns persistence in both native and browser
+                            // modes. Do not swallow an opening-table write failure.
+                            if (onSaveTaxOpening) {
+                              await onSaveTaxOpening({
                                 id: `${person.id}_${aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil)}`,
                                 personnelId: person.id,
                                 year: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
                                 gvCumulativeOpening: val,
                                 effectiveFromPeriodId: aktifDonem.id,
                               });
-                            } catch (taxErr) {
-                              console.error(
-                                'save_tax_opening failed:',
-                                taxErr
-                              );
                             }
+                            updatedAny = true;
                           }
-                          updatedAny = true;
                         }
-                      }
-                      setIsKumulatifModalOpen(false);
-                      await handleCalculateAll();
-                      if (updatedAny) {
-                        setSuccessMessage(
-                          `${aktifDonem.yil} yılı kümülatif GV başlangıç matrahı güncellendi. Bu yıla ait bordrolar yeniden hesaplandı.`
-                        );
+                        await handleCalculateAll();
+                        setIsKumulatifModalOpen(false);
+                        if (updatedAny) {
+                          setSuccessMessage(
+                            `${aktifDonem.yil} yılı kümülatif GV başlangıç matrahı güncellendi. Bu yıla ait bordrolar yeniden hesaplandı.`
+                          );
+                        }
+                      } catch (err) {
+                        setErrorMessage(`Kümülatif matrah kaydedilemedi: ${String(err)}`);
                       }
                     }}
                     className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center gap-1.5 cursor-pointer"

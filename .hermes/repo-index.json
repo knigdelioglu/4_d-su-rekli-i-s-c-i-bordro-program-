@@ -16,7 +16,9 @@
    "src-tauri/src/repositories/tax_opening_repo.rs",
    "src-tauri/src/repositories/period_repo.rs",
    "src-tauri/src/repositories/personnel_repo.rs",
-   "src-tauri/src/repositories/attendance_repo.rs"
+   "src-tauri/src/repositories/attendance_repo.rs",
+   "src-tauri/src/repositories/sick_leave_repo.rs",
+   "src-tauri/src/repositories/annual_payroll_parameters_repo.rs"
   ],
   "rust_db": [
    "src-tauri/src/db/migrations.rs",
@@ -30,7 +32,8 @@
   ],
   "rust_tests": [
    "src-tauri/tests/domain_tests.rs",
-   "src-tauri/tests/native_smoke_test.rs"
+   "src-tauri/tests/native_smoke_test.rs",
+   "src-tauri/tests/remaining_debt_tests.rs"
   ],
   "ts_types": [
    "src/types/payroll.ts"
@@ -57,5 +60,5 @@
   "rust_tests": "cd src-tauri && cargo test",
   "ts_unit": "bun test src/"
  },
- "last_updated": "2026-08-08"
+ "last_updated": "2026-08-10"
 }

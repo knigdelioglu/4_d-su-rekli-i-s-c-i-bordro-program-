@@ -1,10 +1,37 @@
 use crate::domain::models::SickLeaveRecord;
 use crate::domain::{DomainError, Result};
+use chrono::NaiveDate;
 use rusqlite::{params, Connection, Row};
 
 pub struct SickLeaveRepository;
 
 impl SickLeaveRepository {
+    pub fn validate_record(record: &SickLeaveRecord) -> Result<()> {
+        let start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "Rapor başlangıç tarihi geçersiz: {}.",
+                record.startDate
+            ))
+        })?;
+        let end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "Rapor bitiş tarihi geçersiz: {}.",
+                record.endDate
+            ))
+        })?;
+        if start > end {
+            return Err(DomainError::ValidationError(
+                "Rapor başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
+            ));
+        }
+        if record.personnelId.trim().is_empty() {
+            return Err(DomainError::ValidationError(
+                "Rapor kaydında personel zorunludur.".into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn from_row(row: &Row) -> rusqlite::Result<SickLeaveRecord> {
         Ok(SickLeaveRecord {
             id: row.get(0)?,
@@ -17,6 +44,7 @@ impl SickLeaveRepository {
     }
 
     pub fn save(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
+        Self::validate_record(record)?;
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
         let updated_at = &now;
@@ -71,8 +99,9 @@ impl SickLeaveRepository {
             .next()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?
         {
-            let record = Self::from_row(row)
-                .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            let record =
+                Self::from_row(row).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_record(&record)?;
             Ok(Some(record))
         } else {
             Ok(None)
@@ -92,12 +121,13 @@ impl SickLeaveRepository {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![personnel_id], |row| Self::from_row(row))
+            .query_map(params![personnel_id], Self::from_row)
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let mut result = Vec::new();
         for r in rows {
             let record = r.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_record(&record)?;
             result.push(record);
         }
         Ok(result)
@@ -115,12 +145,13 @@ impl SickLeaveRepository {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
-            .query_map([], |row| Self::from_row(row))
+            .query_map([], Self::from_row)
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let mut result = Vec::new();
         for r in rows {
             let record = r.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_record(&record)?;
             result.push(record);
         }
         Ok(result)

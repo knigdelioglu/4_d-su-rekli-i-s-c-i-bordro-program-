@@ -1,7 +1,9 @@
 import {
   BordroDonemi,
   BordroKaydi,
+  BordroStatus,
   DönemselKurumDegerleri,
+  AnnualPayrollParameters,
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
@@ -58,6 +60,13 @@ export const tauriBridge = {
     return invokeTauri<void>('save_period', { period });
   },
 
+  async savePeriodWithSettings(
+    period: BordroDonemi,
+    settings: DönemselKurumDegerleri
+  ): Promise<void> {
+    return invokeTauri<void>('save_period_with_settings', { period, settings });
+  },
+
   async getAttendanceList(): Promise<PersonelPuantaj[]> {
     return invokeTauri<PersonelPuantaj[]>('get_attendance_list');
   },
@@ -74,7 +83,7 @@ export const tauriBridge = {
     return invokeTauri<BordroKaydi>('calculate_payroll', { personnelId, periodId });
   },
 
-  async setPayrollStatus(personnelId: string, periodId: string, status: string): Promise<void> {
+  async setPayrollStatus(personnelId: string, periodId: string, status: BordroStatus): Promise<void> {
     return invokeTauri<void>('set_payroll_status', { personnelId, periodId, status });
   },
 
@@ -100,6 +109,18 @@ export const tauriBridge = {
 
   async migrateLegacyPayload(payloadJson: string): Promise<void> {
     return invokeTauri<void>('migrate_legacy_payload', { payloadJson });
+  },
+
+  async replaceBackupPayload(payloadJson: string): Promise<void> {
+    return invokeTauri<void>('replace_backup_payload', { payloadJson });
+  },
+
+  async getAnnualPayrollParameters(): Promise<AnnualPayrollParameters[]> {
+    return invokeTauri<AnnualPayrollParameters[]>('get_annual_payroll_parameters');
+  },
+
+  async saveAnnualPayrollParameters(parameters: AnnualPayrollParameters): Promise<void> {
+    return invokeTauri<void>('save_annual_payroll_parameters', { parameters });
   },
 
   async getSickLeaveRecords(personnelId?: string): Promise<SickLeaveRecord[]> {

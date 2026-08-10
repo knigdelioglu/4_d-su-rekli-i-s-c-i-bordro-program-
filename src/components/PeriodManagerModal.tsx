@@ -7,9 +7,11 @@ import { Calendar, Save, Plus, Settings, Check, X, Info, Gift, Award, Sparkles, 
 import {
   BordroDonemi,
   DönemselKurumDegerleri,
+  AnnualPayrollParameters,
   IsPrimiGrupItem,
   Personel,
   SickLeaveRecord,
+  TaxBracket,
   TediyeKalemi,
   TisIkramiyeKalemi,
 } from '../types/payroll';
@@ -22,21 +24,25 @@ import {
   DEFAULT_TIS_IKRAMIYE_LISTESI,
   formatTL,
 } from '../utils/payrollUtils';
-import { tauriBridge } from '../services/tauriBridge';
 
 interface PeriodManagerModalProps {
   isOpen: boolean;
   onClose: () => void;
   donemler: BordroDonemi[];
   aktifDonemId: string;
-  onSelectDonem: (donemId: string) => void;
+  onSelectDonem: (donemId: string) => Promise<void> | void;
   onCreateDonem: (
     donem: BordroDonemi,
     kurumDegerleri: DönemselKurumDegerleri
-  ) => void;
+  ) => Promise<void> | void;
   kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
-  onSaveKurumDegerleri: (kurumDegerleri: DönemselKurumDegerleri) => void;
+  onSaveKurumDegerleri: (kurumDegerleri: DönemselKurumDegerleri) => Promise<void> | void;
   personeller?: Personel[];
+  annualPayrollParameters: AnnualPayrollParameters[];
+  onSaveAnnualPayrollParameters: (parameters: AnnualPayrollParameters) => Promise<void> | void;
+  sickLeaveRecords: SickLeaveRecord[];
+  onSaveSickLeaveRecord: (record: SickLeaveRecord) => Promise<void> | void;
+  onDeleteSickLeaveRecord: (id: string) => Promise<void> | void;
 }
 
 export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
@@ -49,6 +55,11 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   kurumDegerleriMap,
   onSaveKurumDegerleri,
   personeller = [],
+  annualPayrollParameters,
+  onSaveAnnualPayrollParameters,
+  sickLeaveRecords,
+  onSaveSickLeaveRecord,
+  onDeleteSickLeaveRecord,
 }) => {
   const currentYear = new Date().getFullYear();
   const [newYear, setNewYear] = useState<number>(currentYear);
@@ -63,7 +74,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
     setNewTaxMonth(tm);
     setNewTaxYear(ty);
   };
-  const [activeTab, setActiveTab] = useState<'editParams' | 'editDeductions' | 'tediyeTis' | 'sickLeave' | 'select' | 'new'>(
+  const [activeTab, setActiveTab] = useState<'editParams' | 'editDeductions' | 'annualTax' | 'tediyeTis' | 'sickLeave' | 'select' | 'new'>(
     'editParams'
   );
 
@@ -88,30 +99,17 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   });
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [isGrupModalOpen, setIsGrupModalOpen] = useState<boolean>(false);
+  const [annualTaxYear, setAnnualTaxYear] = useState<number>(currentYear);
+  const [annualTaxBrackets, setAnnualTaxBrackets] = useState<TaxBracket[]>([]);
+  const [annualTaxSuccess, setAnnualTaxSuccess] = useState<boolean>(false);
 
   // Sick leave records state
-  const [sickLeaveList, setSickLeaveList] = useState<SickLeaveRecord[]>([]);
   const [selectedPersonForSick, setSelectedPersonForSick] = useState<string>(personeller[0]?.id || '');
   const [sickStartDate, setSickStartDate] = useState<string>('');
   const [sickEndDate, setSickEndDate] = useState<string>('');
   const [sickSuccessMsg, setSickSuccessMsg] = useState<string | null>(null);
 
-  const loadSickLeaves = async () => {
-    if (tauriBridge.isTauriAvailable()) {
-      try {
-        const list = await tauriBridge.getSickLeaveRecords();
-        setSickLeaveList(list);
-      } catch (err) {
-        console.error('Failed to load sick leave records:', err);
-      }
-    }
-  };
-
-  useEffect(() => {
-    if (isOpen) {
-      loadSickLeaves();
-    }
-  }, [isOpen]);
+  const sickLeaveList = sickLeaveRecords;
 
   useEffect(() => {
     if (personeller.length > 0 && !selectedPersonForSick) {
@@ -130,34 +128,22 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       endDate: sickEndDate,
     };
 
-    if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.saveSickLeaveRecord(newRecord);
-        await loadSickLeaves();
-        setSickSuccessMsg('Rapor olayı başarıyla kaydedildi.');
-        setTimeout(() => setSickSuccessMsg(null), 2500);
-        setSickStartDate('');
-        setSickEndDate('');
-      } catch (err) {
-        console.error('Failed to save sick leave record:', err);
-      }
-    } else {
-      setSickLeaveList((prev) => [...prev, newRecord]);
+    try {
+      await onSaveSickLeaveRecord(newRecord);
+      setSickSuccessMsg('Rapor olayı başarıyla kaydedildi.');
+      setTimeout(() => setSickSuccessMsg(null), 2500);
       setSickStartDate('');
       setSickEndDate('');
+    } catch (err) {
+      alert(`Rapor olayı kaydedilemedi: ${String(err)}`);
     }
   };
 
   const handleDeleteSickLeave = async (id: string) => {
-    if (tauriBridge.isTauriAvailable()) {
-      try {
-        await tauriBridge.deleteSickLeaveRecord(id);
-        await loadSickLeaves();
-      } catch (err) {
-        console.error('Failed to delete sick leave record:', err);
-      }
-    } else {
-      setSickLeaveList((prev) => prev.filter((r) => r.id !== id));
+    try {
+      await onDeleteSickLeaveRecord(id);
+    } catch (err) {
+      alert(`Rapor olayı silinemedi: ${String(err)}`);
     }
   };
 
@@ -174,6 +160,16 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
     });
   }, [aktifDonemId, kurumDegerleriMap]);
 
+  useEffect(() => {
+    const activePeriod = donemler.find((period) => period.id === aktifDonemId);
+    const year = activePeriod?.taxYear || newTaxYear;
+    const savedParameters = annualPayrollParameters.find((parameters) => parameters.year === year);
+    setAnnualTaxYear(year);
+    setAnnualTaxBrackets(
+      savedParameters?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) || []
+    );
+  }, [aktifDonemId, annualPayrollParameters, donemler, newTaxYear]);
+
   // Preview generated dates
   const previewDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
   const previewExists = donemler.some((d) => d.id === previewDonem.id);
@@ -186,7 +182,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleCreateNewPeriod = (e: React.FormEvent) => {
+  const handleCreateNewPeriod = async (e: React.FormEvent) => {
     e.preventDefault();
     const newDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
     const initialKurum: DönemselKurumDegerleri = {
@@ -218,19 +214,63 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       gunlukAsgariUcret: paramsForm.gunlukAsgariUcret ?? DEFAULT_KURUM_DEGERLERI.gunlukAsgariUcret,
     };
 
-    onCreateDonem(newDonem, initialKurum);
-    onSelectDonem(newDonem.id);
-    setActiveTab('editParams');
+    try {
+      await onCreateDonem(newDonem, initialKurum);
+      await onSelectDonem(newDonem.id);
+      setActiveTab('editParams');
+    } catch (err) {
+      alert(`Dönem kaydedilemedi: ${String(err)}`);
+    }
   };
 
-  const handleSaveParams = (e: React.FormEvent) => {
+  const handleSaveParams = async (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveKurumDegerleri({
-      ...paramsForm,
-      donemId: aktifDonemId,
-    });
-    setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2500);
+    try {
+      await onSaveKurumDegerleri({
+        ...paramsForm,
+        donemId: aktifDonemId,
+      });
+      setSavedSuccess(true);
+      setTimeout(() => setSavedSuccess(false), 2500);
+    } catch (err) {
+      alert(`Kurum ayarları kaydedilemedi: ${String(err)}`);
+    }
+  };
+
+  const handleSaveAnnualTaxParameters = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!Number.isInteger(annualTaxYear) || annualTaxYear <= 0 || annualTaxBrackets.length === 0) {
+      alert('Vergi yılı ve en az bir gelir vergisi dilimi girilmelidir.');
+      return;
+    }
+
+    let previousLimit = 0;
+    for (const bracket of annualTaxBrackets) {
+      if (bracket.limit <= previousLimit || bracket.oran < 0 || bracket.oran > 1) {
+        alert('Vergi dilimleri artan limitlere ve %0-%100 arasında oranlara sahip olmalıdır.');
+        return;
+      }
+      previousLimit = bracket.limit;
+    }
+
+    try {
+      await onSaveAnnualPayrollParameters({
+        year: annualTaxYear,
+        gelirVergisiDilimleri: annualTaxBrackets,
+      });
+      setAnnualTaxSuccess(true);
+      setTimeout(() => setAnnualTaxSuccess(false), 2500);
+    } catch (err) {
+      alert(`Yıllık vergi parametreleri kaydedilemedi: ${String(err)}`);
+    }
+  };
+
+  const updateAnnualTaxBracket = (index: number, field: keyof TaxBracket, value: number) => {
+    setAnnualTaxBrackets((current) =>
+      current.map((bracket, bracketIndex) =>
+        bracketIndex === index ? { ...bracket, [field]: value } : bracket
+      )
+    );
   };
 
   // Tediye Handlers
@@ -383,6 +423,19 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
           >
             <ShieldAlert className="w-4 h-4 text-rose-600" />
             <span>Kesinti Kalemleri & Yasal Oranlar</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('annualTax')}
+            className={`px-3.5 py-2 text-xs font-semibold rounded-t-xl border-t border-x transition-all flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'annualTax'
+                ? 'bg-white border-slate-200 text-violet-700 shadow-2xs -mb-px'
+                : 'border-transparent text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Percent className="w-4 h-4 text-violet-600" />
+            <span>Yıllık GV Tarifesi</span>
           </button>
 
           <button
@@ -716,6 +769,108 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
             </form>
           )}
 
+          {activeTab === 'annualTax' && (
+            <form onSubmit={handleSaveAnnualTaxParameters} className="space-y-5">
+              <div className="bg-violet-50 border border-violet-200 rounded-xl p-3.5 flex items-start gap-3">
+                <Percent className="w-5 h-5 text-violet-600 shrink-0 mt-0.5" />
+                <div className="text-xs text-violet-950 leading-relaxed">
+                  <strong>{annualTaxYear}</strong> vergi yılı için kümülatif gelir vergisi dilimlerini
+                  tanımlayın. Bordro motoru hesaplama sırasında dönemin vergi yılına ait kaydı kullanır;
+                  kayıt yoksa bordro hesaplamayı reddeder.
+                </div>
+              </div>
+
+              {annualTaxSuccess && (
+                <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+                  <Check className="w-4 h-4 text-emerald-600" />
+                  <span>{annualTaxYear} gelir vergisi tarifesi başarıyla kaydedildi.</span>
+                </div>
+              )}
+
+              <div className="flex items-end gap-3">
+                <div className="w-40">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Vergi Yılı</label>
+                  <input
+                    type="number"
+                    min={2000}
+                    value={annualTaxYear || ''}
+                    onChange={(e) => setAnnualTaxYear(parseInt(e.target.value, 10) || 0)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-violet-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setAnnualTaxBrackets((current) => [
+                      ...current,
+                      { limit: (current.at(-1)?.limit || 0) + 100000, oran: 0.4 },
+                    ])
+                  }
+                  className="px-3 py-2 bg-violet-100 hover:bg-violet-200 text-violet-800 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  Dilim Ekle
+                </button>
+              </div>
+
+              {annualTaxBrackets.length === 0 ? (
+                <div className="p-4 border border-dashed border-slate-300 rounded-xl text-xs text-slate-600">
+                  Bu yıl için kayıtlı tarife yok. İlk dilimi ekleyerek başlayın.
+                </div>
+              ) : (
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <div className="grid grid-cols-[1fr_1fr_auto] gap-3 bg-slate-100 px-4 py-2.5 text-xs font-bold text-slate-700">
+                    <span>Kümülatif üst limit (TL)</span>
+                    <span>Oran (%)</span>
+                    <span className="sr-only">İşlem</span>
+                  </div>
+                  <div className="divide-y divide-slate-200">
+                    {annualTaxBrackets.map((bracket, index) => (
+                      <div key={`${annualTaxYear}-${index}`} className="grid grid-cols-[1fr_1fr_auto] gap-3 items-center px-4 py-3">
+                        <input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={Number.isFinite(bracket.limit) ? bracket.limit : ''}
+                          onChange={(e) => updateAnnualTaxBracket(index, 'limit', parseFloat(e.target.value) || 0)}
+                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-violet-500"
+                        />
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step="0.01"
+                          value={(bracket.oran * 100).toString()}
+                          onChange={(e) => updateAnnualTaxBracket(index, 'oran', (parseFloat(e.target.value) || 0) / 100)}
+                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-violet-500"
+                        />
+                        <button
+                          type="button"
+                          disabled={annualTaxBrackets.length <= 1}
+                          onClick={() => setAnnualTaxBrackets((current) => current.filter((_, itemIndex) => itemIndex !== index))}
+                          className="p-2 text-rose-600 hover:bg-rose-50 disabled:opacity-30 disabled:cursor-not-allowed rounded-lg"
+                          title="Dilimi sil"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-slate-200 flex justify-end">
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>Yıllık GV Tarifesini Kaydet</span>
+                </button>
+              </div>
+            </form>
+          )}
+
           {/* TAB 2: Edit Deduction Parameters & Rates */}
           {activeTab === 'editDeductions' && (
             <form onSubmit={handleSaveParams} className="space-y-5">
@@ -789,10 +944,10 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                       Gelir Vergisi Tarifesi
                     </label>
                     <div className="px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-xs font-semibold text-slate-800">
-                      2026 Kümülatif Vergi Tarifesi (%15, %20, %27, %35, %40)
+                      Yıllık GV parametre tablosu kullanılır
                     </div>
                     <span className="text-[11px] text-slate-500 mt-0.5 block">
-                      Otomatik kümülatif dilimli hesaplama
+                      Tarifeyi “Yıllık GV Tarifesi” sekmesinden yönetin.
                     </span>
                   </div>
 

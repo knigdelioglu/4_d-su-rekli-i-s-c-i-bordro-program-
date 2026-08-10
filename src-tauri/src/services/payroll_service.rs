@@ -1,14 +1,13 @@
+use super::cumulative_tax_service::CumulativeTaxService;
 use crate::domain::calculations::*;
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
-use crate::repositories::settings_repo::SettingsRepository;
-use super::cumulative_tax_service::CumulativeTaxService;
 use rusqlite::Connection;
-use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 
 pub struct PayrollService;
@@ -19,28 +18,28 @@ impl PayrollService {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<BordroKaydi> {
-        let personel = PersonnelRepository::get_by_id(conn, personnel_id)?
-            .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", personnel_id)))?;
+        let personel = PersonnelRepository::get_by_id(conn, personnel_id)?.ok_or_else(|| {
+            DomainError::NotFound(format!("Personel bulunamadı: {}", personnel_id))
+        })?;
 
         let period = PeriodRepository::get_by_id(conn, period_id)?
             .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", period_id)))?;
 
         // Check existing payroll status
-        let existing = PayrollRepository::get_all(conn)?
-            .into_iter()
-            .find(|b| b.personelId == personnel_id && b.donemId == period_id);
+        let existing = PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)?;
 
-        if let Some(ref b) = existing {
-            if b.status == BordroStatus::FINALIZED {
+        if let Some((status, _)) = existing.as_ref() {
+            if *status == BordroStatus::FINALIZED {
                 return Err(DomainError::PayrollFinalized(
-                    "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into()
+                    "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
                 ));
             }
         }
 
         // Get saved attendance
-        let attendance = AttendanceRepository::get_by_personnel_and_period(conn, personnel_id, period_id)?
-            .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
+        let attendance =
+            AttendanceRepository::get_by_personnel_and_period(conn, personnel_id, period_id)?
+                .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
 
         let mut summary = PuantajOzeti::default();
         for code in attendance.gunler.values() {
@@ -52,12 +51,36 @@ impl PayrollService {
                 "GÇ" => summary.gc += 1,
                 "GÇT" => summary.gct += 1,
                 "R" => summary.r += 1,
-                _ => {}
+                _ => {
+                    return Err(DomainError::InvalidData(format!(
+                        "{} döneminde desteklenmeyen puantaj kodu: {}",
+                        period_id, code
+                    )))
+                }
             }
         }
 
-        let inst_map = SettingsRepository::get_all_institution_settings(conn)?;
-        let kurum_degerleri = inst_map.get(period_id).cloned().unwrap_or_default();
+        let kurum_degerleri =
+            crate::repositories::settings_repo::SettingsRepository::get_institution_settings(
+                conn, period_id,
+            )?
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi kurum ayarları bulunamadı; bordro hesaplanamaz.",
+                    period_id
+                ))
+            })?;
+        validate_kurum_degerleri_for_payroll(&kurum_degerleri)?;
+
+        let annual_parameters =
+            AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?.ok_or_else(
+                || {
+                    DomainError::InvalidData(format!(
+                    "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
+                    period.taxYear
+                ))
+                },
+            )?;
 
         let (gelirler, is_primi_detay) = auto_fill_gelirler_from_puantaj(
             &summary,
@@ -66,49 +89,67 @@ impl PayrollService {
             Some(&personel.grup),
         )?;
 
-let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
-        let prev_asgari_gv = CumulativeTaxService::get_previous_cumulative_asgari_gv(conn, personnel_id, &period)?;
+        let prev_gv =
+            CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
+        let prev_asgari_gv = CumulativeTaxService::get_previous_cumulative_asgari_gv_strict(
+            conn,
+            personnel_id,
+            &period,
+        )?;
 
-        let devreden_pek_gelen = Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
+        let devreden_pek_gelen =
+            Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
+        let tax_inputs = StatutoryDeductionTaxInputs {
+            previous_cumulative_gv: prev_gv,
+            incoming_devreden_pek: &devreden_pek_gelen,
+            previous_cumulative_asgari_gv: prev_asgari_gv,
+            tax_brackets: &annual_parameters.gelirVergisiDilimleri,
+        };
 
-        let (kesintiler, pek_detay, sonraki_devreden) = calculate_statutory_deductions(
-            &gelirler,
-            Some(&kurum_degerleri),
-            Some(&personel),
-            Some(&summary),
-            prev_gv,
-            &devreden_pek_gelen,
-            prev_asgari_gv,
-        );
+        let (kesintiler, pek_detay, sonraki_devreden) =
+            calculate_statutory_deductions_with_tax_brackets(
+                &gelirler,
+                Some(&kurum_degerleri),
+                Some(&personel),
+                Some(&summary),
+                &tax_inputs,
+            );
 
         let gelir_toplam = calculate_gelir_toplam(&gelirler);
 
         // GV detay snapshot: gerçek kümülatif ile asgari takvim referansı açıkça ayrılır.
-        let sgk_orani = kurum_degerleri.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
-        let issizlik_orani = kurum_degerleri.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
-        let gunluk_asgari = kurum_degerleri.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
+        let sgk_orani = kurum_degerleri
+            .sgkIsciOraniYuzde
+            .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
+            / dec!(100);
+        let issizlik_orani = kurum_degerleri
+            .issizlikIsciOraniYuzde
+            .ok_or_else(|| DomainError::InvalidData("İşsizlik işçi oranı eksik.".into()))?
+            / dec!(100);
+        let gunluk_asgari = kurum_degerleri
+            .gunlukAsgariUcret
+            .ok_or_else(|| DomainError::InvalidData("Günlük asgari ücret eksik.".into()))?;
         let cari_gv_matrah = calculate_gv_matrah(
             gelir_toplam,
             kesintiler.isciSgkPrimi.unwrap_or_default(),
             kesintiler.isciIssizlikPrimi.unwrap_or_default(),
         );
-        let asgari_ucret_aylik_matrah = calculate_aylik_asgari_ucret_gv_matrahi(
-            gunluk_asgari,
-            sgk_orani,
-            issizlik_orani,
-        );
-        let gv_detay = calculate_gv_hesap_detayi(
+        let asgari_ucret_aylik_matrah =
+            calculate_aylik_asgari_ucret_gv_matrahi(gunluk_asgari, sgk_orani, issizlik_orani);
+        let gv_detay = calculate_gv_hesap_detayi_with_brackets(
             cari_gv_matrah,
             prev_gv,
             asgari_ucret_aylik_matrah,
             prev_asgari_gv,
+            &annual_parameters.gelirVergisiDilimleri,
         );
 
-        let odenen_raporlu_gun = super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
-            conn,
-            personnel_id,
-            &period,
-        )?;
+        let odenen_raporlu_gun =
+            super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
+                conn,
+                personnel_id,
+                &period,
+            )?;
 
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
@@ -126,7 +167,9 @@ let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_i
             kesintiToplam: kesinti_toplam,
             netOdeme: net_odeme,
             status: BordroStatus::CALCULATED,
-            olusturulmaTarihi: existing.as_ref().map_or(now.clone(), |b| b.olusturulmaTarihi.clone()),
+            olusturulmaTarihi: existing
+                .as_ref()
+                .map_or(now.clone(), |(_, created_at)| created_at.clone()),
             sonGuncellemeTarihi: now,
             notlar: Some(format!("{} dönemi hesaplandı.", period.donemAdi)),
             oncekiKumulatifGvMatrahi: Some(prev_gv),
@@ -152,21 +195,19 @@ let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_i
         period_id: &str,
         status: BordroStatus,
     ) -> Result<()> {
-        let all = PayrollRepository::get_all(conn)?;
-        if let Some(mut bordro) = all.into_iter().find(|b| b.personelId == personnel_id && b.donemId == period_id) {
-            // A FINALIZED payroll is immutable: it can neither be re-calculated nor
-            // downgraded to a mutable status. Only the FINALIZED state can ever be set again.
-            if bordro.status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
-                return Err(DomainError::PayrollFinalized(
-                    "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into()
-                ));
-            }
-            bordro.status = status;
-            PayrollRepository::save(conn, &bordro)?;
-            Ok(())
-        } else {
-            Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()))
+        let current = PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)?;
+        let Some((current_status, _)) = current else {
+            return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
+        };
+
+        // A FINALIZED payroll is immutable: it can neither be re-calculated nor
+        // downgraded to a mutable status. Only the FINALIZED state can ever be set again.
+        if current_status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
+            return Err(DomainError::PayrollFinalized(
+                "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into(),
+            ));
         }
+        PayrollRepository::update_status(conn, personnel_id, period_id, status)
     }
 
     pub fn calculate_incoming_devreden_pek(
@@ -174,27 +215,15 @@ let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_i
         personnel_id: &str,
         active_period: &BordroDonemi,
     ) -> Result<Vec<DevredenPekKaydi>> {
-        let all_periods = PeriodRepository::get_all(conn)?;
-        let all_payrolls = PayrollRepository::get_all(conn)?;
-
-        let mut prior_periods: Vec<&BordroDonemi> = all_periods
-            .iter()
-            .filter(|p| p.yil < active_period.yil || (p.yil == active_period.yil && p.ay < active_period.ay))
-            .collect();
-
-        prior_periods.sort_by(|a, b| (b.yil * 12 + b.ay).cmp(&(a.yil * 12 + a.ay)));
-
-        if prior_periods.is_empty() {
+        let Some(immediately_prior) =
+            PeriodRepository::get_previous_by_work_period(conn, active_period)?
+        else {
             return Ok(Vec::new());
-        }
+        };
 
-        let immediately_prior = prior_periods[0];
-        let prior_bordro = all_payrolls
-            .iter()
-            .find(|b| b.personelId == personnel_id && b.donemId == immediately_prior.id);
-
-        Ok(prior_bordro
-            .and_then(|b| b.sonrakiDevredenPek.clone())
-            .unwrap_or_default())
+        Ok(
+            PayrollRepository::get_next_devreden_pek(conn, personnel_id, &immediately_prior.id)?
+                .unwrap_or_default(),
+        )
     }
 }
