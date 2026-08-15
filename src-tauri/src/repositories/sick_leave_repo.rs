@@ -130,7 +130,8 @@ impl SickLeaveRepository {
             .next()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?
         {
-            let record = Self::from_row(row).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            let record =
+                Self::from_row(row).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
             Self::validate_record(&record)?;
             Ok(Some(record))
         } else {
