@@ -131,11 +131,8 @@ fn april_2026_meal_exemption_is_split_at_17_april() -> Result<()> {
     };
     AttendanceRepository::save(&conn, &attendance)?;
 
-    let payroll = PayrollService::calculate_payroll_for_personnel(
-        &conn,
-        &personnel.id,
-        &current_period.id,
-    )?;
+    let payroll =
+        PayrollService::calculate_payroll_for_personnel(&conn, &personnel.id, &current_period.id)?;
     let pek = payroll.pekDetay.expect("PEK detayı hesaplanmalı");
 
     assert_eq!(pek.fiiliYemekGunu, 4);

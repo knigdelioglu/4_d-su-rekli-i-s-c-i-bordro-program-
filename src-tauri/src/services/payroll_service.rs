@@ -69,7 +69,8 @@ fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<N
                 continue;
             };
             if candidate >= start && candidate <= end {
-                result = Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
+                result =
+                    Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
             }
         }
     }
@@ -77,9 +78,7 @@ fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<N
     Ok(result)
 }
 
-fn find_2026_sgk_yemek_istisnasi_gecis_tarihi(
-    period: &BordroDonemi,
-) -> Result<Option<NaiveDate>> {
+fn find_2026_sgk_yemek_istisnasi_gecis_tarihi(period: &BordroDonemi) -> Result<Option<NaiveDate>> {
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let effective_date = NaiveDate::from_ymd_opt(2026, 4, 17)
@@ -166,7 +165,11 @@ fn calculate_effective_daily_meal_exemption(
         } else {
             current_settings.gunlukYemek
         };
-        let daily_limit = if date < transition_date { old_limit } else { new_limit };
+        let daily_limit = if date < transition_date {
+            old_limit
+        } else {
+            new_limit
+        };
         total_exemption += meal_amount.min(daily_limit);
         eligible_days += 1;
     }
@@ -320,17 +323,21 @@ impl PayrollService {
             }
         }
 
-        let attendance = AttendanceRepository::get_by_personnel_and_period(conn, personnel_id, period_id)?
-            .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
+        let attendance =
+            AttendanceRepository::get_by_personnel_and_period(conn, personnel_id, period_id)?
+                .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
         let mut summary = PuantajOzeti::default();
         for code in attendance.gunler.values() {
             add_puantaj_kodu(&mut summary, code, period_id)?;
         }
 
         let kurum_degerleri = SettingsRepository::get_institution_settings(conn, period_id)?
-            .ok_or_else(|| DomainError::InvalidData(format!(
-                "{} dönemi kurum ayarları bulunamadı; bordro hesaplanamaz.", period_id
-            )))?;
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi kurum ayarları bulunamadı; bordro hesaplanamaz.",
+                    period_id
+                ))
+            })?;
         validate_kurum_degerleri_for_payroll(&kurum_degerleri)?;
 
         let zam_aylari = get_zam_aylari(conn)?;
@@ -344,13 +351,19 @@ impl PayrollService {
 
         let previous_kurum_degerleri = if needs_previous_settings {
             let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?
-                .ok_or_else(|| DomainError::InvalidData(format!(
-                    "{} dönemi için önceki kurum ayarları bulunamadı.", period.id
-                )))?;
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} dönemi için önceki kurum ayarları bulunamadı.",
+                        period.id
+                    ))
+                })?;
             let settings = SettingsRepository::get_institution_settings(conn, &previous_period.id)?
-                .ok_or_else(|| DomainError::InvalidData(format!(
-                    "{} dönemi önceki kurum ayarları bulunamadı.", previous_period.id
-                )))?;
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} dönemi önceki kurum ayarları bulunamadı.",
+                        previous_period.id
+                    ))
+                })?;
             validate_kurum_degerleri_for_payroll(&settings)?;
             Some(settings)
         } else {
@@ -358,11 +371,15 @@ impl PayrollService {
         };
 
         let mut effective_kurum_degerleri = kurum_degerleri.clone();
-        let annual_parameters = AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?
-            .ok_or_else(|| DomainError::InvalidData(format!(
+        let annual_parameters =
+            AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?.ok_or_else(
+                || {
+                    DomainError::InvalidData(format!(
                 "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
                 period.taxYear
-            )))?;
+            ))
+                },
+            )?;
 
         let (mut gelirler, mut is_primi_detay) = auto_fill_gelirler_from_puantaj(
             &summary,
@@ -374,30 +391,35 @@ impl PayrollService {
         if zam_tarihi.is_some() {
             let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
                 DomainError::InvalidData(format!(
-                    "{} dönemi zam öncesi kurum ayarları bulunamadı.", period.id
+                    "{} dönemi zam öncesi kurum ayarları bulunamadı.",
+                    period.id
                 ))
             })?;
-            let (zam_oncesi_gelirler, zam_oncesi_is_primi) = calculate_gunluk_gelirler_from_puantaj(
-                &zam_oncesi_ozet,
-                previous,
-                Some(&personel.grup),
-            )?;
-            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) = calculate_gunluk_gelirler_from_puantaj(
-                &zam_sonrasi_ozet,
-                &kurum_degerleri,
-                Some(&personel.grup),
-            )?;
+            let (zam_oncesi_gelirler, zam_oncesi_is_primi) =
+                calculate_gunluk_gelirler_from_puantaj(
+                    &zam_oncesi_ozet,
+                    previous,
+                    Some(&personel.grup),
+                )?;
+            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) =
+                calculate_gunluk_gelirler_from_puantaj(
+                    &zam_sonrasi_ozet,
+                    &kurum_degerleri,
+                    Some(&personel.grup),
+                )?;
 
             gelirler.tabanBrutAylik = sum_income_field(
                 zam_oncesi_gelirler.tabanBrutAylik,
                 zam_sonrasi_gelirler.tabanBrutAylik,
             );
-            gelirler.yemek = sum_income_field(zam_oncesi_gelirler.yemek, zam_sonrasi_gelirler.yemek);
+            gelirler.yemek =
+                sum_income_field(zam_oncesi_gelirler.yemek, zam_sonrasi_gelirler.yemek);
             gelirler.vasitaYol = sum_income_field(
                 zam_oncesi_gelirler.vasitaYol,
                 zam_sonrasi_gelirler.vasitaYol,
             );
-            gelirler.isPrimi = sum_income_field(zam_oncesi_gelirler.isPrimi, zam_sonrasi_gelirler.isPrimi);
+            gelirler.isPrimi =
+                sum_income_field(zam_oncesi_gelirler.isPrimi, zam_sonrasi_gelirler.isPrimi);
             gelirler.geceCalismasiUcreti = sum_income_field(
                 zam_oncesi_gelirler.geceCalismasiUcreti,
                 zam_sonrasi_gelirler.geceCalismasiUcreti,
@@ -412,37 +434,38 @@ impl PayrollService {
             let zam_sonrasi_hakedis = hakedis_gun(&zam_sonrasi_ozet);
             let toplam_hakedis = zam_oncesi_hakedis + zam_sonrasi_hakedis;
             if toplam_hakedis > 0 {
-                effective_kurum_degerleri.gunlukTabanUcret =
-                    (previous.gunlukTabanUcret * Decimal::from(zam_oncesi_hakedis)
-                        + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_hakedis))
-                    .checked_div(Decimal::from(toplam_hakedis))
-                    .unwrap_or(kurum_degerleri.gunlukTabanUcret)
-                    .round_dp(6);
+                effective_kurum_degerleri.gunlukTabanUcret = (previous.gunlukTabanUcret
+                    * Decimal::from(zam_oncesi_hakedis)
+                    + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_hakedis))
+                .checked_div(Decimal::from(toplam_hakedis))
+                .unwrap_or(kurum_degerleri.gunlukTabanUcret)
+                .round_dp(6);
             }
         }
 
         if let Some(transition_date) = sgk_yemek_gecis_tarihi {
             let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
                 DomainError::InvalidData(format!(
-                    "{} dönemi 17.04.2026 öncesi SGK yemek istisnası ayarı bulunamadı.", period.id
+                    "{} dönemi 17.04.2026 öncesi SGK yemek istisnası ayarı bulunamadı.",
+                    period.id
                 ))
             })?;
-            effective_kurum_degerleri.gunlukYemekIstisnasiSGK = Some(
-                calculate_effective_daily_meal_exemption(
+            effective_kurum_degerleri.gunlukYemekIstisnasiSGK =
+                Some(calculate_effective_daily_meal_exemption(
                     &attendance,
                     &period,
                     transition_date,
                     zam_tarihi,
                     previous,
                     &kurum_degerleri,
-                )?,
-            );
+                )?);
         }
 
         if let Some(transition_date) = year_transition_date {
             let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
                 DomainError::InvalidData(format!(
-                    "{} dönemi yılbaşı öncesi PEK parametreleri bulunamadı.", period.id
+                    "{} dönemi yılbaşı öncesi PEK parametreleri bulunamadı.",
+                    period.id
                 ))
             })?;
             if let Some((effective_daily_min, effective_ceiling_multiplier)) =
@@ -459,13 +482,15 @@ impl PayrollService {
             }
         }
 
-        let prev_gv = CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
+        let prev_gv =
+            CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
         let prev_asgari_gv = CumulativeTaxService::get_previous_cumulative_asgari_gv_strict(
             conn,
             personnel_id,
             &period,
         )?;
-        let devreden_pek_gelen = Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
+        let devreden_pek_gelen =
+            Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
         let tax_inputs = StatutoryDeductionTaxInputs {
             previous_cumulative_gv: prev_gv,
             incoming_devreden_pek: &devreden_pek_gelen,
@@ -593,7 +618,9 @@ impl PayrollService {
         personnel_id: &str,
         active_period: &BordroDonemi,
     ) -> Result<Vec<DevredenPekKaydi>> {
-        let Some(immediately_prior) = PeriodRepository::get_previous_by_work_period(conn, active_period)? else {
+        let Some(immediately_prior) =
+            PeriodRepository::get_previous_by_work_period(conn, active_period)?
+        else {
             return Ok(Vec::new());
         };
         Ok(

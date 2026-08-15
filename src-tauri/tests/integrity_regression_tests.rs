@@ -68,24 +68,8 @@ fn year_boundary_pek_uses_old_and_new_daily_limits() -> Result<()> {
     let personnel = person("year-boundary");
     PersonnelRepository::save(&conn, &personnel)?;
 
-    let previous_period = period(
-        "2025-11",
-        2025,
-        11,
-        "2025-11-15",
-        "2025-12-14",
-        2025,
-        12,
-    );
-    let current_period = period(
-        "2025-12",
-        2025,
-        12,
-        "2025-12-15",
-        "2026-01-14",
-        2026,
-        1,
-    );
+    let previous_period = period("2025-11", 2025, 11, "2025-11-15", "2025-12-14", 2025, 12);
+    let current_period = period("2025-12", 2025, 12, "2025-12-15", "2026-01-14", 2026, 1);
     PeriodRepository::save(&conn, &previous_period)?;
     PeriodRepository::save(&conn, &current_period)?;
 
@@ -118,11 +102,8 @@ fn year_boundary_pek_uses_old_and_new_daily_limits() -> Result<()> {
         },
     )?;
 
-    let payroll = PayrollService::calculate_payroll_for_personnel(
-        &conn,
-        &personnel.id,
-        &current_period.id,
-    )?;
+    let payroll =
+        PayrollService::calculate_payroll_for_personnel(&conn, &personnel.id, &current_period.id)?;
     let pek = payroll.pekDetay.expect("PEK detayı üretilmeli");
 
     assert_eq!(pek.pekAltSinir, dec!(29283.60));
@@ -149,15 +130,7 @@ fn negative_net_payroll_is_rejected() -> Result<()> {
     });
     PersonnelRepository::save(&conn, &personnel)?;
 
-    let payroll_period = period(
-        "2026-05",
-        2026,
-        5,
-        "2026-05-15",
-        "2026-06-14",
-        2026,
-        6,
-    );
+    let payroll_period = period("2026-05", 2026, 5, "2026-05-15", "2026-06-14", 2026, 6);
     PeriodRepository::save(&conn, &payroll_period)?;
     SettingsRepository::save_institution_settings(&conn, &settings(&payroll_period.id))?;
     AttendanceRepository::save(
@@ -185,40 +158,16 @@ fn negative_net_payroll_is_rejected() -> Result<()> {
 fn duplicate_work_or_tax_period_is_rejected() -> Result<()> {
     let conn =
         create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    let first = period(
-        "2026-05",
-        2026,
-        5,
-        "2026-05-15",
-        "2026-06-14",
-        2026,
-        6,
-    );
+    let first = period("2026-05", 2026, 5, "2026-05-15", "2026-06-14", 2026, 6);
     PeriodRepository::save(&conn, &first)?;
 
-    let duplicate_work = period(
-        "other-id",
-        2026,
-        5,
-        "2026-05-15",
-        "2026-06-14",
-        2026,
-        7,
-    );
+    let duplicate_work = period("other-id", 2026, 5, "2026-05-15", "2026-06-14", 2026, 7);
     assert!(matches!(
         PeriodRepository::save(&conn, &duplicate_work),
         Err(DomainError::ValidationError(_))
     ));
 
-    let duplicate_tax = period(
-        "2026-06",
-        2026,
-        6,
-        "2026-06-15",
-        "2026-07-14",
-        2026,
-        6,
-    );
+    let duplicate_tax = period("2026-06", 2026, 6, "2026-06-15", "2026-07-14", 2026, 6);
     assert!(matches!(
         PeriodRepository::save(&conn, &duplicate_tax),
         Err(DomainError::ValidationError(_))
@@ -268,15 +217,7 @@ fn invalid_backup_payroll_snapshot_rolls_back_replace() -> Result<()> {
     PersonnelRepository::save(&conn, &sentinel)?;
 
     let imported_person = person("backup-person");
-    let imported_period = period(
-        "2026-05",
-        2026,
-        5,
-        "2026-05-15",
-        "2026-06-14",
-        2026,
-        6,
-    );
+    let imported_period = period("2026-05", 2026, 5, "2026-05-15", "2026-06-14", 2026, 6);
     let bad_payroll = BordroKaydi {
         id: "backup-person_2026-05".into(),
         personelId: imported_person.id.clone(),
