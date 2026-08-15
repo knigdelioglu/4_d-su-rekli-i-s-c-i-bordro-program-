@@ -51,17 +51,15 @@ impl AttendanceRepository {
                 period_id
             ))
         })?;
-        let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|e| {
-            DomainError::InvalidData(format!(
-                "{} dönemi başlangıç tarihi bozuk: {}",
-                period_id, e
-            ))
-        })?;
+        let start =
+            NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|e| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi başlangıç tarihi bozuk: {}",
+                    period_id, e
+                ))
+            })?;
         let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|e| {
-            DomainError::InvalidData(format!(
-                "{} dönemi bitiş tarihi bozuk: {}",
-                period_id, e
-            ))
+            DomainError::InvalidData(format!("{} dönemi bitiş tarihi bozuk: {}", period_id, e))
         })?;
 
         for date_text in gunler.keys() {
