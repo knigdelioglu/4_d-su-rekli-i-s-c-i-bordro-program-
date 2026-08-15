@@ -1,5 +1,8 @@
 #![allow(non_snake_case)]
 
+use crate::domain::calculations::{
+    calculate_gelir_toplam, calculate_gv_matrah, calculate_kesinti_toplam,
+};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
@@ -11,6 +14,7 @@ use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use rusqlite::Connection;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
@@ -64,13 +68,13 @@ pub struct LegacyPersonel {
     #[serde(default)]
     pub aciklama: Option<String>,
     #[serde(default)]
-    pub devirKumulatifGvMatrahi: Option<rust_decimal::Decimal>,
+    pub devirKumulatifGvMatrahi: Option<Decimal>,
     #[serde(default)]
     pub devirKumulatifGvMatrahiYili: Option<i32>,
     #[serde(default)]
     pub devirKumulatifGvMatrahiBaslangicAyi: Option<i32>,
     #[serde(default)]
-    pub devirKumulatifAsgariGvMatrahi: Option<rust_decimal::Decimal>,
+    pub devirKumulatifAsgariGvMatrahi: Option<Decimal>,
     #[serde(default)]
     pub devirKumulatifAsgariGvMatrahiYili: Option<i32>,
     #[serde(default)]
@@ -109,6 +113,125 @@ impl MigrationService {
             }
         }
         Ok(payload)
+    }
+
+    fn same_money(left: Decimal, right: Decimal) -> bool {
+        left.round_dp(2) == right.round_dp(2)
+    }
+
+    fn validate_imported_payroll_snapshot(conn: &Connection, payroll: &BordroKaydi) -> Result<()> {
+        if PersonnelRepository::get_by_id(conn, &payroll.personelId)?.is_none() {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordrosunun personeli bulunamadı: {}",
+                payroll.id, payroll.personelId
+            )));
+        }
+        if PeriodRepository::get_by_id(conn, &payroll.donemId)?.is_none() {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordrosunun dönemi bulunamadı: {}",
+                payroll.id, payroll.donemId
+            )));
+        }
+
+        let expected_income = calculate_gelir_toplam(&payroll.gelirler);
+        if !Self::same_money(expected_income, payroll.gelirToplam) {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordro snapshot'ında gelir toplamı tutarsız: kalemler {} TL, kayıt {} TL.",
+                payroll.id, expected_income, payroll.gelirToplam
+            )));
+        }
+
+        let expected_deductions = calculate_kesinti_toplam(&payroll.kesintiler);
+        if !Self::same_money(expected_deductions, payroll.kesintiToplam) {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordro snapshot'ında kesinti toplamı tutarsız: kalemler {} TL, kayıt {} TL.",
+                payroll.id, expected_deductions, payroll.kesintiToplam
+            )));
+        }
+
+        let expected_net = (expected_income - expected_deductions).round_dp(2);
+        if expected_net < Decimal::ZERO {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordro snapshot'ında negatif net ödeme var: {} TL.",
+                payroll.id, expected_net
+            )));
+        }
+        if !Self::same_money(expected_net, payroll.netOdeme) {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordro snapshot'ında net ödeme tutarsız: beklenen {} TL, kayıt {} TL.",
+                payroll.id, expected_net, payroll.netOdeme
+            )));
+        }
+
+        if payroll
+            .raporluGun
+            .is_some_and(|days| days != payroll.puantajOzeti.r)
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{} bordro snapshot'ında raporlu gün puantaj özetiyle uyuşmuyor.",
+                payroll.id
+            )));
+        }
+
+        if let Some(detail) = payroll.isPrimiDetay.as_ref() {
+            let income_item = payroll.gelirler.isPrimi.unwrap_or_default();
+            if !Self::same_money(detail.tutar, income_item) {
+                return Err(DomainError::InvalidData(format!(
+                    "{} bordro snapshot'ında iş primi detayı gelir kalemiyle uyuşmuyor.",
+                    payroll.id
+                )));
+            }
+        }
+
+        if let Some(pek) = payroll.pekDetay.as_ref() {
+            if pek.pekAltSinir < Decimal::ZERO
+                || pek.pekUstSinir < pek.pekAltSinir
+                || pek.finalPek < Decimal::ZERO
+                || pek.finalPek > pek.pekUstSinir
+                || pek.hesaplananPek < Decimal::ZERO
+                || pek.fiiliYemekGunu < 0
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "{} bordro snapshot'ında PEK detayı geçersiz sınır/değer içeriyor.",
+                    payroll.id
+                )));
+            }
+            if pek.hesaplananPek > Decimal::ZERO && pek.finalPek < pek.pekAltSinir {
+                return Err(DomainError::InvalidData(format!(
+                    "{} bordro snapshot'ında nihai PEK alt sınırın altında.",
+                    payroll.id
+                )));
+            }
+        }
+
+        let sgk = payroll.kesintiler.isciSgkPrimi.unwrap_or_default();
+        let unemployment = payroll.kesintiler.isciIssizlikPrimi.unwrap_or_default();
+        let expected_gv_base = calculate_gv_matrah(expected_income, sgk, unemployment);
+        if let Some(gv) = payroll.gvDetay.as_ref() {
+            if !Self::same_money(gv.cariGvMatrahi, expected_gv_base)
+                || !Self::same_money(
+                    gv.kesilenGelirVergisi,
+                    payroll.kesintiler.gelirVergisi.unwrap_or_default(),
+                )
+                || gv.kesilenGelirVergisi < Decimal::ZERO
+                || gv.uygulananGvIstisnasi < Decimal::ZERO
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "{} bordro snapshot'ında gelir vergisi detayı kesinti/matrah ile uyuşmuyor.",
+                    payroll.id
+                )));
+            }
+            if let Some(previous) = payroll.oncekiKumulatifGvMatrahi {
+                if !Self::same_money(previous + expected_gv_base, gv.yeniKumulatifGvMatrahi) {
+                    return Err(DomainError::InvalidData(format!(
+                        "{} bordro snapshot'ında kümülatif GV zinciri tutarsız.",
+                        payroll.id
+                    )));
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn import_payload(conn: &Connection, payload: LegacyPayload) -> Result<()> {
@@ -164,10 +287,8 @@ impl MigrationService {
                 };
                 PersonnelRepository::save(conn, &personel)?;
 
-                // Eski localStorage sözleşmesindeki GV devir alanını yeni, ayrı
-                // açılış tablosuna da yazarak native kümülatif motorla eşitleriz.
                 if let Some(opening_value) = personel.devirKumulatifGvMatrahi {
-                    if opening_value > rust_decimal_macros::dec!(0) {
+                    if opening_value > Decimal::ZERO {
                         let year = personel.devirKumulatifGvMatrahiYili.unwrap_or(2026);
                         let start_month = personel.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(1);
                         let tax_opening = PersonelTaxOpening {
@@ -179,11 +300,6 @@ impl MigrationService {
                             createdAt: None,
                             updatedAt: None,
                         };
-                        // Devir alanı personel kaydında zaten saklanır ve native
-                        // hesap motoru gerektiğinde oradan okuyabilir. Eski
-                        // payload'da başlangıç dönemi bulunmuyorsa FK hatasıyla
-                        // tüm legacy migration'ı bozmayalım; yalnızca gerçek bir
-                        // dönem karşılığı varsa ayrı açılış tablosunu doldur.
                         if PeriodRepository::get_by_id(conn, &tax_opening.effectiveFromPeriodId)?
                             .is_some()
                         {
@@ -208,6 +324,7 @@ impl MigrationService {
 
         if let Some(payroll_list) = bordrolar {
             for payroll in payroll_list {
+                Self::validate_imported_payroll_snapshot(conn, &payroll)?;
                 PayrollRepository::save_in_transaction(conn, &payroll)?;
             }
         }
@@ -218,10 +335,6 @@ impl MigrationService {
             }
         }
 
-        // V1 yedeklerinde yıllık tarife alanı bulunmayabilir; V2 sözleşmesiyle
-        // aynı authoritative üretim yolunu korumak için içe aktarılan
-        // dönemlerin vergi yıllarına JSON/SQLite-safe varsayılan tarife ekle.
-        // Payload'da açıkça verilen yıllık parametreler her zaman önceliklidir.
         if let Some(parameters) = annualPayrollParameters {
             for parameter in parameters {
                 AnnualPayrollParametersRepository::save(conn, &parameter)?;
@@ -248,6 +361,12 @@ impl MigrationService {
         }
 
         if let Some(active_id) = aktifDonemId {
+            if PeriodRepository::get_by_id(conn, &active_id)?.is_none() {
+                return Err(DomainError::InvalidData(format!(
+                    "Yedekteki aktif dönem bulunamadı: {}",
+                    active_id
+                )));
+            }
             SettingsRepository::set_app_setting(conn, "active_period_id", &active_id)?;
         }
 
@@ -270,8 +389,6 @@ impl MigrationService {
         Ok(())
     }
 
-    /// Kullanıcı tarafından çağrılan import/reset akışı: mevcut domain verisini
-    /// aynı transaction içinde siler ve yedek içeriğini eksiksiz yükler.
     pub fn replace_backup_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
         let payload = Self::parse_payload(payload_json)?;
         let tx = conn

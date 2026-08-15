@@ -44,10 +44,18 @@ macOS güvenlik taraması derleme döngüsünü yavaşlatıyorsa yalnızca proje
 önbelleği olan `src-tauri/target/` dizinini kurumunuzun güvenlik politikasına
 uygun biçimde tarama dışı bırakmayı değerlendirin.
 
-Tauri geliştirme akışı için `bun tauri dev` kullanılabilir. SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
+Tauri CLI proje bağımlılığı olarak sabitlenmediği için geliştirme akışını Bun üzerinden doğrudan CLI paketini çağırarak başlatın:
+
+```bash
+bunx @tauri-apps/cli@2 dev
+```
+
+SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
+
+GitHub Actions doğrulaması `main` hedefli pull requestlerde ve `main` push'larında çalışır. Aynı PR için yeni commit geldiğinde eski CI koşusu iptal edilir; Rust doğrulaması sırasıyla `cargo fmt --check`, `cargo clippy --locked` ve en son `cargo test --locked` kapılarından geçer. Rust test fixture'ları da üretimle aynı 15–14 dönem ve tarih doğrulama kurallarına uymalıdır.
 
 ## Veri güvenliği
 
-JSON yedekleri sürüm 2 sözleşmesiyle dönem, personel, kurum ayarları, puantaj, bordro, vergi açılışları, hastalık raporu kayıtları ve yıllık bordro parametrelerini birlikte içerir. İçe aktarma ve örnek veri sıfırlama, mevcut domain verisini tek SQLite transaction içinde silip yükler. Kesinleştirilen (`FINALIZED`) bordrolar yeniden hesaplanamaz veya geriye alınamaz.
+JSON yedekleri sürüm 2 sözleşmesiyle dönem, personel, kurum ayarları, puantaj, bordro, vergi açılışları, hastalık raporu kayıtları ve yıllık bordro parametrelerini birlikte içerir. İçe aktarma ve örnek veri sıfırlama, mevcut domain verisini tek SQLite transaction içinde silip yükler. İçe aktarılan bordro snapshot'larında gelir/kesinti/net toplamları, PEK ve GV snapshot tutarlılığı ile raporlu gün ve iş primi bağlantıları doğrulanır; tutarsız bir bordro tüm import işlemini geri alır. Kesinleştirilen (`FINALIZED`) bordrolar yeniden hesaplanamaz veya geriye alınamaz.
 
 Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.

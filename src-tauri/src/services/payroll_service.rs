@@ -32,6 +32,10 @@ fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> 
     Ok(())
 }
 
+fn is_sgk_prim_code(code: &str) -> bool {
+    matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT" | "R")
+}
+
 fn hakedis_gun(ozet: &PuantajOzeti) -> i32 {
     ozet.c + ozet.t + ozet.g + ozet.i + ozet.gc + ozet.gct
 }
@@ -41,6 +45,15 @@ fn parse_period_date(value: &str, period_id: &str, field_name: &str) -> Result<N
         DomainError::InvalidData(format!(
             "{} dönemi {} tarihi geçersiz: {}",
             period_id, field_name, e
+        ))
+    })
+}
+
+fn parse_attendance_date(value: &str, period_id: &str) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|e| {
+        DomainError::InvalidData(format!(
+            "{} döneminde puantaj tarihi geçersiz: {} ({})",
+            period_id, value, e
         ))
     })
 }
@@ -65,6 +78,29 @@ fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<N
     Ok(result)
 }
 
+fn find_2026_sgk_yemek_istisnasi_gecis_tarihi(period: &BordroDonemi) -> Result<Option<NaiveDate>> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    let effective_date = NaiveDate::from_ymd_opt(2026, 4, 17)
+        .expect("2026-04-17 geçerli sabit mevzuat tarihi olmalı");
+    Ok((start < effective_date && effective_date <= end).then_some(effective_date))
+}
+
+fn find_year_transition_date(period: &BordroDonemi) -> Result<Option<NaiveDate>> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    if start.year() == end.year() {
+        return Ok(None);
+    }
+    let transition = NaiveDate::from_ymd_opt(end.year(), 1, 1).ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi için yıl geçiş tarihi oluşturulamadı.",
+            period.id
+        ))
+    })?;
+    Ok((start < transition && transition <= end).then_some(transition))
+}
+
 fn split_puantaj_by_zam_tarihi(
     attendance: &PersonelPuantaj,
     period: &BordroDonemi,
@@ -83,12 +119,7 @@ fn split_puantaj_by_zam_tarihi(
 
     let cutoff = zam_tarihi.expect("zam tarihi kontrolü sonrası tarih mevcut olmalı");
     for (date_text, code) in &attendance.gunler {
-        let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|e| {
-            DomainError::InvalidData(format!(
-                "{} döneminde puantaj tarihi geçersiz: {} ({})",
-                period.id, date_text, e
-            ))
-        })?;
+        let date = parse_attendance_date(date_text, &period.id)?;
         let summary = if date < cutoff {
             &mut zam_oncesi
         } else {
@@ -98,6 +129,138 @@ fn split_puantaj_by_zam_tarihi(
     }
 
     Ok((zam_oncesi, zam_sonrasi, zam_tarihi))
+}
+
+fn calculate_effective_daily_meal_exemption(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    transition_date: NaiveDate,
+    zam_tarihi: Option<NaiveDate>,
+    previous_settings: &DonemselKurumDegerleri,
+    current_settings: &DonemselKurumDegerleri,
+) -> Result<Decimal> {
+    let old_limit = previous_settings.gunlukYemekIstisnasiSGK.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi SGK yemek istisnası eksik; 17.04.2026 öncesi tutar belirlenemiyor.",
+            previous_settings.donemId
+        ))
+    })?;
+    let new_limit = current_settings.gunlukYemekIstisnasiSGK.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi SGK yemek istisnası eksik.",
+            current_settings.donemId
+        ))
+    })?;
+
+    let mut eligible_days = 0i32;
+    let mut total_exemption = Decimal::ZERO;
+
+    for (date_text, code) in &attendance.gunler {
+        if code != "Ç" && code != "GÇ" {
+            continue;
+        }
+        let date = parse_attendance_date(date_text, &period.id)?;
+        let meal_amount = if zam_tarihi.is_some_and(|cutoff| date < cutoff) {
+            previous_settings.gunlukYemek
+        } else {
+            current_settings.gunlukYemek
+        };
+        let daily_limit = if date < transition_date {
+            old_limit
+        } else {
+            new_limit
+        };
+        total_exemption += meal_amount.min(daily_limit);
+        eligible_days += 1;
+    }
+
+    if eligible_days == 0 {
+        return Ok(new_limit);
+    }
+
+    Ok((total_exemption / Decimal::from(eligible_days)).round_dp(6))
+}
+
+fn calculate_effective_pek_limits(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    transition_date: NaiveDate,
+    previous_settings: &DonemselKurumDegerleri,
+    current_settings: &DonemselKurumDegerleri,
+) -> Result<Option<(Decimal, Decimal)>> {
+    let old_daily_min = previous_settings.gunlukAsgariUcret.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi günlük asgari ücret ayarı eksik.",
+            previous_settings.donemId
+        ))
+    })?;
+    let new_daily_min = current_settings.gunlukAsgariUcret.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi günlük asgari ücret ayarı eksik.",
+            current_settings.donemId
+        ))
+    })?;
+    let old_ceiling = previous_settings.pekTavanKatsayisi.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi PEK tavan katsayısı eksik.",
+            previous_settings.donemId
+        ))
+    })?;
+    let new_ceiling = current_settings.pekTavanKatsayisi.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi PEK tavan katsayısı eksik.",
+            current_settings.donemId
+        ))
+    })?;
+    let old_daily_upper = (old_daily_min * old_ceiling).round_dp(2);
+    let new_daily_upper = (new_daily_min * new_ceiling).round_dp(2);
+
+    let mut prim_dates = Vec::new();
+    for (date_text, code) in &attendance.gunler {
+        if is_sgk_prim_code(code) {
+            prim_dates.push(parse_attendance_date(date_text, &period.id)?);
+        }
+    }
+    prim_dates.sort_unstable();
+
+    // 15-14 kamu dönemlerinde tam ay en fazla 30 prim günüdür. 31 günlük
+    // takvim kesişiminde SGK'nın resmi yılbaşı örneği eski yılda 16 + yeni
+    // yılda 14 gün kullanır; bu nedenle fazlalık en eski tarihten düşürülür.
+    if prim_dates.len() > 30 {
+        let excess = prim_dates.len() - 30;
+        prim_dates.drain(0..excess);
+    }
+    if prim_dates.is_empty() {
+        return Ok(None);
+    }
+
+    let mut lower_total = Decimal::ZERO;
+    let mut upper_total = Decimal::ZERO;
+    for date in prim_dates {
+        if date < transition_date {
+            lower_total += old_daily_min;
+            upper_total += old_daily_upper;
+        } else {
+            lower_total += new_daily_min;
+            upper_total += new_daily_upper;
+        }
+    }
+
+    let day_count = Decimal::from(
+        attendance
+            .gunler
+            .values()
+            .filter(|code| is_sgk_prim_code(code))
+            .count()
+            .min(30) as i32,
+    );
+    if day_count <= Decimal::ZERO || lower_total <= Decimal::ZERO {
+        return Ok(None);
+    }
+
+    let effective_daily_min = (lower_total / day_count).round_dp(12);
+    let effective_ceiling_multiplier = (upper_total / lower_total).round_dp(12);
+    Ok(Some((effective_daily_min, effective_ceiling_multiplier)))
 }
 
 fn sum_income_field(before: Option<Decimal>, after: Option<Decimal>) -> Option<Decimal> {
@@ -148,13 +311,10 @@ impl PayrollService {
         let personel = PersonnelRepository::get_by_id(conn, personnel_id)?.ok_or_else(|| {
             DomainError::NotFound(format!("Personel bulunamadı: {}", personnel_id))
         })?;
-
         let period = PeriodRepository::get_by_id(conn, period_id)?
             .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", period_id)))?;
 
-        // Check existing payroll status
         let existing = PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)?;
-
         if let Some((status, _)) = existing.as_ref() {
             if *status == BordroStatus::FINALIZED {
                 return Err(DomainError::PayrollFinalized(
@@ -163,20 +323,15 @@ impl PayrollService {
             }
         }
 
-        // Get saved attendance
         let attendance =
             AttendanceRepository::get_by_personnel_and_period(conn, personnel_id, period_id)?
                 .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
-
         let mut summary = PuantajOzeti::default();
         for code in attendance.gunler.values() {
             add_puantaj_kodu(&mut summary, code, period_id)?;
         }
 
-        let kurum_degerleri =
-            crate::repositories::settings_repo::SettingsRepository::get_institution_settings(
-                conn, period_id,
-            )?
+        let kurum_degerleri = SettingsRepository::get_institution_settings(conn, period_id)?
             .ok_or_else(|| {
                 DomainError::InvalidData(format!(
                     "{} dönemi kurum ayarları bulunamadı; bordro hesaplanamaz.",
@@ -188,15 +343,41 @@ impl PayrollService {
         let zam_aylari = get_zam_aylari(conn)?;
         let (zam_oncesi_ozet, zam_sonrasi_ozet, zam_tarihi) =
             split_puantaj_by_zam_tarihi(&attendance, &period, &zam_aylari)?;
-        let mut effective_kurum_degerleri = kurum_degerleri.clone();
+        let sgk_yemek_gecis_tarihi = find_2026_sgk_yemek_istisnasi_gecis_tarihi(&period)?;
+        let year_transition_date = find_year_transition_date(&period)?;
+        let needs_previous_settings = zam_tarihi.is_some()
+            || sgk_yemek_gecis_tarihi.is_some()
+            || year_transition_date.is_some();
 
+        let previous_kurum_degerleri = if needs_previous_settings {
+            let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} dönemi için önceki kurum ayarları bulunamadı.",
+                        period.id
+                    ))
+                })?;
+            let settings = SettingsRepository::get_institution_settings(conn, &previous_period.id)?
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} dönemi önceki kurum ayarları bulunamadı.",
+                        previous_period.id
+                    ))
+                })?;
+            validate_kurum_degerleri_for_payroll(&settings)?;
+            Some(settings)
+        } else {
+            None
+        };
+
+        let mut effective_kurum_degerleri = kurum_degerleri.clone();
         let annual_parameters =
             AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?.ok_or_else(
                 || {
                     DomainError::InvalidData(format!(
-                    "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
-                    period.taxYear
-                ))
+                "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
+                period.taxYear
+            ))
                 },
             )?;
 
@@ -208,27 +389,16 @@ impl PayrollService {
         )?;
 
         if zam_tarihi.is_some() {
-            let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?
-                .ok_or_else(|| {
-                    DomainError::InvalidData(format!(
-                        "{} dönemi zam öncesi dönem ayarı bulunamadı.",
-                        period.id
-                    ))
-                })?;
-            let previous_kurum_degerleri =
-                SettingsRepository::get_institution_settings(conn, &previous_period.id)?
-                    .ok_or_else(|| {
-                        DomainError::InvalidData(format!(
-                            "{} dönemi zam öncesi kurum ayarları bulunamadı.",
-                            previous_period.id
-                        ))
-                    })?;
-            validate_kurum_degerleri_for_payroll(&previous_kurum_degerleri)?;
-
+            let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi zam öncesi kurum ayarları bulunamadı.",
+                    period.id
+                ))
+            })?;
             let (zam_oncesi_gelirler, zam_oncesi_is_primi) =
                 calculate_gunluk_gelirler_from_puantaj(
                     &zam_oncesi_ozet,
-                    &previous_kurum_degerleri,
+                    previous,
                     Some(&personel.grup),
                 )?;
             let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) =
@@ -264,12 +434,51 @@ impl PayrollService {
             let zam_sonrasi_hakedis = hakedis_gun(&zam_sonrasi_ozet);
             let toplam_hakedis = zam_oncesi_hakedis + zam_sonrasi_hakedis;
             if toplam_hakedis > 0 {
-                effective_kurum_degerleri.gunlukTabanUcret =
-                    (previous_kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_oncesi_hakedis)
-                        + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_hakedis))
-                    .checked_div(Decimal::from(toplam_hakedis))
-                    .unwrap_or(kurum_degerleri.gunlukTabanUcret)
-                    .round_dp(6);
+                effective_kurum_degerleri.gunlukTabanUcret = (previous.gunlukTabanUcret
+                    * Decimal::from(zam_oncesi_hakedis)
+                    + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_hakedis))
+                .checked_div(Decimal::from(toplam_hakedis))
+                .unwrap_or(kurum_degerleri.gunlukTabanUcret)
+                .round_dp(6);
+            }
+        }
+
+        if let Some(transition_date) = sgk_yemek_gecis_tarihi {
+            let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi 17.04.2026 öncesi SGK yemek istisnası ayarı bulunamadı.",
+                    period.id
+                ))
+            })?;
+            effective_kurum_degerleri.gunlukYemekIstisnasiSGK =
+                Some(calculate_effective_daily_meal_exemption(
+                    &attendance,
+                    &period,
+                    transition_date,
+                    zam_tarihi,
+                    previous,
+                    &kurum_degerleri,
+                )?);
+        }
+
+        if let Some(transition_date) = year_transition_date {
+            let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi yılbaşı öncesi PEK parametreleri bulunamadı.",
+                    period.id
+                ))
+            })?;
+            if let Some((effective_daily_min, effective_ceiling_multiplier)) =
+                calculate_effective_pek_limits(
+                    &attendance,
+                    &period,
+                    transition_date,
+                    previous,
+                    &kurum_degerleri,
+                )?
+            {
+                effective_kurum_degerleri.gunlukAsgariUcret = Some(effective_daily_min);
+                effective_kurum_degerleri.pekTavanKatsayisi = Some(effective_ceiling_multiplier);
             }
         }
 
@@ -280,7 +489,6 @@ impl PayrollService {
             personnel_id,
             &period,
         )?;
-
         let devreden_pek_gelen =
             Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
         let tax_inputs = StatutoryDeductionTaxInputs {
@@ -290,7 +498,7 @@ impl PayrollService {
             tax_brackets: &annual_parameters.gelirVergisiDilimleri,
         };
 
-        let (kesintiler, pek_detay, sonraki_devreden) =
+        let (mut kesintiler, pek_detay, sonraki_devreden) =
             calculate_statutory_deductions_with_tax_brackets(
                 &gelirler,
                 Some(&effective_kurum_degerleri),
@@ -298,10 +506,8 @@ impl PayrollService {
                 Some(&summary),
                 &tax_inputs,
             );
-
         let gelir_toplam = calculate_gelir_toplam(&gelirler);
 
-        // GV detay snapshot: gerçek kümülatif ile asgari takvim referansı açıkça ayrılır.
         let sgk_orani = kurum_degerleri
             .sgkIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
@@ -327,6 +533,20 @@ impl PayrollService {
             prev_asgari_gv,
             &annual_parameters.gelirVergisiDilimleri,
         );
+        kesintiler.gelirVergisi = Some(gv_detay.kesilenGelirVergisi);
+
+        let damga_rate = kurum_degerleri
+            .damgaVergisiOraniBinde
+            .ok_or_else(|| DomainError::InvalidData("Damga vergisi oranı eksik.".into()))?
+            / dec!(1000);
+        let aylik_brut_asgari = (gunluk_asgari * dec!(30)).round_dp(2);
+        let asgari_dv_istisnasi = (aylik_brut_asgari * damga_rate).round_dp(2);
+        let ham_damga_vergisi = (gelir_toplam * damga_rate).round_dp(2);
+        kesintiler.damgaVergisi = Some(
+            (ham_damga_vergisi - asgari_dv_istisnasi)
+                .round_dp(2)
+                .max(Decimal::ZERO),
+        );
 
         let odenen_raporlu_gun =
             super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
@@ -334,12 +554,16 @@ impl PayrollService {
                 personnel_id,
                 &period,
             )?;
-
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
+        if net_odeme < Decimal::ZERO {
+            return Err(DomainError::ValidationError(format!(
+                "{} personelinin {} dönemi net ödemesi negatif olamaz: {} TL. Kesinti kalemlerini kontrol edin.",
+                personnel_id, period_id, net_odeme
+            )));
+        }
 
         let now = chrono::Utc::now().to_rfc3339();
-
         let new_bordro = BordroKaydi {
             id: format!("{}_{}", personnel_id, period_id),
             personelId: personnel_id.to_string(),
@@ -367,9 +591,7 @@ impl PayrollService {
             odenenRaporluGun: Some(odenen_raporlu_gun),
             raporluGun: Some(summary.r),
         };
-
         PayrollRepository::save(conn, &new_bordro)?;
-
         Ok(new_bordro)
     }
 
@@ -383,9 +605,6 @@ impl PayrollService {
         let Some((current_status, _)) = current else {
             return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
         };
-
-        // A FINALIZED payroll is immutable: it can neither be re-calculated nor
-        // downgraded to a mutable status. Only the FINALIZED state can ever be set again.
         if current_status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
             return Err(DomainError::PayrollFinalized(
                 "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into(),
@@ -404,7 +623,6 @@ impl PayrollService {
         else {
             return Ok(Vec::new());
         };
-
         Ok(
             PayrollRepository::get_next_devreden_pek(conn, personnel_id, &immediately_prior.id)?
                 .unwrap_or_default(),

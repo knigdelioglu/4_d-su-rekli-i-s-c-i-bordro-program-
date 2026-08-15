@@ -66,6 +66,80 @@ mod tests {
         Ok(())
     }
 
+    fn work_days_for_period_id(period_id: &str, day_count: i64) -> HashMap<String, String> {
+        let mut parts = period_id.split('-');
+        let year: i32 = parts
+            .next()
+            .expect("test period year")
+            .parse()
+            .expect("numeric test period year");
+        let month: u32 = parts
+            .next()
+            .expect("test period month")
+            .parse()
+            .expect("numeric test period month");
+        let start = chrono::NaiveDate::from_ymd_opt(year, month, 15)
+            .expect("valid 15-14 test period start");
+        let (end_year, end_month) = if month == 12 {
+            (year + 1, 1)
+        } else {
+            (year, month + 1)
+        };
+        let end = chrono::NaiveDate::from_ymd_opt(end_year, end_month, 14)
+            .expect("valid 15-14 test period end");
+        let available = (end - start).num_days() + 1;
+        let count = day_count.clamp(0, available);
+        if count == 0 {
+            return HashMap::new();
+        }
+        let first = end - chrono::Duration::days(count - 1);
+        (0..count)
+            .map(|offset| {
+                (
+                    (first + chrono::Duration::days(offset))
+                        .format("%Y-%m-%d")
+                        .to_string(),
+                    "Ç".to_string(),
+                )
+            })
+            .collect()
+    }
+
+    fn ensure_previous_period_settings(
+        conn: &rusqlite::Connection,
+        current: &BordroDonemi,
+        current_settings: &DonemselKurumDegerleri,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (year, month) = if current.ay == 1 {
+            (current.yil - 1, 12)
+        } else {
+            (current.yil, current.ay - 1)
+        };
+        let previous_id = format!("{year:04}-{month:02}");
+        if PeriodRepository::get_by_id(conn, &previous_id)?.is_none() {
+            let (end_year, end_month) = if month == 12 {
+                (year + 1, 1)
+            } else {
+                (year, month + 1)
+            };
+            let previous = BordroDonemi {
+                id: previous_id.clone(),
+                yil: year,
+                ay: month,
+                baslangicTarihi: format!("{year:04}-{month:02}-15"),
+                bitisTarihi: format!("{end_year:04}-{end_month:02}-14"),
+                donemAdi: format!("Önceki test dönemi {previous_id}"),
+                taxYear: year,
+                taxMonth: month,
+            };
+            PeriodRepository::save(conn, &previous)?;
+        }
+        let mut previous_settings = current_settings.clone();
+        previous_settings.donemId = previous_id;
+        SettingsRepository::save_institution_settings(conn, &previous_settings)?;
+        Ok(())
+    }
+
     #[test]
     fn test_cumulative_gv_regression_and_collision() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
@@ -1153,6 +1227,9 @@ mod tests {
             };
             PeriodRepository::save(&conn, &donem)?;
             ensure_test_institution_settings(&conn, &["2026-12"])?;
+            let current_settings = SettingsRepository::get_institution_settings(&conn, "2026-12")?
+                .expect("2026-12 test settings");
+            ensure_previous_period_settings(&conn, &donem, &current_settings)?;
 
             let rec = SickLeaveRecord {
                 id: "sick_yc_p".into(),
@@ -1469,10 +1546,7 @@ mod tests {
             ensure_test_institution_settings(&conn, &["2026-05"])?;
 
             // 6 days of "R" + 24 days of "Ç" = 30 days
-            let mut gunler = HashMap::new();
-            for d in 1..=24 {
-                gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-            }
+            let mut gunler = work_days_for_period_id("2026-05", 30);
             for d in 25..=30 {
                 gunler.insert(format!("2026-05-{:02}", d), "R".to_string());
             }
@@ -2827,10 +2901,6 @@ mod tests {
         );
         SettingsRepository::save_institution_settings(&conn, &ocak_settings)?;
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
 
         AttendanceRepository::save(
             &conn,
@@ -2838,7 +2908,7 @@ mod tests {
                 id: "p-pek-a_2026-12".into(),
                 personelId: "p-pek-a".into(),
                 donemId: "2026-12".into(),
-                gunler: gunler_30.clone(),
+                gunler: work_days_for_period_id("2026-12", 30),
             },
         )?;
 
@@ -2848,12 +2918,16 @@ mod tests {
                 id: "p-pek-a_2027-01".into(),
                 personelId: "p-pek-a".into(),
                 donemId: "2027-01".into(),
-                gunler: gunler_30.clone(),
+                gunler: work_days_for_period_id("2027-01", 30),
             },
         )?;
 
         let bordro_aralik =
-            PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2026-12")?;
+            let current_settings = SettingsRepository::get_institution_settings(&conn, "2026-12")?
+            .expect("2026-12 PEK test settings");
+        ensure_previous_period_settings(&conn, &aralik2026, &current_settings)?;
+
+        PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-a", "2026-12")?;
         let sonraki_aralik = bordro_aralik.sonrakiDevredenPek.as_ref().unwrap();
         assert_eq!(sonraki_aralik.len(), 1);
         assert_eq!(sonraki_aralik[0].tutar, dec!(52730.00));
@@ -2928,10 +3002,6 @@ mod tests {
             PeriodRepository::save(&conn, p)?;
         }
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
 
         for p in &periods {
             AttendanceRepository::save(
@@ -2940,7 +3010,7 @@ mod tests {
                     id: format!("p-pek-b_{}", p.id),
                     personelId: "p-pek-b".into(),
                     donemId: p.id.clone(),
-                    gunler: gunler_30.clone(),
+                    gunler: work_days_for_period_id(&p.id, 30),
                 },
             )?;
         }
@@ -3051,10 +3121,6 @@ mod tests {
         PeriodRepository::save(&conn, &aralik2026)?;
         PeriodRepository::save(&conn, &ocak2027)?;
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
 
         AttendanceRepository::save(
             &conn,
@@ -3062,7 +3128,7 @@ mod tests {
                 id: "p-pek-c_2026-12".into(),
                 personelId: "p-pek-c".into(),
                 donemId: "2026-12".into(),
-                gunler: gunler_30.clone(),
+                gunler: work_days_for_period_id("2026-12", 30),
             },
         )?;
         AttendanceRepository::save(
@@ -3071,7 +3137,7 @@ mod tests {
                 id: "p-pek-c_2027-01".into(),
                 personelId: "p-pek-c".into(),
                 donemId: "2027-01".into(),
-                gunler: gunler_30.clone(),
+                gunler: work_days_for_period_id("2027-01", 30),
             },
         )?;
 
@@ -3095,6 +3161,10 @@ mod tests {
                 dec!(9.00),
             ),
         )?;
+
+        let current_settings = SettingsRepository::get_institution_settings(&conn, "2026-12")?
+            .expect("2026-12 PEK test settings");
+        ensure_previous_period_settings(&conn, &aralik2026, &current_settings)?;
 
         PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2026-12")?;
         let b_ocak = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2027-01")?;
@@ -3154,10 +3224,6 @@ mod tests {
             PeriodRepository::save(&conn, p)?;
         }
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
 
         for p in &periods {
             AttendanceRepository::save(
@@ -3166,7 +3232,7 @@ mod tests {
                     id: format!("p-pek-d_{}", p.id),
                     personelId: "p-pek-d".into(),
                     donemId: p.id.clone(),
-                    gunler: gunler_30.clone(),
+                    gunler: work_days_for_period_id(&p.id, 30),
                 },
             )?;
         }
@@ -3261,10 +3327,6 @@ mod tests {
         PeriodRepository::save(&conn, &aralik2026)?;
         PeriodRepository::save(&conn, &ocak2027)?;
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
 
         AttendanceRepository::save(
             &conn,
@@ -3272,7 +3334,7 @@ mod tests {
                 id: "p-pek-e_2026-12".into(),
                 personelId: "p-pek-e".into(),
                 donemId: "2026-12".into(),
-                gunler: gunler_30.clone(),
+                gunler: work_days_for_period_id("2026-12", 30),
             },
         )?;
         AttendanceRepository::save(
@@ -3281,7 +3343,7 @@ mod tests {
                 id: "p-pek-e_2027-01".into(),
                 personelId: "p-pek-e".into(),
                 donemId: "2027-01".into(),
-                gunler: gunler_30.clone(),
+                gunler: work_days_for_period_id("2027-01", 30),
             },
         )?;
 
@@ -3305,6 +3367,10 @@ mod tests {
                 dec!(9.00),
             ),
         )?;
+
+        let current_settings = SettingsRepository::get_institution_settings(&conn, "2026-12")?
+            .expect("2026-12 PEK test settings");
+        ensure_previous_period_settings(&conn, &aralik2026, &current_settings)?;
 
         PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-e", "2026-12")?;
 
@@ -3349,10 +3415,7 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
         ensure_test_institution_settings(&conn, &["2026-05"])?;
 
-        let mut gunler = HashMap::new();
-        for d in 1..=30 {
-            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-        }
+        let gunler = work_days_for_period_id("2026-05", 30);
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
@@ -3411,10 +3474,7 @@ mod tests {
             PeriodRepository::save(&conn, &donem)?;
             ensure_test_institution_settings(&conn, &["2026-06"])?;
 
-            let mut gunler = HashMap::new();
-            for d in 1..=30 {
-                gunler.insert(format!("2026-06-{:02}", d), "Ç".to_string());
-            }
+            let gunler = work_days_for_period_id("2026-06", 30);
             AttendanceRepository::save(
                 &conn,
                 &PersonelPuantaj {
@@ -3453,14 +3513,9 @@ mod tests {
     // Test C — yanlış period_id: aynı tarih aralığı/benzer dönem olsa bile başka
     // period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli.
     #[test]
-    fn test_c_attendance_bound_to_period_id_not_date_range(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn test_c_duplicate_work_period_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
 
-        let person = setup_test_person("test-att-c");
-        PersonnelRepository::save(&conn, &person)?;
-
-        // AYNI tarih aralığına sahip iki ayrı period ID (kopya dönem senaryosu).
         let donem_a = BordroDonemi {
             id: "2026-05".into(),
             yil: 2026,
@@ -3481,44 +3536,18 @@ mod tests {
             taxYear: 2026,
             taxMonth: 6,
         };
+
         PeriodRepository::save(&conn, &donem_a)?;
-        PeriodRepository::save(&conn, &donem_b)?;
-        ensure_test_institution_settings(&conn, &["2026-05", "2026-05-alt"])?;
-
-        // Puantaj yalnız A'ya kaydedildi; B aynı tarih aralığını paylaşsa bile puantajsız.
-        let mut gunler = HashMap::new();
-        for d in 1..=30 {
-            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-        }
-        AttendanceRepository::save(
-            &conn,
-            &PersonelPuantaj {
-                id: "test-att-c_2026-05".into(),
-                personelId: "test-att-c".into(),
-                donemId: "2026-05".into(),
-                gunler,
-            },
-        )?;
-
-        // A için hesaplama başarılı.
+        let duplicate = PeriodRepository::save(&conn, &donem_b);
         assert!(
-            PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05").is_ok()
+            matches!(duplicate, Err(DomainError::ValidationError(msg)) if msg.contains("çalışma dönemi")),
+            "aynı çalışma dönemi farklı ID ile ikinci kez oluşturulmamalı"
         );
-
-        // B için hesaplama, tarih aralığı aynı olsa bile puantaj bulamadığı için başarısız olmalı.
-        let res =
-            PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05-alt");
-        assert!(
-            matches!(res, Err(DomainError::NotFound(msg)) if msg.contains("puantaj")),
-            "Başka period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli"
-        );
+        assert!(PeriodRepository::get_by_id(&conn, "2026-05-alt")?.is_none());
 
         Ok(())
     }
 
-    // Test D — UI/native aynı semantik: "Puantaj Girildi" rozet koşulu
-    // (personelId + donemId eşleşmesi + boş olmayan gunler) native
-    // get_by_personnel_and_period lookup'ı ile birebir örtüşmelidir.
     #[test]
     fn test_d_badge_semantics_match_native_attendance_lookup(
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -3540,10 +3569,7 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
 
         // Rozet koşulu true (kayıt + boş olmayan gunler) -> native lookup Some döndürmeli.
-        let mut gunler = HashMap::new();
-        for d in 1..=30 {
-            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-        }
+        let gunler = work_days_for_period_id("2026-05", 30);
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
