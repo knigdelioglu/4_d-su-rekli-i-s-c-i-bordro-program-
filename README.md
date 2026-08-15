@@ -52,6 +52,8 @@ bunx @tauri-apps/cli@2 dev
 
 SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
 
+GitHub Actions doğrulaması `main` hedefli pull requestlerde ve `main` push'larında çalışır. Aynı PR için yeni commit geldiğinde eski CI koşusu iptal edilir; Rust doğrulaması sırasıyla `cargo fmt --check`, `cargo clippy --locked` ve en son `cargo test --locked` kapılarından geçer.
+
 ## Veri güvenliği
 
 JSON yedekleri sürüm 2 sözleşmesiyle dönem, personel, kurum ayarları, puantaj, bordro, vergi açılışları, hastalık raporu kayıtları ve yıllık bordro parametrelerini birlikte içerir. İçe aktarma ve örnek veri sıfırlama, mevcut domain verisini tek SQLite transaction içinde silip yükler. İçe aktarılan bordro snapshot'larında gelir/kesinti/net toplamları, PEK ve GV snapshot tutarlılığı ile raporlu gün ve iş primi bağlantıları doğrulanır; tutarsız bir bordro tüm import işlemini geri alır. Kesinleştirilen (`FINALIZED`) bordrolar yeniden hesaplanamaz veya geriye alınamaz.
