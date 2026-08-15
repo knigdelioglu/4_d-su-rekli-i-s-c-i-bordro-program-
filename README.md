@@ -52,7 +52,7 @@ bunx @tauri-apps/cli@2 dev
 
 SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
 
-GitHub Actions doğrulaması `main` hedefli pull requestlerde ve `main` push'larında çalışır. Aynı PR için yeni commit geldiğinde eski CI koşusu iptal edilir; Rust doğrulaması sırasıyla `cargo fmt --check`, `cargo clippy --locked` ve en son `cargo test --locked` kapılarından geçer.
+GitHub Actions doğrulaması `main` hedefli pull requestlerde ve `main` push'larında çalışır. Aynı PR için yeni commit geldiğinde eski CI koşusu iptal edilir; Rust doğrulaması sırasıyla `cargo fmt --check`, `cargo clippy --locked` ve en son `cargo test --locked` kapılarından geçer. Rust test fixture'ları da üretimle aynı 15–14 dönem ve tarih doğrulama kurallarına uymalıdır.
 
 ## Veri güvenliği
 
