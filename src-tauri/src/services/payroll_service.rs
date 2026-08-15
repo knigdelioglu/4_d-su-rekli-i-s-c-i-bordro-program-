@@ -32,6 +32,10 @@ fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> 
     Ok(())
 }
 
+fn is_sgk_prim_code(code: &str) -> bool {
+    matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT" | "R")
+}
+
 fn hakedis_gun(ozet: &PuantajOzeti) -> i32 {
     ozet.c + ozet.t + ozet.g + ozet.i + ozet.gc + ozet.gct
 }
@@ -82,6 +86,21 @@ fn find_2026_sgk_yemek_istisnasi_gecis_tarihi(
     let effective_date = NaiveDate::from_ymd_opt(2026, 4, 17)
         .expect("2026-04-17 geçerli sabit mevzuat tarihi olmalı");
     Ok((start < effective_date && effective_date <= end).then_some(effective_date))
+}
+
+fn find_year_transition_date(period: &BordroDonemi) -> Result<Option<NaiveDate>> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    if start.year() == end.year() {
+        return Ok(None);
+    }
+    let transition = NaiveDate::from_ymd_opt(end.year(), 1, 1).ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi için yıl geçiş tarihi oluşturulamadı.",
+            period.id
+        ))
+    })?;
+    Ok((start < transition && transition <= end).then_some(transition))
 }
 
 fn split_puantaj_by_zam_tarihi(
@@ -162,6 +181,86 @@ fn calculate_effective_daily_meal_exemption(
     }
 
     Ok((total_exemption / Decimal::from(eligible_days)).round_dp(6))
+}
+
+fn calculate_effective_pek_limits(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    transition_date: NaiveDate,
+    previous_settings: &DonemselKurumDegerleri,
+    current_settings: &DonemselKurumDegerleri,
+) -> Result<Option<(Decimal, Decimal)>> {
+    let old_daily_min = previous_settings.gunlukAsgariUcret.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi günlük asgari ücret ayarı eksik.",
+            previous_settings.donemId
+        ))
+    })?;
+    let new_daily_min = current_settings.gunlukAsgariUcret.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi günlük asgari ücret ayarı eksik.",
+            current_settings.donemId
+        ))
+    })?;
+    let old_ceiling = previous_settings.pekTavanKatsayisi.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi PEK tavan katsayısı eksik.",
+            previous_settings.donemId
+        ))
+    })?;
+    let new_ceiling = current_settings.pekTavanKatsayisi.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi PEK tavan katsayısı eksik.",
+            current_settings.donemId
+        ))
+    })?;
+
+    let mut prim_dates = Vec::new();
+    for (date_text, code) in &attendance.gunler {
+        if is_sgk_prim_code(code) {
+            prim_dates.push(parse_attendance_date(date_text, &period.id)?);
+        }
+    }
+    prim_dates.sort_unstable();
+
+    // 15-14 kamu dönemlerinde tam ay en fazla 30 prim günüdür. 31 günlük
+    // takvim kesişiminde SGK'nın resmi yılbaşı örneği eski yılda 16 + yeni
+    // yılda 14 gün kullanır; bu nedenle fazlalık en eski tarihten düşürülür.
+    if prim_dates.len() > 30 {
+        let excess = prim_dates.len() - 30;
+        prim_dates.drain(0..excess);
+    }
+    if prim_dates.is_empty() {
+        return Ok(None);
+    }
+
+    let mut lower_total = Decimal::ZERO;
+    let mut upper_total = Decimal::ZERO;
+    for date in prim_dates {
+        if date < transition_date {
+            lower_total += old_daily_min;
+            upper_total += old_daily_min * old_ceiling;
+        } else {
+            lower_total += new_daily_min;
+            upper_total += new_daily_min * new_ceiling;
+        }
+    }
+
+    let day_count = Decimal::from(
+        attendance
+            .gunler
+            .values()
+            .filter(|code| is_sgk_prim_code(code))
+            .count()
+            .min(30) as i32,
+    );
+    if day_count <= Decimal::ZERO || lower_total <= Decimal::ZERO {
+        return Ok(None);
+    }
+
+    let effective_daily_min = (lower_total / day_count).round_dp(12);
+    let effective_ceiling_multiplier = (upper_total / lower_total).round_dp(12);
+    Ok(Some((effective_daily_min, effective_ceiling_multiplier)))
 }
 
 fn sum_income_field(before: Option<Decimal>, after: Option<Decimal>) -> Option<Decimal> {
@@ -247,7 +346,10 @@ impl PayrollService {
         let (zam_oncesi_ozet, zam_sonrasi_ozet, zam_tarihi) =
             split_puantaj_by_zam_tarihi(&attendance, &period, &zam_aylari)?;
         let sgk_yemek_gecis_tarihi = find_2026_sgk_yemek_istisnasi_gecis_tarihi(&period)?;
-        let needs_previous_settings = zam_tarihi.is_some() || sgk_yemek_gecis_tarihi.is_some();
+        let year_transition_date = find_year_transition_date(&period)?;
+        let needs_previous_settings = zam_tarihi.is_some()
+            || sgk_yemek_gecis_tarihi.is_some()
+            || year_transition_date.is_some();
 
         let previous_kurum_degerleri = if needs_previous_settings {
             let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?
@@ -363,6 +465,28 @@ impl PayrollService {
                 )?);
         }
 
+        if let Some(transition_date) = year_transition_date {
+            let previous = previous_kurum_degerleri.as_ref().ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi yılbaşı öncesi PEK parametreleri bulunamadı.",
+                    period.id
+                ))
+            })?;
+            if let Some((effective_daily_min, effective_ceiling_multiplier)) =
+                calculate_effective_pek_limits(
+                    &attendance,
+                    &period,
+                    transition_date,
+                    previous,
+                    &kurum_degerleri,
+                )?
+            {
+                effective_kurum_degerleri.gunlukAsgariUcret = Some(effective_daily_min);
+                effective_kurum_degerleri.pekTavanKatsayisi =
+                    Some(effective_ceiling_multiplier);
+            }
+        }
+
         let prev_gv =
             CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
         let prev_asgari_gv = CumulativeTaxService::get_previous_cumulative_asgari_gv_strict(
@@ -380,7 +504,7 @@ impl PayrollService {
             tax_brackets: &annual_parameters.gelirVergisiDilimleri,
         };
 
-        let (kesintiler, pek_detay, sonraki_devreden) =
+        let (mut kesintiler, pek_detay, sonraki_devreden) =
             calculate_statutory_deductions_with_tax_brackets(
                 &gelirler,
                 Some(&effective_kurum_degerleri),
@@ -416,6 +540,19 @@ impl PayrollService {
             prev_asgari_gv,
             &annual_parameters.gelirVergisiDilimleri,
         );
+        kesintiler.gelirVergisi = Some(gv_detay.kesilenGelirVergisi);
+
+        // PEK için yılbaşı bölünmüş günlük asgari kullanılsa dahi GV/DV istisnası
+        // vergi ayının cari asgari ücret referansıyla hesaplanır.
+        let damga_rate = kurum_degerleri
+            .damgaVergisiOraniBinde
+            .ok_or_else(|| DomainError::InvalidData("Damga vergisi oranı eksik.".into()))?
+            / dec!(1000);
+        let aylik_brut_asgari = (gunluk_asgari * dec!(30)).round_dp(2);
+        let asgari_dv_istisnasi = (aylik_brut_asgari * damga_rate).round_dp(2);
+        let ham_damga_vergisi = (gelir_toplam * damga_rate).round_dp(2);
+        kesintiler.damgaVergisi =
+            Some((ham_damga_vergisi - asgari_dv_istisnasi).round_dp(2).max(Decimal::ZERO));
 
         let odenen_raporlu_gun =
             super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
@@ -426,6 +563,12 @@ impl PayrollService {
 
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
+        if net_odeme < Decimal::ZERO {
+            return Err(DomainError::ValidationError(format!(
+                "{} personelinin {} dönemi net ödemesi negatif olamaz: {} TL. Kesinti kalemlerini kontrol edin.",
+                personnel_id, period_id, net_odeme
+            )));
+        }
 
         let now = chrono::Utc::now().to_rfc3339();
 
