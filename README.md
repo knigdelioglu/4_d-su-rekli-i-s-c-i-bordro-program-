@@ -16,9 +16,33 @@ bun run dev
 bun test
 bun run lint
 bun run build
+cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 ```
+
+Rust test döngüsünü hızlandırmak için bağımlılık crate'leri `dev` ve `test`
+profillerinde 3. seviye optimizasyonla derlenir; uygulama kodu hızlı debug
+derlemesinde kalır. Küçük değişikliklerde `bun run check:rust` veya doğrudan
+`cargo check --manifest-path src-tauri/Cargo.toml` kullanın.
+
+Paralel test çalıştırma için bir kez `cargo install cargo-nextest --locked`
+kurduktan sonra `bun run test:rust` otomatik olarak nextest'i kullanır.
+`cargo-nextest` kurulu değilse aynı komut standart `cargo test`e düşer;
+`bun run test:rust:nextest` ise nextest'i zorunlu kılan doğrudan komuttur.
+
+macOS'ta LLVM `lld` kuruluysa hızlı linker yapılandırması açıkça etkinleştirilebilir:
+
+```bash
+cargo --config src-tauri/.cargo/config.fast.toml nextest run --manifest-path src-tauri/Cargo.toml
+```
+
+Bu yapılandırma varsayılan `config.toml` olarak etkin değildir; böylece `lld`
+kurulu olmayan geliştirici ve CI makinelerinde test akışı kırılmaz.
+
+macOS güvenlik taraması derleme döngüsünü yavaşlatıyorsa yalnızca proje
+önbelleği olan `src-tauri/target/` dizinini kurumunuzun güvenlik politikasına
+uygun biçimde tarama dışı bırakmayı değerlendirin.
 
 Tauri geliştirme akışı için `bun tauri dev` kullanılabilir. SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
 

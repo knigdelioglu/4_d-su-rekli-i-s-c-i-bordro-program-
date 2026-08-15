@@ -2,11 +2,26 @@ use crate::domain::models::*;
 use crate::domain::Result;
 use chrono::Utc;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+pub const ZAM_AYLARI_SETTING_KEY: &str = "zam_aylari";
 
 pub struct SettingsRepository;
 
 impl SettingsRepository {
+    pub fn normalize_zam_aylari(months: &[i32]) -> Result<Vec<i32>> {
+        let mut unique = BTreeSet::new();
+        for month in months {
+            if !(1..=12).contains(month) {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Zam ayları 1-12 arasında olmalıdır.".into(),
+                ));
+            }
+            unique.insert(*month);
+        }
+        Ok(unique.into_iter().collect())
+    }
+
     fn decode_settings(period_id: &str, settings_json: &str) -> Result<DonemselKurumDegerleri> {
         let mut value: DonemselKurumDegerleri =
             serde_json::from_str(settings_json).map_err(|e| {

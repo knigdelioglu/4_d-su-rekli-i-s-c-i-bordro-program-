@@ -1,0 +1,10 @@
+# Opt-in configuration for macOS machines with LLVM lld installed.
+#
+# This file is intentionally not named config.toml: enabling lld globally would
+# make every Rust command fail on machines where lld is not installed.
+
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]

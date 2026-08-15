@@ -534,10 +534,9 @@ pub fn calculate_is_primi_detayi(
 /// Is primi: oran personelin grubundan (grup) gelir; kurumsal tek oran
 /// isPrimiYuzde bu hesapta rol oynamaz. Hak gunu = C + GC. Sessiz fallback yok:
 /// grup cozumleme hatalari [DomainError] olarak doner ve motor tahmin uretmez.
-pub fn auto_fill_gelirler_from_puantaj(
+pub fn calculate_gunluk_gelirler_from_puantaj(
     puantaj_ozeti: &PuantajOzeti,
     kurum_degerleri: &DonemselKurumDegerleri,
-    hizmet_yili: i32,
     grup: Option<&str>,
 ) -> Result<(GelirKalemleri, IsPrimiHesapDetayi)> {
     let hakedis_gun = puantaj_ozeti.c
@@ -552,9 +551,6 @@ pub fn auto_fill_gelirler_from_puantaj(
     let taban_brut_aylik = round2(hakedis_dec * kurum_degerleri.gunlukTabanUcret);
     let yemek = round2(fiili_calisma_gun * kurum_degerleri.gunlukYemek);
     let vasita_yol = round2(fiili_calisma_gun * kurum_degerleri.gunlukVasitaYol);
-    let birlestirilmis_sosyal_yardim = kurum_degerleri.birlestirilmisSosyalYardim;
-    let giyim_yardimi = kurum_degerleri.giyimYardimi;
-    let hizmet_zammi = round2(Decimal::from(hizmet_yili) * kurum_degerleri.hizmetZammiBirimi);
 
     // Is primi: oran personelin grubundan gelir; hak gunu = C + GC.
     let is_primi_hak_gunu = puantaj_ozeti.c + puantaj_ozeti.gc;
@@ -564,7 +560,6 @@ pub fn auto_fill_gelirler_from_puantaj(
         grup,
         kurum_degerleri.isPrimiGruplari.as_deref(),
     )?;
-    let is_primi = is_primi_detay.tutar;
 
     let gc_orani = kurum_degerleri.geceCalismaPrimiYuzde.unwrap_or(dec!(0));
     let gct_orani = kurum_degerleri
@@ -576,12 +571,37 @@ pub fn auto_fill_gelirler_from_puantaj(
         gc_orani,
         puantaj_ozeti.gc,
     );
-
     let gece_calismasi_tatili_ucreti = NightWorkPolicy::calculate_gece_calismasi_tatili_primi(
         kurum_degerleri.gunlukTabanUcret,
         gct_orani,
         puantaj_ozeti.gct,
     );
+
+    let gelirler = GelirKalemleri {
+        tabanBrutAylik: Some(taban_brut_aylik),
+        yemek: Some(yemek),
+        vasitaYol: Some(vasita_yol),
+        isPrimi: Some(is_primi_detay.tutar),
+        geceCalismasiUcreti: Some(gece_calismasi_ucreti),
+        geceCalismasiTatiliUcreti: Some(gece_calismasi_tatili_ucreti),
+        ..GelirKalemleri::default()
+    };
+
+    Ok((gelirler, is_primi_detay))
+}
+
+pub fn auto_fill_gelirler_from_puantaj(
+    puantaj_ozeti: &PuantajOzeti,
+    kurum_degerleri: &DonemselKurumDegerleri,
+    hizmet_yili: i32,
+    grup: Option<&str>,
+) -> Result<(GelirKalemleri, IsPrimiHesapDetayi)> {
+    let (mut gelirler, is_primi_detay) =
+        calculate_gunluk_gelirler_from_puantaj(puantaj_ozeti, kurum_degerleri, grup)?;
+
+    let birlestirilmis_sosyal_yardim = kurum_degerleri.birlestirilmisSosyalYardim;
+    let giyim_yardimi = kurum_degerleri.giyimYardimi;
+    let hizmet_zammi = round2(Decimal::from(hizmet_yili) * kurum_degerleri.hizmetZammiBirimi);
 
     let mut tediye: Option<Decimal> = None;
     if let Some(ref t_list) = kurum_degerleri.tediyeListesi {
@@ -603,21 +623,13 @@ pub fn auto_fill_gelirler_from_puantaj(
         }
     }
 
-    let gelirler = GelirKalemleri {
-        tabanBrutAylik: Some(taban_brut_aylik),
-        tediye,
-        tisIkramiyesi: tis_ikramiyesi,
-        ekOdeme: kurum_degerleri.ekOdeme,
-        yemek: Some(yemek),
-        birlestirilmisSosyalYardim: Some(birlestirilmis_sosyal_yardim),
-        vasitaYol: Some(vasita_yol),
-        giyimYardimi: Some(giyim_yardimi),
-        isPrimi: Some(is_primi),
-        geceCalismasiUcreti: Some(gece_calismasi_ucreti),
-        geceCalismasiTatiliUcreti: Some(gece_calismasi_tatili_ucreti),
-        hizmetZammi: Some(hizmet_zammi),
-        digerGelir: kurum_degerleri.digerGelirVarsayilan,
-    };
+    gelirler.tediye = tediye;
+    gelirler.tisIkramiyesi = tis_ikramiyesi;
+    gelirler.ekOdeme = kurum_degerleri.ekOdeme;
+    gelirler.birlestirilmisSosyalYardim = Some(birlestirilmis_sosyal_yardim);
+    gelirler.giyimYardimi = Some(giyim_yardimi);
+    gelirler.hizmetZammi = Some(hizmet_zammi);
+    gelirler.digerGelir = kurum_degerleri.digerGelirVarsayilan;
 
     Ok((gelirler, is_primi_detay))
 }

@@ -234,3 +234,74 @@ fn period_and_settings_are_atomic_when_settings_write_fails() -> Result<()> {
     assert_eq!(count, 0, "failed settings write must roll back the period");
     Ok(())
 }
+
+#[test]
+fn common_raise_month_splits_15_14_daily_income() -> Result<()> {
+    let conn =
+        create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let personnel = person("raise-person");
+    PersonnelRepository::save(&conn, &personnel)?;
+
+    let previous_period = BordroDonemi {
+        id: "2026-02".into(),
+        yil: 2026,
+        ay: 2,
+        baslangicTarihi: "2026-02-15".into(),
+        bitisTarihi: "2026-03-14".into(),
+        donemAdi: "Şubat 2026".into(),
+        taxYear: 2026,
+        taxMonth: 3,
+    };
+    let current_period = BordroDonemi {
+        id: "2026-03".into(),
+        yil: 2026,
+        ay: 3,
+        baslangicTarihi: "2026-03-15".into(),
+        bitisTarihi: "2026-04-14".into(),
+        donemAdi: "Mart 2026".into(),
+        taxYear: 2026,
+        taxMonth: 4,
+    };
+    PeriodRepository::save(&conn, &previous_period)?;
+    PeriodRepository::save(&conn, &current_period)?;
+
+    let mut previous_settings = settings(&previous_period.id);
+    previous_settings.gunlukTabanUcret = dec!(1000);
+    previous_settings.gunlukYemek = dec!(10);
+    previous_settings.gunlukVasitaYol = dec!(5);
+    SettingsRepository::save_institution_settings(&conn, &previous_settings)?;
+
+    let mut current_settings = settings(&current_period.id);
+    current_settings.gunlukTabanUcret = dec!(1200);
+    current_settings.gunlukYemek = dec!(20);
+    current_settings.gunlukVasitaYol = dec!(7);
+    SettingsRepository::save_institution_settings(&conn, &current_settings)?;
+
+    let mut gunler = HashMap::new();
+    for day in 15..=31 {
+        gunler.insert(format!("2026-03-{day:02}"), "Ç".into());
+    }
+    for day in 1..=14 {
+        gunler.insert(format!("2026-04-{day:02}"), "Ç".into());
+    }
+    AttendanceRepository::save(
+        &conn,
+        &PersonelPuantaj {
+            id: "raise-person_2026-03".into(),
+            personelId: personnel.id.clone(),
+            donemId: current_period.id.clone(),
+            gunler,
+        },
+    )?;
+    SettingsRepository::set_app_setting(&conn, "zam_aylari", "[4]")?;
+
+    let payroll =
+        PayrollService::calculate_payroll_for_personnel(&conn, &personnel.id, &current_period.id)?;
+
+    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(33800.00)));
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(450.00)));
+    assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(183.00)));
+    assert_eq!(payroll.gelirler.isPrimi, Some(dec!(3042.00)));
+    assert_eq!(payroll.isPrimiDetay.unwrap().hakGunu, 31);
+    Ok(())
+}

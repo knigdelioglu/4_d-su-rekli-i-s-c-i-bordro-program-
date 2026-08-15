@@ -242,6 +242,8 @@ export interface SickLeaveRecord {
 }
 
 export const BACKUP_FORMAT_VERSION = 2;
+/** Native app_settings anahtarı: kurum genelinde zam yürürlük ayları (1-12). */
+export const ZAM_AYLARI_SETTING_KEY = 'zam_aylari';
 
 /** JSON yedek sözleşmesi. V2, SQLite'daki tüm kullanıcı verisini kapsar. */
 export interface BackupPayload {
@@ -256,6 +258,8 @@ export interface BackupPayload {
   taxOpenings: PersonelTaxOpening[];
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
+  /** Kurum genelinde zam yürürlük ayları; seçilen ayın 1'i esas alınır. */
+  zamAylari: number[];
 }
 
 export type PuantajOzeti = Record<PuantajKodu, number>;

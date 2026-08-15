@@ -22,3 +22,11 @@ chrono = { version = "0.4", features = ["serde"] }
 [lib]
 name = "bordro_programi_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Keep application crates quick to rebuild while compiling third-party
+# dependencies with optimizations for faster test execution.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.test.package."*"]
+opt-level = 3

@@ -180,5 +180,6 @@ export function getInitialDataset() {
         ],
       } satisfies AnnualPayrollParameters,
     ],
+    zamAylari: [],
   };
 }

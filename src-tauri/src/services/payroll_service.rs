@@ -7,8 +7,135 @@ use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
+use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
+use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+
+fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> Result<()> {
+    match code {
+        "Ç" => summary.c += 1,
+        "T" => summary.t += 1,
+        "G" => summary.g += 1,
+        "İ" => summary.i += 1,
+        "GÇ" => summary.gc += 1,
+        "GÇT" => summary.gct += 1,
+        "R" => summary.r += 1,
+        _ => {
+            return Err(DomainError::InvalidData(format!(
+                "{} döneminde desteklenmeyen puantaj kodu: {}",
+                period_id, code
+            )))
+        }
+    }
+    Ok(())
+}
+
+fn hakedis_gun(ozet: &PuantajOzeti) -> i32 {
+    ozet.c + ozet.t + ozet.g + ozet.i + ozet.gc + ozet.gct
+}
+
+fn parse_period_date(value: &str, period_id: &str, field_name: &str) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|e| {
+        DomainError::InvalidData(format!(
+            "{} dönemi {} tarihi geçersiz: {}",
+            period_id, field_name, e
+        ))
+    })
+}
+
+fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<NaiveDate>> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    let mut result = None;
+
+    for year in (start.year() - 1)..=(end.year() + 1) {
+        for month in zam_aylari {
+            let Some(candidate) = NaiveDate::from_ymd_opt(year, *month as u32, 1) else {
+                continue;
+            };
+            if candidate >= start && candidate <= end {
+                result =
+                    Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+fn split_puantaj_by_zam_tarihi(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    zam_aylari: &[i32],
+) -> Result<(PuantajOzeti, PuantajOzeti, Option<NaiveDate>)> {
+    let zam_tarihi = find_zam_tarihi(period, zam_aylari)?;
+    let mut zam_oncesi = PuantajOzeti::default();
+    let mut zam_sonrasi = PuantajOzeti::default();
+
+    if zam_tarihi.is_none() {
+        for code in attendance.gunler.values() {
+            add_puantaj_kodu(&mut zam_sonrasi, code, &period.id)?;
+        }
+        return Ok((zam_oncesi, zam_sonrasi, zam_tarihi));
+    }
+
+    let cutoff = zam_tarihi.expect("zam tarihi kontrolü sonrası tarih mevcut olmalı");
+    for (date_text, code) in &attendance.gunler {
+        let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|e| {
+            DomainError::InvalidData(format!(
+                "{} döneminde puantaj tarihi geçersiz: {} ({})",
+                period.id, date_text, e
+            ))
+        })?;
+        let summary = if date < cutoff {
+            &mut zam_oncesi
+        } else {
+            &mut zam_sonrasi
+        };
+        add_puantaj_kodu(summary, code, &period.id)?;
+    }
+
+    Ok((zam_oncesi, zam_sonrasi, zam_tarihi))
+}
+
+fn sum_income_field(before: Option<Decimal>, after: Option<Decimal>) -> Option<Decimal> {
+    Some((before.unwrap_or_default() + after.unwrap_or_default()).round_dp(2))
+}
+
+fn merge_is_primi_details(
+    before: &IsPrimiHesapDetayi,
+    after: &IsPrimiHesapDetayi,
+) -> IsPrimiHesapDetayi {
+    let hak_gunu = before.hakGunu + after.hakGunu;
+    let tutar = (before.tutar + after.tutar).round_dp(2);
+    let reference = if after.hakGunu > 0 { after } else { before };
+    let gunluk_is_primi = if hak_gunu > 0 {
+        (tutar / Decimal::from(hak_gunu)).round_dp(2)
+    } else {
+        Decimal::ZERO
+    };
+
+    IsPrimiHesapDetayi {
+        grupId: reference.grupId.clone(),
+        grupAd: reference.grupAd.clone(),
+        oran: reference.oran,
+        hakGunu: hak_gunu,
+        gunlukIsPrimi: gunluk_is_primi,
+        tutar,
+    }
+}
+
+fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
+    let Some(raw) = SettingsRepository::get_app_setting(conn, ZAM_AYLARI_SETTING_KEY)? else {
+        return Ok(Vec::new());
+    };
+    let months: Vec<i32> = serde_json::from_str(&raw).map_err(|e| {
+        DomainError::InvalidData(format!("Kurum zam ayarı bozuk JSON içeriyor: {}", e))
+    })?;
+    SettingsRepository::normalize_zam_aylari(&months)
+}
 
 pub struct PayrollService;
 
@@ -43,21 +170,7 @@ impl PayrollService {
 
         let mut summary = PuantajOzeti::default();
         for code in attendance.gunler.values() {
-            match code.as_str() {
-                "Ç" => summary.c += 1,
-                "T" => summary.t += 1,
-                "G" => summary.g += 1,
-                "İ" => summary.i += 1,
-                "GÇ" => summary.gc += 1,
-                "GÇT" => summary.gct += 1,
-                "R" => summary.r += 1,
-                _ => {
-                    return Err(DomainError::InvalidData(format!(
-                        "{} döneminde desteklenmeyen puantaj kodu: {}",
-                        period_id, code
-                    )))
-                }
-            }
+            add_puantaj_kodu(&mut summary, code, period_id)?;
         }
 
         let kurum_degerleri =
@@ -72,6 +185,11 @@ impl PayrollService {
             })?;
         validate_kurum_degerleri_for_payroll(&kurum_degerleri)?;
 
+        let zam_aylari = get_zam_aylari(conn)?;
+        let (zam_oncesi_ozet, zam_sonrasi_ozet, zam_tarihi) =
+            split_puantaj_by_zam_tarihi(&attendance, &period, &zam_aylari)?;
+        let mut effective_kurum_degerleri = kurum_degerleri.clone();
+
         let annual_parameters =
             AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?.ok_or_else(
                 || {
@@ -82,12 +200,78 @@ impl PayrollService {
                 },
             )?;
 
-        let (gelirler, is_primi_detay) = auto_fill_gelirler_from_puantaj(
+        let (mut gelirler, mut is_primi_detay) = auto_fill_gelirler_from_puantaj(
             &summary,
             &kurum_degerleri,
             personel.hizmetYili,
             Some(&personel.grup),
         )?;
+
+        if zam_tarihi.is_some() {
+            let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} dönemi zam öncesi dönem ayarı bulunamadı.",
+                        period.id
+                    ))
+                })?;
+            let previous_kurum_degerleri =
+                SettingsRepository::get_institution_settings(conn, &previous_period.id)?
+                    .ok_or_else(|| {
+                        DomainError::InvalidData(format!(
+                            "{} dönemi zam öncesi kurum ayarları bulunamadı.",
+                            previous_period.id
+                        ))
+                    })?;
+            validate_kurum_degerleri_for_payroll(&previous_kurum_degerleri)?;
+
+            let (zam_oncesi_gelirler, zam_oncesi_is_primi) =
+                calculate_gunluk_gelirler_from_puantaj(
+                    &zam_oncesi_ozet,
+                    &previous_kurum_degerleri,
+                    Some(&personel.grup),
+                )?;
+            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) =
+                calculate_gunluk_gelirler_from_puantaj(
+                    &zam_sonrasi_ozet,
+                    &kurum_degerleri,
+                    Some(&personel.grup),
+                )?;
+
+            gelirler.tabanBrutAylik = sum_income_field(
+                zam_oncesi_gelirler.tabanBrutAylik,
+                zam_sonrasi_gelirler.tabanBrutAylik,
+            );
+            gelirler.yemek =
+                sum_income_field(zam_oncesi_gelirler.yemek, zam_sonrasi_gelirler.yemek);
+            gelirler.vasitaYol = sum_income_field(
+                zam_oncesi_gelirler.vasitaYol,
+                zam_sonrasi_gelirler.vasitaYol,
+            );
+            gelirler.isPrimi =
+                sum_income_field(zam_oncesi_gelirler.isPrimi, zam_sonrasi_gelirler.isPrimi);
+            gelirler.geceCalismasiUcreti = sum_income_field(
+                zam_oncesi_gelirler.geceCalismasiUcreti,
+                zam_sonrasi_gelirler.geceCalismasiUcreti,
+            );
+            gelirler.geceCalismasiTatiliUcreti = sum_income_field(
+                zam_oncesi_gelirler.geceCalismasiTatiliUcreti,
+                zam_sonrasi_gelirler.geceCalismasiTatiliUcreti,
+            );
+            is_primi_detay = merge_is_primi_details(&zam_oncesi_is_primi, &zam_sonrasi_is_primi);
+
+            let zam_oncesi_hakedis = hakedis_gun(&zam_oncesi_ozet);
+            let zam_sonrasi_hakedis = hakedis_gun(&zam_sonrasi_ozet);
+            let toplam_hakedis = zam_oncesi_hakedis + zam_sonrasi_hakedis;
+            if toplam_hakedis > 0 {
+                effective_kurum_degerleri.gunlukTabanUcret =
+                    (previous_kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_oncesi_hakedis)
+                        + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_hakedis))
+                    .checked_div(Decimal::from(toplam_hakedis))
+                    .unwrap_or(kurum_degerleri.gunlukTabanUcret)
+                    .round_dp(6);
+            }
+        }
 
         let prev_gv =
             CumulativeTaxService::get_previous_cumulative_gv(conn, personnel_id, &period)?;
@@ -109,7 +293,7 @@ impl PayrollService {
         let (kesintiler, pek_detay, sonraki_devreden) =
             calculate_statutory_deductions_with_tax_brackets(
                 &gelirler,
-                Some(&kurum_degerleri),
+                Some(&effective_kurum_degerleri),
                 Some(&personel),
                 Some(&summary),
                 &tax_inputs,

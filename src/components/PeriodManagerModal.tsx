@@ -43,6 +43,8 @@ interface PeriodManagerModalProps {
   sickLeaveRecords: SickLeaveRecord[];
   onSaveSickLeaveRecord: (record: SickLeaveRecord) => Promise<void> | void;
   onDeleteSickLeaveRecord: (id: string) => Promise<void> | void;
+  zamAylari: number[];
+  onSaveZamAylari: (months: number[]) => Promise<void> | void;
 }
 
 export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
@@ -60,8 +62,20 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   sickLeaveRecords,
   onSaveSickLeaveRecord,
   onDeleteSickLeaveRecord,
+  zamAylari,
+  onSaveZamAylari,
 }) => {
   const currentYear = new Date().getFullYear();
+  const configuredYears = [
+    ...donemler.flatMap((period) => [period.yil, period.taxYear]),
+    ...annualPayrollParameters.map((parameters) => parameters.year),
+  ].filter((year): year is number => Number.isInteger(year));
+  const firstSelectableYear = Math.min(currentYear - 5, ...configuredYears, currentYear);
+  const lastSelectableYear = Math.max(currentYear + 40, ...configuredYears, currentYear);
+  const yearOptions = Array.from(
+    { length: lastSelectableYear - firstSelectableYear + 1 },
+    (_, index) => firstSelectableYear + index
+  );
   const [newYear, setNewYear] = useState<number>(currentYear);
   const [newMonth, setNewMonth] = useState<number>(1); // 1 = Ocak
   const [newTaxYear, setNewTaxYear] = useState<number>(currentYear);
@@ -102,6 +116,9 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   const [annualTaxYear, setAnnualTaxYear] = useState<number>(currentYear);
   const [annualTaxBrackets, setAnnualTaxBrackets] = useState<TaxBracket[]>([]);
   const [annualTaxSuccess, setAnnualTaxSuccess] = useState<boolean>(false);
+  const [zamAylariForm, setZamAylariForm] = useState<number[]>(
+    [...zamAylari].sort((a, b) => a - b)
+  );
 
   // Sick leave records state
   const [selectedPersonForSick, setSelectedPersonForSick] = useState<string>(personeller[0]?.id || '');
@@ -170,6 +187,10 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
     );
   }, [aktifDonemId, annualPayrollParameters, donemler, newTaxYear]);
 
+  useEffect(() => {
+    setZamAylariForm([...zamAylari].sort((a, b) => a - b));
+  }, [zamAylari]);
+
   // Preview generated dates
   const previewDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
   const previewExists = donemler.some((d) => d.id === previewDonem.id);
@@ -230,6 +251,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
         ...paramsForm,
         donemId: aktifDonemId,
       });
+      await onSaveZamAylari(zamAylariForm);
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 2500);
     } catch (err) {
@@ -507,9 +529,58 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
               {savedSuccess && (
                 <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
                   <Check className="w-4 h-4 text-emerald-600" />
-                  <span>Dönem gelir parametreleri başarıyla kaydedildi!</span>
+                  <span>Dönem gelir ve zam ayarları başarıyla kaydedildi!</span>
                 </div>
               )}
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <Percent className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs text-amber-950 leading-relaxed">
+                    <strong className="block mb-1">Kurum Genelinde Zam Takvimi</strong>
+                    Zam seçilen ayın 1&apos;inde yürürlüğe girer ve kurumun tüm işçilerine uygulanır.
+                    15–14 bordro dönemi bu tarihi içeriyorsa, tarih öncesi günler önceki dönem
+                    parametreleriyle; tarih ve sonrası günler aktif dönem parametreleriyle hesaplanır.
+                    Yeni tutarları zam tarihini içeren dönemin gelir parametrelerine girin.
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                  {AY_ISIMLERI.map((ay, index) => {
+                    const month = index + 1;
+                    const selected = zamAylariForm.includes(month);
+                    return (
+                      <label
+                        key={month}
+                        className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold cursor-pointer transition-colors ${
+                          selected
+                            ? 'bg-amber-100 border-amber-400 text-amber-900'
+                            : 'bg-white border-amber-200 text-slate-700 hover:bg-amber-100/60'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selected}
+                          onChange={() =>
+                            setZamAylariForm((current) =>
+                              selected
+                                ? current.filter((value) => value !== month)
+                                : [...current, month].sort((a, b) => a - b)
+                            )
+                          }
+                          className="accent-amber-600"
+                        />
+                        {ay}
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-amber-800">
+                  Seçili aylar:{' '}
+                  {zamAylariForm.length > 0
+                    ? zamAylariForm.map((month) => AY_ISIMLERI[month - 1]).join(', ')
+                    : 'Henüz seçilmedi (dönem tek ücretle hesaplanır).'}
+                </div>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -1727,7 +1798,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                     }}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
                   >
-                    {[2024, 2025, 2026, 2027, 2028].map((y) => (
+                    {yearOptions.map((y) => (
                       <option key={y} value={y}>
                         {y}
                       </option>
@@ -1803,7 +1874,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                       onChange={(e) => setNewTaxYear(parseInt(e.target.value, 10))}
                       className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
                     >
-                      {[2024, 2025, 2026, 2027, 2028].map((y) => (
+                      {yearOptions.map((y) => (
                         <option key={y} value={y}>
                           {y}
                         </option>

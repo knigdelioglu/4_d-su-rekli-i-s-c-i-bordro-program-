@@ -7,7 +7,7 @@ use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
-use crate::repositories::settings_repo::SettingsRepository;
+use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use rusqlite::Connection;
@@ -41,6 +41,8 @@ pub struct LegacyPayload {
     pub sickLeaveRecords: Option<Vec<SickLeaveRecord>>,
     #[serde(default)]
     pub annualPayrollParameters: Option<Vec<AnnualPayrollParameters>>,
+    #[serde(default)]
+    pub zamAylari: Option<Vec<i32>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -122,6 +124,7 @@ impl MigrationService {
             taxOpenings,
             sickLeaveRecords,
             annualPayrollParameters,
+            zamAylari,
         } = payload;
 
         if let Some(periods) = donemler {
@@ -224,6 +227,14 @@ impl MigrationService {
                 AnnualPayrollParametersRepository::save(conn, &parameter)?;
             }
         }
+
+        if let Some(months) = zamAylari {
+            let normalized_months = SettingsRepository::normalize_zam_aylari(&months)?;
+            let value = serde_json::to_string(&normalized_months)
+                .map_err(|e| DomainError::InvalidData(e.to_string()))?;
+            SettingsRepository::set_app_setting(conn, ZAM_AYLARI_SETTING_KEY, &value)?;
+        }
+
         let imported_tax_years: BTreeSet<i32> = PeriodRepository::get_all(conn)?
             .into_iter()
             .map(|period| period.taxYear)

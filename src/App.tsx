@@ -21,6 +21,7 @@ import {
   PersonelPuantaj,
   PersonelTaxOpening,
   SickLeaveRecord,
+  ZAM_AYLARI_SETTING_KEY,
 } from './types/payroll';
 import { tauriBridge } from './services/tauriBridge';
 import { getInitialDataset } from './utils/sampleData';
@@ -28,6 +29,25 @@ import { getInitialDataset } from './utils/sampleData';
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 
 type DatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
+
+function normalizeZamAylari(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(
+    value.filter(
+      (month): month is number =>
+        typeof month === 'number' && Number.isInteger(month) && month >= 1 && month <= 12
+    )
+  )].sort((a, b) => a - b);
+}
+
+function parseZamAylariSetting(value: string | null): number[] {
+  if (!value) return [];
+  try {
+    return normalizeZamAylari(JSON.parse(value));
+  } catch {
+    return [];
+  }
+}
 
 function makeBackupPayload(data: DatasetFields): BackupPayload {
   return {
@@ -81,6 +101,7 @@ function parseBackupPayload(json: string): BackupPayload {
     sickLeaveRecords: (parsed.sickLeaveRecords as SickLeaveRecord[] | undefined) || [],
     annualPayrollParameters:
       (parsed.annualPayrollParameters as AnnualPayrollParameters[] | undefined) || [],
+    zamAylari: normalizeZamAylari(parsed.zamAylari),
   });
 }
 
@@ -113,6 +134,7 @@ export default function App() {
   const [annualPayrollParameters, setAnnualPayrollParameters] = useState<
     AnnualPayrollParameters[]
   >([]);
+  const [zamAylari, setZamAylari] = useState<number[]>([]);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -139,6 +161,7 @@ export default function App() {
     setTaxOpenings(data.taxOpenings);
     setSickLeaveRecords(data.sickLeaveRecords);
     setAnnualPayrollParameters(data.annualPayrollParameters);
+    setZamAylari(normalizeZamAylari(data.zamAylari));
   }, []);
 
   const loadData = useCallback(async () => {
@@ -157,7 +180,7 @@ export default function App() {
           }
         }
 
-        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId] =
+        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, savedZamAylari] =
           await Promise.all([
             tauriBridge.getPeriods(),
             tauriBridge.getPersonnelList(),
@@ -168,6 +191,7 @@ export default function App() {
             tauriBridge.getSickLeaveRecords(),
             tauriBridge.getAnnualPayrollParameters(),
             tauriBridge.getAppSetting('active_period_id'),
+            tauriBridge.getAppSetting(ZAM_AYLARI_SETTING_KEY),
           ]);
 
         applyDataset({
@@ -180,6 +204,7 @@ export default function App() {
           taxOpenings: fetchedTaxOpenings,
           sickLeaveRecords: fetchedSickLeaves,
           annualPayrollParameters: fetchedAnnualParameters,
+          zamAylari: parseZamAylariSetting(savedZamAylari),
         });
         setIsDataLoaded(true);
         return;
@@ -200,6 +225,7 @@ export default function App() {
           taxOpenings: [],
           sickLeaveRecords: [],
           annualPayrollParameters: [],
+          zamAylari: [],
         });
       }
       setIsDataLoaded(true);
@@ -232,6 +258,7 @@ export default function App() {
       taxOpenings,
       sickLeaveRecords,
       annualPayrollParameters,
+      zamAylari,
     });
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -249,6 +276,7 @@ export default function App() {
     taxOpenings,
     sickLeaveRecords,
     annualPayrollParameters,
+    zamAylari,
   ]);
 
   const handleSelectDonem = async (id: string) => {
@@ -281,6 +309,7 @@ export default function App() {
       taxOpenings: initialData.taxOpenings || [],
       sickLeaveRecords: initialData.sickLeaveRecords || [],
       annualPayrollParameters: initialData.annualPayrollParameters || [],
+      zamAylari: initialData.zamAylari || [],
     });
 
     try {
@@ -311,6 +340,7 @@ export default function App() {
       taxOpenings,
       sickLeaveRecords,
       annualPayrollParameters,
+      zamAylari,
     });
     const jsonStr = JSON.stringify(payload, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
@@ -452,6 +482,14 @@ export default function App() {
     });
   };
 
+  const handleSaveZamAylari = async (months: number[]) => {
+    const normalized = normalizeZamAylari(months);
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.setAppSetting(ZAM_AYLARI_SETTING_KEY, JSON.stringify(normalized));
+    }
+    setZamAylari(normalized);
+  };
+
   const handleDeleteSickLeaveRecord = async (id: string) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.deleteSickLeaveRecord(id);
@@ -569,6 +607,8 @@ export default function App() {
         personeller={personeller}
         annualPayrollParameters={annualPayrollParameters}
         onSaveAnnualPayrollParameters={handleSaveAnnualPayrollParameters}
+        zamAylari={zamAylari}
+        onSaveZamAylari={handleSaveZamAylari}
         sickLeaveRecords={sickLeaveRecords}
         onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
         onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
