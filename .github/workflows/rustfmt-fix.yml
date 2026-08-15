@@ -1,0 +1,44 @@
+name: One-shot Rustfmt
+
+on:
+  push:
+    branches:
+      - fix/p0-payroll-integrity-ci
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/p0-payroll-integrity-ci
+          fetch-depth: 0
+
+      - name: Setup Rustfmt
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Format Rust sources
+        working-directory: src-tauri
+        run: cargo fmt
+
+      - name: Remove one-shot workflow
+        run: rm .github/workflows/rustfmt-fix.yml
+
+      - name: Commit formatted sources
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Apply rustfmt to Rust changes"
+          git push origin HEAD:fix/p0-payroll-integrity-ci
