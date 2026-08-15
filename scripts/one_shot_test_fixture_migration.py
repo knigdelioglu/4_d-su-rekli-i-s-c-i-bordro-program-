@@ -2,7 +2,6 @@ from pathlib import Path
 import re
 
 TEST_PATH = Path("src-tauri/tests/domain_tests.rs")
-CI_PATH = Path(".github/workflows/ci.yml")
 SELF_PATH = Path(__file__)
 
 s = TEST_PATH.read_text()
@@ -112,15 +111,7 @@ if "fn work_days_for_period_id(" not in s:
         raise RuntimeError("helper insertion marker not found")
     s = s.replace(helper_marker, helper + helper_marker, 1)
 
-# A/B/D and any equivalent legacy fixture: calendar day 1..30 is invalid for a 15..14 period.
-calendar_loop = re.compile(
-    r'(?P<indent>\s*)let mut gunler = HashMap::new\(\);\n'
-    r'(?P=indent)for d in 1\.\.=30 \{\n'
-    r'(?P=indent)    gunler\.insert\(format!\("(?P<ym>2026-(?:05|06))-\{:\\?02\}", d\), "Ç"\.to_string\(\)\);\n'
-    r'(?P=indent)\}'
-)
-
-# The source spelling is {:02}; keep a deterministic fallback replacement because regex escaping is easy to misread.
+# A/B/D and equivalent legacy fixtures: calendar day 1..30 is invalid for a 15..14 period.
 for ym in ("2026-05", "2026-06"):
     for indent in ("        ", "            "):
         old = (
@@ -256,14 +247,4 @@ if "test_c_attendance_bound_to_period_id_not_date_range" in s:
     raise RuntimeError("old duplicate-period Test C remains")
 
 TEST_PATH.write_text(s)
-
-# Restore CI to its permanent read-only shape and remove this one-shot script.
-ci = CI_PATH.read_text()
-ci = ci.replace("permissions:\n  contents: write\n\n", "", 1)
-start_marker = "      # ONE_SHOT_FIX_START\n"
-end_marker = "      # ONE_SHOT_FIX_END\n"
-start = ci.index(start_marker)
-end = ci.index(end_marker, start) + len(end_marker)
-ci = ci[:start] + ci[end:]
-CI_PATH.write_text(ci)
 SELF_PATH.unlink()
