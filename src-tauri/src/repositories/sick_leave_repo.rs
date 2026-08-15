@@ -1,7 +1,7 @@
 use crate::domain::models::SickLeaveRecord;
 use crate::domain::{DomainError, Result};
 use chrono::NaiveDate;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct SickLeaveRepository;
 
@@ -32,6 +32,36 @@ impl SickLeaveRepository {
         Ok(())
     }
 
+    fn validate_no_overlap(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
+        let overlapping_id = conn
+            .query_row(
+                "SELECT id
+                 FROM sick_leave_records
+                 WHERE personnel_id = ?1
+                   AND id <> ?2
+                   AND start_date <= ?3
+                   AND end_date >= ?4
+                 LIMIT 1",
+                params![
+                    record.personnelId,
+                    record.id,
+                    record.endDate,
+                    record.startDate
+                ],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if let Some(existing_id) = overlapping_id {
+            return Err(DomainError::ValidationError(format!(
+                "Rapor tarihleri aynı personele ait {} kaydıyla çakışıyor; aynı günler ikinci bir rapor olayı olarak sayılamaz.",
+                existing_id
+            )));
+        }
+        Ok(())
+    }
+
     fn from_row(row: &Row) -> rusqlite::Result<SickLeaveRecord> {
         Ok(SickLeaveRecord {
             id: row.get(0)?,
@@ -45,6 +75,7 @@ impl SickLeaveRepository {
 
     pub fn save(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         Self::validate_record(record)?;
+        Self::validate_no_overlap(conn, record)?;
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
         let updated_at = &now;
@@ -99,8 +130,7 @@ impl SickLeaveRepository {
             .next()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?
         {
-            let record =
-                Self::from_row(row).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            let record = Self::from_row(row).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
             Self::validate_record(&record)?;
             Ok(Some(record))
         } else {
