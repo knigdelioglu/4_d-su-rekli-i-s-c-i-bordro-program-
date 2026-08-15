@@ -1,6 +1,8 @@
 #![allow(non_snake_case)]
 
-use crate::domain::calculations::{calculate_gelir_toplam, calculate_gv_matrah, calculate_kesinti_toplam};
+use crate::domain::calculations::{
+    calculate_gelir_toplam, calculate_gv_matrah, calculate_kesinti_toplam,
+};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
@@ -161,7 +163,10 @@ impl MigrationService {
             )));
         }
 
-        if payroll.raporluGun.is_some_and(|days| days != payroll.puantajOzeti.r) {
+        if payroll
+            .raporluGun
+            .is_some_and(|days| days != payroll.puantajOzeti.r)
+        {
             return Err(DomainError::InvalidData(format!(
                 "{} bordro snapshot'ında raporlu gün puantaj özetiyle uyuşmuyor.",
                 payroll.id
