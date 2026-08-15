@@ -81,7 +81,7 @@ fn find_2026_sgk_yemek_istisnasi_gecis_tarihi(
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let effective_date = NaiveDate::from_ymd_opt(2026, 4, 17)
         .expect("2026-04-17 geçerli sabit mevzuat tarihi olmalı");
-    Ok((effective_date >= start && effective_date <= end).then_some(effective_date))
+    Ok((start < effective_date && effective_date <= end).then_some(effective_date))
 }
 
 fn split_puantaj_by_zam_tarihi(
