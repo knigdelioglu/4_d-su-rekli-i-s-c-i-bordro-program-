@@ -11,6 +11,9 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -18,6 +21,24 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # ONE_SHOT_FIX_START
+      - name: Apply one-shot Rust fixture migration
+        if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin "${GITHUB_HEAD_REF}"
+          git checkout "${GITHUB_HEAD_REF}"
+          git reset --hard "origin/${GITHUB_HEAD_REF}"
+          python3 scripts/one_shot_test_fixture_migration.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Migrate legacy Rust test fixtures"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
+          exit 0
+      # ONE_SHOT_FIX_END
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
