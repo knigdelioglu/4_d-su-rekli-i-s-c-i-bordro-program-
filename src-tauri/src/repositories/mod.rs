@@ -1,3 +1,4 @@
+use crate::domain::{DomainError, Result};
 pub mod annual_payroll_parameters_repo;
 pub mod attendance_repo;
 pub mod payroll_repo;
@@ -10,15 +11,27 @@ pub mod tax_opening_repo;
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 
-pub fn dec_to_kurus(d: Option<Decimal>) -> i64 {
-    match d {
-        Some(dec) => (dec * Decimal::from(100)).round().to_i64().unwrap_or(0),
-        None => 0,
-    }
+fn decimal_to_kurus_i64(value: Decimal) -> Result<i64> {
+    let scaled = value.checked_mul(Decimal::from(100)).ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "Parasal değer kuruşa çevrilirken Decimal taşması oluştu: {}",
+            value
+        ))
+    })?;
+    scaled.round().to_i64().ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "Parasal değer SQLite i64 kuruş sınırını aşıyor: {}",
+            value
+        ))
+    })
 }
 
-pub fn opt_dec_to_kurus(d: Option<Decimal>) -> Option<i64> {
-    d.map(|dec| (dec * Decimal::from(100)).round().to_i64().unwrap_or(0))
+pub fn dec_to_kurus(d: Option<Decimal>) -> Result<i64> {
+    decimal_to_kurus_i64(d.unwrap_or_default())
+}
+
+pub fn opt_dec_to_kurus(d: Option<Decimal>) -> Result<Option<i64>> {
+    d.map(decimal_to_kurus_i64).transpose()
 }
 
 pub fn kurus_to_dec(k: i64) -> Decimal {

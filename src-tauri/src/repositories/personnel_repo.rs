@@ -8,6 +8,11 @@ pub struct PersonnelRepository;
 
 impl PersonnelRepository {
     fn validate(personel: &Personel) -> Result<()> {
+        if personel.hizmetYili < 0 {
+            return Err(crate::domain::DomainError::ValidationError(
+                "Hizmet yılı negatif olamaz.".into(),
+            ));
+        }
         if personel
             .devirKumulatifGvMatrahi
             .is_some_and(|value| value < rust_decimal::Decimal::ZERO)
@@ -29,6 +34,51 @@ impl PersonnelRepository {
             ));
         }
 
+        if let Some(k) = personel.kesintiler.as_ref() {
+            let monetary = [
+                ("sabitSendikaAidati", k.sabitSendikaAidati),
+                ("sabitBesTutar", k.sabitBesTutar),
+                ("icraTutar", k.icraTutar),
+                ("kisiBorcuTutar", k.kisiBorcuTutar),
+                ("dogumAskerlikBorclanmasiTutar", k.dogumAskerlikBorclanmasiTutar),
+                ("hayatSaglikSigortasiTutar", k.hayatSaglikSigortasiTutar),
+                ("digerKesintiTutar", k.digerKesintiTutar),
+            ];
+            for (field, value) in monetary {
+                if value.is_some_and(|amount| amount < rust_decimal::Decimal::ZERO) {
+                    return Err(crate::domain::DomainError::ValidationError(format!(
+                        "Personel kesinti tutarı negatif olamaz: {}.",
+                        field
+                    )));
+                }
+            }
+
+            if k.besUyesi.unwrap_or(false) {
+                if let Some(rate) = k.oksOraniYuzde {
+                    if rate < rust_decimal_macros::dec!(3) || rate > rust_decimal_macros::dec!(100) {
+                        return Err(crate::domain::DomainError::ValidationError(
+                            "OKS özel oranı, OKS'ye tabi personelde %3-%100 arasında olmalıdır.".into(),
+                        ));
+                    }
+                }
+            }
+
+            if let Some(gv) = k.gvIndirimleri.as_ref() {
+                for (field, value) in [
+                    ("dogumAskerlikGvIndirimTutar", gv.dogumAskerlikGvIndirimTutar),
+                    ("hayatSigortasiPrimiTutar", gv.hayatSigortasiPrimiTutar),
+                    ("saglikSigortasiPrimiTutar", gv.saglikSigortasiPrimiTutar),
+                ] {
+                    if value.is_some_and(|amount| amount < rust_decimal::Decimal::ZERO) {
+                        return Err(crate::domain::DomainError::ValidationError(format!(
+                            "GV indirim girdisi negatif olamaz: {}.",
+                            field
+                        )));
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -43,6 +93,9 @@ impl PersonnelRepository {
         let dogum: Option<i64> = row.get(22)?;
         let hayat: Option<i64> = row.get(23)?;
         let diger: Option<i64> = row.get(24)?;
+        let dogum_gv: Option<i64> = row.get(25)?;
+        let hayat_gv: Option<i64> = row.get(26)?;
+        let saglik_gv: Option<i64> = row.get(27)?;
 
         Ok(Personel {
             id: row.get(0)?,
@@ -71,7 +124,12 @@ impl PersonnelRepository {
                 dogumAskerlikBorclanmasiTutar: opt_kurus_to_dec(dogum),
                 hayatSaglikSigortasiTutar: opt_kurus_to_dec(hayat),
                 digerKesintiTutar: opt_kurus_to_dec(diger),
-            }),
+                gvIndirimleri: Some(GvIndirimGirdileri {
+                    dogumAskerlikGvIndirimTutar: opt_kurus_to_dec(dogum_gv),
+                    hayatSigortasiPrimiTutar: opt_kurus_to_dec(hayat_gv),
+                    saglikSigortasiPrimiTutar: opt_kurus_to_dec(saglik_gv),
+                }),
+}),
         })
     }
 
@@ -82,7 +140,8 @@ impl PersonnelRepository {
                     devir_kumulatif_gv_matrahi_baslangic_ayi, devir_kumulatif_asgari_gv_matrahi,
                     devir_kumulatif_asgari_gv_matrahi_yili, sendika_uyesi, sabit_sendika_aidati,
                     bes_uyesi, oks_orani_yuzde, sabit_bes_tutar, icra_tutar, kisi_borcu_tutar,
-                    dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar
+                    dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar,
+                    dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar
              FROM personnel ORDER BY ad ASC, soyad ASC",
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
@@ -104,7 +163,8 @@ impl PersonnelRepository {
                     devir_kumulatif_gv_matrahi_baslangic_ayi, devir_kumulatif_asgari_gv_matrahi,
                     devir_kumulatif_asgari_gv_matrahi_yili, sendika_uyesi, sabit_sendika_aidati,
                     bes_uyesi, oks_orani_yuzde, sabit_bes_tutar, icra_tutar, kisi_borcu_tutar,
-                    dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar
+                    dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar,
+                    dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar
              FROM personnel WHERE id = ?1",
             params![id],
             Self::from_row,
@@ -129,14 +189,19 @@ impl PersonnelRepository {
             0
         };
 
-        let sabit_sendika = opt_dec_to_kurus(k.and_then(|k| k.sabitSendikaAidati));
-        let oks_orani = opt_dec_to_kurus(k.and_then(|k| k.oksOraniYuzde));
-        let sabit_bes = opt_dec_to_kurus(k.and_then(|k| k.sabitBesTutar));
-        let icra = opt_dec_to_kurus(k.and_then(|k| k.icraTutar));
-        let kisi_borcu = opt_dec_to_kurus(k.and_then(|k| k.kisiBorcuTutar));
-        let dogum = opt_dec_to_kurus(k.and_then(|k| k.dogumAskerlikBorclanmasiTutar));
-        let hayat = opt_dec_to_kurus(k.and_then(|k| k.hayatSaglikSigortasiTutar));
-        let diger = opt_dec_to_kurus(k.and_then(|k| k.digerKesintiTutar));
+        let sabit_sendika = opt_dec_to_kurus(k.and_then(|k| k.sabitSendikaAidati))?;
+        let oks_orani = opt_dec_to_kurus(k.and_then(|k| k.oksOraniYuzde))?;
+        let sabit_bes = opt_dec_to_kurus(k.and_then(|k| k.sabitBesTutar))?;
+        let icra = opt_dec_to_kurus(k.and_then(|k| k.icraTutar))?;
+        let kisi_borcu = opt_dec_to_kurus(k.and_then(|k| k.kisiBorcuTutar))?;
+        let dogum = opt_dec_to_kurus(k.and_then(|k| k.dogumAskerlikBorclanmasiTutar))?;
+        let hayat = opt_dec_to_kurus(k.and_then(|k| k.hayatSaglikSigortasiTutar))?;
+        let diger = opt_dec_to_kurus(k.and_then(|k| k.digerKesintiTutar))?;
+        let gv = k.and_then(|k| k.gvIndirimleri.as_ref());
+        let dogum_gv_indirim =
+            opt_dec_to_kurus(gv.and_then(|g| g.dogumAskerlikGvIndirimTutar))?;
+        let hayat_gv_prim = opt_dec_to_kurus(gv.and_then(|g| g.hayatSigortasiPrimiTutar))?;
+        let saglik_gv_prim = opt_dec_to_kurus(gv.and_then(|g| g.saglikSigortasiPrimiTutar))?;
 
         // Aşağıdaki dal, migration'ları henüz tamamlanmamış eski bir SQLite
         // dosyasını açan bakım/test akışları için geriye dönük uyumludur.
@@ -188,8 +253,9 @@ impl PersonnelRepository {
                 devir_kumulatif_asgari_gv_matrahi_yili, sendika_uyesi, sabit_sendika_aidati,
                 bes_uyesi, oks_orani_yuzde, sabit_bes_tutar, icra_tutar, kisi_borcu_tutar,
                 dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar,
+                dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar,
                 created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)
             ON CONFLICT(id) DO UPDATE SET
                 tc_no=?2, ad=?3, soyad=?4, grup=?5, unvan=?6, sgk_sicil_no=?7, iban=?8, hizmet_yili=?9, aciklama=?10,
                 devir_kumulatif_gv_matrahi=?11, devir_kumulatif_gv_matrahi_yili=?12,
@@ -197,13 +263,14 @@ impl PersonnelRepository {
                 devir_kumulatif_asgari_gv_matrahi_yili=?15, sendika_uyesi=?16, sabit_sendika_aidati=?17,
                 bes_uyesi=?18, oks_orani_yuzde=?19, sabit_bes_tutar=?20, icra_tutar=?21,
                 kisi_borcu_tutar=?22, dogum_askerlik_borclanmasi_tutar=?23, hayat_saglik_sigortasi_tutar=?24,
-                diger_kesinti_tutar=?25, updated_at=?27",
+                diger_kesinti_tutar=?25, dogum_askerlik_gv_indirim_tutar=?26, hayat_sigortasi_gv_prim_tutar=?27,
+                saglik_sigortasi_gv_prim_tutar=?28, updated_at=?30",
             params![
                 p.id, p.tcNo, p.ad, p.soyad, p.grup, p.unvan, p.sgkSicilNo, p.iban, p.hizmetYili, p.aciklama,
-                opt_dec_to_kurus(p.devirKumulatifGvMatrahi), p.devirKumulatifGvMatrahiYili,
-                p.devirKumulatifGvMatrahiBaslangicAyi, opt_dec_to_kurus(p.devirKumulatifAsgariGvMatrahi),
+                opt_dec_to_kurus(p.devirKumulatifGvMatrahi)?, p.devirKumulatifGvMatrahiYili,
+                p.devirKumulatifGvMatrahiBaslangicAyi, opt_dec_to_kurus(p.devirKumulatifAsgariGvMatrahi)?,
                 p.devirKumulatifAsgariGvMatrahiYili, sendika_uyesi, sabit_sendika, bes_uyesi, oks_orani, sabit_bes,
-                icra, kisi_borcu, dogum, hayat, diger, now, now
+                icra, kisi_borcu, dogum, hayat, diger, dogum_gv_indirim, hayat_gv_prim, saglik_gv_prim, now, now
             ],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 

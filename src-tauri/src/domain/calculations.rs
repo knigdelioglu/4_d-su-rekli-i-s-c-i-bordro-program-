@@ -5,6 +5,7 @@ use rust_decimal::Decimal;
 use rust_decimal::RoundingStrategy;
 use rust_decimal_macros::dec;
 use std::cmp::min;
+use std::collections::HashSet;
 
 fn round2(val: Decimal) -> Decimal {
     val.round_dp(2)
@@ -181,6 +182,11 @@ pub fn calculate_gv_hesap_detayi_with_brackets(
         asgariUcretGvIstisnasi: asgari_ucret_gv_istisnasi,
         uygulananGvIstisnasi: uygulanan_gv_istisnasi,
         kesilenGelirVergisi: kesilen_gelir_vergisi,
+        dogumAskerlikGvIndirimi: dec!(0),
+        sigortaGvIndirimAdayi: dec!(0),
+        sigortaGvAylikLimiti: dec!(0),
+        sigortaGvYillikKalanLimiti: dec!(0),
+        uygulanabilirSigortaGvIndirimi: dec!(0),
     }
 }
 
@@ -376,35 +382,41 @@ pub fn resolve_is_primi_grubu(
 pub fn validate_kurum_degerleri_for_payroll(
     kurum_degerleri: &DonemselKurumDegerleri,
 ) -> Result<()> {
+    if kurum_degerleri.gunlukTabanUcret <= Decimal::ZERO {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi günlük taban ücreti sıfırdan büyük olmalıdır.",
+            kurum_degerleri.donemId
+        )));
+    }
+    for (field, value) in [
+        ("gunlukYemek", kurum_degerleri.gunlukYemek),
+        ("birlestirilmisSosyalYardim", kurum_degerleri.birlestirilmisSosyalYardim),
+        ("gunlukVasitaYol", kurum_degerleri.gunlukVasitaYol),
+        ("giyimYardimi", kurum_degerleri.giyimYardimi),
+        ("hizmetZammiBirimi", kurum_degerleri.hizmetZammiBirimi),
+    ] {
+        if value < Decimal::ZERO {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi kurum değeri negatif olamaz: {}.",
+                kurum_degerleri.donemId, field
+            )));
+        }
+    }
+
     let required_non_negative = [
         ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
-        (
-            "issizlikIsciOraniYuzde",
-            kurum_degerleri.issizlikIsciOraniYuzde,
-        ),
+        ("issizlikIsciOraniYuzde", kurum_degerleri.issizlikIsciOraniYuzde),
         ("sendikaAidatiYuzde", kurum_degerleri.sendikaAidatiYuzde),
         ("besOraniYuzde", kurum_degerleri.besOraniYuzde),
-        (
-            "geceCalismaPrimiYuzde",
-            kurum_degerleri.geceCalismaPrimiYuzde,
-        ),
-        (
-            "geceCalismaTatiliPrimiYuzde",
-            kurum_degerleri.geceCalismaTatiliPrimiYuzde,
-        ),
-        (
-            "gunlukYemekIstisnasiSGK",
-            kurum_degerleri.gunlukYemekIstisnasiSGK,
-        ),
+        ("geceCalismaPrimiYuzde", kurum_degerleri.geceCalismaPrimiYuzde),
+        ("geceCalismaTatiliPrimiYuzde", kurum_degerleri.geceCalismaTatiliPrimiYuzde),
+        ("gunlukYemekIstisnasiSGK", kurum_degerleri.gunlukYemekIstisnasiSGK),
+        ("gunlukYemekIstisnasiGV", kurum_degerleri.gunlukYemekIstisnasiGV),
         ("gunlukAsgariUcret", kurum_degerleri.gunlukAsgariUcret),
         ("pekTavanKatsayisi", kurum_degerleri.pekTavanKatsayisi),
         ("sgkIsverenOraniYuzde", kurum_degerleri.sgkIsverenOraniYuzde),
-        (
-            "issizlikIsverenOraniYuzde",
-            kurum_degerleri.issizlikIsverenOraniYuzde,
-        ),
+        ("issizlikIsverenOraniYuzde", kurum_degerleri.issizlikIsverenOraniYuzde),
     ];
-
     for (field, value) in required_non_negative {
         let value = value.ok_or_else(|| {
             DomainError::ValidationError(format!(
@@ -422,25 +434,13 @@ pub fn validate_kurum_degerleri_for_payroll(
 
     let percent_fields = [
         ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
-        (
-            "issizlikIsciOraniYuzde",
-            kurum_degerleri.issizlikIsciOraniYuzde,
-        ),
+        ("issizlikIsciOraniYuzde", kurum_degerleri.issizlikIsciOraniYuzde),
         ("sendikaAidatiYuzde", kurum_degerleri.sendikaAidatiYuzde),
         ("besOraniYuzde", kurum_degerleri.besOraniYuzde),
-        (
-            "geceCalismaPrimiYuzde",
-            kurum_degerleri.geceCalismaPrimiYuzde,
-        ),
-        (
-            "geceCalismaTatiliPrimiYuzde",
-            kurum_degerleri.geceCalismaTatiliPrimiYuzde,
-        ),
+        ("geceCalismaPrimiYuzde", kurum_degerleri.geceCalismaPrimiYuzde),
+        ("geceCalismaTatiliPrimiYuzde", kurum_degerleri.geceCalismaTatiliPrimiYuzde),
         ("sgkIsverenOraniYuzde", kurum_degerleri.sgkIsverenOraniYuzde),
-        (
-            "issizlikIsverenOraniYuzde",
-            kurum_degerleri.issizlikIsverenOraniYuzde,
-        ),
+        ("issizlikIsverenOraniYuzde", kurum_degerleri.issizlikIsverenOraniYuzde),
     ];
     for (field, value) in percent_fields {
         if let Some(value) = value {
@@ -466,15 +466,31 @@ pub fn validate_kurum_degerleri_for_payroll(
         )));
     }
 
-    if kurum_degerleri
-        .gunlukAsgariUcret
-        .is_some_and(|value| value <= Decimal::ZERO)
-        || kurum_degerleri.pekTavanKatsayisi == Some(Decimal::ZERO)
-    {
+    if kurum_degerleri.gunlukAsgariUcret.is_some_and(|value| value <= Decimal::ZERO) {
         return Err(DomainError::ValidationError(format!(
-            "{} dönemi asgari ücret ve PEK tavan katsayısı sıfırdan büyük olmalıdır.",
+            "{} dönemi günlük asgari ücret sıfırdan büyük olmalıdır.",
             kurum_degerleri.donemId
         )));
+    }
+    if kurum_degerleri.pekTavanKatsayisi.is_some_and(|value| value < Decimal::ONE) {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi PEK tavan katsayısı en az 1 olmalıdır.",
+            kurum_degerleri.donemId
+        )));
+    }
+
+    for (field, value) in [
+        ("sabitSendikaAidati", kurum_degerleri.sabitSendikaAidati),
+        ("sabitBesTutar", kurum_degerleri.sabitBesTutar),
+        ("ekOdeme", kurum_degerleri.ekOdeme),
+        ("digerGelirVarsayilan", kurum_degerleri.digerGelirVarsayilan),
+    ] {
+        if value.is_some_and(|amount| amount < Decimal::ZERO) {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi sabit tutarı negatif olamaz: {}.",
+                kurum_degerleri.donemId, field
+            )));
+        }
     }
 
     let groups = match kurum_degerleri.isPrimiGruplari.as_deref() {
@@ -486,6 +502,8 @@ pub fn validate_kurum_degerleri_for_payroll(
             )))
         }
     };
+    let mut active_ids = HashSet::new();
+    let mut active_names = HashSet::new();
     for group in groups {
         if group.id.trim().is_empty()
             || group.ad.trim().is_empty()
@@ -497,8 +515,68 @@ pub fn validate_kurum_degerleri_for_payroll(
                 kurum_degerleri.donemId
             )));
         }
+        if group.aktif
+            && (!active_ids.insert(group.id.trim().to_string())
+                || !active_names.insert(group.ad.trim().to_string()))
+        {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi aktif iş primi gruplarında tekrar eden id/ad var.",
+                kurum_degerleri.donemId
+            )));
+        }
     }
 
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GvIndirimHesabi {
+    pub dogum_askerlik_indirimi: Decimal,
+    pub sigorta_adayi: Decimal,
+    pub sigorta_aylik_limiti: Decimal,
+    pub sigorta_yillik_kalan_limiti: Decimal,
+    pub uygulanabilir_sigorta_indirimi: Decimal,
+}
+
+pub fn calculate_gv_indirimleri(
+    sigorta_limit_brut_ucret: Decimal,
+    dogum_askerlik_gv_indirimi: Decimal,
+    hayat_sigortasi_primi: Decimal,
+    saglik_sigortasi_primi: Decimal,
+    sigorta_gv_yillik_tavan: Decimal,
+    sigorta_gv_yil_once_kullanilan: Decimal,
+) -> GvIndirimHesabi {
+    let life_candidate = (hayat_sigortasi_primi.max(Decimal::ZERO) * dec!(0.50)).round_dp(2);
+    let health_candidate = saglik_sigortasi_primi.max(Decimal::ZERO).round_dp(2);
+    let sigorta_adayi = (life_candidate + health_candidate).round_dp(2);
+    let sigorta_aylik_limiti =
+        (sigorta_limit_brut_ucret.max(Decimal::ZERO) * dec!(0.15)).round_dp(2);
+    let sigorta_yillik_kalan_limiti = (sigorta_gv_yillik_tavan.max(Decimal::ZERO)
+        - sigorta_gv_yil_once_kullanilan.max(Decimal::ZERO))
+    .max(Decimal::ZERO)
+    .round_dp(2);
+    let uygulanabilir_sigorta_indirimi = sigorta_adayi
+        .min(sigorta_aylik_limiti)
+        .min(sigorta_yillik_kalan_limiti)
+        .max(Decimal::ZERO)
+        .round_dp(2);
+
+    GvIndirimHesabi {
+        dogum_askerlik_indirimi: dogum_askerlik_gv_indirimi.max(Decimal::ZERO).round_dp(2),
+        sigorta_adayi,
+        sigorta_aylik_limiti,
+        sigorta_yillik_kalan_limiti,
+        uygulanabilir_sigorta_indirimi,
+    }
+}
+
+pub fn validate_pek_bounds(alt_sinir: Decimal, ust_sinir: Decimal) -> Result<()> {
+    if alt_sinir < Decimal::ZERO || ust_sinir < Decimal::ZERO || alt_sinir > ust_sinir {
+        return Err(DomainError::ValidationError(format!(
+            "PEK sınırları geçersiz: alt={}, üst={}.",
+            alt_sinir, ust_sinir
+        )));
+    }
     Ok(())
 }
 
@@ -710,6 +788,8 @@ fn calculate_prime_esas_kazanc_with_statutory_snapshot(
             round2(gunluk_asgari * tavan_katsayi * Decimal::from(prim_gun_sayisi)),
         )
     };
+
+    debug_assert!(pek_alt_sinir <= pek_ust_sinir, "PEK alt sınırı üst sınırı aşamaz");
 
     let mut pek_matrah_adayi = ham_pek;
     let mut eklenecek_devreden_toplam = dec!(0);

@@ -352,7 +352,7 @@ Yeni bir yasal değişiklik açık/gelecek 15–14 döneminin ortasında yürür
 
 ---
 
-## Faz 6 — P1: `taxYear/taxMonth` tekilliği
+## Faz 6 — P1: `taxYear/taxMonth` tekilliği [TAMAMLANDI]
 
 ### Ürün kararı
 
@@ -376,7 +376,7 @@ invariantı uygulanabilir.
 
 ---
 
-## Faz 7 — P1: GV indirilebilir kesintileri doğru modelle
+## Faz 7 — P1: GV indirilebilir kesintileri doğru modelle [TAMAMLANDI]
 
 ### Mevcut sorun
 
@@ -420,7 +420,7 @@ Gerekli girdiler ve oran/limitler domain fonksiyonunda değerlendirilip:
 
 ---
 
-## Faz 8 — P1: Kurum ve personel parametre validasyonlarını sertleştir
+## Faz 8 — P1: Kurum ve personel parametre validasyonlarını sertleştir [TAMAMLANDI]
 
 ### Kurum ayarları
 
@@ -458,7 +458,7 @@ Ek olarak hesap fonksiyonu defensive assertion/error ile bunu tekrar korumalıd�
 
 ---
 
-## Faz 9 — P1: Decimal → kuruş persistence fail-mode'unu düzelt
+## Faz 9 — P1: Decimal → kuruş persistence fail-mode'unu düzelt [TAMAMLANDI]
 
 ### Mevcut sorun
 
@@ -487,7 +487,7 @@ Overflow veya temsil edilemeyen değer:
 
 ---
 
-## Faz 10 — P1/P2: Negatif net ödemeyi blokla
+## Faz 10 — P1/P2: Negatif net ödemeyi blokla [TAMAMLANDI]
 
 ### Hedef davranış
 

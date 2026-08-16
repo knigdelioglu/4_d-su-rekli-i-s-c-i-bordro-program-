@@ -74,7 +74,7 @@ impl TaxOpeningRepository {
         }
 
         let now = Utc::now().to_rfc3339();
-        let opening_kurus = dec_to_kurus(Some(t.gvCumulativeOpening));
+        let opening_kurus = dec_to_kurus(Some(t.gvCumulativeOpening))?;
 
         conn.execute(
             "INSERT INTO personnel_tax_opening (id, personnel_id, year, gv_cumulative_opening, effective_from_period_id, created_at, updated_at)

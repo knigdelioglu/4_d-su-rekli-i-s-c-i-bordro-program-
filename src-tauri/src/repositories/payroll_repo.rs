@@ -311,6 +311,65 @@ impl PayrollRepository {
         Ok(kurus_to_dec(sum_kurus))
     }
 
+    pub fn sum_insurance_gv_deduction_before_tax_month(
+        conn: &Connection,
+        personnel_id: &str,
+        tax_year: i32,
+        tax_month: i32,
+    ) -> Result<Decimal> {
+        let non_authoritative: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM payroll_records AS pr
+                 JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                 WHERE pr.personnel_id = ?1
+                   AND pp.tax_year = ?2
+                   AND pp.tax_month < ?3
+                   AND pr.status IN ('DRAFT', 'STALE')",
+                params![personnel_id, tax_year, tax_month],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if non_authoritative > 0 {
+            return Err(DomainError::ValidationError(
+                "Önceki vergi zincirinde DRAFT/STALE bordro var; sigorta GV yıllık limiti çözümlenemez.".into(),
+            ));
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT pr.id, pr.gv_snapshot_json
+                 FROM payroll_records AS pr
+                 JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                 WHERE pr.personnel_id = ?1
+                   AND pp.tax_year = ?2
+                   AND pp.tax_month < ?3
+                   AND pr.status IN ('CALCULATED', 'FINALIZED')
+                 ORDER BY pp.tax_month ASC",
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![personnel_id, tax_year, tax_month], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+            })
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let mut total = Decimal::ZERO;
+        for row in rows {
+            let (id, json) = row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            let Some(json) = json else {
+                continue;
+            };
+            let snapshot: GvHesapDetayi =
+                Self::parse_json(&json, &format!("{} GV snapshot'ı", id))?;
+            total = total
+                .checked_add(snapshot.uygulanabilirSigortaGvIndirimi)
+                .ok_or_else(|| DomainError::InvalidData(
+                    "Sigorta GV yıllık kullanım toplamında Decimal taşması oluştu.".into(),
+                ))?;
+        }
+        Ok(total.round_dp(2))
+    }
+
     pub fn get_next_devreden_pek(
         conn: &Connection,
         personnel_id: &str,
@@ -652,8 +711,18 @@ impl PayrollRepository {
         let now = Utc::now().to_rfc3339();
         let status_str = Self::status_to_str(b.status);
 
-        let gross_total = dec_to_kurus(Some(b.gelirToplam));
-        let sgk_base = dec_to_kurus(b.pekDetay.as_ref().map(|p| p.finalPek));
+        let computed_net = (b.gelirToplam - b.kesintiToplam).round_dp(2);
+        if b.netOdeme < Decimal::ZERO || computed_net < Decimal::ZERO {
+            let fark = (b.kesintiToplam - b.gelirToplam).max(Decimal::ZERO).round_dp(2);
+            return Err(DomainError::NegativeNetPayment {
+                gelir: b.gelirToplam,
+                kesinti: b.kesintiToplam,
+                fark,
+            });
+        }
+
+        let gross_total = dec_to_kurus(Some(b.gelirToplam))?;
+        let sgk_base = dec_to_kurus(b.pekDetay.as_ref().map(|p| p.finalPek))?;
         let isci_sgk = b.kesintiler.isciSgkPrimi.unwrap_or_default();
         let isci_issizlik = b.kesintiler.isciIssizlikPrimi.unwrap_or_default();
         // Production bordrosunda authoritative GV matrahı, hesap sırasında oluşturulan
@@ -664,13 +733,15 @@ impl PayrollRepository {
             .as_ref()
             .map(|g| g.cariGvMatrahi)
             .unwrap_or_else(|| (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO));
-        let gv_base = dec_to_kurus(Some(gv_base_decimal));
-        let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi);
-        let new_gv = prev_gv + gv_base;
-        let income_tax = dec_to_kurus(b.kesintiler.gelirVergisi);
-        let stamp_tax = dec_to_kurus(b.kesintiler.damgaVergisi);
-        let total_deductions = dec_to_kurus(Some(b.kesintiToplam));
-        let net_payment = dec_to_kurus(Some(b.netOdeme));
+        let gv_base = dec_to_kurus(Some(gv_base_decimal))?;
+        let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi)?;
+        let new_gv = prev_gv.checked_add(gv_base).ok_or_else(|| {
+            DomainError::InvalidData("Kümülatif GV kuruş toplamı SQLite i64 sınırını aşıyor.".into())
+        })?;
+        let income_tax = dec_to_kurus(b.kesintiler.gelirVergisi)?;
+        let stamp_tax = dec_to_kurus(b.kesintiler.damgaVergisi)?;
+        let total_deductions = dec_to_kurus(Some(b.kesintiToplam))?;
+        let net_payment = dec_to_kurus(Some(b.netOdeme))?;
 
         let puantaj_summary_json = Self::serialize_json(&b.puantajOzeti, "Puantaj özeti")?;
         let pek_detail_json = Self::serialize_optional_json(b.pekDetay.as_ref(), "PEK detayı")?;
@@ -775,7 +846,7 @@ impl PayrollRepository {
                     b.id,
                     item_type,
                     item_type,
-                    dec_to_kurus(Some(amount)),
+                    dec_to_kurus(Some(amount))?,
                     source,
                 ],
             )
@@ -816,7 +887,7 @@ impl PayrollRepository {
                     b.id,
                     item_type,
                     item_type,
-                    dec_to_kurus(Some(amount)),
+                    dec_to_kurus(Some(amount))?,
                     "CALCULATED",
                 ],
             )

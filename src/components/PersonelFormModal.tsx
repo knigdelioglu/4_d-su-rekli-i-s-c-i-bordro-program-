@@ -89,6 +89,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       errs.iban = 'Görünür IBAN "TR" ile başlamalıdır.';
     }
 
+    if ((formData.hizmetYili ?? 0) < 0) {
+      errs.hizmetYili = 'Hizmet yılı negatif olamaz.';
+    }
+
+    const oksRate = formData.kesintiler?.oksOraniYuzde;
+    if (formData.kesintiler?.besUyesi === true && oksRate != null && (oksRate < 3 || oksRate > 100)) {
+      errs.oksOraniYuzde = 'OKS özel oranı %3-%100 arasında olmalıdır.';
+    }
+
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -435,12 +444,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                               ...formData,
                               kesintiler: {
                                 ...(formData.kesintiler || {}),
-                                oksOraniYuzde: parseFloat(e.target.value) || 0,
+                                oksOraniYuzde: e.target.value === '' ? undefined : Number(e.target.value),
                               },
                             })
                           }
                           className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
                         />
+                        {errors.oksOraniYuzde && (
+                          <p className="text-[10px] text-rose-600 mt-1 font-medium">{errors.oksOraniYuzde}</p>
+                        )}
                       </div>
 
                       <div>
@@ -579,6 +591,79 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     }
                     className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-slate-500"
                   />
+                </div>
+              </div>
+
+              <div className="sm:col-span-2 bg-violet-50/70 p-4 rounded-xl border border-violet-200 space-y-3 mt-2">
+                <div>
+                  <h4 className="text-xs font-bold text-violet-950 uppercase tracking-wider">GV İndirimi Uygunluk Girdileri</h4>
+                  <p className="text-[11px] text-violet-800 mt-1">
+                    Bu alanlar net ücret kesintilerinden bağımsızdır. Yalnız belgeye dayalı ve cari bordroda GV matrahından indirime uygun tutarları girin.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-violet-900 mb-1">Doğum/Askerlik GV İndirimi (TL)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={formData.kesintiler?.gvIndirimleri?.dogumAskerlikGvIndirimTutar ?? ''}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        kesintiler: {
+                          ...(formData.kesintiler || {}),
+                          gvIndirimleri: {
+                            ...(formData.kesintiler?.gvIndirimleri || {}),
+                            dogumAskerlikGvIndirimTutar: e.target.value === '' ? undefined : Number(e.target.value),
+                          },
+                        },
+                      })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-violet-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-violet-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-violet-900 mb-1">Hayat Sigortası Primi (TL)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={formData.kesintiler?.gvIndirimleri?.hayatSigortasiPrimiTutar ?? ''}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        kesintiler: {
+                          ...(formData.kesintiler || {}),
+                          gvIndirimleri: {
+                            ...(formData.kesintiler?.gvIndirimleri || {}),
+                            hayatSigortasiPrimiTutar: e.target.value === '' ? undefined : Number(e.target.value),
+                          },
+                        },
+                      })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-violet-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-violet-500"
+                    />
+                    <span className="text-[10px] text-violet-700 mt-1 block">GV adayı: primin %50'si.</span>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-violet-900 mb-1">Sağlık/Şahıs Sigortası Primi (TL)</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={formData.kesintiler?.gvIndirimleri?.saglikSigortasiPrimiTutar ?? ''}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        kesintiler: {
+                          ...(formData.kesintiler || {}),
+                          gvIndirimleri: {
+                            ...(formData.kesintiler?.gvIndirimleri || {}),
+                            saglikSigortasiPrimiTutar: e.target.value === '' ? undefined : Number(e.target.value),
+                          },
+                        },
+                      })}
+                      className="w-full px-2.5 py-1.5 bg-white border border-violet-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-violet-500"
+                    />
+                    <span className="text-[10px] text-violet-700 mt-1 block">GV adayı: primin %100'ü; yasal aylık/yıllık limit ayrıca uygulanır.</span>
+                  </div>
                 </div>
               </div>
 

@@ -64,6 +64,12 @@ export const PUANTAJ_KODLARI: Record<PuantajKodu, PuantajKoduBilgi> = {
   },
 };
 
+export interface GvIndirimGirdileri {
+  dogumAskerlikGvIndirimTutar?: number;
+  hayatSigortasiPrimiTutar?: number;
+  saglikSigortasiPrimiTutar?: number;
+}
+
 export interface PersonelKesintiBilgileri {
   sendikaUyesi?: boolean;
   sabitSendikaAidati?: number; // TL
@@ -75,6 +81,7 @@ export interface PersonelKesintiBilgileri {
   dogumAskerlikBorclanmasiTutar?: number;
   hayatSaglikSigortasiTutar?: number;
   digerKesintiTutar?: number;
+  gvIndirimleri?: GvIndirimGirdileri;
 }
 
 export interface IsPrimiGrupItem {
@@ -119,6 +126,11 @@ export interface GvHesapDetayi {
   uygulananGvIstisnasi: number;
   /** Kesilecek gelir vergisi (negatif olamaz). */
   kesilenGelirVergisi: number;
+  dogumAskerlikGvIndirimi?: number;
+  sigortaGvIndirimAdayi?: number;
+  sigortaGvAylikLimiti?: number;
+  sigortaGvYillikKalanLimiti?: number;
+  uygulanabilirSigortaGvIndirimi?: number;
 }
 
 export type IsPrimiGrubu = string;
@@ -153,6 +165,7 @@ export interface TaxBracket {
 export interface AnnualPayrollParameters {
   year: number;
   gelirVergisiDilimleri: TaxBracket[];
+  sigortaGvYillikBrutAsgariUcretTavani?: number;
   updatedAt?: string;
 }
 

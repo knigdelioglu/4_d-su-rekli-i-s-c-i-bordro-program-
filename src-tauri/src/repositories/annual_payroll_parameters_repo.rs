@@ -15,6 +15,15 @@ impl AnnualPayrollParametersRepository {
             ));
         }
 
+        if parameters
+            .sigortaGvYillikBrutAsgariUcretTavani
+            .is_some_and(|value| value <= Decimal::ZERO)
+        {
+            return Err(DomainError::ValidationError(
+                "Sigorta GV yıllık tavanı sıfırdan büyük olmalıdır.".into(),
+            ));
+        }
+
         let mut previous_limit = rust_decimal_macros::dec!(0);
         let max_persisted_limit = Decimal::from(OPEN_ENDED_TAX_BRACKET_LIMIT);
         for TaxBracket { limit, oran } in &parameters.gelirVergisiDilimleri {
@@ -64,6 +73,13 @@ impl AnnualPayrollParametersRepository {
                     year, e
                 ))
             })?;
+
+        // 2026 eski kayıtları bu alan eklenmeden önce persist edilmiş olabilir.
+        // Geçmiş mevzuat arşivi oluşturmadan yalnız mevcut 2026 sözleşmesini
+        // geriye uyumlu biçimde tamamlarız; gelecek yıllar açıkça girilmelidir.
+        if parameters.sigortaGvYillikBrutAsgariUcretTavani.is_none() && year == 2026 {
+            parameters.sigortaGvYillikBrutAsgariUcretTavani = Some(Decimal::from(396360));
+        }
 
         if parameters.year != year {
             return Err(DomainError::InvalidData(format!(

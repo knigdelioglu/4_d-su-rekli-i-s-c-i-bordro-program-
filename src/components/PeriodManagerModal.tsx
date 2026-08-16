@@ -120,6 +120,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   const [isGrupModalOpen, setIsGrupModalOpen] = useState<boolean>(false);
   const [annualTaxYear, setAnnualTaxYear] = useState<number>(currentYear);
   const [annualTaxBrackets, setAnnualTaxBrackets] = useState<TaxBracket[]>([]);
+  const [annualInsuranceGvCap, setAnnualInsuranceGvCap] = useState<number>(396360);
   const [annualTaxSuccess, setAnnualTaxSuccess] = useState<boolean>(false);
   const [zamAylariForm, setZamAylariForm] = useState<number[]>(
     [...zamAylari].sort((a, b) => a - b)
@@ -194,6 +195,9 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
     setAnnualTaxYear(year);
     setAnnualTaxBrackets(
       savedParameters?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) || []
+    );
+    setAnnualInsuranceGvCap(
+      savedParameters?.sigortaGvYillikBrutAsgariUcretTavani ?? (year === 2026 ? 396360 : 0)
     );
   }, [aktifDonemId, annualPayrollParameters, donemler, newTaxYear]);
 
@@ -311,6 +315,11 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       return;
     }
 
+    if (!Number.isFinite(annualInsuranceGvCap) || annualInsuranceGvCap <= 0) {
+      alert('Sigorta GV yıllık brüt asgari ücret tavanı sıfırdan büyük olmalıdır.');
+      return;
+    }
+
     let previousLimit = 0;
     for (const bracket of annualTaxBrackets) {
       if (bracket.limit <= previousLimit || bracket.oran < 0 || bracket.oran > 1) {
@@ -324,6 +333,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       await onSaveAnnualPayrollParameters({
         year: annualTaxYear,
         gelirVergisiDilimleri: annualTaxBrackets,
+        sigortaGvYillikBrutAsgariUcretTavani: annualInsuranceGvCap,
       });
       setAnnualTaxSuccess(true);
       setTimeout(() => setAnnualTaxSuccess(false), 2500);
@@ -911,6 +921,17 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                     min={2000}
                     value={annualTaxYear || ''}
                     onChange={(e) => setAnnualTaxYear(parseInt(e.target.value, 10) || 0)}
+                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-violet-500"
+                  />
+                </div>
+                <div className="w-64">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Sigorta GV Yıllık Brüt Asgari Ücret Tavanı (TL)</label>
+                  <input
+                    type="number"
+                    min={0.01}
+                    step="0.01"
+                    value={annualInsuranceGvCap || ''}
+                    onChange={(e) => setAnnualInsuranceGvCap(Number(e.target.value) || 0)}
                     className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-violet-500"
                   />
                 </div>

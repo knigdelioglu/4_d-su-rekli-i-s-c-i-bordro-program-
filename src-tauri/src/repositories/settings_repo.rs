@@ -217,6 +217,7 @@ impl SettingsRepository {
         if normalized.gunlukYemekIstisnasiGV.is_none() {
             normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
         }
+        crate::domain::calculations::validate_kurum_degerleri_for_payroll(&normalized)?;
         Self::validate_statutory_segments_for_period(&period, &normalized)?;
 
         let now = Utc::now().to_rfc3339();

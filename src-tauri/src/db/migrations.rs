@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use rusqlite_migration::{Migrations, M};
 use std::collections::HashSet;
 
@@ -16,6 +16,38 @@ const DEVIR_COLUMNS: [(&str, &str); 5] = [
     ("devir_kumulatif_asgari_gv_matrahi", "INTEGER DEFAULT 0"),
     ("devir_kumulatif_asgari_gv_matrahi_yili", "INTEGER"),
 ];
+
+fn ensure_unique_tax_year_month(conn: &Connection) -> rusqlite::Result<()> {
+    let duplicate: Option<(i32, i32, i64)> = conn
+        .query_row(
+            "SELECT tax_year, tax_month, COUNT(*)
+             FROM payroll_periods
+             WHERE tax_year IS NOT NULL AND tax_month IS NOT NULL
+             GROUP BY tax_year, tax_month
+             HAVING COUNT(*) > 1
+             LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    if let Some((year, month, count)) = duplicate {
+        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "payroll_periods vergi yılı/ayı çakışması: {}-{:02} için {} kayıt var; migration otomatik seçim yapmayacak.",
+                    year, month, count
+                ),
+            ),
+        )));
+    }
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_periods_tax_year_month
+         ON payroll_periods(tax_year, tax_month)",
+        [],
+    )?;
+    Ok(())
+}
 
 pub fn get_migrations() -> Migrations<'static> {
     Migrations::new(vec![
@@ -247,6 +279,27 @@ pub fn get_migrations() -> Migrations<'static> {
             }
             Ok(())
         }),
+        M::up_with_hook("SELECT 1;", |tx| {
+            for column in [
+                "dogum_askerlik_gv_indirim_tutar",
+                "hayat_sigortasi_gv_prim_tutar",
+                "saglik_sigortasi_gv_prim_tutar",
+            ] {
+                let exists: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('personnel') WHERE name = ?1",
+                    [column],
+                    |row| row.get(0),
+                )?;
+                if exists == 0 {
+                    tx.execute(&format!("ALTER TABLE personnel ADD COLUMN {column} INTEGER"), [])?;
+                }
+            }
+            Ok(())
+        }),
+        M::up_with_hook("SELECT 1;", |tx| {
+            ensure_unique_tax_year_month(tx)?;
+            Ok(())
+        }),
     ])
 }
 
@@ -342,6 +395,13 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
     for (column, definition) in DEVIR_COLUMNS {
         add_column_if_missing(&tx, "personnel", &mut personnel_columns, column, definition)?;
     }
+    for (column, definition) in [
+        ("dogum_askerlik_gv_indirim_tutar", "INTEGER"),
+        ("hayat_sigortasi_gv_prim_tutar", "INTEGER"),
+        ("saglik_sigortasi_gv_prim_tutar", "INTEGER"),
+    ] {
+        add_column_if_missing(&tx, "personnel", &mut personnel_columns, column, definition)?;
+    }
 
     let mut payroll_columns = table_columns(&tx, "payroll_records")?;
     for (column, definition) in [
@@ -384,6 +444,8 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
          UPDATE payroll_periods SET tax_month = COALESCE(tax_month, 1);
          UPDATE payroll_periods SET tax_year = COALESCE(tax_year, yil);",
     )?;
+
+    ensure_unique_tax_year_month(&tx)?;
 
     tx.commit()?;
     Ok(())

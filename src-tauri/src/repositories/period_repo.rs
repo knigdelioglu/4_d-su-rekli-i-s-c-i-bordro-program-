@@ -145,6 +145,23 @@ impl PeriodRepository {
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
         Self::validate_period(d)?;
+        let collision: Option<String> = conn
+            .query_row(
+                "SELECT id FROM payroll_periods
+                 WHERE tax_year = ?1 AND tax_month = ?2 AND id <> ?3
+                 LIMIT 1",
+                params![d.taxYear, d.taxMonth, d.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some(conflicting_id) = collision {
+            return Err(DomainError::ValidationError(format!(
+                "Vergi yılı/ayı çakışması: {}-{:02} zaten {} döneminde kullanılıyor.",
+                d.taxYear, d.taxMonth, conflicting_id
+            )));
+        }
+
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO payroll_periods (id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month, created_at)

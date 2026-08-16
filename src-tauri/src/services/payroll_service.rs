@@ -413,6 +413,7 @@ impl PayrollService {
         SettingsRepository::validate_statutory_segments_for_period(&period, &kurum_degerleri)?;
         let statutory_snapshot =
             resolve_statutory_snapshot_for_period(&attendance, &period, &kurum_degerleri)?;
+        validate_pek_bounds(statutory_snapshot.pekAltSinir, statutory_snapshot.pekUstSinir)?;
 
         let zam_aylari = get_zam_aylari(conn)?;
         let (zam_oncesi_ozet, zam_sonrasi_ozet, zam_tarihi) =
@@ -580,24 +581,75 @@ impl PayrollService {
             .min(statutory_snapshot.gvYemekIstisnasiToplam);
         let sendika_aidati = kesintiler.sendikaAidati.unwrap_or_default();
 
-        // GVK 63: işçi SGK/işsizlik primleri ve çalışan tarafından ödenen sendika
-        // aidatı matrahtan indirilir. Yemek istisnası da brüt ücretin vergiden
-        // istisna edilen bölümüdür.
+        let gv_inputs = personel
+            .kesintiler
+            .as_ref()
+            .and_then(|k| k.gvIndirimleri.as_ref());
+        let dogum_askerlik_gv = gv_inputs
+            .and_then(|g| g.dogumAskerlikGvIndirimTutar)
+            .unwrap_or_default();
+        let hayat_sigortasi_primi = gv_inputs
+            .and_then(|g| g.hayatSigortasiPrimiTutar)
+            .unwrap_or_default();
+        let saglik_sigortasi_primi = gv_inputs
+            .and_then(|g| g.saglikSigortasiPrimiTutar)
+            .unwrap_or_default();
+        let sigorta_yillik_tavan = annual_parameters
+            .sigortaGvYillikBrutAsgariUcretTavani
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} vergi yılı sigorta GV yıllık brüt asgari ücret tavanı eksik.",
+                    period.taxYear
+                ))
+            })?;
+        let sigorta_yil_once_kullanilan =
+            PayrollRepository::sum_insurance_gv_deduction_before_tax_month(
+                conn,
+                personnel_id,
+                period.taxYear,
+                period.taxMonth,
+            )?;
+
+        // GİB 63/3 sınırı ücret üzerinden çalışır. Yemek ve yol burada masraf
+        // karşılığı niteliğinde olduğundan aylık %15 limit bazına eklenmez.
+        let sigorta_limit_brut_ucret = (gelir_toplam
+            - gelirler.yemek.unwrap_or_default()
+            - gelirler.vasitaYol.unwrap_or_default())
+            .max(Decimal::ZERO);
+        let gv_indirim = calculate_gv_indirimleri(
+            sigorta_limit_brut_ucret,
+            dogum_askerlik_gv,
+            hayat_sigortasi_primi,
+            saglik_sigortasi_primi,
+            sigorta_yillik_tavan,
+            sigorta_yil_once_kullanilan,
+        );
+
+        // GVK 63: işçi SGK/işsizlik primleri, çalışan sendika aidatı, belgeye
+        // dayalı doğum/askerlik borçlanması ve sınırlar içindeki sigorta primi
+        // indirimleri matrahtan düşer. Yemek GV istisnası ayrıca uygulanır.
         let cari_gv_matrah = (gelir_toplam
             - kesintiler.isciSgkPrimi.unwrap_or_default()
             - kesintiler.isciIssizlikPrimi.unwrap_or_default()
             - yemek_gv_istisnasi
-            - sendika_aidati)
+            - sendika_aidati
+            - gv_indirim.dogum_askerlik_indirimi
+            - gv_indirim.uygulanabilir_sigorta_indirimi)
             .max(dec!(0));
         let asgari_ucret_aylik_matrah =
             calculate_aylik_asgari_ucret_gv_matrahi(gunluk_asgari, sgk_orani, issizlik_orani);
-        let gv_detay = calculate_gv_hesap_detayi_with_brackets(
+        let mut gv_detay = calculate_gv_hesap_detayi_with_brackets(
             cari_gv_matrah,
             prev_gv,
             asgari_ucret_aylik_matrah,
             prev_asgari_gv,
             &annual_parameters.gelirVergisiDilimleri,
         );
+        gv_detay.dogumAskerlikGvIndirimi = gv_indirim.dogum_askerlik_indirimi;
+        gv_detay.sigortaGvIndirimAdayi = gv_indirim.sigorta_adayi;
+        gv_detay.sigortaGvAylikLimiti = gv_indirim.sigorta_aylik_limiti;
+        gv_detay.sigortaGvYillikKalanLimiti = gv_indirim.sigorta_yillik_kalan_limiti;
+        gv_detay.uygulanabilirSigortaGvIndirimi = gv_indirim.uygulanabilir_sigorta_indirimi;
 
         // Alt seviye statutory helper eski yalın GV matrah formülünü kullanıyor.
         // Production bordro yolu authoritative GV snapshot üzerinden doğru vergiyi uygular.
@@ -605,6 +657,14 @@ impl PayrollService {
 
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
+
+        if net_odeme < Decimal::ZERO {
+            return Err(DomainError::NegativeNetPayment {
+                gelir: gelir_toplam,
+                kesinti: kesinti_toplam,
+                fark: (kesinti_toplam - gelir_toplam).round_dp(2),
+            });
+        }
 
         let now = chrono::Utc::now().to_rfc3339();
 

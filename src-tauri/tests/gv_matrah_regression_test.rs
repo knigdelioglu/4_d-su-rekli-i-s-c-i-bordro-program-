@@ -78,7 +78,8 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
             dogumAskerlikBorclanmasiTutar: None,
             hayatSaglikSigortasiTutar: None,
             digerKesintiTutar: None,
-        }),
+            gvIndirimleri: None,
+}),
     };
     PersonnelRepository::save(&conn, &person)?;
 

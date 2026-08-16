@@ -10,7 +10,19 @@ use std::collections::HashMap;
 /// unbounded, so this is only a persistence-safe sentinel.
 pub const OPEN_ENDED_TAX_BRACKET_LIMIT: i64 = 1_000_000_000_000_000;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GvIndirimGirdileri {
+    /// Doğum/askerlik borçlanmasının cari bordroda GV matrahından indirime
+    /// uygun ve belgeye dayalı kısmı. Net kesinti alanından bağımsızdır.
+    pub dogumAskerlikGvIndirimTutar: Option<Decimal>,
+    /// Çalışanın ödediği hayat sigortası priminin cari ay brüt tutarı.
+    pub hayatSigortasiPrimiTutar: Option<Decimal>,
+    /// Çalışanın ödediği şahıs/sağlık sigortası priminin cari ay brüt tutarı.
+    pub saglikSigortasiPrimiTutar: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonelKesintileri {
     pub sendikaUyesi: Option<bool>,
@@ -23,6 +35,8 @@ pub struct PersonelKesintileri {
     pub dogumAskerlikBorclanmasiTutar: Option<Decimal>,
     pub hayatSaglikSigortasiTutar: Option<Decimal>,
     pub digerKesintiTutar: Option<Decimal>,
+    #[serde(default)]
+    pub gvIndirimleri: Option<GvIndirimGirdileri>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +102,9 @@ pub struct TaxBracket {
 pub struct AnnualPayrollParameters {
     pub year: i32,
     pub gelirVergisiDilimleri: Vec<TaxBracket>,
+    /// GVK 63/3 sigorta primi indiriminin yıllık brüt asgari ücret tavanı.
+    #[serde(default)]
+    pub sigortaGvYillikBrutAsgariUcretTavani: Option<Decimal>,
     pub updatedAt: Option<String>,
 }
 
@@ -119,6 +136,7 @@ impl AnnualPayrollParameters {
                     oran: Decimal::new(40, 2),
                 },
             ],
+            sigortaGvYillikBrutAsgariUcretTavani: Some(Decimal::from(396360)),
             updatedAt: None,
         }
     }
@@ -376,6 +394,21 @@ pub struct GvHesapDetayi {
     pub uygulananGvIstisnasi: Decimal,
     /// Kesilecek gelir vergisi (negatif olamaz).
     pub kesilenGelirVergisi: Decimal,
+    /// Cari ayda gerçekten uygulanan doğum/askerlik borçlanması GV indirimi.
+    #[serde(default)]
+    pub dogumAskerlikGvIndirimi: Decimal,
+    /// Hayat (%50) + sağlık/şahıs (%100) primlerinden oluşan brüt GV indirim adayı.
+    #[serde(default)]
+    pub sigortaGvIndirimAdayi: Decimal,
+    /// Cari ay ücretinin %15'i üzerinden hesaplanan sigorta GV indirimi üst sınırı.
+    #[serde(default)]
+    pub sigortaGvAylikLimiti: Decimal,
+    /// Yıllık brüt asgari ücret tavanından cari ay öncesi kullanım düşüldükten sonra kalan limit.
+    #[serde(default)]
+    pub sigortaGvYillikKalanLimiti: Decimal,
+    /// Aday, aylık limit ve yıllık kalan limitin en küçüğü.
+    #[serde(default)]
+    pub uygulanabilirSigortaGvIndirimi: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

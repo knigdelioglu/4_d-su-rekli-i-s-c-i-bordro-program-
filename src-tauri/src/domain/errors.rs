@@ -1,3 +1,4 @@
+use rust_decimal::Decimal;
 use serde::Serialize;
 use thiserror::Error;
 
@@ -21,6 +22,13 @@ pub enum DomainError {
 
     #[error("Geçersiz veri: {0}")]
     InvalidData(String),
+
+    #[error("Kesintiler toplam geliri aşıyor: gelir={gelir}, kesinti={kesinti}, fark={fark}")]
+    NegativeNetPayment {
+        gelir: Decimal,
+        kesinti: Decimal,
+        fark: Decimal,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, DomainError>;

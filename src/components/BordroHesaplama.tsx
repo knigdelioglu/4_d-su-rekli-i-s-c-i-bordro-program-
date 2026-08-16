@@ -37,6 +37,23 @@ import {
 import { PaySlipModal } from './PaySlipModal';
 import { tauriBridge } from '../services/tauriBridge';
 
+function formatPayrollError(err: unknown): string {
+  if (err && typeof err === 'object') {
+    const tagged = err as { type?: string; message?: unknown };
+    if (tagged.type === 'NegativeNetPayment' && tagged.message && typeof tagged.message === 'object') {
+      const details = tagged.message as { gelir?: number; kesinti?: number; fark?: number };
+      return `Kesintiler geliri aşıyor. Gelir: ${formatTL(details.gelir ?? 0)}, kesinti: ${formatTL(details.kesinti ?? 0)}, açık: ${formatTL(details.fark ?? 0)}.`;
+    }
+    if (typeof tagged.message === 'string') return tagged.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
 interface BordroHesaplamaProps {
   aktifDonem: BordroDonemi;
   donemler: BordroDonemi[];
@@ -119,7 +136,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return rustBordro;
     } catch (err) {
       console.error('Rust calculate_payroll failed:', err);
-      setErrorMessage(`Hesaplama hatası: ${String(err)}`);
+      setErrorMessage(`Hesaplama hatası: ${formatPayrollError(err)}`);
       return null;
     }
   };
