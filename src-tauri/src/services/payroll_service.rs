@@ -91,14 +91,30 @@ fn full_period_sgk_day_weight(date: NaiveDate, period_start: NaiveDate) -> Resul
     Ok(1)
 }
 
-fn is_prim_bearing_code(code: &str) -> bool {
-    matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT" | "R")
+/// Rapor kodu tek başına prim günü doğurmaz. R günü ancak kurumca ücret ödenen
+/// rapor tarihleri arasında ise primli kabul edilir. Diğer ücretli/primli puantaj
+/// kodları mevcut davranışını korur.
+fn is_prim_bearing_code(code: &str, date: NaiveDate, paid_sick_dates: &[NaiveDate]) -> bool {
+    matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT")
+        || (code == "R" && paid_sick_dates.contains(&date))
 }
 
+/// Geriye dönük yardımcı API. Ücretli rapor bilgisi verilmediği için R günleri
+/// primsiz kabul edilir. Production bordro yolu ücretli rapor tarihlerini açıkça
+/// `resolve_statutory_snapshot_for_period_with_paid_sick_dates` fonksiyonuna geçirir.
 pub fn resolve_statutory_snapshot_for_period(
     attendance: &PersonelPuantaj,
     period: &BordroDonemi,
     k: &DonemselKurumDegerleri,
+) -> Result<ResolvedStatutorySnapshot> {
+    resolve_statutory_snapshot_for_period_with_paid_sick_dates(attendance, period, k, &[])
+}
+
+pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    k: &DonemselKurumDegerleri,
+    paid_sick_dates: &[NaiveDate],
 ) -> Result<ResolvedStatutorySnapshot> {
     SettingsRepository::validate_statutory_segments_for_period(period, k)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
@@ -130,13 +146,10 @@ pub fn resolve_statutory_snapshot_for_period(
         if effective == start {
             apply_statutory_segment(&mut points[0].1, segment);
         } else {
-            let mut next_values =
-                points
-                    .last()
-                    .map(|(_, values)| values.clone())
-                    .ok_or_else(|| {
-                        DomainError::InvalidData("Yasal parametre baseline eksik.".into())
-                    })?;
+            let mut next_values = points
+                .last()
+                .map(|(_, values)| values.clone())
+                .ok_or_else(|| DomainError::InvalidData("Yasal parametre baseline eksik.".into()))?;
             apply_statutory_segment(&mut next_values, segment);
             points.push((effective, next_values));
         }
@@ -167,7 +180,7 @@ pub fn resolve_statutory_snapshot_for_period(
             if date < *range_start || date > range_end {
                 continue;
             }
-            if is_prim_bearing_code(code) {
+            if is_prim_bearing_code(code, date, paid_sick_dates) {
                 segment_sgk_days += if full_calendar_coverage {
                     full_period_sgk_day_weight(date, start)?
                 } else {
@@ -241,8 +254,7 @@ fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<N
                 continue;
             };
             if candidate >= start && candidate <= end {
-                result =
-                    Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
+                result = Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
             }
         }
     }
@@ -397,12 +409,7 @@ impl PayrollService {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<BordroKaydi> {
-        Self::calculate_payroll_for_personnel_with_manual_income(
-            conn,
-            personnel_id,
-            period_id,
-            None,
-        )
+        Self::calculate_payroll_for_personnel_with_manual_income(conn, personnel_id, period_id, None)
     }
 
     pub fn calculate_payroll_for_personnel_with_manual_income(
@@ -460,8 +467,12 @@ impl PayrollService {
             })?;
         validate_kurum_degerleri_for_payroll(&kurum_degerleri)?;
         SettingsRepository::validate_statutory_segments_for_period(&period, &kurum_degerleri)?;
-        let statutory_snapshot =
-            resolve_statutory_snapshot_for_period(&attendance, &period, &kurum_degerleri)?;
+        let statutory_snapshot = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+            &attendance,
+            &period,
+            &kurum_degerleri,
+            &paid_sick_dates,
+        )?;
         validate_pek_bounds(
             statutory_snapshot.pekAltSinir,
             statutory_snapshot.pekUstSinir,
@@ -507,23 +518,18 @@ impl PayrollService {
                     })?;
             validate_kurum_degerleri_for_payroll(&previous_kurum_degerleri)?;
 
-            let (zam_oncesi_gelirler, zam_oncesi_is_primi) =
-                calculate_gunluk_gelirler_from_puantaj(
-                    &zam_oncesi_ozet,
-                    &previous_kurum_degerleri,
-                    Some(&personel.grup),
-                )?;
-            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) =
-                calculate_gunluk_gelirler_from_puantaj(
-                    &zam_sonrasi_ozet,
-                    &kurum_degerleri,
-                    Some(&personel.grup),
-                )?;
+            let (zam_oncesi_gelirler, zam_oncesi_is_primi) = calculate_gunluk_gelirler_from_puantaj(
+                &zam_oncesi_ozet,
+                &previous_kurum_degerleri,
+                Some(&personel.grup),
+            )?;
+            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) = calculate_gunluk_gelirler_from_puantaj(
+                &zam_sonrasi_ozet,
+                &kurum_degerleri,
+                Some(&personel.grup),
+            )?;
 
-            let paid_before = paid_sick_dates
-                .iter()
-                .filter(|date| **date < cutoff)
-                .count() as i32;
+            let paid_before = paid_sick_dates.iter().filter(|date| **date < cutoff).count() as i32;
             let paid_after = odenen_raporlu_gun - paid_before;
 
             let mut taban_brut = sum_income_field(
@@ -596,14 +602,23 @@ impl PayrollService {
 
         let devreden_pek_gelen =
             Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
+        // Prim günü/ücret hakkı olmayan ayda önceki dönemden gelen PEK tüketilmez ve
+        // iki aylık ömrü azaltılmaz. Cari dönemde oluşan yeni ücret dışı taşmalar ise
+        // helper tarafından ayrıca oluşturulmaya devam eder.
+        let incoming_devreden_for_calculation: &[DevredenPekKaydi] =
+            if statutory_snapshot.sgkPrimGunSayisi > 0 {
+                &devreden_pek_gelen
+            } else {
+                &[]
+            };
         let tax_inputs = StatutoryDeductionTaxInputs {
             previous_cumulative_gv: prev_gv,
-            incoming_devreden_pek: &devreden_pek_gelen,
+            incoming_devreden_pek: incoming_devreden_for_calculation,
             previous_cumulative_asgari_gv: prev_asgari_gv,
             tax_brackets: &annual_parameters.gelirVergisiDilimleri,
         };
 
-        let (mut kesintiler, pek_detay, sonraki_devreden) =
+        let (mut kesintiler, pek_detay, mut sonraki_devreden) =
             calculate_statutory_deductions_with_tax_brackets(
                 &gelirler,
                 Some(&effective_kurum_degerleri),
@@ -613,7 +628,56 @@ impl PayrollService {
                 Some(&statutory_snapshot),
             );
 
+        if statutory_snapshot.sgkPrimGunSayisi == 0 && !devreden_pek_gelen.is_empty() {
+            let mut preserved_incoming = devreden_pek_gelen.clone();
+            preserved_incoming.append(&mut sonraki_devreden);
+            sonraki_devreden = preserved_incoming;
+        }
+
         let gelir_toplam = calculate_gelir_toplam(&gelirler);
+
+        // Damga vergisi istisnasında ödeme/vergi ayındaki resolved asgari ücret
+        // referansı authoritative'dir. Dönem başlangıcındaki eski baseline ile
+        // hesap yapmak 15-14 yıl geçişlerinde fazla kesinti üretirdi.
+        let damga_orani = effective_kurum_degerleri
+            .damgaVergisiOraniBinde
+            .ok_or_else(|| DomainError::InvalidData("Damga vergisi oranı eksik.".into()))?
+            / dec!(1000);
+        let damga_asgari_aylik =
+            (statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30)).round_dp(2);
+        let ham_damga_vergisi = (gelir_toplam * damga_orani).round_dp(2);
+        let damga_istisnasi = (damga_asgari_aylik * damga_orani).round_dp(2);
+        kesintiler.damgaVergisi =
+            Some((ham_damga_vergisi - damga_istisnasi).max(Decimal::ZERO).round_dp(2));
+
+        // OKS katkısı 4/a için prime esas kazancı izler. Cari ayda tavan içine
+        // gerçekten alınmış devreden PEK `primMatrahi` içindedir; henüz taşınan bakiye
+        // ise değildir. Alt sınır işveren tamamlama farkı da worker PEK'e eklenmez.
+        let personel_kesintileri = personel.kesintiler.as_ref();
+        let oks_uyesi = personel_kesintileri
+            .and_then(|k| k.besUyesi)
+            .unwrap_or(false);
+        kesintiler.bes = if oks_uyesi {
+            let sabit_bes = personel_kesintileri
+                .and_then(|k| k.sabitBesTutar)
+                .filter(|tutar| *tutar > Decimal::ZERO)
+                .or_else(|| {
+                    effective_kurum_degerleri
+                        .sabitBesTutar
+                        .filter(|tutar| *tutar > Decimal::ZERO)
+                });
+            Some(if let Some(sabit) = sabit_bes {
+                sabit
+            } else {
+                let oran_yuzde = personel_kesintileri
+                    .and_then(|k| k.oksOraniYuzde)
+                    .or(effective_kurum_degerleri.besOraniYuzde)
+                    .ok_or_else(|| DomainError::InvalidData("OKS oranı eksik.".into()))?;
+                (pek_detay.primMatrahi * (oran_yuzde / dec!(100))).floor()
+            })
+        } else {
+            Some(Decimal::ZERO)
+        };
 
         // GV detay snapshot: gerçek kümülatif ile asgari takvim referansı açıkça ayrılır.
         let sgk_orani = kurum_degerleri
@@ -781,8 +845,7 @@ impl PayrollService {
         personnel_id: &str,
         active_period: &BordroDonemi,
     ) -> Result<Vec<DevredenPekKaydi>> {
-        let Some(immediately_prior) =
-            PeriodRepository::get_previous_by_work_period(conn, active_period)?
+        let Some(immediately_prior) = PeriodRepository::get_previous_by_work_period(conn, active_period)?
         else {
             return Ok(Vec::new());
         };
