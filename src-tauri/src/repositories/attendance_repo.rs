@@ -56,12 +56,13 @@ impl AttendanceRepository {
 
         Self::validate_codes(&attendance.gunler, &period.id)?;
 
-        let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
-            DomainError::ValidationError(format!(
-                "{} dönemi başlangıç tarihi geçersiz: {}",
-                period.id, period.baslangicTarihi
-            ))
-        })?;
+        let start =
+            NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+                DomainError::ValidationError(format!(
+                    "{} dönemi başlangıç tarihi geçersiz: {}",
+                    period.id, period.baslangicTarihi
+                ))
+            })?;
         let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
             DomainError::ValidationError(format!(
                 "{} dönemi bitiş tarihi geçersiz: {}",

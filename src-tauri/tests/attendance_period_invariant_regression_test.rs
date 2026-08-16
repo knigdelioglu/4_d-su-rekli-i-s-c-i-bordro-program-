@@ -57,7 +57,9 @@ fn valid_days(count: i64) -> HashMap<String, String> {
     (0..count)
         .map(|offset| {
             (
-                (start + Duration::days(offset)).format("%Y-%m-%d").to_string(),
+                (start + Duration::days(offset))
+                    .format("%Y-%m-%d")
+                    .to_string(),
                 "Ç".to_string(),
             )
         })
@@ -108,11 +110,8 @@ fn otuz_bir_gunluk_periodun_tum_gecerli_tarihleri_accept() {
     let gunler = valid_days(31);
     assert_eq!(gunler.len(), 31);
 
-    AttendanceRepository::validate_attendance_for_period(
-        &attendance("2026-07", gunler),
-        &period(),
-    )
-    .expect("31 günlük gerçek dönem aralığı kabul edilmeli");
+    AttendanceRepository::validate_attendance_for_period(&attendance("2026-07", gunler), &period())
+        .expect("31 günlük gerçek dönem aralığı kabul edilmeli");
 }
 
 #[test]
@@ -165,7 +164,9 @@ fn repository_save_period_disi_tarihi_persist_etmez() -> Result<(), Box<dyn std:
     let result = AttendanceRepository::save(&conn, &attendance("2026-07", gunler));
 
     assert!(matches!(result, Err(DomainError::ValidationError(_))));
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM attendance_records", [], |row| row.get(0))?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM attendance_records", [], |row| {
+        row.get(0)
+    })?;
     assert_eq!(count, 0);
     Ok(())
 }
@@ -214,7 +215,8 @@ fn payroll_service_bozuk_raw_puantajdan_ucret_uretmez() -> Result<(), Box<dyn st
     let result = PayrollService::calculate_payroll_for_personnel(&conn, "p1", "2026-07");
     assert!(matches!(result, Err(DomainError::ValidationError(_))));
 
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM payroll_records", [], |row| row.get(0))?;
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM payroll_records", [], |row| row.get(0))?;
     assert_eq!(count, 0, "bozuk puantaj bordro üretmemeli");
     Ok(())
 }

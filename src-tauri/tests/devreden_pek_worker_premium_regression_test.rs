@@ -65,15 +65,8 @@ fn devreden_tamamen_tavana_sigarsa_isci_prim_matrahina_girer() {
     let g = gelir(dec!(50000));
     let gelen = vec![devreden(dec!(20000), 2, "onceki")];
 
-    let (kesintiler, pek, sonraki) = calculate_statutory_deductions(
-        &g,
-        Some(&k),
-        None,
-        Some(&p),
-        dec!(0),
-        &gelen,
-        dec!(0),
-    );
+    let (kesintiler, pek, sonraki) =
+        calculate_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
 
     assert_eq!(pek.hamPek, dec!(50000));
     assert_eq!(pek.devredenPekKullanilan, dec!(20000));
@@ -91,15 +84,8 @@ fn devreden_kismen_sigarsa_yalniz_kullanilan_kisim_primlenir() {
     let g = gelir(dec!(80000));
     let gelen = vec![devreden(dec!(20000), 2, "onceki")];
 
-    let (kesintiler, pek, sonraki) = calculate_statutory_deductions(
-        &g,
-        Some(&k),
-        None,
-        Some(&p),
-        dec!(0),
-        &gelen,
-        dec!(0),
-    );
+    let (kesintiler, pek, sonraki) =
+        calculate_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
 
     assert_eq!(pek.devredenPekKullanilan, dec!(10000));
     assert_eq!(pek.primMatrahi, dec!(90000));
@@ -118,15 +104,8 @@ fn tavan_boslugu_yoksa_devreden_isci_primine_girmez() {
     let g = gelir(dec!(100000));
     let gelen = vec![devreden(dec!(20000), 2, "onceki")];
 
-    let (kesintiler, pek, sonraki) = calculate_statutory_deductions(
-        &g,
-        Some(&k),
-        None,
-        Some(&p),
-        dec!(0),
-        &gelen,
-        dec!(0),
-    );
+    let (kesintiler, pek, sonraki) =
+        calculate_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
 
     assert_eq!(pek.devredenPekKullanilan, dec!(0));
     assert_eq!(pek.primMatrahi, dec!(90000));
@@ -142,20 +121,10 @@ fn birden_fazla_devreden_kaydi_tavan_boslugunu_sirayla_doldurur() {
     let k = kurum();
     let p = puantaj_30();
     let g = gelir(dec!(60000));
-    let gelen = vec![
-        devreden(dec!(20000), 2, "a"),
-        devreden(dec!(30000), 2, "b"),
-    ];
+    let gelen = vec![devreden(dec!(20000), 2, "a"), devreden(dec!(30000), 2, "b")];
 
-    let (kesintiler, pek, sonraki) = calculate_statutory_deductions(
-        &g,
-        Some(&k),
-        None,
-        Some(&p),
-        dec!(0),
-        &gelen,
-        dec!(0),
-    );
+    let (kesintiler, pek, sonraki) =
+        calculate_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
 
     assert_eq!(pek.devredenPekKullanilan, dec!(30000));
     assert_eq!(pek.primMatrahi, dec!(90000));
@@ -174,8 +143,7 @@ fn devreden_iki_aylik_omru_korunur() {
     let g = gelir(dec!(80000));
     let ilk_gelen = vec![devreden(dec!(20000), 2, "kaynak")];
 
-    let (ilk_pek, ilk_sonraki) =
-        calculate_prime_esas_kazanc(&g, Some(&p), Some(&k), &ilk_gelen);
+    let (ilk_pek, ilk_sonraki) = calculate_prime_esas_kazanc(&g, Some(&p), Some(&k), &ilk_gelen);
     assert_eq!(ilk_pek.devredenPekKullanilan, dec!(10000));
     assert_eq!(ilk_sonraki.len(), 1);
     assert_eq!(ilk_sonraki[0].tutar, dec!(10000));
@@ -195,15 +163,8 @@ fn devreden_alt_sinir_farkini_azaltir_ama_isciye_yapay_fark_yansitilmaz() {
     let g = gelir(dec!(10000));
     let gelen = vec![devreden(dec!(5000), 2, "onceki")];
 
-    let (kesintiler, pek, _) = calculate_statutory_deductions(
-        &g,
-        Some(&k),
-        None,
-        Some(&p),
-        dec!(0),
-        &gelen,
-        dec!(0),
-    );
+    let (kesintiler, pek, _) =
+        calculate_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
 
     assert_eq!(pek.primMatrahi, dec!(15000));
     assert_eq!(pek.pekAltSinir, dec!(30000));
@@ -221,15 +182,8 @@ fn devreden_alt_siniri_asarsa_yapay_tamamlama_farki_kalmaz() {
     let g = gelir(dec!(10000));
     let gelen = vec![devreden(dec!(25000), 2, "onceki")];
 
-    let (kesintiler, pek, _) = calculate_statutory_deductions(
-        &g,
-        Some(&k),
-        None,
-        Some(&p),
-        dec!(0),
-        &gelen,
-        dec!(0),
-    );
+    let (kesintiler, pek, _) =
+        calculate_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
 
     assert_eq!(pek.devredenPekKullanilan, dec!(25000));
     assert_eq!(pek.primMatrahi, dec!(35000));

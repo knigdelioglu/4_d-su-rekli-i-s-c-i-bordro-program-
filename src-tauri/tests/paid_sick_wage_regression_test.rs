@@ -5,7 +5,9 @@ use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPay
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
-use bordro_programi_lib::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
+use bordro_programi_lib::repositories::settings_repo::{
+    SettingsRepository, ZAM_AYLARI_SETTING_KEY,
+};
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
@@ -119,7 +121,10 @@ fn paid_sick_days_restore_base_wage_but_not_meal_road_or_work_premium(
     assert_eq!(payroll.gelirler.yemek, Some(dec!(2800)));
     assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(1400)));
     assert_eq!(payroll.gelirler.isPrimi, Some(dec!(2520)));
-    assert_eq!(payroll.pekDetay.as_ref().map(|d| d.fiiliYemekGunu), Some(28));
+    assert_eq!(
+        payroll.pekDetay.as_ref().map(|d| d.fiiliYemekGunu),
+        Some(28)
+    );
 
     Ok(())
 }

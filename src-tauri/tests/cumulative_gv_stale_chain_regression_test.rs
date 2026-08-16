@@ -1,7 +1,7 @@
 use bordro_programi_lib::db::create_in_memory_connection;
 use bordro_programi_lib::domain::models::{
-    BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, GelirKalemleri,
-    GvHesapDetayi, KesintiKalemleri, PekDetayi, Personel, PuantajOzeti,
+    BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, GelirKalemleri, GvHesapDetayi,
+    KesintiKalemleri, PekDetayi, Personel, PuantajOzeti,
 };
 use bordro_programi_lib::domain::DomainError;
 use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
@@ -33,7 +33,11 @@ fn person(id: &str) -> Personel {
 }
 
 fn period(id: &str, yil: i32, ay: i32, tax_year: i32, tax_month: i32) -> BordroDonemi {
-    let (end_year, end_month) = if ay == 12 { (yil + 1, 1) } else { (yil, ay + 1) };
+    let (end_year, end_month) = if ay == 12 {
+        (yil + 1, 1)
+    } else {
+        (yil, ay + 1)
+    };
     BordroDonemi {
         id: id.into(),
         yil,
@@ -139,9 +143,11 @@ fn status_of(
     personnel_id: &str,
     period_id: &str,
 ) -> Result<BordroStatus, Box<dyn std::error::Error>> {
-    Ok(PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)?
-        .expect("bordro kaydı bulunmalı")
-        .0)
+    Ok(
+        PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)?
+            .expect("bordro kaydı bulunmalı")
+            .0,
+    )
 }
 
 #[test]
@@ -151,15 +157,39 @@ fn onceki_bordro_degisince_sonraki_calculated_bordrolar_stale_olur(
 
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(50000), dec!(0), dec!(80000), dec!(70000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(50000),
+            dec!(0),
+            dec!(80000),
+            dec!(70000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(50000), dec!(85000), dec!(71000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(50000),
+            dec!(85000),
+            dec!(71000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-07", dec!(70000), dec!(110000), dec!(90000), dec!(72000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-07",
+            dec!(70000),
+            dec!(110000),
+            dec!(90000),
+            dec!(72000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
 
     let changed_may = payroll(
@@ -173,23 +203,48 @@ fn onceki_bordro_degisince_sonraki_calculated_bordrolar_stale_olur(
     );
     PayrollRepository::save(&conn, &changed_may)?;
 
-    assert_eq!(status_of(&conn, &personnel_id, "2026-05")?, BordroStatus::CALCULATED);
-    assert_eq!(status_of(&conn, &personnel_id, "2026-06")?, BordroStatus::STALE);
-    assert_eq!(status_of(&conn, &personnel_id, "2026-07")?, BordroStatus::STALE);
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-05")?,
+        BordroStatus::CALCULATED
+    );
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-06")?,
+        BordroStatus::STALE
+    );
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-07")?,
+        BordroStatus::STALE
+    );
     Ok(())
 }
 
 #[test]
-fn yalniz_pek_degisikligi_de_sonraki_bordroyu_stale_yapar(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn yalniz_pek_degisikligi_de_sonraki_bordroyu_stale_yapar() -> Result<(), Box<dyn std::error::Error>>
+{
     let (conn, personnel_id) = setup_three_periods()?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(50000), dec!(0), dec!(80000), dec!(70000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(50000),
+            dec!(0),
+            dec!(80000),
+            dec!(70000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(50000), dec!(85000), dec!(71000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(50000),
+            dec!(85000),
+            dec!(71000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
 
     let changed = payroll(
@@ -203,7 +258,10 @@ fn yalniz_pek_degisikligi_de_sonraki_bordroyu_stale_yapar(
     );
     PayrollRepository::save(&conn, &changed)?;
 
-    assert_eq!(status_of(&conn, &personnel_id, "2026-06")?, BordroStatus::STALE);
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-06")?,
+        BordroStatus::STALE
+    );
     Ok(())
 }
 
@@ -228,7 +286,15 @@ fn final_pek_ayni_kalsa_bile_devreden_pek_snapshot_degisikligi_stale_yapar(
     PayrollRepository::save(&conn, &may)?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(50000), dec!(90000), dec!(71000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(50000),
+            dec!(90000),
+            dec!(71000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
 
     may.sonrakiDevredenPek = Some(vec![DevredenPekKaydi {
@@ -238,7 +304,10 @@ fn final_pek_ayni_kalsa_bile_devreden_pek_snapshot_degisikligi_stale_yapar(
     }]);
     PayrollRepository::save(&conn, &may)?;
 
-    assert_eq!(status_of(&conn, &personnel_id, "2026-06")?, BordroStatus::STALE);
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-06")?,
+        BordroStatus::STALE
+    );
     Ok(())
 }
 
@@ -248,32 +317,69 @@ fn stale_bordro_finalized_yapilamaz_ve_recalc_sonrasi_tekrar_calculated_olur(
     let (conn, personnel_id) = setup_three_periods()?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(50000), dec!(0), dec!(80000), dec!(70000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(50000),
+            dec!(0),
+            dec!(80000),
+            dec!(70000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(50000), dec!(85000), dec!(71000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(50000),
+            dec!(85000),
+            dec!(71000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
 
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(55000), dec!(0), dec!(82000), dec!(69000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(55000),
+            dec!(0),
+            dec!(82000),
+            dec!(69000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
-    assert_eq!(status_of(&conn, &personnel_id, "2026-06")?, BordroStatus::STALE);
-
-    let finalize_stale = PayrollRepository::update_status(
-        &conn,
-        &personnel_id,
-        "2026-06",
-        BordroStatus::FINALIZED,
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-06")?,
+        BordroStatus::STALE
     );
-    assert!(matches!(finalize_stale, Err(DomainError::ValidationError(_))));
+
+    let finalize_stale =
+        PayrollRepository::update_status(&conn, &personnel_id, "2026-06", BordroStatus::FINALIZED);
+    assert!(matches!(
+        finalize_stale,
+        Err(DomainError::ValidationError(_))
+    ));
 
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(55000), dec!(85000), dec!(70500), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(55000),
+            dec!(85000),
+            dec!(70500),
+            BordroStatus::CALCULATED,
+        ),
     )?;
-    assert_eq!(status_of(&conn, &personnel_id, "2026-06")?, BordroStatus::CALCULATED);
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-06")?,
+        BordroStatus::CALCULATED
+    );
 
     let previous_for_july = CumulativeTaxService::get_previous_cumulative_gv(
         &conn,
@@ -290,24 +396,39 @@ fn finalization_onceki_mevcut_vergi_zincirinin_finalized_olmasini_zorunlu_kilar(
     let (conn, personnel_id) = setup_three_periods()?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(50000), dec!(0), dec!(80000), dec!(70000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(50000),
+            dec!(0),
+            dec!(80000),
+            dec!(70000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(50000), dec!(85000), dec!(71000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(50000),
+            dec!(85000),
+            dec!(71000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
 
-    let june_first = PayrollRepository::update_status(
-        &conn,
-        &personnel_id,
-        "2026-06",
-        BordroStatus::FINALIZED,
-    );
+    let june_first =
+        PayrollRepository::update_status(&conn, &personnel_id, "2026-06", BordroStatus::FINALIZED);
     assert!(matches!(june_first, Err(DomainError::ValidationError(_))));
 
     PayrollRepository::update_status(&conn, &personnel_id, "2026-05", BordroStatus::FINALIZED)?;
     PayrollRepository::update_status(&conn, &personnel_id, "2026-06", BordroStatus::FINALIZED)?;
-    assert_eq!(status_of(&conn, &personnel_id, "2026-06")?, BordroStatus::FINALIZED);
+    assert_eq!(
+        status_of(&conn, &personnel_id, "2026-06")?,
+        BordroStatus::FINALIZED
+    );
     Ok(())
 }
 
@@ -317,7 +438,15 @@ fn ileride_finalized_bordro_varsa_gecmis_mutable_bordro_degistirilemez(
     let (conn, personnel_id) = setup_three_periods()?;
     PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(50000), dec!(0), dec!(80000), dec!(70000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(50000),
+            dec!(0),
+            dec!(80000),
+            dec!(70000),
+            BordroStatus::CALCULATED,
+        ),
     )?;
 
     // Legacy/restore kaynaklı tutarsız bir zinciri simüle ediyoruz. Production
@@ -325,12 +454,28 @@ fn ileride_finalized_bordro_varsa_gecmis_mutable_bordro_degistirilemez(
     // de bu snapshot karşısında fail-closed olmalıdır.
     PayrollRepository::save_in_transaction(
         &conn,
-        &payroll(&personnel_id, "2026-06", dec!(60000), dec!(50000), dec!(85000), dec!(71000), BordroStatus::FINALIZED),
+        &payroll(
+            &personnel_id,
+            "2026-06",
+            dec!(60000),
+            dec!(50000),
+            dec!(85000),
+            dec!(71000),
+            BordroStatus::FINALIZED,
+        ),
     )?;
 
     let result = PayrollRepository::save(
         &conn,
-        &payroll(&personnel_id, "2026-05", dec!(55000), dec!(0), dec!(82000), dec!(69000), BordroStatus::CALCULATED),
+        &payroll(
+            &personnel_id,
+            "2026-05",
+            dec!(55000),
+            dec!(0),
+            dec!(82000),
+            dec!(69000),
+            BordroStatus::CALCULATED,
+        ),
     );
     assert!(matches!(result, Err(DomainError::PayrollFinalized(_))));
     Ok(())
@@ -350,7 +495,15 @@ fn draft_ve_stale_kayitlar_kumulatif_gv_icin_authoritative_degil(
 
         PayrollRepository::save_in_transaction(
             &conn,
-            &payroll(&personnel_id, "2026-05", dec!(50000), dec!(0), dec!(80000), dec!(70000), status),
+            &payroll(
+                &personnel_id,
+                "2026-05",
+                dec!(50000),
+                dec!(0),
+                dec!(80000),
+                dec!(70000),
+                status,
+            ),
         )?;
 
         assert!(!PayrollRepository::has_personnel_tax_month_before(
@@ -405,10 +558,19 @@ fn vergi_yili_degisiminde_onceki_yilin_stale_kaydi_yeni_yili_kirletmez(
 
     PayrollRepository::save_in_transaction(
         &conn,
-        &payroll(personnel_id, "2026-11", dec!(80000), dec!(0), dec!(90000), dec!(70000), BordroStatus::STALE),
+        &payroll(
+            personnel_id,
+            "2026-11",
+            dec!(80000),
+            dec!(0),
+            dec!(90000),
+            dec!(70000),
+            BordroStatus::STALE,
+        ),
     )?;
 
-    let previous = CumulativeTaxService::get_previous_cumulative_gv(&conn, personnel_id, &december)?;
+    let previous =
+        CumulativeTaxService::get_previous_cumulative_gv(&conn, personnel_id, &december)?;
     assert_eq!(previous, dec!(0));
     Ok(())
 }

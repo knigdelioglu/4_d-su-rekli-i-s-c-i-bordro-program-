@@ -280,7 +280,10 @@ impl PayrollService {
                     Some(&personel.grup),
                 )?;
 
-            let paid_before = paid_sick_dates.iter().filter(|date| **date < cutoff).count() as i32;
+            let paid_before = paid_sick_dates
+                .iter()
+                .filter(|date| **date < cutoff)
+                .count() as i32;
             let paid_after = odenen_raporlu_gun - paid_before;
 
             let mut taban_brut = sum_income_field(
@@ -325,14 +328,13 @@ impl PayrollService {
             let zam_sonrasi_ucret_gunu = hakedis_gun(&zam_sonrasi_ozet) + paid_after;
             let toplam_ucret_gunu = zam_oncesi_ucret_gunu + zam_sonrasi_ucret_gunu;
             if toplam_ucret_gunu > 0 {
-                effective_kurum_degerleri.gunlukTabanUcret =
-                    (previous_kurum_degerleri.gunlukTabanUcret
-                        * Decimal::from(zam_oncesi_ucret_gunu)
-                        + kurum_degerleri.gunlukTabanUcret
-                            * Decimal::from(zam_sonrasi_ucret_gunu))
-                    .checked_div(Decimal::from(toplam_ucret_gunu))
-                    .unwrap_or(kurum_degerleri.gunlukTabanUcret)
-                    .round_dp(6);
+                effective_kurum_degerleri.gunlukTabanUcret = (previous_kurum_degerleri
+                    .gunlukTabanUcret
+                    * Decimal::from(zam_oncesi_ucret_gunu)
+                    + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_ucret_gunu))
+                .checked_div(Decimal::from(toplam_ucret_gunu))
+                .unwrap_or(kurum_degerleri.gunlukTabanUcret)
+                .round_dp(6);
             }
         } else {
             // Institution-paid sick days restore only the base wage. Attendance remains unchanged,

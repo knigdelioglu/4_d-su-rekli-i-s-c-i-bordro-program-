@@ -822,7 +822,10 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
     let worker_pek_matrah = pek_detay.primMatrahi;
     // OKS davranışı bu P0 düzeltmesinin kapsamı dışındadır; mevcut cari-kazanç
     // matrahı korunur ve ayrı hardening fazında ele alınır.
-    let oks_pek_matrah = pek_detay.hesaplananPek.min(pek_detay.pekUstSinir).max(dec!(0));
+    let oks_pek_matrah = pek_detay
+        .hesaplananPek
+        .min(pek_detay.pekUstSinir)
+        .max(dec!(0));
 
     let sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
     let issizlik_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
