@@ -448,9 +448,7 @@ impl PayrollRepository {
             .gvDetay
             .as_ref()
             .map(|g| g.cariGvMatrahi)
-            .unwrap_or_else(|| {
-                (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO)
-            });
+            .unwrap_or_else(|| (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO));
         let gv_base = dec_to_kurus(Some(gv_base_decimal));
         let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi);
         let new_gv = prev_gv + gv_base;
