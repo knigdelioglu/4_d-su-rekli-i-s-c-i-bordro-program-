@@ -230,11 +230,11 @@ pub fn get_migrations() -> Migrations<'static> {
             );
             "#,
         ),
-        M::up(
-            r#"
-            ALTER TABLE payroll_records ADD COLUMN statutory_snapshot_json TEXT;
-            "#,
-        ),
+        // The additive column itself is installed by ensure_optional_columns() via
+        // add_column_if_missing(). Keep this migration as a version marker so databases
+        // that already received the column through a repair/pre-release path do not fail
+        // with a duplicate-column ALTER TABLE during normal migration replay.
+        M::up("SELECT 1;"),
     ])
 }
 
