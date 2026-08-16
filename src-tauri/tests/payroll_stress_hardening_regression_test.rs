@@ -213,7 +213,7 @@ fn unpaid_r_is_not_sgk_day_but_paid_r_is() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
-fn incoming_devreden_pek_is_not_aged_when_period_has_no_prim_day(
+fn incoming_devreden_pek_is_not_used_but_ages_when_period_has_no_prim_day(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conn, active) = setup_devreden_case("no-prim-day", false, &["R"])?;
 
@@ -232,10 +232,10 @@ fn incoming_devreden_pek_is_not_aged_when_period_has_no_prim_day(
             .map(|pek| pek.devredenPekKullanilan),
         Some(dec!(0))
     );
-    let carried = payroll.sonrakiDevredenPek.as_ref().expect("devreden PEK korunmalı");
+    let carried = payroll.sonrakiDevredenPek.as_ref().expect("devreden PEK taşınmalı");
     assert_eq!(carried.len(), 1);
     assert_eq!(carried[0].tutar, dec!(20000));
-    assert_eq!(carried[0].kalanAySayisi, 2);
+    assert_eq!(carried[0].kalanAySayisi, 1);
     Ok(())
 }
 
