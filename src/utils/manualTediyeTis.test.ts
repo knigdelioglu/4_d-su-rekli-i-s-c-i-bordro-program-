@@ -42,7 +42,7 @@ describe('Tediye/TİS manual-only browser contract', () => {
     };
 
     const gelirler = autoFillGelirlerFromPuantaj(puantaj, kurum, 1, '1. Grup');
-    expect(gelirler.tediye).toBeNull();
-    expect(gelirler.tisIkramiyesi).toBeNull();
+    expect(gelirler.tediye).toBe(null);
+    expect(gelirler.tisIkramiyesi).toBe(null);
   });
 });
