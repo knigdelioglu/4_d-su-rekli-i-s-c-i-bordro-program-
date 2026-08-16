@@ -14,16 +14,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: agent/complete-remaining-p1-hardening
+          fetch-depth: 2
       - name: Static source scans only
         shell: bash
         run: |
           echo '=== AnnualPayrollParameters literals ==='
-          rg -n 'AnnualPayrollParameters\s*\{' src-tauri || true
+          grep -R -n -E 'AnnualPayrollParameters[[:space:]]*\{' src-tauri || true
           echo '=== GvHesapDetayi literals ==='
-          rg -n 'GvHesapDetayi\s*\{' src-tauri || true
+          grep -R -n -E 'GvHesapDetayi[[:space:]]*\{' src-tauri || true
           echo '=== PersonelKesintileri literals ==='
-          rg -n 'PersonelKesintileri\s*\{' src-tauri || true
+          grep -R -n -E 'PersonelKesintileri[[:space:]]*\{' src-tauri || true
           echo '=== kuruş conversion call sites ==='
-          rg -n '(opt_)?dec_to_kurus\(' src-tauri || true
+          grep -R -n -E '(opt_)?dec_to_kurus\(' src-tauri || true
           echo '=== source whitespace check ==='
           git diff --check HEAD~1..HEAD || true
+
+# grep-based rerun
