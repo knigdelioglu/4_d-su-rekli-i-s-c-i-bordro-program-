@@ -602,23 +602,17 @@ impl PayrollService {
 
         let devreden_pek_gelen =
             Self::calculate_incoming_devreden_pek(conn, personnel_id, &period)?;
-        // Prim günü/ücret hakkı olmayan ayda önceki dönemden gelen PEK tüketilmez ve
-        // iki aylık ömrü azaltılmaz. Cari dönemde oluşan yeni ücret dışı taşmalar ise
-        // helper tarafından ayrıca oluşturulmaya devam eder.
-        let incoming_devreden_for_calculation: &[DevredenPekKaydi] =
-            if statutory_snapshot.sgkPrimGunSayisi > 0 {
-                &devreden_pek_gelen
-            } else {
-                &[]
-            };
+        // Devreden ücret dışı PEK, cari dönemde prim günü yoksa snapshot üst sınırı
+        // 0 olduğundan bu ay tüketilmez. Ancak SGK'nın "takip eden iki ay" penceresi
+        // takvimsel olduğu için helper kalanAySayisi değerini normal şekilde yaşlandırır.
         let tax_inputs = StatutoryDeductionTaxInputs {
             previous_cumulative_gv: prev_gv,
-            incoming_devreden_pek: incoming_devreden_for_calculation,
+            incoming_devreden_pek: &devreden_pek_gelen,
             previous_cumulative_asgari_gv: prev_asgari_gv,
             tax_brackets: &annual_parameters.gelirVergisiDilimleri,
         };
 
-        let (mut kesintiler, pek_detay, mut sonraki_devreden) =
+        let (mut kesintiler, pek_detay, sonraki_devreden) =
             calculate_statutory_deductions_with_tax_brackets(
                 &gelirler,
                 Some(&effective_kurum_degerleri),
@@ -628,17 +622,11 @@ impl PayrollService {
                 Some(&statutory_snapshot),
             );
 
-        if statutory_snapshot.sgkPrimGunSayisi == 0 && !devreden_pek_gelen.is_empty() {
-            let mut preserved_incoming = devreden_pek_gelen.clone();
-            preserved_incoming.append(&mut sonraki_devreden);
-            sonraki_devreden = preserved_incoming;
-        }
-
         let gelir_toplam = calculate_gelir_toplam(&gelirler);
 
-        // Damga vergisi istisnasında ödeme/vergi ayındaki resolved asgari ücret
-        // referansı authoritative'dir. Dönem başlangıcındaki eski baseline ile
-        // hesap yapmak 15-14 yıl geçişlerinde fazla kesinti üretirdi.
+        // Damga vergisi istisnası resolved yasal snapshot içindeki asgari ücret
+        // referansını izler; dönem başlangıcındaki eski baseline ile hesap yapmak
+        // 15-14 yıl geçişlerinde fazla kesinti üretirdi.
         let damga_orani = effective_kurum_degerleri
             .damgaVergisiOraniBinde
             .ok_or_else(|| DomainError::InvalidData("Damga vergisi oranı eksik.".into()))?
