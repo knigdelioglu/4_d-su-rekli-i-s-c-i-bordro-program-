@@ -1,0 +1,174 @@
+from pathlib import Path
+
+path = Path("src-tauri/tests/domain_tests.rs")
+text = path.read_text()
+
+anchor = "    #[test]\n    fn test_cumulative_gv_regression_and_collision"
+helper = '''    fn thirty_work_days(period: &BordroDonemi) -> HashMap<String, String> {
+        let start = chrono::NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
+            .expect("test period start date must be valid");
+        let end = chrono::NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
+            .expect("test period end date must be valid");
+
+        (0..30)
+            .map(|offset| {
+                let date = start + chrono::Duration::days(offset);
+                assert!(
+                    date <= end,
+                    "generated attendance date {date} must stay inside period {}",
+                    period.id
+                );
+                (date.format("%Y-%m-%d").to_string(), "Ç".to_string())
+            })
+            .collect()
+    }
+
+'''
+if "fn thirty_work_days(" not in text:
+    if anchor not in text:
+        raise SystemExit("helper insertion anchor not found")
+    text = text.replace(anchor, helper + anchor, 1)
+
+fake_block = '''        let mut gunler_30 = HashMap::new();
+        for d in 1..=30 {
+            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
+        }
+
+'''
+
+
+def patch_test(name, transform):
+    global text
+    marker = f"fn {name}"
+    idx = text.find(marker)
+    if idx < 0:
+        raise SystemExit(f"test not found: {name}")
+    start = text.rfind("    #[test]", 0, idx)
+    end = text.find("\n    #[test]", idx + len(marker))
+    if end < 0:
+        end = len(text)
+    original = text[start:end]
+    updated = transform(original)
+    if updated == original:
+        raise SystemExit(f"no fixture change made in {name}")
+    text = text[:start] + updated + text[end:]
+
+
+def replace_once(body, old, new, label):
+    if body.count(old) < 1:
+        raise SystemExit(f"expected pattern missing: {label}")
+    return body.replace(old, new, 1)
+
+
+def two_period_fixture(body, first, second):
+    body = replace_once(body, fake_block, "", "fake day block")
+    body = replace_once(
+        body,
+        "gunler: gunler_30.clone(),",
+        f"gunler: thirty_work_days(&{first}),",
+        "first period attendance",
+    )
+    body = replace_once(
+        body,
+        "gunler: gunler_30.clone(),",
+        f"gunler: thirty_work_days(&{second}),",
+        "second period attendance",
+    )
+    return body
+
+
+patch_test(
+    "test_devreden_pek_aralik_ocak_gecisi",
+    lambda b: two_period_fixture(b, "aralik2026", "ocak2027"),
+)
+patch_test(
+    "test_devreden_pek_yeni_yil_ocak_tavani",
+    lambda b: two_period_fixture(b, "aralik2026", "ocak2027"),
+)
+patch_test(
+    "test_devreden_pek_tax_year_bagimsizligi",
+    lambda b: two_period_fixture(b, "aralik2026", "ocak2027"),
+)
+
+
+def loop_period_fixture(body):
+    body = replace_once(body, fake_block, "", "loop fake day block")
+    return replace_once(
+        body,
+        "gunler: gunler_30.clone(),",
+        "gunler: thirty_work_days(p),",
+        "loop period attendance",
+    )
+
+
+patch_test("test_devreden_pek_aralik_ocak_subat_iki_ay_omur", loop_period_fixture)
+patch_test("test_devreden_pek_yil_ici_haziran_temmuz_agustos", loop_period_fixture)
+
+may_loop = '''        let mut gunler = HashMap::new();
+        for d in 1..=30 {
+            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
+        }'''
+june_loop = '''            let mut gunler = HashMap::new();
+            for d in 1..=30 {
+                gunler.insert(format!("2026-06-{:02}", d), "Ç".to_string());
+            }'''
+
+patch_test(
+    "test_a_save_attendance_then_calculate_same_personnel_period",
+    lambda b: replace_once(
+        b,
+        may_loop,
+        "        let gunler = thirty_work_days(&donem);",
+        "attendance A dates",
+    ),
+)
+patch_test(
+    "test_b_attendance_survives_db_close_reopen_and_calculation",
+    lambda b: replace_once(
+        b,
+        june_loop,
+        "            let gunler = thirty_work_days(&donem);",
+        "attendance B dates",
+    ),
+)
+patch_test(
+    "test_c_attendance_bound_to_period_id_not_date_range",
+    lambda b: replace_once(
+        b,
+        may_loop,
+        "        let gunler = thirty_work_days(&donem_a);",
+        "attendance C dates",
+    ),
+)
+patch_test(
+    "test_d_badge_semantics_match_native_attendance_lookup",
+    lambda b: replace_once(
+        b,
+        may_loop,
+        "        let gunler = thirty_work_days(&donem);",
+        "attendance D dates",
+    ),
+)
+
+persistence_old = '''            let mut gunler = HashMap::new();
+            for d in 1..=24 {
+                gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
+            }
+            for d in 25..=30 {
+                gunler.insert(format!("2026-05-{:02}", d), "R".to_string());
+            }'''
+persistence_new = '''            let mut gunler = thirty_work_days(&donem);
+            for d in 25..=30 {
+                gunler.insert(format!("2026-05-{d:02}"), "R".to_string());
+            }'''
+patch_test(
+    "test_raporlu_gun_persistence_and_finalized_reload",
+    lambda b: replace_once(
+        b,
+        persistence_old,
+        persistence_new,
+        "sick persistence dates",
+    ),
+)
+
+path.write_text(text)
