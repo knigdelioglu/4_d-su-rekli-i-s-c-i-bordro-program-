@@ -71,15 +71,12 @@ mod tests {
             .expect("test period start date must be valid");
         let end = chrono::NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
             .expect("test period end date must be valid");
+        let period_day_count = (end - start).num_days() + 1;
+        let work_day_count = period_day_count.min(30);
 
-        (0..30)
+        (0..work_day_count)
             .map(|offset| {
                 let date = start + chrono::Duration::days(offset);
-                assert!(
-                    date <= end,
-                    "generated attendance date {date} must stay inside period {}",
-                    period.id
-                );
                 (date.format("%Y-%m-%d").to_string(), "Ç".to_string())
             })
             .collect()
