@@ -4,18 +4,20 @@ on:
   push:
     branches:
       - agent/complete-remaining-p1-hardening
+    paths:
+      - .github/workflows/apply-p1-patch.yml
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout branch
+      - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: agent/complete-remaining-p1-hardening
           fetch-depth: 0
 
       - name: Assemble and apply staged patch
@@ -37,9 +39,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
           git commit -m "fix: complete remaining P1 payroll hardening"
           git push origin HEAD:agent/complete-remaining-p1-hardening
