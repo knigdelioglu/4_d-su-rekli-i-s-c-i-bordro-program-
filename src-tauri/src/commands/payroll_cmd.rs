@@ -18,11 +18,17 @@ pub fn calculate_payroll(
     db: State<'_, DbState>,
     personnel_id: String,
     period_id: String,
+    manual_income: Option<ManualPayrollIncomeInput>,
 ) -> Result<BordroKaydi> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    PayrollService::calculate_payroll_for_personnel(&conn, &personnel_id, &period_id)
+    PayrollService::calculate_payroll_for_personnel_with_manual_income(
+        &conn,
+        &personnel_id,
+        &period_id,
+        manual_income.as_ref(),
+    )
 }
 
 #[tauri::command]

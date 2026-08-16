@@ -89,7 +89,7 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   digerGelirVarsayilan: 0,
   tediyeListesi: DEFAULT_TEDIYE_LISTESI,
   tisIkramiyeListesi: DEFAULT_TIS_IKRAMIYE_LISTESI,
-  tediyeTisNotu: "6772 sayılı Kanun uyarınca 4/D kamu çalışanlarına yılda 4 defa ilave tediye (13'er günlük) ve Toplu İş Sözleşmesi (TİS) hükümlerine göre yılda 2 defa ikramiye ödenir. Aşağıdan ödeme aylarını, gün sayılarını (manuel) ve aktif dönemde ödenip ödenmeyeceğini belirleyebilirsiniz.",
+  tediyeTisNotu: "Tediye ve TİS listeleri yalnız referans takvimidir. Ödeme ayı ve gün sayısı burada not edilebilir; bordroya aktarılacak gerçek brüt Tediye/TİS tutarı Bordro Hesaplama ekranında personel ve dönem bazında manuel girilir.",
 
   // Default Kesinti Kalemleri & Yasal Oranlar
   sgkIsciOraniYuzde: 14,
@@ -527,25 +527,10 @@ export function autoFillGelirlerFromPuantaj(
       ? Math.round(kurumDegerleri.gunlukTabanUcret * (gctOrani / 100) * (puantajOzeti.GÇT || 0) * 100) / 100
       : 0;
 
-  // Active Tediye calculation
-  let tediye: number | null = null;
-  const activeTediye = kurumDegerleri.tediyeListesi?.find((t) => t.aktifDonemdeOdensin);
-  if (activeTediye) {
-    tediye =
-      activeTediye.sabitTutar && activeTediye.sabitTutar > 0
-        ? activeTediye.sabitTutar
-        : Math.round(activeTediye.gunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
-  }
-
-  // Active TİS İkramiyesi calculation
-  let tisIkramiyesi: number | null = null;
-  const activeTis = kurumDegerleri.tisIkramiyeListesi?.find((t) => t.aktifDonemdeOdensin);
-  if (activeTis) {
-    tisIkramiyesi =
-      activeTis.sabitTutar && activeTis.sabitTutar > 0
-        ? activeTis.sabitTutar
-        : Math.round(activeTis.gunSayisi * kurumDegerleri.gunlukTabanUcret * 100) / 100;
-  }
+  // Tediye ve TİS ikramiyesi manual-only ürün girdileridir.
+  // Legacy browser helper da dönem listesinden otomatik tutar üretmez.
+  const tediye: number | null = null;
+  const tisIkramiyesi: number | null = null;
 
   return {
     tabanBrutAylik,

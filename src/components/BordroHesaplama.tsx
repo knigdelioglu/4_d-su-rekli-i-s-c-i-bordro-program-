@@ -30,6 +30,7 @@ import {
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
+  ManualPayrollIncomeInput,
 } from '../types/payroll';
 import {
   formatTL,
@@ -87,6 +88,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [manualIncomeMap, setManualIncomeMap] = useState<
+    Record<string, { tediye?: string; tisIkramiyesi?: string }>
+  >({});
 
   // Manual cumulative GV override state per person for the current period
   const [manualKumulatifGvMap, setManualKumulatifGvMap] = useState<
@@ -95,6 +99,47 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState<boolean>(false);
 
   const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
+
+  const getManualIncomeStateKey = (personId: string): string =>
+    `${aktifDonem.id}:${personId}`;
+
+  const getManualIncomeInput = (personId: string): ManualPayrollIncomeInput => {
+    const existingPayroll = bordrolar.find(
+      (item) => item.personelId === personId && item.donemId === aktifDonem.id
+    );
+    const draft = manualIncomeMap[getManualIncomeStateKey(personId)];
+    const resolveAmount = (
+      field: 'tediye' | 'tisIkramiyesi'
+    ): number | null => {
+      const raw = draft?.[field];
+      if (raw !== undefined) {
+        if (raw.trim() === '') return null;
+        const parsed = Number(raw);
+        return Number.isFinite(parsed) ? parsed : null;
+      }
+      return existingPayroll?.gelirler[field] ?? null;
+    };
+
+    return {
+      tediye: resolveAmount('tediye'),
+      tisIkramiyesi: resolveAmount('tisIkramiyesi'),
+    };
+  };
+
+  const updateManualIncomeDraft = (
+    personId: string,
+    field: 'tediye' | 'tisIkramiyesi',
+    value: string
+  ) => {
+    const stateKey = getManualIncomeStateKey(personId);
+    setManualIncomeMap((current) => ({
+      ...current,
+      [stateKey]: {
+        ...current[stateKey],
+        [field]: value,
+      },
+    }));
+  };
 
   const getDevirGvMatrahiForActiveYear = (person: Personel): number => {
     const activeTaxYear = aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil);
@@ -131,7 +176,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     }
 
     try {
-      const rustBordro = await tauriBridge.calculatePayroll(person.id, aktifDonem.id);
+      const rustBordro = await tauriBridge.calculatePayroll(
+        person.id,
+        aktifDonem.id,
+        getManualIncomeInput(person.id)
+      );
       await onSaveBordro(rustBordro);
       return rustBordro;
     } catch (err) {
@@ -467,6 +516,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 <th className="py-3 px-4 text-center">Puantaj İcmal</th>
                 <th className="py-3 px-4 text-right">Önceki Küm. GV</th>
                 <th className="py-3 px-4 text-right">Brüt Gelir</th>
+                <th className="py-3 px-4 text-right">Tediye (Manuel)</th>
+                <th className="py-3 px-4 text-right">TİS İkramiye (Manuel)</th>
                 <th className="py-3 px-4 text-right">Kesintiler</th>
                 <th className="py-3 px-4 text-right">Net Ele Geçen</th>
                 <th className="py-3 px-4 text-center">Durum</th>
@@ -476,7 +527,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             <tbody className="divide-y divide-slate-200 text-xs text-slate-800">
               {filteredPersoneller.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-slate-500">
+                  <td colSpan={12} className="py-12 text-center text-slate-500">
                     Arama kriterlerine uygun personel kaydı bulunamadı.
                   </td>
                 </tr>
@@ -502,6 +553,15 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
+                  const manualIncomeStateKey = getManualIncomeStateKey(person.id);
+                  const tediyeInputValue =
+                    manualIncomeMap[manualIncomeStateKey]?.tediye ??
+                    (bordro?.gelirler.tediye != null ? String(bordro.gelirler.tediye) : '');
+                  const tisInputValue =
+                    manualIncomeMap[manualIncomeStateKey]?.tisIkramiyesi ??
+                    (bordro?.gelirler.tisIkramiyesi != null
+                      ? String(bordro.gelirler.tisIkramiyesi)
+                      : '');
 
                   return (
                     <tr
@@ -629,6 +689,38 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       {/* Brüt */}
                       <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
                         {hasPayrollSnapshot ? formatTL(brut) : '—'}
+                      </td>
+
+                      {/* Manuel Tediye */}
+                      <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          disabled={isFinalized}
+                          value={tediyeInputValue}
+                          onChange={(e) => updateManualIncomeDraft(person.id, 'tediye', e.target.value)}
+                          placeholder="Boş"
+                          title="Brüt Tediye tutarını manuel girin. Boş bırakılırsa Tediye hesaplanmaz."
+                          className="w-28 px-2 py-1.5 text-right bg-white border border-amber-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100 disabled:text-slate-500"
+                        />
+                      </td>
+
+                      {/* Manuel TİS İkramiyesi */}
+                      <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          disabled={isFinalized}
+                          value={tisInputValue}
+                          onChange={(e) => updateManualIncomeDraft(person.id, 'tisIkramiyesi', e.target.value)}
+                          placeholder="Boş"
+                          title="Brüt TİS ikramiyesi tutarını manuel girin. Boş bırakılırsa TİS ikramiyesi hesaplanmaz."
+                          className="w-28 px-2 py-1.5 text-right bg-white border border-indigo-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-500"
+                        />
                       </td>
 
                       {/* Kesintiler */}

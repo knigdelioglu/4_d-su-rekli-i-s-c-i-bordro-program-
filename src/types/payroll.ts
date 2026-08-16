@@ -315,6 +315,13 @@ export interface PersonelPuantaj {
   gunler: Record<string, PuantajKodu>;
 }
 
+export interface ManualPayrollIncomeInput {
+  /** Kişi+dönem bazında kullanıcı tarafından girilen brüt Tediye tutarı. */
+  tediye?: number | null;
+  /** Kişi+dönem bazında kullanıcı tarafından girilen brüt TİS ikramiyesi tutarı. */
+  tisIkramiyesi?: number | null;
+}
+
 export interface GelirKalemleri {
   tabanBrutAylik: number | null;
   tediye: number | null;
