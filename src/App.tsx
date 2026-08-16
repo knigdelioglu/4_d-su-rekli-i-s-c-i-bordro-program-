@@ -500,6 +500,12 @@ export default function App() {
   };
 
   const handleSaveBordro = async (updatedBordro: BordroKaydi) => {
+    if (tauriBridge.isTauriAvailable()) {
+      // Re-fetch the whole ledger: recalculating an earlier payroll may have marked
+      // one or more downstream CALCULATED payrolls as STALE in the same transaction.
+      setBordrolar(await tauriBridge.getPayrollList());
+      return;
+    }
     setBordrolar((previous) => {
       const index = previous.findIndex((b) => b.id === updatedBordro.id);
       if (index < 0) return [...previous, updatedBordro];
