@@ -18,7 +18,7 @@ impl SickLeaveService {
     /// - For the 6th and subsequent episodes starting in a calendar year, 0 days are paid.
     /// - For episodes spanning across calendar years or payroll periods, the global payable dates remain attached to the episode start
     ///   and are returned only by the payroll period whose date range contains them.
-    /// - Duplicate/overlapping records can never make the same calendar date payable twice.
+    /// - Exact duplicate records and overlapping payable dates can never make the same episode/date consume quota or pay twice.
     pub fn calculate_paid_sick_dates_for_period(
         conn: &Connection,
         personnel_id: &str,
@@ -76,7 +76,9 @@ impl SickLeaveService {
         let mut paid_dates = BTreeSet::new();
 
         for (_year, mut recs) in year_groups {
-            recs.sort_by_key(|a| a.0);
+            recs.sort_by_key(|a| (a.0, a.1));
+            // An accidental duplicate DB row must not consume one of the first-five episode slots.
+            recs.dedup();
 
             for (idx, (start, end)) in recs.iter().enumerate() {
                 let episode_index = idx + 1; // 1-indexed (1st, 2nd, ... episode of this calendar year)
