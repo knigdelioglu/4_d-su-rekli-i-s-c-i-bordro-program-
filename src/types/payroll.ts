@@ -324,7 +324,7 @@ export interface PekDetayi {
   isverenIssizlikOraniYuzde?: number;
 }
 
-export type BordroStatus = 'DRAFT' | 'CALCULATED' | 'FINALIZED';
+export type BordroStatus = 'DRAFT' | 'CALCULATED' | 'STALE' | 'FINALIZED';
 
 export interface BordroKaydi {
   id: string; // `${personelId}_${donemId}`
