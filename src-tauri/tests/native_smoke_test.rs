@@ -240,11 +240,14 @@ mod smoke_tests {
             assert!(restored_mayis_pek.isverenIssizlikPrimi.is_some());
             assert!(restored_mayis_pek.isverenPrimToplami.is_some());
 
-            // Calculate May GV matrah from saved May payroll
+            // Extract May GV matrah from saved May payroll snapshot (authoritative cariGvMatrahi accounting for union due / GVK 63/4)
             let mayis_saved = &restored_payrolls[0];
-            let isci_sgk = mayis_saved.kesintiler.isciSgkPrimi.unwrap_or_default();
-            let isci_issizlik = mayis_saved.kesintiler.isciIssizlikPrimi.unwrap_or_default();
-            let mayis_gv_base = mayis_saved.gelirToplam - isci_sgk - isci_issizlik;
+            let mayis_gv_base = mayis_saved
+                .gvDetay
+                .as_ref()
+                .expect("Restored May payroll must have gvDetay")
+                .cariGvMatrahi;
+            assert_eq!(mayis_gv_base, dec!(69193.14));
 
             println!("     Restored May GV Base: {} TL", mayis_gv_base);
 
