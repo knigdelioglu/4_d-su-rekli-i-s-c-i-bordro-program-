@@ -1,0 +1,78 @@
+name: Fix period-length test helper
+
+on:
+  push:
+    branches:
+      - agent/fix-period-length-test-helper
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-period-length-test-helper
+          fetch-depth: 0
+      - name: Make fixture helper period-aware
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/tests/domain_tests.rs')
+          s = p.read_text()
+          old = '''    fn thirty_work_days(period: &BordroDonemi) -> HashMap<String, String> {
+              let start = chrono::NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
+                  .expect("test period start date must be valid");
+              let end = chrono::NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
+                  .expect("test period end date must be valid");
+
+              (0..30)
+                  .map(|offset| {
+                      let date = start + chrono::Duration::days(offset);
+                      assert!(
+                          date <= end,
+                          "generated attendance date {date} must stay inside period {}",
+                          period.id
+                      );
+                      (date.format("%Y-%m-%d").to_string(), "Ç".to_string())
+                  })
+                  .collect()
+          }
+'''
+          new = '''    fn thirty_work_days(period: &BordroDonemi) -> HashMap<String, String> {
+              let start = chrono::NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
+                  .expect("test period start date must be valid");
+              let end = chrono::NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
+                  .expect("test period end date must be valid");
+              let period_day_count = (end - start).num_days() + 1;
+              let work_day_count = period_day_count.min(30);
+
+              (0..work_day_count)
+                  .map(|offset| {
+                      let date = start + chrono::Duration::days(offset);
+                      (date.format("%Y-%m-%d").to_string(), "Ç".to_string())
+                  })
+                  .collect()
+          }
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one helper block, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          cache: false
+      - run: cargo fmt
+        working-directory: src-tauri
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/fix-period-length-test-helper.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: make attendance fixture helper period-aware"
+          git push origin HEAD:agent/fix-period-length-test-helper
