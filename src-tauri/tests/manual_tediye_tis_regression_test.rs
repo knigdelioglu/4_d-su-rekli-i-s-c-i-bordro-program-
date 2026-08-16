@@ -53,26 +53,26 @@ fn setup(personnel_id: &str) -> Result<rusqlite::Connection> {
     let d = period();
     PersonnelRepository::save(&conn, &p)?;
     PeriodRepository::save(&conn, &d)?;
-    let mut settings = DonemselKurumDegerleri {
+    let settings = DonemselKurumDegerleri {
         donemId: d.id.clone(),
+        tediyeListesi: Some(vec![TediyeKalemi {
+            id: 1,
+            ad: "Legacy aktif tediye".into(),
+            odemeAyi: "Haziran".into(),
+            gunSayisi: 13,
+            aktifDonemdeOdensin: true,
+            sabitTutar: Some(dec!(9999)),
+        }]),
+        tisIkramiyeListesi: Some(vec![TisIkramiyeKalemi {
+            id: 1,
+            ad: "Legacy aktif TİS".into(),
+            odemeAyi: "Haziran".into(),
+            gunSayisi: 30,
+            aktifDonemdeOdensin: true,
+            sabitTutar: Some(dec!(8888)),
+        }]),
         ..DonemselKurumDegerleri::default()
     };
-    settings.tediyeListesi = Some(vec![TediyeKalemi {
-        id: 1,
-        ad: "Legacy aktif tediye".into(),
-        odemeAyi: "Haziran".into(),
-        gunSayisi: 13,
-        aktifDonemdeOdensin: true,
-        sabitTutar: Some(dec!(9999)),
-    }]);
-    settings.tisIkramiyeListesi = Some(vec![TisIkramiyeKalemi {
-        id: 1,
-        ad: "Legacy aktif TİS".into(),
-        odemeAyi: "Haziran".into(),
-        gunSayisi: 30,
-        aktifDonemdeOdensin: true,
-        sabitTutar: Some(dec!(8888)),
-    }]);
     SettingsRepository::save_institution_settings(&conn, &settings)?;
     let mut gunler = HashMap::new();
     gunler.insert("2026-05-15".into(), "Ç".into());
@@ -90,23 +90,25 @@ fn setup(personnel_id: &str) -> Result<rusqlite::Connection> {
 
 #[test]
 fn legacy_period_lists_do_not_auto_create_tediye_or_tis() -> Result<()> {
-    let mut settings = DonemselKurumDegerleri::default();
-    settings.tediyeListesi = Some(vec![TediyeKalemi {
-        id: 1,
-        ad: "Aktif".into(),
-        odemeAyi: "Haziran".into(),
-        gunSayisi: 13,
-        aktifDonemdeOdensin: true,
-        sabitTutar: Some(dec!(5000)),
-    }]);
-    settings.tisIkramiyeListesi = Some(vec![TisIkramiyeKalemi {
-        id: 1,
-        ad: "Aktif".into(),
-        odemeAyi: "Haziran".into(),
-        gunSayisi: 30,
-        aktifDonemdeOdensin: true,
-        sabitTutar: Some(dec!(6000)),
-    }]);
+    let settings = DonemselKurumDegerleri {
+        tediyeListesi: Some(vec![TediyeKalemi {
+            id: 1,
+            ad: "Aktif".into(),
+            odemeAyi: "Haziran".into(),
+            gunSayisi: 13,
+            aktifDonemdeOdensin: true,
+            sabitTutar: Some(dec!(5000)),
+        }]),
+        tisIkramiyeListesi: Some(vec![TisIkramiyeKalemi {
+            id: 1,
+            ad: "Aktif".into(),
+            odemeAyi: "Haziran".into(),
+            gunSayisi: 30,
+            aktifDonemdeOdensin: true,
+            sabitTutar: Some(dec!(6000)),
+        }]),
+        ..DonemselKurumDegerleri::default()
+    };
     let summary = PuantajOzeti {
         c: 1,
         ..Default::default()
