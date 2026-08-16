@@ -12,7 +12,8 @@ use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
 #[test]
-fn july_2026_gv_matrah_applies_meal_exemption_and_union_due() -> Result<(), Box<dyn std::error::Error>> {
+fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
+) -> Result<(), Box<dyn std::error::Error>> {
     let conn = create_in_memory_connection()?;
 
     let period = BordroDonemi {
@@ -103,7 +104,10 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due() -> Result<(), Box<
 
     // Gerçek bordrodaki 93.312,64 / 87.312,64 değerlerine motor yuvarlamasıyla 1 kuruş yaklaşır.
     assert_eq!(payroll.gelirToplam, dec!(93312.63));
-    assert_eq!(payroll.pekDetay.as_ref().unwrap().hesaplananPek, dec!(87312.63));
+    assert_eq!(
+        payroll.pekDetay.as_ref().unwrap().hesaplananPek,
+        dec!(87312.63)
+    );
     assert_eq!(payroll.kesintiler.isciSgkPrimi, Some(dec!(12223.77)));
     assert_eq!(payroll.kesintiler.isciIssizlikPrimi, Some(dec!(873.13)));
     assert_eq!(payroll.kesintiler.sendikaAidati, Some(dec!(1588.13)));
@@ -119,11 +123,8 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due() -> Result<(), Box<
 
     // Persist edilen gv_base de aynı authoritative snapshot'ı kullanmalı; aksi halde
     // sonraki ay kümülatif matrah eski hatalı formülle yeniden yükselir.
-    let next_previous = CumulativeTaxService::get_previous_cumulative_gv(
-        &conn,
-        &person.id,
-        &next_period,
-    )?;
+    let next_previous =
+        CumulativeTaxService::get_previous_cumulative_gv(&conn, &person.id, &next_period)?;
     assert_eq!(next_previous, dec!(472627.60));
 
     Ok(())
