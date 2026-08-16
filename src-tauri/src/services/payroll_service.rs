@@ -194,9 +194,9 @@ impl PayrollService {
             AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?.ok_or_else(
                 || {
                     DomainError::InvalidData(format!(
-                    "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
-                    period.taxYear
-                ))
+                        "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
+                        period.taxYear
+                    ))
                 },
             )?;
 
@@ -290,7 +290,7 @@ impl PayrollService {
             tax_brackets: &annual_parameters.gelirVergisiDilimleri,
         };
 
-        let (kesintiler, pek_detay, sonraki_devreden) =
+        let (mut kesintiler, pek_detay, sonraki_devreden) =
             calculate_statutory_deductions_with_tax_brackets(
                 &gelirler,
                 Some(&effective_kurum_degerleri),
@@ -313,11 +313,29 @@ impl PayrollService {
         let gunluk_asgari = kurum_degerleri
             .gunlukAsgariUcret
             .ok_or_else(|| DomainError::InvalidData("Günlük asgari ücret eksik.".into()))?;
-        let cari_gv_matrah = calculate_gv_matrah(
-            gelir_toplam,
-            kesintiler.isciSgkPrimi.unwrap_or_default(),
-            kesintiler.isciIssizlikPrimi.unwrap_or_default(),
-        );
+
+        // GVK 23/8: nakit yemek yardımında fiilen çalışılan gün başına istisna limiti
+        // uygulanır; limit üstü yemek ücret olarak GV matrahında kalır. Mevcut dönem
+        // şemasında 2026 için aynı 300 TL değeri SGK yemek istisnası alanında tutuluyor.
+        let fiili_yemek_gunu = (summary.c + summary.gc).max(0);
+        let gunluk_yemek_gv_istisnasi = effective_kurum_degerleri
+            .gunlukYemekIstisnasiSGK
+            .ok_or_else(|| DomainError::InvalidData("Günlük yemek istisnası eksik.".into()))?;
+        let yemek_gv_istisnasi = gelirler
+            .yemek
+            .unwrap_or_default()
+            .min(gunluk_yemek_gv_istisnasi * Decimal::from(fiili_yemek_gunu));
+        let sendika_aidati = kesintiler.sendikaAidati.unwrap_or_default();
+
+        // GVK 63: işçi SGK/işsizlik primleri ve çalışan tarafından ödenen sendika
+        // aidatı matrahtan indirilir. Yemek istisnası da brüt ücretin vergiden
+        // istisna edilen bölümüdür.
+        let cari_gv_matrah = (gelir_toplam
+            - kesintiler.isciSgkPrimi.unwrap_or_default()
+            - kesintiler.isciIssizlikPrimi.unwrap_or_default()
+            - yemek_gv_istisnasi
+            - sendika_aidati)
+            .max(dec!(0));
         let asgari_ucret_aylik_matrah =
             calculate_aylik_asgari_ucret_gv_matrahi(gunluk_asgari, sgk_orani, issizlik_orani);
         let gv_detay = calculate_gv_hesap_detayi_with_brackets(
@@ -327,6 +345,10 @@ impl PayrollService {
             prev_asgari_gv,
             &annual_parameters.gelirVergisiDilimleri,
         );
+
+        // Alt seviye statutory helper eski yalın GV matrah formülünü kullanıyor.
+        // Production bordro yolu authoritative GV snapshot üzerinden doğru vergiyi uygular.
+        kesintiler.gelirVergisi = Some(gv_detay.kesilenGelirVergisi);
 
         let odenen_raporlu_gun =
             super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
