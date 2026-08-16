@@ -66,6 +66,25 @@ mod tests {
         Ok(())
     }
 
+    fn thirty_work_days(period: &BordroDonemi) -> HashMap<String, String> {
+        let start = chrono::NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
+            .expect("test period start date must be valid");
+        let end = chrono::NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
+            .expect("test period end date must be valid");
+
+        (0..30)
+            .map(|offset| {
+                let date = start + chrono::Duration::days(offset);
+                assert!(
+                    date <= end,
+                    "generated attendance date {date} must stay inside period {}",
+                    period.id
+                );
+                (date.format("%Y-%m-%d").to_string(), "Ç".to_string())
+            })
+            .collect()
+    }
+
     #[test]
     fn test_cumulative_gv_regression_and_collision() -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
@@ -1469,12 +1488,9 @@ mod tests {
             ensure_test_institution_settings(&conn, &["2026-05"])?;
 
             // 6 days of "R" + 24 days of "Ç" = 30 days
-            let mut gunler = HashMap::new();
-            for d in 1..=24 {
-                gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-            }
+            let mut gunler = thirty_work_days(&donem);
             for d in 25..=30 {
-                gunler.insert(format!("2026-05-{:02}", d), "R".to_string());
+                gunler.insert(format!("2026-05-{d:02}"), "R".to_string());
             }
 
             let puantaj = PersonelPuantaj {
@@ -2827,18 +2843,13 @@ mod tests {
         );
         SettingsRepository::save_institution_settings(&conn, &ocak_settings)?;
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
-
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
                 id: "p-pek-a_2026-12".into(),
                 personelId: "p-pek-a".into(),
                 donemId: "2026-12".into(),
-                gunler: gunler_30.clone(),
+                gunler: thirty_work_days(&aralik2026),
             },
         )?;
 
@@ -2848,7 +2859,7 @@ mod tests {
                 id: "p-pek-a_2027-01".into(),
                 personelId: "p-pek-a".into(),
                 donemId: "2027-01".into(),
-                gunler: gunler_30.clone(),
+                gunler: thirty_work_days(&ocak2027),
             },
         )?;
 
@@ -2928,11 +2939,6 @@ mod tests {
             PeriodRepository::save(&conn, p)?;
         }
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
-
         for p in &periods {
             AttendanceRepository::save(
                 &conn,
@@ -2940,7 +2946,7 @@ mod tests {
                     id: format!("p-pek-b_{}", p.id),
                     personelId: "p-pek-b".into(),
                     donemId: p.id.clone(),
-                    gunler: gunler_30.clone(),
+                    gunler: thirty_work_days(p),
                 },
             )?;
         }
@@ -3051,18 +3057,13 @@ mod tests {
         PeriodRepository::save(&conn, &aralik2026)?;
         PeriodRepository::save(&conn, &ocak2027)?;
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
-
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
                 id: "p-pek-c_2026-12".into(),
                 personelId: "p-pek-c".into(),
                 donemId: "2026-12".into(),
-                gunler: gunler_30.clone(),
+                gunler: thirty_work_days(&aralik2026),
             },
         )?;
         AttendanceRepository::save(
@@ -3071,7 +3072,7 @@ mod tests {
                 id: "p-pek-c_2027-01".into(),
                 personelId: "p-pek-c".into(),
                 donemId: "2027-01".into(),
-                gunler: gunler_30.clone(),
+                gunler: thirty_work_days(&ocak2027),
             },
         )?;
 
@@ -3154,11 +3155,6 @@ mod tests {
             PeriodRepository::save(&conn, p)?;
         }
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
-
         for p in &periods {
             AttendanceRepository::save(
                 &conn,
@@ -3166,7 +3162,7 @@ mod tests {
                     id: format!("p-pek-d_{}", p.id),
                     personelId: "p-pek-d".into(),
                     donemId: p.id.clone(),
-                    gunler: gunler_30.clone(),
+                    gunler: thirty_work_days(p),
                 },
             )?;
         }
@@ -3261,18 +3257,13 @@ mod tests {
         PeriodRepository::save(&conn, &aralik2026)?;
         PeriodRepository::save(&conn, &ocak2027)?;
 
-        let mut gunler_30 = HashMap::new();
-        for d in 1..=30 {
-            gunler_30.insert(format!("day_{}", d), "Ç".to_string());
-        }
-
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
                 id: "p-pek-e_2026-12".into(),
                 personelId: "p-pek-e".into(),
                 donemId: "2026-12".into(),
-                gunler: gunler_30.clone(),
+                gunler: thirty_work_days(&aralik2026),
             },
         )?;
         AttendanceRepository::save(
@@ -3281,7 +3272,7 @@ mod tests {
                 id: "p-pek-e_2027-01".into(),
                 personelId: "p-pek-e".into(),
                 donemId: "2027-01".into(),
-                gunler: gunler_30.clone(),
+                gunler: thirty_work_days(&ocak2027),
             },
         )?;
 
@@ -3349,10 +3340,7 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
         ensure_test_institution_settings(&conn, &["2026-05"])?;
 
-        let mut gunler = HashMap::new();
-        for d in 1..=30 {
-            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-        }
+        let gunler = thirty_work_days(&donem);
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
@@ -3411,10 +3399,7 @@ mod tests {
             PeriodRepository::save(&conn, &donem)?;
             ensure_test_institution_settings(&conn, &["2026-06"])?;
 
-            let mut gunler = HashMap::new();
-            for d in 1..=30 {
-                gunler.insert(format!("2026-06-{:02}", d), "Ç".to_string());
-            }
+            let gunler = thirty_work_days(&donem);
             AttendanceRepository::save(
                 &conn,
                 &PersonelPuantaj {
@@ -3486,10 +3471,7 @@ mod tests {
         ensure_test_institution_settings(&conn, &["2026-05", "2026-05-alt"])?;
 
         // Puantaj yalnız A'ya kaydedildi; B aynı tarih aralığını paylaşsa bile puantajsız.
-        let mut gunler = HashMap::new();
-        for d in 1..=30 {
-            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-        }
+        let gunler = thirty_work_days(&donem_a);
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
@@ -3540,10 +3522,7 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
 
         // Rozet koşulu true (kayıt + boş olmayan gunler) -> native lookup Some döndürmeli.
-        let mut gunler = HashMap::new();
-        for d in 1..=30 {
-            gunler.insert(format!("2026-05-{:02}", d), "Ç".to_string());
-        }
+        let gunler = thirty_work_days(&donem);
         AttendanceRepository::save(
             &conn,
             &PersonelPuantaj {
