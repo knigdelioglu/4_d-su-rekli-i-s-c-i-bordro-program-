@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - agent/phase11-manual-tediye-tis
   pull_request:
 
 jobs:
