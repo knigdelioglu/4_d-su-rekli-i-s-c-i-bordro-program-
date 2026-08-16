@@ -658,35 +658,6 @@ impl PayrollService {
         kesintiler.damgaVergisi =
             Some((ham_damga_vergisi - damga_istisnasi).max(Decimal::ZERO).round_dp(2));
 
-        // OKS katkısı 4/a için prime esas kazancı izler. Cari ayda tavan içine
-        // gerçekten alınmış devreden PEK `primMatrahi` içindedir; henüz taşınan bakiye
-        // ise değildir. Alt sınır işveren tamamlama farkı da worker PEK'e eklenmez.
-        let personel_kesintileri = personel.kesintiler.as_ref();
-        let oks_uyesi = personel_kesintileri
-            .and_then(|k| k.besUyesi)
-            .unwrap_or(false);
-        kesintiler.bes = if oks_uyesi {
-            let sabit_bes = personel_kesintileri
-                .and_then(|k| k.sabitBesTutar)
-                .filter(|tutar| *tutar > Decimal::ZERO)
-                .or_else(|| {
-                    effective_kurum_degerleri
-                        .sabitBesTutar
-                        .filter(|tutar| *tutar > Decimal::ZERO)
-                });
-            Some(if let Some(sabit) = sabit_bes {
-                sabit
-            } else {
-                let oran_yuzde = personel_kesintileri
-                    .and_then(|k| k.oksOraniYuzde)
-                    .or(effective_kurum_degerleri.besOraniYuzde)
-                    .ok_or_else(|| DomainError::InvalidData("OKS oranı eksik.".into()))?;
-                (pek_detay.primMatrahi * (oran_yuzde / dec!(100))).floor()
-            })
-        } else {
-            Some(Decimal::ZERO)
-        };
-
         // GV detay snapshot: gerçek kümülatif ile asgari takvim referansı açıkça ayrılır.
         let sgk_orani = kurum_degerleri
             .sgkIsciOraniYuzde
