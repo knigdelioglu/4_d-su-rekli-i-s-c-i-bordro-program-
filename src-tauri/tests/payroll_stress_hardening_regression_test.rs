@@ -122,6 +122,29 @@ fn attendance_from_codes(
     }
 }
 
+fn full_attendance_with_unpaid_r(
+    personnel_id: &str,
+    period: &BordroDonemi,
+    unpaid_r_date: &str,
+) -> PersonelPuantaj {
+    let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").unwrap();
+    let mut gunler = HashMap::new();
+    let mut date = start;
+    while date <= end {
+        let date_text = date.format("%Y-%m-%d").to_string();
+        let code = if date_text == unpaid_r_date { "R" } else { "Ç" };
+        gunler.insert(date_text, code.to_string());
+        date += Duration::days(1);
+    }
+    PersonelPuantaj {
+        id: format!("{}_{}", personnel_id, period.id),
+        personelId: personnel_id.into(),
+        donemId: period.id.clone(),
+        gunler,
+    }
+}
+
 fn prior_payroll_with_devreden(
     personnel_id: &str,
     period_id: &str,
@@ -209,6 +232,41 @@ fn unpaid_r_is_not_sgk_day_but_paid_r_is() -> Result<(), Box<dyn std::error::Err
         &[paid_date],
     )?;
     assert_eq!(paid.sgkPrimGunSayisi, 2);
+    Ok(())
+}
+
+#[test]
+fn unpaid_r_sgk_day_count_is_independent_of_calendar_position(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let july = period("2026-07-full-r", 2026, 7, 2026, 8);
+    let k = settings(&july.id);
+
+    // 15 Temmuz-14 Ağustos 31 takvim günüdür. Tek ücretsiz R olduğunda
+    // gerçek primli gün 30'dur; R'nin eski normalizasyonda 0 ağırlık verilen
+    // 31 Temmuz'a veya başka bir güne gelmesi sonucu değiştiremez.
+    for r_date in ["2026-07-20", "2026-07-31", "2026-08-10"] {
+        let attendance = full_attendance_with_unpaid_r("july-r", &july, r_date);
+        let snapshot = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+            &attendance,
+            &july,
+            &k,
+            &[],
+        )?;
+        assert_eq!(snapshot.sgkPrimGunSayisi, 30, "R tarihi: {r_date}");
+    }
+
+    // 15 Şubat-14 Mart 2026 dönemi 28 takvim günüdür. Tam ve eksiksiz dönem
+    // 30 gün normalize edilir; tek ücretsiz R varsa eksik-gün kuralıyla 27 gün kalır.
+    let feb = period("2026-02-full-r", 2026, 2, 2026, 3);
+    let feb_settings = settings(&feb.id);
+    let feb_attendance = full_attendance_with_unpaid_r("feb-r", &feb, "2026-02-20");
+    let feb_snapshot = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+        &feb_attendance,
+        &feb,
+        &feb_settings,
+        &[],
+    )?;
+    assert_eq!(feb_snapshot.sgkPrimGunSayisi, 27);
     Ok(())
 }
 
