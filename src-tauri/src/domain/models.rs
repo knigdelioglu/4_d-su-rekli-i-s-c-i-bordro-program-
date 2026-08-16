@@ -208,7 +208,17 @@ pub struct DevredenPekKaydi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PekDetayi {
+    /// Geriye dönük uyumluluk alanı; yeni hesaplarda `hamPek` ile aynıdır.
     pub hesaplananPek: Decimal,
+    /// Yalnız cari dönem kazançlarından oluşan PEK, devreden PEK hariç.
+    #[serde(default)]
+    pub hamPek: Decimal,
+    /// Önceki dönemlerden gelip cari ay tavanına fiilen sığdırılan PEK.
+    #[serde(default)]
+    pub devredenPekKullanilan: Decimal,
+    /// İşçi SGK ve işsizlik primlerinin authoritative matrahı: ham PEK + bu ay kullanılan devreden PEK, tavanla sınırlı; yapay alt sınır tamamlama hariç.
+    #[serde(default)]
+    pub primMatrahi: Decimal,
     pub finalPek: Decimal,
     pub devredenPekAşanTutar: Decimal,
     pub pekAltSinir: Decimal,

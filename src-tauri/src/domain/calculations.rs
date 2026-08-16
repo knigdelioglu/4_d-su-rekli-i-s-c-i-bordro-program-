@@ -728,14 +728,17 @@ pub fn calculate_prime_esas_kazanc(
         });
     }
 
-    let mut final_pek = pek_matrah_adayi;
-    let alt_sinir_tamamlama_farki = if ham_pek > dec!(0) && ham_pek < pek_alt_sinir {
-        round2(pek_alt_sinir - ham_pek)
+    // `prim_matrahi`, cari ayda gerçekten primlendirilen kazançtır: cari ham PEK +
+    // bu ay tavana sığan devreden PEK. Alt sınır tamamlama işçi matrahına dahil edilmez.
+    let prim_matrahi = round2(pek_matrah_adayi.max(dec!(0)));
+    let mut final_pek = prim_matrahi;
+    let alt_sinir_tamamlama_farki = if prim_matrahi > dec!(0) && prim_matrahi < pek_alt_sinir {
+        round2(pek_alt_sinir - prim_matrahi)
     } else {
         dec!(0)
     };
 
-    if final_pek < pek_alt_sinir && ham_pek > dec!(0) {
+    if final_pek < pek_alt_sinir && prim_matrahi > dec!(0) {
         final_pek = pek_alt_sinir;
     }
 
@@ -758,6 +761,9 @@ pub fn calculate_prime_esas_kazanc(
 
     let det = PekDetayi {
         hesaplananPek: round2(ham_pek),
+        hamPek: round2(ham_pek),
+        devredenPekKullanilan: round2(eklenecek_devreden_toplam),
+        primMatrahi: prim_matrahi,
         finalPek: round2(final_pek),
         devredenPekAşanTutar: devreden_pek_asan_tutar,
         pekAltSinir: pek_alt_sinir,
@@ -810,9 +816,13 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
         kurum_degerleri,
         tax_inputs.incoming_devreden_pek,
     );
-    // Worker deductions must be calculated over real earnings (hesaplananPek / ham_pek) capped at ceiling,
-    // NOT on the artificially inflated floor finalPek (5510 m.82 & 4447 m.49).
-    let worker_pek_matrah = pek_detay.hesaplananPek.min(pek_detay.pekUstSinir);
+    // İşçi SGK ve işsizlik primi, cari ay PEK'ine fiilen eklenen devreden tutarı da
+    // içerir. Alt sınır tamamlama farkı ise yalnız işveren sorumluluğudur ve bu
+    // authoritative işçi prim matrahına girmez.
+    let worker_pek_matrah = pek_detay.primMatrahi;
+    // OKS davranışı bu P0 düzeltmesinin kapsamı dışındadır; mevcut cari-kazanç
+    // matrahı korunur ve ayrı hardening fazında ele alınır.
+    let oks_pek_matrah = pek_detay.hesaplananPek.min(pek_detay.pekUstSinir).max(dec!(0));
 
     let sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
     let issizlik_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
@@ -867,7 +877,7 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
                 let custom_oran = p_kesintiler.and_then(|pk| pk.oksOraniYuzde);
                 let oks_orani =
                     custom_oran.unwrap_or_else(|| k.besOraniYuzde.unwrap_or(dec!(3))) / dec!(100);
-                floor_dec(worker_pek_matrah * oks_orani)
+                floor_dec(oks_pek_matrah * oks_orani)
             })
     } else {
         dec!(0)
