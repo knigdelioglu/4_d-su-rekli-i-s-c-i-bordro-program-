@@ -3478,7 +3478,7 @@ mod tests {
             bitisTarihi: "2026-06-14".into(),
             donemAdi: "Mayıs 2026 (kopya)".into(),
             taxYear: 2026,
-            taxMonth: 6,
+            taxMonth: 5,
         };
         PeriodRepository::save(&conn, &donem_a)?;
         PeriodRepository::save(&conn, &donem_b)?;
