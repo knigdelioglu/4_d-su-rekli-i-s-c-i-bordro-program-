@@ -43,22 +43,27 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
   const [activeTab, setActiveTab] = useState<KesintiTipi>('sendika');
   const [search, setSearch] = useState<string>('');
 
-  // Map employee with active payroll deductions
-  const entries = personeller.map((p) => {
+  // Resmî kesinti listelerine yalnız authoritative CALCULATED/FINALIZED
+  // bordrolar girer. STALE/DRAFT snapshot'lar yeniden hesaplanmadan dışlanır.
+  const entries = personeller.flatMap((p) => {
     const b = bordrolar.find(
-      (record) => record.personelId === p.id && record.donemId === aktifDonem.id
+      (record) =>
+        record.personelId === p.id &&
+        record.donemId === aktifDonem.id &&
+        (record.status === 'CALCULATED' || record.status === 'FINALIZED')
     );
-    return {
+    if (!b) return [];
+    return [{
       personel: p,
       bordro: b,
-      sendikaAidati: b?.kesintiler.sendikaAidati ?? 0,
-      bes: b?.kesintiler.bes ?? 0,
-      icra: b?.kesintiler.icra ?? 0,
-      kisiBorcu: b?.kesintiler.kisiBorcu ?? 0,
-      dogumAskerlikBorclanmasi: b?.kesintiler.dogumAskerlikBorclanmasi ?? 0,
-      hayatSaglikSigortasi: b?.kesintiler.hayatSaglikSigortasi ?? 0,
-      digerKesinti: b?.kesintiler.digerKesinti ?? 0,
-    };
+      sendikaAidati: b.kesintiler.sendikaAidati ?? 0,
+      bes: b.kesintiler.bes ?? 0,
+      icra: b.kesintiler.icra ?? 0,
+      kisiBorcu: b.kesintiler.kisiBorcu ?? 0,
+      dogumAskerlikBorclanmasi: b.kesintiler.dogumAskerlikBorclanmasi ?? 0,
+      hayatSaglikSigortasi: b.kesintiler.hayatSaglikSigortasi ?? 0,
+      digerKesinti: b.kesintiler.digerKesinti ?? 0,
+    }];
   });
 
   const getActiveTabConfig = () => {
