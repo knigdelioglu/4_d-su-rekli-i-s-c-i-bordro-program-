@@ -54,6 +54,15 @@ export const Navbar: React.FC<NavbarProps> = ({
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const confirmed = window.confirm(
+      'Yedekten geri yükleme mevcut personel, dönem, puantaj, bordro, vergi açılışı, rapor kayıtları ve dönem parametrelerini yedekteki verilerle değiştirecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?'
+    );
+    if (!confirmed) {
+      e.target.value = '';
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result as string;
