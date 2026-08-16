@@ -1,6 +1,10 @@
 import { expect, test, describe } from 'bun:test';
 import { tauriBridge } from './tauriBridge';
-import { PersonelPuantaj, PersonelTaxOpening } from '../types/payroll';
+import {
+  ManualPayrollIncomeInput,
+  PersonelPuantaj,
+  PersonelTaxOpening,
+} from '../types/payroll';
 
 /**
  * Regression testi: tauriBridge IPC arg anahtarları, Tauri command wrapper'ın
@@ -29,11 +33,30 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
     };
   };
 
-  test('calculatePayroll: personnelId / periodId göndermeli (Rust: personnel_id, period_id)', async () => {
+  test('calculatePayroll: manuel gelir verilmezse manualIncome=null göndermeli', async () => {
     const mock = installMock();
     await tauriBridge.calculatePayroll('p-1', '2026-05');
     expect(mock.cmd()).toBe('calculate_payroll');
-    expect(mock.args()).toEqual({ personnelId: 'p-1', periodId: '2026-05' });
+    expect(mock.args()).toEqual({
+      personnelId: 'p-1',
+      periodId: '2026-05',
+      manualIncome: null,
+    });
+  });
+
+  test('calculatePayroll: manuel Tediye/TİS değerlerini değiştirmeden göndermeli', async () => {
+    const mock = installMock();
+    const manualIncome: ManualPayrollIncomeInput = {
+      tediye: 1000.25,
+      tisIkramiyesi: 2000.75,
+    };
+    await tauriBridge.calculatePayroll('p-1', '2026-05', manualIncome);
+    expect(mock.cmd()).toBe('calculate_payroll');
+    expect(mock.args()).toEqual({
+      personnelId: 'p-1',
+      periodId: '2026-05',
+      manualIncome,
+    });
   });
 
   test('setPayrollStatus: personnelId / periodId / status göndermeli', async () => {
