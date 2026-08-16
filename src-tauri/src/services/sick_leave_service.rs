@@ -64,7 +64,7 @@ impl SickLeaveService {
         let mut total_paid_in_period = 0;
 
         for (_year, mut recs) in year_groups {
-            recs.sort_by(|a, b| a.0.cmp(&b.0));
+            recs.sort_by_key(|a| a.0);
 
             for (idx, (start, end)) in recs.iter().enumerate() {
                 let episode_index = idx + 1; // 1-indexed (1st, 2nd, ... episode of this calendar year)
