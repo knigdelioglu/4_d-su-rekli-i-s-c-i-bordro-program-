@@ -1,0 +1,29 @@
+name: P1 static audit
+
+on:
+  push:
+    branches:
+      - agent/complete-remaining-p1-hardening
+    paths:
+      - .github/workflows/p1-static-audit.yml
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/complete-remaining-p1-hardening
+      - name: Static source scans only
+        shell: bash
+        run: |
+          echo '=== AnnualPayrollParameters literals ==='
+          rg -n 'AnnualPayrollParameters\s*\{' src-tauri || true
+          echo '=== GvHesapDetayi literals ==='
+          rg -n 'GvHesapDetayi\s*\{' src-tauri || true
+          echo '=== PersonelKesintileri literals ==='
+          rg -n 'PersonelKesintileri\s*\{' src-tauri || true
+          echo '=== kuruş conversion call sites ==='
+          rg -n '(opt_)?dec_to_kurus\(' src-tauri || true
+          echo '=== source whitespace check ==='
+          git diff --check HEAD~1..HEAD || true
