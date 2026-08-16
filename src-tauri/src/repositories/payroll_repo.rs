@@ -7,6 +7,15 @@ use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PayrollDependencyFingerprint {
+    gv_base: i64,
+    sgk_base: i64,
+    new_cumulative_gv: i64,
+    net_payment: i64,
+    sonraki_devreden_pek_json: Option<String>,
+}
+
 pub struct PayrollRepository;
 
 impl PayrollRepository {
@@ -14,6 +23,7 @@ impl PayrollRepository {
         match status {
             BordroStatus::DRAFT => "DRAFT",
             BordroStatus::CALCULATED => "CALCULATED",
+            BordroStatus::STALE => "STALE",
             BordroStatus::FINALIZED => "FINALIZED",
         }
     }
@@ -22,12 +32,107 @@ impl PayrollRepository {
         match status {
             "DRAFT" => Ok(BordroStatus::DRAFT),
             "CALCULATED" => Ok(BordroStatus::CALCULATED),
+            "STALE" => Ok(BordroStatus::STALE),
             "FINALIZED" => Ok(BordroStatus::FINALIZED),
             _ => Err(DomainError::InvalidData(format!(
                 "{} bordrosunun durumu geçersiz: {}",
                 id, status
             ))),
         }
+    }
+
+    fn dependency_fingerprint(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<Option<PayrollDependencyFingerprint>> {
+        conn.query_row(
+            "SELECT gv_base, sgk_base, new_cumulative_gv, net_payment, sonraki_devreden_pek_json
+             FROM payroll_records
+             WHERE personnel_id = ?1 AND period_id = ?2",
+            params![personnel_id, period_id],
+            |row| {
+                Ok(PayrollDependencyFingerprint {
+                    gv_base: row.get(0)?,
+                    sgk_base: row.get(1)?,
+                    new_cumulative_gv: row.get(2)?,
+                    net_payment: row.get(3)?,
+                    sonraki_devreden_pek_json: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))
+    }
+
+    fn has_later_finalized_by_work_period(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<bool> {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payroll_records AS pr
+                    JOIN payroll_periods AS later ON later.id = pr.period_id
+                    JOIN payroll_periods AS current ON current.id = ?2
+                    WHERE pr.personnel_id = ?1
+                      AND pr.status = 'FINALIZED'
+                      AND (later.yil > current.yil OR (later.yil = current.yil AND later.ay > current.ay))
+                 )",
+                params![personnel_id, period_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(exists != 0)
+    }
+
+    fn mark_later_calculated_stale(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE payroll_records
+             SET status = 'STALE', updated_at = ?1
+             WHERE personnel_id = ?2
+               AND status = 'CALCULATED'
+               AND period_id IN (
+                    SELECT later.id
+                    FROM payroll_periods AS later
+                    JOIN payroll_periods AS current ON current.id = ?3
+                    WHERE later.yil > current.yil
+                       OR (later.yil = current.yil AND later.ay > current.ay)
+               )",
+            params![now, personnel_id, period_id],
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))
+    }
+
+    fn has_nonfinalized_prior_tax_chain(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<bool> {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payroll_records AS pr
+                    JOIN payroll_periods AS prior ON prior.id = pr.period_id
+                    JOIN payroll_periods AS current ON current.id = ?2
+                    WHERE pr.personnel_id = ?1
+                      AND prior.tax_year = current.tax_year
+                      AND prior.tax_month < current.tax_month
+                      AND pr.status <> 'FINALIZED'
+                 )",
+                params![personnel_id, period_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(exists != 0)
     }
 
     pub fn get_status_and_created_at(
@@ -64,6 +169,36 @@ impl PayrollRepository {
         period_id: &str,
         status: BordroStatus,
     ) -> Result<()> {
+        let current = Self::get_status_and_created_at(conn, personnel_id, period_id)?
+            .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+        let current_status = current.0;
+
+        if current_status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
+            return Err(DomainError::PayrollFinalized(
+                "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into(),
+            ));
+        }
+
+        if status == BordroStatus::FINALIZED {
+            if current_status == BordroStatus::STALE {
+                return Err(DomainError::ValidationError(
+                    "STALE bordro kesinleştirilemez. Önce bordroyu yeniden hesaplayın.".into(),
+                ));
+            }
+            if current_status == BordroStatus::DRAFT {
+                return Err(DomainError::ValidationError(
+                    "DRAFT bordro kesinleştirilemez. Önce bordroyu hesaplayın.".into(),
+                ));
+            }
+            if current_status != BordroStatus::FINALIZED
+                && Self::has_nonfinalized_prior_tax_chain(conn, personnel_id, period_id)?
+            {
+                return Err(DomainError::ValidationError(
+                    "Bu bordro kesinleştirilemez: aynı vergi yılındaki önceki mevcut bordrolar önce FINALIZED olmalıdır.".into(),
+                ));
+            }
+        }
+
         let updated_at = Utc::now().to_rfc3339();
         let changed = conn
             .execute(
@@ -112,6 +247,7 @@ impl PayrollRepository {
                     WHERE pr.personnel_id = ?1
                       AND pp.tax_year = ?2
                       AND pp.tax_month < ?3
+                      AND pr.status IN ('CALCULATED', 'FINALIZED')
                  )",
                 params![personnel_id, tax_year, tax_month],
                 |row| row.get(0),
@@ -127,6 +263,32 @@ impl PayrollRepository {
         start_tax_month: i32,
         end_tax_month_exclusive: i32,
     ) -> Result<Decimal> {
+        let non_authoritative: i64 = conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM payroll_records AS pr
+                 JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                 WHERE pr.personnel_id = ?1
+                   AND pp.tax_year = ?2
+                   AND pp.tax_month >= ?3
+                   AND pp.tax_month < ?4
+                   AND pr.status IN ('DRAFT', 'STALE')",
+                params![
+                    personnel_id,
+                    tax_year,
+                    start_tax_month,
+                    end_tax_month_exclusive
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if non_authoritative > 0 {
+            return Err(DomainError::ValidationError(
+                "Önceki vergi zincirinde DRAFT/STALE bordro var. Kümülatif GV hesabına devam etmeden önce bu bordroları yeniden hesaplayın.".into(),
+            ));
+        }
+
         let sum_kurus: i64 = conn
             .query_row(
                 "SELECT COALESCE(SUM(pr.gv_base), 0)
@@ -135,7 +297,8 @@ impl PayrollRepository {
                  WHERE pr.personnel_id = ?1
                    AND pp.tax_year = ?2
                    AND pp.tax_month >= ?3
-                   AND pp.tax_month < ?4",
+                   AND pp.tax_month < ?4
+                   AND pr.status IN ('CALCULATED', 'FINALIZED')",
                 params![
                     personnel_id,
                     tax_year,
@@ -153,17 +316,36 @@ impl PayrollRepository {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<Option<Vec<DevredenPekKaydi>>> {
-        let json = conn
+        let row = conn
             .query_row(
-                "SELECT sonraki_devreden_pek_json
+                "SELECT id, status, sonraki_devreden_pek_json
                  FROM payroll_records
                  WHERE personnel_id = ?1 AND period_id = ?2",
                 params![personnel_id, period_id],
-                |row| row.get::<_, Option<String>>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
             )
             .optional()
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?
-            .flatten();
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        let Some((id, status_text, json)) = row else {
+            return Ok(None);
+        };
+        match Self::parse_status(&id, &status_text)? {
+            BordroStatus::DRAFT | BordroStatus::STALE => {
+                return Err(DomainError::ValidationError(format!(
+                    "{} dönemindeki önceki bordro {} durumda; devreden PEK authoritative değildir. Önce bordroyu yeniden hesaplayın.",
+                    period_id, status_text
+                )))
+            }
+            BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
+        }
+
         Self::parse_optional_json(
             json.as_deref(),
             &format!("{} {} sonraki devreden PEK", personnel_id, period_id),
@@ -427,12 +609,38 @@ impl PayrollRepository {
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if let Some((current_status, _)) =
+            Self::get_status_and_created_at(&tx, &bordro.personelId, &bordro.donemId)?
+        {
+            if current_status == BordroStatus::FINALIZED {
+                return Err(DomainError::PayrollFinalized(
+                    "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
+                ));
+            }
+        }
+
+        if Self::has_later_finalized_by_work_period(&tx, &bordro.personelId, &bordro.donemId)? {
+            return Err(DomainError::PayrollFinalized(
+                "Bu bordro değiştirilemez: daha sonraki bir bordro FINALIZED durumunda ve bu bordronun bağımlılık zincirine dayanıyor.".into(),
+            ));
+        }
+
+        let before = Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId)?;
         Self::save_in_transaction(&tx, bordro)?;
+        let after = Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId)?;
+
+        if before != after {
+            Self::mark_later_calculated_stale(&tx, &bordro.personelId, &bordro.donemId)?;
+        }
+
         tx.commit()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
 
     /// MigrationService transaction'ı içinden çağrılır; yeni transaction açmaz.
+    /// Bulk restore/import snapshot'ları olduğu gibi korur; production dependency
+    /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let status_str = Self::status_to_str(b.status);
