@@ -648,8 +648,7 @@ pub fn calculate_is_primi_detayi(
 
 /// Puantajdan gelir kalemlerini otomatik doldurur.
 ///
-/// Is primi: oran personelin grubundan (grup) gelir; kurumsal tek oran
-/// isPrimiYuzde bu hesapta rol oynamaz. Hak gunu = C + GC. Sessiz fallback yok:
+/// Is primi: oran personelin grubundan (grup) gelir; hak gunu = C + GC. Sessiz fallback yok:
 /// grup cozumleme hatalari [DomainError] olarak doner ve motor tahmin uretmez.
 pub fn calculate_gunluk_gelirler_from_puantaj(
     puantaj_ozeti: &PuantajOzeti,
@@ -933,17 +932,8 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
-    if brut_gelir <= dec!(0) {
-        let (pek_detay, sonraki) = calculate_prime_esas_kazanc_with_statutory_snapshot(
-            gelirler,
-            puantaj_ozeti,
-            kurum_degerleri,
-            tax_inputs.incoming_devreden_pek,
-            statutory_snapshot,
-        );
-        return (KesintiKalemleri::default(), pek_detay, sonraki);
-    }
-
+    // PEK önce çözülür. Cari brüt sıfır olsa bile tavan içine alınan devreden PEK
+    // varsa işçi SGK/işsizlik ve OKS bu authoritative matrah üzerinden tahakkuk eder.
     let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_statutory_snapshot(
         gelirler,
         puantaj_ozeti,
@@ -951,16 +941,17 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
         tax_inputs.incoming_devreden_pek,
         statutory_snapshot,
     );
-    // İşçi SGK ve işsizlik primi, cari ay PEK'ine fiilen eklenen devreden tutarı da
-    // içerir. Alt sınır tamamlama farkı ise yalnız işveren sorumluluğudur ve bu
-    // authoritative işçi prim matrahına girmez.
+
+    // Sıfır brüt + sıfır PEK için önceki davranışı koru; ancak PEK varken kesintileri
+    // gelir toplamına bakarak erken sıfırlama.
+    if brut_gelir <= dec!(0) && pek_detay.primMatrahi <= dec!(0) {
+        return (KesintiKalemleri::default(), pek_detay, sonraki_devreden);
+    }
+
+    // İşçi SGK, işsizlik ve OKS aynı authoritative PEK matrahını izler. Cari ayda
+    // tavana sığan devreden tutar dahildir; alt sınır işveren tamamlama farkı dahil değildir.
     let worker_pek_matrah = pek_detay.primMatrahi;
-    // OKS davranışı bu P0 düzeltmesinin kapsamı dışındadır; mevcut cari-kazanç
-    // matrahı korunur ve ayrı hardening fazında ele alınır.
-    let oks_pek_matrah = pek_detay
-        .hesaplananPek
-        .min(pek_detay.pekUstSinir)
-        .max(dec!(0));
+    let oks_pek_matrah = pek_detay.primMatrahi;
 
     let sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
     let issizlik_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
