@@ -1,0 +1,100 @@
+from pathlib import Path
+import re
+
+ROOT = Path('.')
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding='utf-8')
+
+
+def write(path: str, text: str) -> None:
+    (ROOT / path).write_text(text, encoding='utf-8')
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    text = read(path)
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f'{path}: expected exactly one occurrence, found {count}: {old[:80]!r}')
+    write(path, text.replace(old, new, 1))
+
+
+def insert_after(path: str, anchor: str, addition: str) -> None:
+    replace_once(path, anchor, anchor + addition)
+
+
+# ---------------------------------------------------------------------------
+# 1. Domain errors: explicit negative-net error.
+# ---------------------------------------------------------------------------
+path = 'src-tauri/src/domain/errors.rs'
+text = read(path)
+if 'NegativeNetPayment' not in text:
+    text = text.replace('use serde::Serialize;\n', 'use rust_decimal::Decimal;\nuse serde::Serialize;\n', 1)
+    marker = '''    #[error("Geçersiz veri: {0}")]\n    InvalidData(String),\n'''
+    addition = '''\n    #[error("Kesintiler toplam geliri aşıyor: gelir={gelir}, kesinti={kesinti}, fark={fark}")]\n    NegativeNetPayment {\n        gelir: Decimal,\n        kesinti: Decimal,\n        fark: Decimal,\n    },\n'''
+    if marker not in text:
+        raise RuntimeError('errors.rs marker not found')
+    text = text.replace(marker, marker + addition, 1)
+    write(path, text)
+
+# ---------------------------------------------------------------------------
+# 2. Domain models: explicit GV deduction inputs and auditable snapshots.
+# ---------------------------------------------------------------------------
+path = 'src-tauri/src/domain/models.rs'
+text = read(path)
+if 'pub struct GvIndirimGirdileri' not in text:
+    marker = '''#[derive(Debug, Clone, Serialize, Deserialize, Default)]\n#[serde(rename_all = "camelCase")]\npub struct PersonelKesintileri {\n'''
+    addition = '''#[derive(Debug, Clone, Serialize, Deserialize, Default)]\n#[serde(rename_all = "camelCase")]\npub struct GvIndirimGirdileri {\n    /// Doğum/askerlik borçlanmasının cari bordroda GV matrahından indirime\n    /// uygun ve belgeye dayalı kısmı. Net kesinti alanından bağımsızdır.\n    pub dogumAskerlikGvIndirimTutar: Option<Decimal>,\n    /// Çalışanın ödediği hayat sigortası priminin cari ay brüt tutarı.\n    pub hayatSigortasiPrimiTutar: Option<Decimal>,\n    /// Çalışanın ödediği şahıs/sağlık sigortası priminin cari ay brüt tutarı.\n    pub saglikSigortasiPrimiTutar: Option<Decimal>,\n}\n\n'''
+    if marker not in text:
+        raise RuntimeError('PersonelKesintileri marker not found')
+    text = text.replace(marker, addition + marker, 1)
+    text = text.replace(
+        '    pub digerKesintiTutar: Option<Decimal>,\n}',
+        '    pub digerKesintiTutar: Option<Decimal>,\n    #[serde(default)]\n    pub gvIndirimleri: Option<GvIndirimGirdileri>,\n}',
+        1,
+    )
+
+# Add annual insurance GV cap.
+if 'sigortaGvYillikBrutAsgariUcretTavani' not in text:
+    text = text.replace(
+        '    pub gelirVergisiDilimleri: Vec<TaxBracket>,\n    pub updatedAt: Option<String>,',
+        '    pub gelirVergisiDilimleri: Vec<TaxBracket>,\n    /// GVK 63/3 sigorta primi indiriminin yıllık brüt asgari ücret tavanı.\n    #[serde(default)]\n    pub sigortaGvYillikBrutAsgariUcretTavani: Option<Decimal>,\n    pub updatedAt: Option<String>,',
+        1,
+    )
+    text = text.replace(
+        '            updatedAt: None,\n        }\n    }\n}',
+        '            sigortaGvYillikBrutAsgariUcretTavani: Some(Decimal::from(396360)),\n            updatedAt: None,\n        }\n    }\n}',
+        1,
+    )
+
+# Extend GV audit snapshot with defaulted fields for backwards-compatible JSON reads.
+if 'pub dogumAskerlikGvIndirimi:' not in text:
+    marker = '''    /// Kesilecek gelir vergisi (negatif olamaz).\n    pub kesilenGelirVergisi: Decimal,\n}'''
+    addition = '''    /// Kesilecek gelir vergisi (negatif olamaz).\n    pub kesilenGelirVergisi: Decimal,\n    /// Cari ayda gerçekten uygulanan doğum/askerlik borçlanması GV indirimi.\n    #[serde(default)]\n    pub dogumAskerlikGvIndirimi: Decimal,\n    /// Hayat (%50) + sağlık/şahıs (%100) primlerinden oluşan brüt GV indirim adayı.\n    #[serde(default)]\n    pub sigortaGvIndirimAdayi: Decimal,\n    /// Cari ay ücretinin %15'i üzerinden hesaplanan sigorta GV indirimi üst sınırı.\n    #[serde(default)]\n    pub sigortaGvAylikLimiti: Decimal,\n    /// Yıllık brüt asgari ücret tavanından cari ay öncesi kullanım düşüldükten sonra kalan limit.\n    #[serde(default)]\n    pub sigortaGvYillikKalanLimiti: Decimal,\n    /// Aday, aylık limit ve yıllık kalan limitin en küçüğü.\n    #[serde(default)]\n    pub uygulanabilirSigortaGvIndirimi: Decimal,\n}'''
+    if marker not in text:
+        raise RuntimeError('GvHesapDetayi marker not found')
+    text = text.replace(marker, addition, 1)
+
+write(path, text)
+
+# Add gvIndirimleri: None to all explicit Rust PersonelKesintileri literals missing it.
+for rs in (ROOT / 'src-tauri').rglob('*.rs'):
+    t = rs.read_text(encoding='utf-8')
+    changed = False
+    pos = 0
+    while True:
+        idx = t.find('PersonelKesintileri {', pos)
+        if idx < 0:
+            break
+        brace = t.find('{', idx)
+        depth = 0
+        end = None
+        for j in range(brace, len(t)):
+            if t[j] == '{':
+                depth += 1
+            elif t[j] == '}':
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
