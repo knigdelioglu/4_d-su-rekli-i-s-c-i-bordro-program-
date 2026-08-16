@@ -133,7 +133,7 @@ fn production_payroll_uses_only_explicit_manual_tediye_and_tis() -> Result<()> {
     assert_eq!(payroll.gelirler.tediye, Some(dec!(1000.25)));
     assert_eq!(payroll.gelirler.tisIkramiyesi, Some(dec!(2000.75)));
 
-    for (kind, expected) in [("tediye", dec!(1000.25)), ("tisIkramiyesi", dec!(2000.75))] {
+    for (kind, expected_kurus) in [("tediye", 100_025_i64), ("tisIkramiyesi", 200_075_i64)] {
         let (amount, source): (i64, String) = conn
             .query_row(
                 "SELECT amount, source FROM payroll_income_items WHERE payroll_id = ?1 AND item_type = ?2",
@@ -141,14 +141,7 @@ fn production_payroll_uses_only_explicit_manual_tediye_and_tis() -> Result<()> {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        assert_eq!(
-            amount,
-            (expected * dec!(100))
-                .round()
-                .to_string()
-                .parse::<i64>()
-                .unwrap()
-        );
+        assert_eq!(amount, expected_kurus);
         assert_eq!(source, "MANUAL");
     }
     Ok(())

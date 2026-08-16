@@ -100,11 +100,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
   const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
 
+  const getManualIncomeStateKey = (personId: string): string =>
+    `${aktifDonem.id}:${personId}`;
+
   const getManualIncomeInput = (personId: string): ManualPayrollIncomeInput => {
     const existingPayroll = bordrolar.find(
       (item) => item.personelId === personId && item.donemId === aktifDonem.id
     );
-    const draft = manualIncomeMap[personId];
+    const draft = manualIncomeMap[getManualIncomeStateKey(personId)];
     const resolveAmount = (
       field: 'tediye' | 'tisIkramiyesi'
     ): number | null => {
@@ -128,10 +131,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     field: 'tediye' | 'tisIkramiyesi',
     value: string
   ) => {
+    const stateKey = getManualIncomeStateKey(personId);
     setManualIncomeMap((current) => ({
       ...current,
-      [personId]: {
-        ...current[personId],
+      [stateKey]: {
+        ...current[stateKey],
         [field]: value,
       },
     }));
@@ -549,11 +553,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
+                  const manualIncomeStateKey = getManualIncomeStateKey(person.id);
                   const tediyeInputValue =
-                    manualIncomeMap[person.id]?.tediye ??
+                    manualIncomeMap[manualIncomeStateKey]?.tediye ??
                     (bordro?.gelirler.tediye != null ? String(bordro.gelirler.tediye) : '');
                   const tisInputValue =
-                    manualIncomeMap[person.id]?.tisIkramiyesi ??
+                    manualIncomeMap[manualIncomeStateKey]?.tisIkramiyesi ??
                     (bordro?.gelirler.tisIkramiyesi != null
                       ? String(bordro.gelirler.tisIkramiyesi)
                       : '');
