@@ -241,6 +241,7 @@ pub enum BordroStatus {
     DRAFT,
     #[default]
     CALCULATED,
+    STALE,
     FINALIZED,
 }
 
