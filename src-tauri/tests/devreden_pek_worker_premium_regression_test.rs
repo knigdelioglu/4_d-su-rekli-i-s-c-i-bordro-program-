@@ -7,14 +7,15 @@ use bordro_programi_lib::domain::models::{
 use rust_decimal_macros::dec;
 
 fn kurum() -> DonemselKurumDegerleri {
-    let mut k = DonemselKurumDegerleri::default();
     // 30 prim günü => alt sınır 30.000, üst sınır 90.000.
     // Test değerleri devreden PEK sınır davranışını okunabilir kılar.
-    k.gunlukAsgariUcret = Some(dec!(1000));
-    k.pekTavanKatsayisi = Some(dec!(3));
-    k.sgkIsciOraniYuzde = Some(dec!(14));
-    k.issizlikIsciOraniYuzde = Some(dec!(1));
-    k
+    DonemselKurumDegerleri {
+        gunlukAsgariUcret: Some(dec!(1000)),
+        pekTavanKatsayisi: Some(dec!(3)),
+        sgkIsciOraniYuzde: Some(dec!(14)),
+        issizlikIsciOraniYuzde: Some(dec!(1)),
+        ..Default::default()
+    }
 }
 
 fn puantaj_30() -> PuantajOzeti {
