@@ -22,17 +22,22 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   const [search, setSearch] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Map each employee to their active period payroll record
-  const bankEntries = personeller.map((p) => {
+  // Resmî ödeme listesine yalnız authoritative bordrolar girer. STALE/DRAFT
+  // snapshot'lar yeniden hesaplanmadan banka çıktısına taşınamaz.
+  const bankEntries = personeller.flatMap((p) => {
     const b = bordrolar.find(
-      (record) => record.personelId === p.id && record.donemId === aktifDonem.id
+      (record) =>
+        record.personelId === p.id &&
+        record.donemId === aktifDonem.id &&
+        (record.status === 'CALCULATED' || record.status === 'FINALIZED')
     );
-    return {
+    if (!b) return [];
+    return [{
       personel: p,
       bordro: b,
-      netOdeme: b ? b.netOdeme : 0,
-      hasBordro: !!b,
-    };
+      netOdeme: b.netOdeme,
+      hasBordro: true,
+    }];
   });
 
   const filteredEntries = bankEntries.filter((e) => {
