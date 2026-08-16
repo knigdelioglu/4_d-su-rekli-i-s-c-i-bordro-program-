@@ -42,4 +42,4 @@ jobs:
           git commit -m "fix: complete remaining P1 payroll hardening"
           git push origin HEAD:agent/complete-remaining-p1-hardening
 
-# retrigger after completing staged regression test body
+# retrigger after adding source compatibility prelude
