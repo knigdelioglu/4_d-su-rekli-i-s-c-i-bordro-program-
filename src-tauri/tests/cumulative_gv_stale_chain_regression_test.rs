@@ -60,6 +60,11 @@ fn gv_detay(gv_base: Decimal, previous: Decimal) -> GvHesapDetayi {
         asgariUcretGvIstisnasi: dec!(0),
         uygulananGvIstisnasi: dec!(0),
         kesilenGelirVergisi: dec!(0),
+        dogumAskerlikGvIndirimi: dec!(0),
+        sigortaGvIndirimAdayi: dec!(0),
+        sigortaGvAylikLimiti: dec!(0),
+        sigortaGvYillikKalanLimiti: dec!(0),
+        uygulanabilirSigortaGvIndirimi: dec!(0),
     }
 }
 

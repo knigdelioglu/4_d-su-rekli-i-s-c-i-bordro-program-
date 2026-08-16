@@ -390,7 +390,10 @@ pub fn validate_kurum_degerleri_for_payroll(
     }
     for (field, value) in [
         ("gunlukYemek", kurum_degerleri.gunlukYemek),
-        ("birlestirilmisSosyalYardim", kurum_degerleri.birlestirilmisSosyalYardim),
+        (
+            "birlestirilmisSosyalYardim",
+            kurum_degerleri.birlestirilmisSosyalYardim,
+        ),
         ("gunlukVasitaYol", kurum_degerleri.gunlukVasitaYol),
         ("giyimYardimi", kurum_degerleri.giyimYardimi),
         ("hizmetZammiBirimi", kurum_degerleri.hizmetZammiBirimi),
@@ -405,17 +408,35 @@ pub fn validate_kurum_degerleri_for_payroll(
 
     let required_non_negative = [
         ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
-        ("issizlikIsciOraniYuzde", kurum_degerleri.issizlikIsciOraniYuzde),
+        (
+            "issizlikIsciOraniYuzde",
+            kurum_degerleri.issizlikIsciOraniYuzde,
+        ),
         ("sendikaAidatiYuzde", kurum_degerleri.sendikaAidatiYuzde),
         ("besOraniYuzde", kurum_degerleri.besOraniYuzde),
-        ("geceCalismaPrimiYuzde", kurum_degerleri.geceCalismaPrimiYuzde),
-        ("geceCalismaTatiliPrimiYuzde", kurum_degerleri.geceCalismaTatiliPrimiYuzde),
-        ("gunlukYemekIstisnasiSGK", kurum_degerleri.gunlukYemekIstisnasiSGK),
-        ("gunlukYemekIstisnasiGV", kurum_degerleri.gunlukYemekIstisnasiGV),
+        (
+            "geceCalismaPrimiYuzde",
+            kurum_degerleri.geceCalismaPrimiYuzde,
+        ),
+        (
+            "geceCalismaTatiliPrimiYuzde",
+            kurum_degerleri.geceCalismaTatiliPrimiYuzde,
+        ),
+        (
+            "gunlukYemekIstisnasiSGK",
+            kurum_degerleri.gunlukYemekIstisnasiSGK,
+        ),
+        (
+            "gunlukYemekIstisnasiGV",
+            kurum_degerleri.gunlukYemekIstisnasiGV,
+        ),
         ("gunlukAsgariUcret", kurum_degerleri.gunlukAsgariUcret),
         ("pekTavanKatsayisi", kurum_degerleri.pekTavanKatsayisi),
         ("sgkIsverenOraniYuzde", kurum_degerleri.sgkIsverenOraniYuzde),
-        ("issizlikIsverenOraniYuzde", kurum_degerleri.issizlikIsverenOraniYuzde),
+        (
+            "issizlikIsverenOraniYuzde",
+            kurum_degerleri.issizlikIsverenOraniYuzde,
+        ),
     ];
     for (field, value) in required_non_negative {
         let value = value.ok_or_else(|| {
@@ -434,13 +455,25 @@ pub fn validate_kurum_degerleri_for_payroll(
 
     let percent_fields = [
         ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
-        ("issizlikIsciOraniYuzde", kurum_degerleri.issizlikIsciOraniYuzde),
+        (
+            "issizlikIsciOraniYuzde",
+            kurum_degerleri.issizlikIsciOraniYuzde,
+        ),
         ("sendikaAidatiYuzde", kurum_degerleri.sendikaAidatiYuzde),
         ("besOraniYuzde", kurum_degerleri.besOraniYuzde),
-        ("geceCalismaPrimiYuzde", kurum_degerleri.geceCalismaPrimiYuzde),
-        ("geceCalismaTatiliPrimiYuzde", kurum_degerleri.geceCalismaTatiliPrimiYuzde),
+        (
+            "geceCalismaPrimiYuzde",
+            kurum_degerleri.geceCalismaPrimiYuzde,
+        ),
+        (
+            "geceCalismaTatiliPrimiYuzde",
+            kurum_degerleri.geceCalismaTatiliPrimiYuzde,
+        ),
         ("sgkIsverenOraniYuzde", kurum_degerleri.sgkIsverenOraniYuzde),
-        ("issizlikIsverenOraniYuzde", kurum_degerleri.issizlikIsverenOraniYuzde),
+        (
+            "issizlikIsverenOraniYuzde",
+            kurum_degerleri.issizlikIsverenOraniYuzde,
+        ),
     ];
     for (field, value) in percent_fields {
         if let Some(value) = value {
@@ -466,13 +499,19 @@ pub fn validate_kurum_degerleri_for_payroll(
         )));
     }
 
-    if kurum_degerleri.gunlukAsgariUcret.is_some_and(|value| value <= Decimal::ZERO) {
+    if kurum_degerleri
+        .gunlukAsgariUcret
+        .is_some_and(|value| value <= Decimal::ZERO)
+    {
         return Err(DomainError::ValidationError(format!(
             "{} dönemi günlük asgari ücret sıfırdan büyük olmalıdır.",
             kurum_degerleri.donemId
         )));
     }
-    if kurum_degerleri.pekTavanKatsayisi.is_some_and(|value| value < Decimal::ONE) {
+    if kurum_degerleri
+        .pekTavanKatsayisi
+        .is_some_and(|value| value < Decimal::ONE)
+    {
         return Err(DomainError::ValidationError(format!(
             "{} dönemi PEK tavan katsayısı en az 1 olmalıdır.",
             kurum_degerleri.donemId
@@ -789,7 +828,10 @@ fn calculate_prime_esas_kazanc_with_statutory_snapshot(
         )
     };
 
-    debug_assert!(pek_alt_sinir <= pek_ust_sinir, "PEK alt sınırı üst sınırı aşamaz");
+    debug_assert!(
+        pek_alt_sinir <= pek_ust_sinir,
+        "PEK alt sınırı üst sınırı aşamaz"
+    );
 
     let mut pek_matrah_adayi = ham_pek;
     let mut eklenecek_devreden_toplam = dec!(0);

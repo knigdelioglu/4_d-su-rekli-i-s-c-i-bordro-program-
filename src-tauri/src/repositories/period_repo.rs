@@ -1,5 +1,5 @@
 use crate::domain::models::*;
-use crate::domain::Result;
+use crate::domain::{DomainError, Result};
 use chrono::NaiveDate;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Row};

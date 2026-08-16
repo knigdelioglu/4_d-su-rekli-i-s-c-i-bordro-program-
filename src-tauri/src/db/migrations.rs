@@ -291,7 +291,10 @@ pub fn get_migrations() -> Migrations<'static> {
                     |row| row.get(0),
                 )?;
                 if exists == 0 {
-                    tx.execute(&format!("ALTER TABLE personnel ADD COLUMN {column} INTEGER"), [])?;
+                    tx.execute(
+                        &format!("ALTER TABLE personnel ADD COLUMN {column} INTEGER"),
+                        [],
+                    )?;
                 }
             }
             Ok(())

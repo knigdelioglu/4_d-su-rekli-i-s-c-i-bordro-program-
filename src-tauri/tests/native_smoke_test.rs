@@ -79,7 +79,7 @@ mod smoke_tests {
                     hayatSaglikSigortasiTutar: None,
                     digerKesintiTutar: None,
                     gvIndirimleri: None,
-}),
+                }),
             };
             PersonnelRepository::save(&conn, &person)?;
 

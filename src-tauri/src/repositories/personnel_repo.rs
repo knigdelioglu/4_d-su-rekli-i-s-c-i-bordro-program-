@@ -40,7 +40,10 @@ impl PersonnelRepository {
                 ("sabitBesTutar", k.sabitBesTutar),
                 ("icraTutar", k.icraTutar),
                 ("kisiBorcuTutar", k.kisiBorcuTutar),
-                ("dogumAskerlikBorclanmasiTutar", k.dogumAskerlikBorclanmasiTutar),
+                (
+                    "dogumAskerlikBorclanmasiTutar",
+                    k.dogumAskerlikBorclanmasiTutar,
+                ),
                 ("hayatSaglikSigortasiTutar", k.hayatSaglikSigortasiTutar),
                 ("digerKesintiTutar", k.digerKesintiTutar),
             ];
@@ -55,9 +58,11 @@ impl PersonnelRepository {
 
             if k.besUyesi.unwrap_or(false) {
                 if let Some(rate) = k.oksOraniYuzde {
-                    if rate < rust_decimal_macros::dec!(3) || rate > rust_decimal_macros::dec!(100) {
+                    if rate < rust_decimal_macros::dec!(3) || rate > rust_decimal_macros::dec!(100)
+                    {
                         return Err(crate::domain::DomainError::ValidationError(
-                            "OKS özel oranı, OKS'ye tabi personelde %3-%100 arasında olmalıdır.".into(),
+                            "OKS özel oranı, OKS'ye tabi personelde %3-%100 arasında olmalıdır."
+                                .into(),
                         ));
                     }
                 }
@@ -65,7 +70,10 @@ impl PersonnelRepository {
 
             if let Some(gv) = k.gvIndirimleri.as_ref() {
                 for (field, value) in [
-                    ("dogumAskerlikGvIndirimTutar", gv.dogumAskerlikGvIndirimTutar),
+                    (
+                        "dogumAskerlikGvIndirimTutar",
+                        gv.dogumAskerlikGvIndirimTutar,
+                    ),
                     ("hayatSigortasiPrimiTutar", gv.hayatSigortasiPrimiTutar),
                     ("saglikSigortasiPrimiTutar", gv.saglikSigortasiPrimiTutar),
                 ] {
@@ -129,7 +137,7 @@ impl PersonnelRepository {
                     hayatSigortasiPrimiTutar: opt_kurus_to_dec(hayat_gv),
                     saglikSigortasiPrimiTutar: opt_kurus_to_dec(saglik_gv),
                 }),
-}),
+            }),
         })
     }
 
@@ -198,8 +206,7 @@ impl PersonnelRepository {
         let hayat = opt_dec_to_kurus(k.and_then(|k| k.hayatSaglikSigortasiTutar))?;
         let diger = opt_dec_to_kurus(k.and_then(|k| k.digerKesintiTutar))?;
         let gv = k.and_then(|k| k.gvIndirimleri.as_ref());
-        let dogum_gv_indirim =
-            opt_dec_to_kurus(gv.and_then(|g| g.dogumAskerlikGvIndirimTutar))?;
+        let dogum_gv_indirim = opt_dec_to_kurus(gv.and_then(|g| g.dogumAskerlikGvIndirimTutar))?;
         let hayat_gv_prim = opt_dec_to_kurus(gv.and_then(|g| g.hayatSigortasiPrimiTutar))?;
         let saglik_gv_prim = opt_dec_to_kurus(gv.and_then(|g| g.saglikSigortasiPrimiTutar))?;
 

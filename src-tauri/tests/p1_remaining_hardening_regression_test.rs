@@ -20,7 +20,11 @@ use std::collections::HashMap;
 
 fn period(id: &str, yil: i32, ay: i32, tax_year: i32, tax_month: i32) -> BordroDonemi {
     let start = NaiveDate::from_ymd_opt(yil, ay as u32, 15).unwrap();
-    let (end_y, end_m) = if ay == 12 { (yil + 1, 1) } else { (yil, ay + 1) };
+    let (end_y, end_m) = if ay == 12 {
+        (yil + 1, 1)
+    } else {
+        (yil, ay + 1)
+    };
     let end = NaiveDate::from_ymd_opt(end_y, end_m as u32, 14).unwrap();
     BordroDonemi {
         id: id.into(),
@@ -37,7 +41,10 @@ fn period(id: &str, yil: i32, ay: i32, tax_year: i32, tax_month: i32) -> BordroD
 fn person(id: &str) -> Personel {
     Personel {
         id: id.into(),
-        tcNo: format!("1{:010}", id.bytes().map(u64::from).sum::<u64>() % 10_000_000_000),
+        tcNo: format!(
+            "1{:010}",
+            id.bytes().map(u64::from).sum::<u64>() % 10_000_000_000
+        ),
         ad: "P1".into(),
         soyad: "Test".into(),
         grup: "1. Grup".into(),
@@ -72,7 +79,9 @@ fn attendance_for(period: &BordroDonemi, personnel_id: &str) -> PersonelPuantaj 
     let mut gunler = HashMap::new();
     for offset in 0..30 {
         gunler.insert(
-            (start + Duration::days(offset)).format("%Y-%m-%d").to_string(),
+            (start + Duration::days(offset))
+                .format("%Y-%m-%d")
+                .to_string(),
             "Ç".to_string(),
         );
     }
@@ -132,7 +141,8 @@ fn unique_index_rejects_raw_duplicate_tax_month() {
 #[test]
 fn initialize_db_fails_explicitly_when_legacy_tax_month_duplicates_exist() {
     let mut conn = create_in_memory_connection().unwrap();
-    conn.execute("DROP INDEX idx_payroll_periods_tax_year_month", []).unwrap();
+    conn.execute("DROP INDEX idx_payroll_periods_tax_year_month", [])
+        .unwrap();
     let p1 = period("2026-05", 2026, 5, 2026, 6);
     let p2 = period("2026-06", 2026, 6, 2026, 6);
     for p in [p1, p2] {
@@ -166,7 +176,9 @@ fn insurance_and_borrowing_gv_deductions_apply_legal_limits() {
 #[test]
 fn pek_bounds_fail_closed_when_ceiling_is_below_floor() {
     let err = validate_pek_bounds(dec!(1000), dec!(999)).unwrap_err();
-    assert!(matches!(err, DomainError::ValidationError(message) if message.contains("PEK sınırları")));
+    assert!(
+        matches!(err, DomainError::ValidationError(message) if message.contains("PEK sınırları"))
+    );
 }
 
 #[test]
@@ -174,7 +186,9 @@ fn institution_validation_rejects_pek_multiplier_below_one() {
     let mut settings = DonemselKurumDegerleri::default();
     settings.pekTavanKatsayisi = Some(dec!(0.5));
     let err = validate_kurum_degerleri_for_payroll(&settings).unwrap_err();
-    assert!(matches!(err, DomainError::ValidationError(message) if message.contains("PEK tavan katsayısı")));
+    assert!(
+        matches!(err, DomainError::ValidationError(message) if message.contains("PEK tavan katsayısı"))
+    );
 }
 
 #[test]
@@ -195,7 +209,9 @@ fn personnel_repository_rejects_oks_rate_below_three_percent() {
         gvIndirimleri: None,
     });
     let err = PersonnelRepository::save(&conn, &p).unwrap_err();
-    assert!(matches!(err, DomainError::ValidationError(message) if message.contains("OKS özel oranı")));
+    assert!(
+        matches!(err, DomainError::ValidationError(message) if message.contains("OKS özel oranı"))
+    );
 }
 
 #[test]
@@ -204,7 +220,12 @@ fn decimal_to_kurus_overflow_is_an_error_not_zero() {
     assert!(opt_dec_to_kurus(Some(Decimal::MAX)).is_err());
 }
 
-fn payroll_record(personnel_id: &str, period_id: &str, gross: Decimal, deductions: Decimal) -> BordroKaydi {
+fn payroll_record(
+    personnel_id: &str,
+    period_id: &str,
+    gross: Decimal,
+    deductions: Decimal,
+) -> BordroKaydi {
     let net = (gross - deductions).round_dp(2);
     BordroKaydi {
         id: format!("{}_{}", personnel_id, period_id),
@@ -260,7 +281,10 @@ fn annual_2026_parameters_persist_insurance_gv_cap() {
     let loaded = AnnualPayrollParametersRepository::get_by_year(&conn, 2026)
         .unwrap()
         .unwrap();
-    assert_eq!(loaded.sigortaGvYillikBrutAsgariUcretTavani, Some(dec!(396360)));
+    assert_eq!(
+        loaded.sigortaGvYillikBrutAsgariUcretTavani,
+        Some(dec!(396360))
+    );
 }
 
 #[test]
@@ -274,7 +298,9 @@ fn payroll_service_surfaces_negative_net_instead_of_saving_debt_as_salary() {
     setup_payroll_inputs(&conn, &p, &donem).unwrap();
     let err = PayrollService::calculate_payroll_for_personnel(&conn, &p.id, &donem.id).unwrap_err();
     assert!(matches!(err, DomainError::NegativeNetPayment { .. }));
-    assert!(PayrollRepository::get_status_and_created_at(&conn, &p.id, &donem.id)
-        .unwrap()
-        .is_none());
+    assert!(
+        PayrollRepository::get_status_and_created_at(&conn, &p.id, &donem.id)
+            .unwrap()
+            .is_none()
+    );
 }

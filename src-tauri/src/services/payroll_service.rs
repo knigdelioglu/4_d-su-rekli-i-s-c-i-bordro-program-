@@ -413,7 +413,10 @@ impl PayrollService {
         SettingsRepository::validate_statutory_segments_for_period(&period, &kurum_degerleri)?;
         let statutory_snapshot =
             resolve_statutory_snapshot_for_period(&attendance, &period, &kurum_degerleri)?;
-        validate_pek_bounds(statutory_snapshot.pekAltSinir, statutory_snapshot.pekUstSinir)?;
+        validate_pek_bounds(
+            statutory_snapshot.pekAltSinir,
+            statutory_snapshot.pekUstSinir,
+        )?;
 
         let zam_aylari = get_zam_aylari(conn)?;
         let (zam_oncesi_ozet, zam_sonrasi_ozet, zam_tarihi) =
@@ -615,7 +618,7 @@ impl PayrollService {
         let sigorta_limit_brut_ucret = (gelir_toplam
             - gelirler.yemek.unwrap_or_default()
             - gelirler.vasitaYol.unwrap_or_default())
-            .max(Decimal::ZERO);
+        .max(Decimal::ZERO);
         let gv_indirim = calculate_gv_indirimleri(
             sigorta_limit_brut_ucret,
             dogum_askerlik_gv,

@@ -2169,6 +2169,11 @@ mod tests {
             asgariUcretGvIstisnasi: dec!(4211.33),
             uygulananGvIstisnasi: dec!(4211.33),
             kesilenGelirVergisi: dec!(0),
+            dogumAskerlikGvIndirimi: dec!(0),
+            sigortaGvIndirimAdayi: dec!(0),
+            sigortaGvAylikLimiti: dec!(0),
+            sigortaGvYillikKalanLimiti: dec!(0),
+            uygulanabilirSigortaGvIndirimi: dec!(0),
         };
 
         let kall = BordroKaydi {
@@ -2639,6 +2644,11 @@ mod tests {
                 asgariUcretGvIstisnasi: dec!(4211.33),
                 uygulananGvIstisnasi: dec!(4211.33),
                 kesilenGelirVergisi: dec!(0),
+                dogumAskerlikGvIndirimi: dec!(0),
+                sigortaGvIndirimAdayi: dec!(0),
+                sigortaGvAylikLimiti: dec!(0),
+                sigortaGvYillikKalanLimiti: dec!(0),
+                uygulanabilirSigortaGvIndirimi: dec!(0),
             };
 
             let bordro = BordroKaydi {

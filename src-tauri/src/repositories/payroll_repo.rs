@@ -363,9 +363,11 @@ impl PayrollRepository {
                 Self::parse_json(&json, &format!("{} GV snapshot'ı", id))?;
             total = total
                 .checked_add(snapshot.uygulanabilirSigortaGvIndirimi)
-                .ok_or_else(|| DomainError::InvalidData(
-                    "Sigorta GV yıllık kullanım toplamında Decimal taşması oluştu.".into(),
-                ))?;
+                .ok_or_else(|| {
+                    DomainError::InvalidData(
+                        "Sigorta GV yıllık kullanım toplamında Decimal taşması oluştu.".into(),
+                    )
+                })?;
         }
         Ok(total.round_dp(2))
     }
@@ -713,7 +715,9 @@ impl PayrollRepository {
 
         let computed_net = (b.gelirToplam - b.kesintiToplam).round_dp(2);
         if b.netOdeme < Decimal::ZERO || computed_net < Decimal::ZERO {
-            let fark = (b.kesintiToplam - b.gelirToplam).max(Decimal::ZERO).round_dp(2);
+            let fark = (b.kesintiToplam - b.gelirToplam)
+                .max(Decimal::ZERO)
+                .round_dp(2);
             return Err(DomainError::NegativeNetPayment {
                 gelir: b.gelirToplam,
                 kesinti: b.kesintiToplam,
@@ -736,7 +740,9 @@ impl PayrollRepository {
         let gv_base = dec_to_kurus(Some(gv_base_decimal))?;
         let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi)?;
         let new_gv = prev_gv.checked_add(gv_base).ok_or_else(|| {
-            DomainError::InvalidData("Kümülatif GV kuruş toplamı SQLite i64 sınırını aşıyor.".into())
+            DomainError::InvalidData(
+                "Kümülatif GV kuruş toplamı SQLite i64 sınırını aşıyor.".into(),
+            )
         })?;
         let income_tax = dec_to_kurus(b.kesintiler.gelirVergisi)?;
         let stamp_tax = dec_to_kurus(b.kesintiler.damgaVergisi)?;
