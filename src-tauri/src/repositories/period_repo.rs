@@ -52,8 +52,8 @@ impl PeriodRepository {
         }
 
         // Bu uygulamanın authoritative çalışma dönemi 15-14'tür. Serbest tarih
-        // aralığı kabul etmek SGK gün hesabını ve vergi ayı/yılı zincirini belirsiz
-        // hale getirir; invalid state hesap aşamasına kadar yaşayamaz.
+        // aralığı kabul etmek SGK gün hesabını ve dönem bazlı gelir üretimini
+        // belirsiz hale getirir; invalid state hesap aşamasına kadar yaşayamaz.
         if start.day() != 15 || end.day() != 14 {
             return Err(DomainError::ValidationError(format!(
                 "Bordro dönemi 15-14 olmalıdır: {} - {}.",
@@ -73,19 +73,12 @@ impl PeriodRepository {
             )));
         }
 
+        // `ay` dönem başlangıç ayıdır; taxYear/taxMonth ise ayrı ödeme/tahakkuk
+        // metadata'sıdır ve ürün sözleşmesi gereği kullanıcı tarafından seçilebilir.
         if period.yil != start.year() || period.ay != start.month() as i32 {
             return Err(DomainError::ValidationError(format!(
                 "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
                 period.yil, period.ay, period.baslangicTarihi
-            )));
-        }
-
-        // 15-14 bordroda vergi dönemi kapanış/ödeme ayıdır. Özellikle Aralık-Ocak
-        // geçişinde yanlış taxYear yıllık vergi tarifesini de yanlış seçtirir.
-        if period.taxYear != end.year() || period.taxMonth != end.month() as i32 {
-            return Err(DomainError::ValidationError(format!(
-                "Vergi yılı/ayı dönem bitiş ayıyla uyuşmuyor: {}-{:02} / {}.",
-                period.taxYear, period.taxMonth, period.bitisTarihi
             )));
         }
 
