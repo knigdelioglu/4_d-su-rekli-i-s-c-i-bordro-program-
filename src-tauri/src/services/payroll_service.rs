@@ -37,6 +37,28 @@ fn hakedis_gun(ozet: &PuantajOzeti) -> i32 {
     ozet.c + ozet.t + ozet.g + ozet.i + ozet.gc + ozet.gct
 }
 
+/// SGK kamu sektörü 15-14 bordrolarında aylık PEK alt/üst sınırı 30 günlük
+/// tutardır. Şubat gibi 28/29 gerçek takvim günü içeren eksiksiz bir dönemde
+/// puantaj gerçek tarihlerle tutulmaya devam eder, ancak PEK sınırı 30 gün
+/// üzerinden çözülür. Eksik/parsiyel puantaj sessizce 30 güne tamamlanmaz.
+fn resolve_sgk_prim_gun_sayisi(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    summary: &PuantajOzeti,
+) -> Result<i32> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    let calendar_day_count = (end - start).num_days() + 1;
+    let raw_prim_gun =
+        summary.c + summary.t + summary.g + summary.i + summary.gc + summary.gct + summary.r;
+
+    if calendar_day_count < 30 && attendance.gunler.len() as i64 == calendar_day_count {
+        return Ok(30);
+    }
+
+    Ok(raw_prim_gun.clamp(0, 30))
+}
+
 fn parse_period_date(value: &str, period_id: &str, field_name: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|e| {
         DomainError::InvalidData(format!(
@@ -208,6 +230,7 @@ impl PayrollService {
         for code in attendance.gunler.values() {
             add_puantaj_kodu(&mut summary, code, period_id)?;
         }
+        let sgk_prim_gun_sayisi = resolve_sgk_prim_gun_sayisi(&attendance, &period, &summary)?;
 
         // Calculate exact payable sick dates before any income is produced. A payable date must
         // be represented as R in attendance; otherwise payroll fails closed to prevent double pay.
@@ -370,6 +393,7 @@ impl PayrollService {
                 Some(&personel),
                 Some(&summary),
                 &tax_inputs,
+                Some(sgk_prim_gun_sayisi),
             );
 
         let gelir_toplam = calculate_gelir_toplam(&gelirler);

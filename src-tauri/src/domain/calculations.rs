@@ -640,8 +640,24 @@ pub fn calculate_prime_esas_kazanc(
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     devreden_pek_gelen: &[DevredenPekKaydi],
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    calculate_prime_esas_kazanc_with_prim_gun_sayisi(
+        gelirler,
+        puantaj_ozeti,
+        kurum_degerleri,
+        devreden_pek_gelen,
+        None,
+    )
+}
+
+fn calculate_prime_esas_kazanc_with_prim_gun_sayisi(
+    gelirler: &GelirKalemleri,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    devreden_pek_gelen: &[DevredenPekKaydi],
+    sgk_prim_gun_sayisi: Option<i32>,
+) -> (PekDetayi, Vec<DevredenPekKaydi>) {
     let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
-    let prim_gun_sayisi = min(30, raw_prim_gun.max(0));
+    let prim_gun_sayisi = sgk_prim_gun_sayisi.unwrap_or(raw_prim_gun).clamp(0, 30);
     let fiili_yemek_gunu = puantaj_ozeti.map_or(0, |p| p.c + p.gc);
 
     let default_k = DonemselKurumDegerleri::default();
@@ -795,26 +811,29 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
     personel: Option<&Personel>,
     puantaj_ozeti: Option<&PuantajOzeti>,
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
+    sgk_prim_gun_sayisi: Option<i32>,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
     let brut_gelir = calculate_gelir_toplam(gelirler);
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     if brut_gelir <= dec!(0) {
-        let (pek_detay, sonraki) = calculate_prime_esas_kazanc(
+        let (pek_detay, sonraki) = calculate_prime_esas_kazanc_with_prim_gun_sayisi(
             gelirler,
             puantaj_ozeti,
             kurum_degerleri,
             tax_inputs.incoming_devreden_pek,
+            sgk_prim_gun_sayisi,
         );
         return (KesintiKalemleri::default(), pek_detay, sonraki);
     }
 
-    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc(
+    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_prim_gun_sayisi(
         gelirler,
         puantaj_ozeti,
         kurum_degerleri,
         tax_inputs.incoming_devreden_pek,
+        sgk_prim_gun_sayisi,
     );
     // İşçi SGK ve işsizlik primi, cari ay PEK'ine fiilen eklenen devreden tutarı da
     // içerir. Alt sınır tamamlama farkı ise yalnız işveren sorumluluğudur ve bu
@@ -942,5 +961,6 @@ pub fn calculate_statutory_deductions(
         personel,
         puantaj_ozeti,
         &tax_inputs,
+        None,
     )
 }

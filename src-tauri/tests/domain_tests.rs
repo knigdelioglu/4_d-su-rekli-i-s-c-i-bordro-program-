@@ -3012,6 +3012,7 @@ mod tests {
             b3.devredenPekGelen.as_ref().unwrap()[0].tutar,
             dec!(35460.00)
         );
+        assert_eq!(b3.pekDetay.as_ref().unwrap().pekUstSinir, dec!(297270.00));
         assert_eq!(b3.pekDetay.as_ref().unwrap().finalPek, dec!(297270.00));
         assert!(b3.sonrakiDevredenPek.as_ref().unwrap().is_empty());
 
