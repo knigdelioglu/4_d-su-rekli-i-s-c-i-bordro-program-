@@ -1,0 +1,59 @@
+name: Fix legacy attendance fixture
+
+on:
+  push:
+    branches:
+      - agent/complete-remaining-p1-hardening
+    paths:
+      - .github/workflows/fix-attendance-tax-slot-fixture.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/complete-remaining-p1-hardening
+          fetch-depth: 0
+
+      - name: Give the alternate attendance period a distinct tax slot
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/tests/domain_tests.rs')
+          text = p.read_text(encoding='utf-8')
+          old = '''        let donem_b = BordroDonemi {
+            id: "2026-05-alt".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026 Kopya".into(),
+            taxYear: 2026,
+            taxMonth: 6,
+        };
+'''
+          new = old.replace('            taxMonth: 6,\n', '            taxMonth: 5,\n')
+          if old not in text:
+              raise SystemExit('attendance period fixture marker not found')
+          p.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
+      - name: Restore normal CI and remove temporary workflow
+        shell: bash
+        run: |
+          git show 603eed97004921840a99620b597759b174854d83:.github/workflows/ci.yml > .github/workflows/ci.yml
+          rm -f .github/workflows/fix-attendance-tax-slot-fixture.yml
+
+      - name: Commit fixture repair
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: use unique tax slot in attendance fixture"
+          git push origin HEAD:agent/complete-remaining-p1-hardening

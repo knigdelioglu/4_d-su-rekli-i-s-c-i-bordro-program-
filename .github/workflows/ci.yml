@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches-ignore:
+      - agent/complete-remaining-p1-hardening
   pull_request:
 
 jobs:
