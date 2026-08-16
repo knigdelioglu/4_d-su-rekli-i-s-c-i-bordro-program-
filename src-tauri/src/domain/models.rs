@@ -292,6 +292,8 @@ pub struct BordroKaydi {
     pub pekDetay: Option<PekDetayi>,
     pub isPrimiDetay: Option<IsPrimiHesapDetayi>,
     pub gvDetay: Option<GvHesapDetayi>,
+    /// Bordro hesaplanırken çözümlenen period-local yasal parametrelerin snapshot'ı.
+    pub statutorySnapshot: Option<ResolvedStatutorySnapshot>,
     pub odenenRaporluGun: Option<i32>,
     pub raporluGun: Option<i32>,
 }
@@ -376,6 +378,44 @@ pub struct GvHesapDetayi {
     pub kesilenGelirVergisi: Decimal,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct StatutoryParameterSegment {
+    /// Inclusive effective date inside this payroll period (YYYY-MM-DD).
+    pub effectiveFrom: String,
+    pub gunlukAsgariUcret: Option<Decimal>,
+    pub pekTavanKatsayisi: Option<Decimal>,
+    pub gunlukYemekIstisnasiSGK: Option<Decimal>,
+    pub gunlukYemekIstisnasiGV: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedStatutorySegmentSnapshot {
+    pub effectiveFrom: String,
+    pub effectiveTo: String,
+    pub sgkPrimGunSayisi: i32,
+    pub fiiliYemekGunu: i32,
+    pub gunlukAsgariUcret: Decimal,
+    pub pekTavanKatsayisi: Decimal,
+    pub gunlukYemekIstisnasiSGK: Decimal,
+    pub gunlukYemekIstisnasiGV: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedStatutorySnapshot {
+    pub segments: Vec<ResolvedStatutorySegmentSnapshot>,
+    pub sgkPrimGunSayisi: i32,
+    pub pekAltSinir: Decimal,
+    pub pekUstSinir: Decimal,
+    pub sgkYemekIstisnasiToplam: Decimal,
+    pub gvYemekIstisnasiToplam: Decimal,
+    /// Gelir vergisi asgari ücret istisnası için vergi ayına taşınan son
+    /// yürürlükteki günlük asgari ücret değeri.
+    pub gvReferansGunlukAsgariUcret: Decimal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DonemselKurumDegerleri {
@@ -410,6 +450,11 @@ pub struct DonemselKurumDegerleri {
         alias = "sgkYemekIstisnasiGunluk"
     )]
     pub gunlukYemekIstisnasiSGK: Option<Decimal>,
+    /// Gelir vergisi yemek istisnası SGK istisnasından bağımsız tutulur.
+    pub gunlukYemekIstisnasiGV: Option<Decimal>,
+    /// Yalnız bu açık/gelecek 15-14 dönemi içinde geçerli değişiklikler.
+    /// Genel tarihsel mevzuat arşivi değildir.
+    pub statutoryParameterSegments: Option<Vec<StatutoryParameterSegment>>,
     pub pekTavanKatsayisi: Option<Decimal>,
     pub gunlukAsgariUcret: Option<Decimal>,
 
@@ -470,6 +515,8 @@ impl Default for DonemselKurumDegerleri {
             besOraniYuzde: Some(dec!(3)),
             sabitBesTutar: Some(dec!(0)),
             gunlukYemekIstisnasiSGK: Some(dec!(300.00)),
+            gunlukYemekIstisnasiGV: Some(dec!(300.00)),
+            statutoryParameterSegments: None,
             pekTavanKatsayisi: Some(dec!(9)),
             gunlukAsgariUcret: Some(dec!(1101.00)),
             sgkIsverenOraniYuzde: Some(dec!(21.75)),

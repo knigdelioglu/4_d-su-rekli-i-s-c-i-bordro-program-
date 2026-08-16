@@ -1,7 +1,7 @@
 use crate::domain::models::SickLeaveRecord;
 use crate::domain::{DomainError, Result};
 use chrono::NaiveDate;
-use rusqlite::{params, Connection, Row};
+use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct SickLeaveRepository;
 
@@ -32,6 +32,45 @@ impl SickLeaveRepository {
         Ok(())
     }
 
+    fn validate_no_overlap(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
+        let overlap = conn
+            .query_row(
+                r#"
+                SELECT id, start_date, end_date
+                FROM sick_leave_records
+                WHERE personnel_id = ?1
+                  AND id <> ?2
+                  AND start_date <= ?4
+                  AND end_date >= ?3
+                ORDER BY start_date ASC, end_date ASC, id ASC
+                LIMIT 1
+                "#,
+                params![
+                    record.personnelId,
+                    record.id,
+                    record.startDate,
+                    record.endDate,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if let Some((id, start, end)) = overlap {
+            return Err(DomainError::ValidationError(format!(
+                "Rapor tarihleri çakışıyor: {}–{} aralığı, {} kaydındaki {}–{} aralığıyla örtüşüyor. Örtüşen raporlar ayrı episode olarak kaydedilemez.",
+                record.startDate, record.endDate, id, start, end
+            )));
+        }
+        Ok(())
+    }
+
     fn from_row(row: &Row) -> rusqlite::Result<SickLeaveRecord> {
         Ok(SickLeaveRecord {
             id: row.get(0)?,
@@ -45,6 +84,7 @@ impl SickLeaveRepository {
 
     pub fn save(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         Self::validate_record(record)?;
+        Self::validate_no_overlap(conn, record)?;
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
         let updated_at = &now;

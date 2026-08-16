@@ -110,6 +110,11 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
     isPrimiGruplari: activeKurumDegerleri.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI,
     tediyeListesi: sanitizeTediyeList(activeKurumDegerleri.tediyeListesi),
     tisIkramiyeListesi: activeKurumDegerleri.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI,
+    gunlukYemekIstisnasiGV:
+      activeKurumDegerleri.gunlukYemekIstisnasiGV ??
+      activeKurumDegerleri.gunlukYemekIstisnasiSGK ??
+      DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
+    statutoryParameterSegments: activeKurumDegerleri.statutoryParameterSegments || [],
   });
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [isGrupModalOpen, setIsGrupModalOpen] = useState<boolean>(false);
@@ -174,6 +179,11 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       isPrimiGruplari: active.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI,
       tediyeListesi: sanitizeTediyeList(active.tediyeListesi),
       tisIkramiyeListesi: active.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI,
+      gunlukYemekIstisnasiGV:
+        active.gunlukYemekIstisnasiGV ??
+        active.gunlukYemekIstisnasiSGK ??
+        DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
+      statutoryParameterSegments: active.statutoryParameterSegments || [],
     });
   }, [aktifDonemId, kurumDegerleriMap]);
 
@@ -190,6 +200,38 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
   useEffect(() => {
     setZamAylariForm([...zamAylari].sort((a, b) => a - b));
   }, [zamAylari]);
+
+  const activePeriodForParams = donemler.find((period) => period.id === aktifDonemId);
+  const addStatutorySegment = () => {
+    const current = paramsForm.statutoryParameterSegments || [];
+    setParamsForm({
+      ...paramsForm,
+      statutoryParameterSegments: [
+        ...current,
+        {
+          effectiveFrom: activePeriodForParams?.baslangicTarihi || '',
+        },
+      ],
+    });
+  };
+  const updateStatutorySegment = (
+    index: number,
+    field: 'effectiveFrom' | 'gunlukAsgariUcret' | 'pekTavanKatsayisi' | 'gunlukYemekIstisnasiSGK' | 'gunlukYemekIstisnasiGV',
+    value: string | number | undefined
+  ) => {
+    setParamsForm({
+      ...paramsForm,
+      statutoryParameterSegments: (paramsForm.statutoryParameterSegments || []).map((segment, i) =>
+        i === index ? { ...segment, [field]: value } : segment
+      ),
+    });
+  };
+  const removeStatutorySegment = (index: number) => {
+    setParamsForm({
+      ...paramsForm,
+      statutoryParameterSegments: (paramsForm.statutoryParameterSegments || []).filter((_, i) => i !== index),
+    });
+  };
 
   // Preview generated dates
   const previewDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
@@ -231,6 +273,9 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
       sgkIsverenOraniYuzde: paramsForm.sgkIsverenOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.sgkIsverenOraniYuzde,
       issizlikIsverenOraniYuzde: paramsForm.issizlikIsverenOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.issizlikIsverenOraniYuzde,
       gunlukYemekIstisnasiSGK: paramsForm.gunlukYemekIstisnasiSGK ?? DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiSGK,
+      gunlukYemekIstisnasiGV:
+        paramsForm.gunlukYemekIstisnasiGV ?? DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
+      statutoryParameterSegments: paramsForm.statutoryParameterSegments || [],
       pekTavanKatsayisi: paramsForm.pekTavanKatsayisi ?? DEFAULT_KURUM_DEGERLERI.pekTavanKatsayisi,
       gunlukAsgariUcret: paramsForm.gunlukAsgariUcret ?? DEFAULT_KURUM_DEGERLERI.gunlukAsgariUcret,
     };
@@ -1165,7 +1210,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                   <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3 flex items-center gap-1.5">
                     <span>SGK Prime Esas Kazanç (PEK) Parametreleri (2026)</span>
                   </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1">
                         Günlük SGK Yemek İstisnası (TL)
@@ -1184,6 +1229,27 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                       />
                       <span className="text-[11px] text-slate-500 mt-0.5 block">
                         2026-08 dönemi için 300,00 TL (17.04.2026 sonrası)
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Günlük GV Yemek İstisnası (TL)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={paramsForm.gunlukYemekIstisnasiGV ?? ''}
+                        onChange={(e) =>
+                          setParamsForm({
+                            ...paramsForm,
+                            gunlukYemekIstisnasiGV: parseFloat(e.target.value) || 0,
+                          })
+                        }
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <span className="text-[11px] text-slate-500 mt-0.5 block">
+                        Gelir vergisi istisnası SGK limitinden bağımsızdır.
                       </span>
                     </div>
 
@@ -1228,6 +1294,78 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                         PEK Alt Sınırı = 1.101,00 TL (30 gün = 33.030 TL)
                       </span>
                     </div>
+                  </div>
+
+                  <div className="mt-4 pt-4 border-t border-slate-200 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h5 className="text-xs font-bold text-slate-900">Dönem İçi Yasal Parametre Değişimleri</h5>
+                        <p className="text-[11px] text-slate-600 mt-1">
+                          Yalnız aktif/gelecek {activePeriodForParams?.baslangicTarihi}–{activePeriodForParams?.bitisTarihi}
+                          dönemi içindeki yürürlük değişimlerini girin. Bu alan geçmiş mevzuat arşivi oluşturmaz.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={addStatutorySegment}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 text-xs font-semibold flex items-center gap-1 shrink-0"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Segment Ekle
+                      </button>
+                    </div>
+
+                    {(paramsForm.statutoryParameterSegments || []).map((segment, index) => (
+                      <div key={`${segment.effectiveFrom}-${index}`} className="border border-indigo-200 bg-indigo-50/50 rounded-xl p-3 space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-indigo-900">Segment {index + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeStatutorySegment(index)}
+                            className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-100"
+                            title="Segmenti kaldır"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">Yürürlük Tarihi</label>
+                            <input
+                              type="date"
+                              min={activePeriodForParams?.baslangicTarihi}
+                              max={activePeriodForParams?.bitisTarihi}
+                              value={segment.effectiveFrom}
+                              onChange={(e) => updateStatutorySegment(index, 'effectiveFrom', e.target.value)}
+                              className="w-full px-2 py-2 bg-white border border-slate-300 rounded-lg text-xs"
+                            />
+                          </div>
+                          {[
+                            ['gunlukAsgariUcret', 'Günlük Asgari'],
+                            ['pekTavanKatsayisi', 'PEK Katsayı'],
+                            ['gunlukYemekIstisnasiSGK', 'SGK Yemek'],
+                            ['gunlukYemekIstisnasiGV', 'GV Yemek'],
+                          ].map(([field, label]) => (
+                            <div key={field}>
+                              <label className="block text-[11px] font-semibold text-slate-700 mb-1">{label}</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={(segment as any)[field] ?? ''}
+                                placeholder="Değişmiyor"
+                                onChange={(e) =>
+                                  updateStatutorySegment(
+                                    index,
+                                    field as 'gunlukAsgariUcret' | 'pekTavanKatsayisi' | 'gunlukYemekIstisnasiSGK' | 'gunlukYemekIstisnasiGV',
+                                    e.target.value === '' ? undefined : Number(e.target.value)
+                                  )
+                                }
+                                className="w-full px-2 py-2 bg-white border border-slate-300 rounded-lg text-xs font-mono"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>

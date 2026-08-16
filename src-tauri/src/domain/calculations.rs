@@ -640,7 +640,7 @@ pub fn calculate_prime_esas_kazanc(
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     devreden_pek_gelen: &[DevredenPekKaydi],
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
-    calculate_prime_esas_kazanc_with_prim_gun_sayisi(
+    calculate_prime_esas_kazanc_with_statutory_snapshot(
         gelirler,
         puantaj_ozeti,
         kurum_degerleri,
@@ -649,24 +649,29 @@ pub fn calculate_prime_esas_kazanc(
     )
 }
 
-fn calculate_prime_esas_kazanc_with_prim_gun_sayisi(
+fn calculate_prime_esas_kazanc_with_statutory_snapshot(
     gelirler: &GelirKalemleri,
     puantaj_ozeti: Option<&PuantajOzeti>,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     devreden_pek_gelen: &[DevredenPekKaydi],
-    sgk_prim_gun_sayisi: Option<i32>,
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
     let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
-    let prim_gun_sayisi = sgk_prim_gun_sayisi.unwrap_or(raw_prim_gun).clamp(0, 30);
+    let prim_gun_sayisi = statutory_snapshot
+        .map_or(raw_prim_gun, |snapshot| snapshot.sgkPrimGunSayisi)
+        .clamp(0, 30);
     let fiili_yemek_gunu = puantaj_ozeti.map_or(0, |p| p.c + p.gc);
 
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
-    let gunluk_yemek_istisnasi = k.gunlukYemekIstisnasiSGK.unwrap_or(dec!(300.00));
     let brut_yemek = gelirler.yemek.unwrap_or(dec!(0));
-    let yemek_istisnasi_tutar =
-        brut_yemek.min(gunluk_yemek_istisnasi * Decimal::from(fiili_yemek_gunu));
+    let yemek_istisnasi_tutar = if let Some(snapshot) = statutory_snapshot {
+        brut_yemek.min(snapshot.sgkYemekIstisnasiToplam)
+    } else {
+        let gunluk_yemek_istisnasi = k.gunlukYemekIstisnasiSGK.unwrap_or(dec!(300.00));
+        brut_yemek.min(gunluk_yemek_istisnasi * Decimal::from(fiili_yemek_gunu))
+    };
     let sgk_tabi_yemek = (brut_yemek - yemek_istisnasi_tutar).max(dec!(0));
 
     let vasita_yol = gelirler.vasitaYol.unwrap_or(dec!(0));
@@ -695,10 +700,16 @@ fn calculate_prime_esas_kazanc_with_prim_gun_sayisi(
     let ucret_disi_odemeler = tediye + tis_ikramiyesi + ek_odeme + is_primi;
     let ham_pek = ucretler + ucret_disi_odemeler;
 
-    let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
-    let pek_alt_sinir = round2(gunluk_asgari * Decimal::from(prim_gun_sayisi));
-    let tavan_katsayi = k.pekTavanKatsayisi.unwrap_or(dec!(9));
-    let pek_ust_sinir = round2(gunluk_asgari * tavan_katsayi * Decimal::from(prim_gun_sayisi));
+    let (pek_alt_sinir, pek_ust_sinir) = if let Some(snapshot) = statutory_snapshot {
+        (snapshot.pekAltSinir, snapshot.pekUstSinir)
+    } else {
+        let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
+        let tavan_katsayi = k.pekTavanKatsayisi.unwrap_or(dec!(9));
+        (
+            round2(gunluk_asgari * Decimal::from(prim_gun_sayisi)),
+            round2(gunluk_asgari * tavan_katsayi * Decimal::from(prim_gun_sayisi)),
+        )
+    };
 
     let mut pek_matrah_adayi = ham_pek;
     let mut eklenecek_devreden_toplam = dec!(0);
@@ -811,29 +822,29 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
     personel: Option<&Personel>,
     puantaj_ozeti: Option<&PuantajOzeti>,
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
-    sgk_prim_gun_sayisi: Option<i32>,
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
     let brut_gelir = calculate_gelir_toplam(gelirler);
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     if brut_gelir <= dec!(0) {
-        let (pek_detay, sonraki) = calculate_prime_esas_kazanc_with_prim_gun_sayisi(
+        let (pek_detay, sonraki) = calculate_prime_esas_kazanc_with_statutory_snapshot(
             gelirler,
             puantaj_ozeti,
             kurum_degerleri,
             tax_inputs.incoming_devreden_pek,
-            sgk_prim_gun_sayisi,
+            statutory_snapshot,
         );
         return (KesintiKalemleri::default(), pek_detay, sonraki);
     }
 
-    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_prim_gun_sayisi(
+    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_statutory_snapshot(
         gelirler,
         puantaj_ozeti,
         kurum_degerleri,
         tax_inputs.incoming_devreden_pek,
-        sgk_prim_gun_sayisi,
+        statutory_snapshot,
     );
     // İşçi SGK ve işsizlik primi, cari ay PEK'ine fiilen eklenen devreden tutarı da
     // içerir. Alt sınır tamamlama farkı ise yalnız işveren sorumluluğudur ve bu

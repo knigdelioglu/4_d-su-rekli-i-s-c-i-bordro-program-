@@ -185,6 +185,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -225,6 +226,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -282,6 +284,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -344,6 +347,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -2192,6 +2196,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: Some(gv_detay),
+            statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
@@ -2661,6 +2666,7 @@ mod tests {
                 pekDetay: None,
                 isPrimiDetay: None,
                 gvDetay: Some(gv_detay),
+                statutorySnapshot: None,
                 odenenRaporluGun: None,
                 raporluGun: None,
             };
@@ -2725,6 +2731,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         }

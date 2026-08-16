@@ -5,6 +5,15 @@
 **Kapsam:** 4/D bordro hesaplama motoru, bordro ledger bütünlüğü ve kritik backend invariantları  
 **Temel ürün kararı:** Uygulama geçmiş dönem bordrolarını yeniden üretmeyecek ve eski mevzuatı tarihsel bir kural arşivi olarak modellemeyecek.
 
+### Uygulama durumu — 16 Ağustos 2026
+
+- ✅ Faz 1 — Devreden PEK işçi prim matrahı tamamlandı.
+- ✅ Faz 2 — Puantaj tarih/dönem invariantı tamamlandı.
+- ✅ Faz 3 — Kümülatif GV / STALE / FINALIZED zinciri tamamlandı.
+- ✅ Faz 4 — Örtüşen rapor kayıtları write path'te fail-closed reddediliyor; adjacency ayrı episode olarak kalıyor.
+- ✅ Faz 5 — Period-local effective-date segmentleri, bağımsız SGK/GV yemek istisnaları ve resolved statutory snapshot tamamlandı.
+- ⏳ Faz 6–11 bu planın kalan işleri olarak devam ediyor.
+
 ---
 
 ## 1. Amaç

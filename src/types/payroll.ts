@@ -197,6 +197,35 @@ export interface TisIkramiyeKalemi {
   sabitTutar?: number;
 }
 
+export interface StatutoryParameterSegment {
+  effectiveFrom: string; // YYYY-MM-DD, active period inclusive
+  gunlukAsgariUcret?: number;
+  pekTavanKatsayisi?: number;
+  gunlukYemekIstisnasiSGK?: number;
+  gunlukYemekIstisnasiGV?: number;
+}
+
+export interface ResolvedStatutorySegmentSnapshot {
+  effectiveFrom: string;
+  effectiveTo: string;
+  sgkPrimGunSayisi: number;
+  fiiliYemekGunu: number;
+  gunlukAsgariUcret: number;
+  pekTavanKatsayisi: number;
+  gunlukYemekIstisnasiSGK: number;
+  gunlukYemekIstisnasiGV: number;
+}
+
+export interface ResolvedStatutorySnapshot {
+  segments: ResolvedStatutorySegmentSnapshot[];
+  sgkPrimGunSayisi: number;
+  pekAltSinir: number;
+  pekUstSinir: number;
+  sgkYemekIstisnasiToplam: number;
+  gvYemekIstisnasiToplam: number;
+  gvReferansGunlukAsgariUcret: number;
+}
+
 export interface DönemselKurumDegerleri {
   donemId: string;
   gunlukTabanUcret: number;
@@ -225,6 +254,8 @@ export interface DönemselKurumDegerleri {
   sabitBesTutar?: number;
 
   gunlukYemekIstisnasiSGK?: number;
+  gunlukYemekIstisnasiGV?: number;
+  statutoryParameterSegments?: StatutoryParameterSegment[];
   pekTavanKatsayisi?: number;
   gunlukAsgariUcret?: number;
 
@@ -348,6 +379,7 @@ export interface BordroKaydi {
   pekDetay?: PekDetayi;
   isPrimiDetay?: IsPrimiHesapDetayi;
   gvDetay?: GvHesapDetayi;
+  statutorySnapshot?: ResolvedStatutorySnapshot;
   odenenRaporluGun?: number;
   raporluGun?: number;
 }

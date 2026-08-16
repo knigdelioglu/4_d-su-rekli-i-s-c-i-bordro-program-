@@ -1,6 +1,7 @@
 use crate::domain::models::*;
 use crate::domain::Result;
-use chrono::Utc;
+use crate::repositories::period_repo::PeriodRepository;
+use chrono::{NaiveDate, Utc};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use std::collections::{BTreeSet, HashMap};
 
@@ -31,6 +32,11 @@ impl SettingsRepository {
                 ))
             })?;
         value.donemId = period_id.to_string();
+        // Legacy settings stored a single meal exemption value. Preserve old data by
+        // copying it once into the new, independent GV field; new saves persist both.
+        if value.gunlukYemekIstisnasiGV.is_none() {
+            value.gunlukYemekIstisnasiGV = value.gunlukYemekIstisnasiSGK;
+        }
         Ok(value)
     }
 
@@ -110,9 +116,111 @@ impl SettingsRepository {
         Ok(result)
     }
 
+    pub fn validate_statutory_segments_for_period(
+        period: &BordroDonemi,
+        k: &DonemselKurumDegerleri,
+    ) -> Result<()> {
+        PeriodRepository::validate_period(period)?;
+        if k.donemId != period.id {
+            return Err(crate::domain::DomainError::ValidationError(format!(
+                "Kurum ayarı dönem kimliği eşleşmiyor: {} / {}.",
+                k.donemId, period.id
+            )));
+        }
+
+        let start =
+            NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+                crate::domain::DomainError::ValidationError(format!(
+                    "Dönem başlangıç tarihi geçersiz: {}.",
+                    period.baslangicTarihi
+                ))
+            })?;
+        let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
+            crate::domain::DomainError::ValidationError(format!(
+                "Dönem bitiş tarihi geçersiz: {}.",
+                period.bitisTarihi
+            ))
+        })?;
+
+        let mut previous_date: Option<NaiveDate> = None;
+        for segment in k.statutoryParameterSegments.as_deref().unwrap_or(&[]) {
+            let effective =
+                NaiveDate::parse_from_str(&segment.effectiveFrom, "%Y-%m-%d").map_err(|_| {
+                    crate::domain::DomainError::ValidationError(format!(
+                        "Yasal parametre segment tarihi geçersiz: {}.",
+                        segment.effectiveFrom
+                    ))
+                })?;
+            if effective < start || effective > end {
+                return Err(crate::domain::DomainError::ValidationError(format!(
+                    "Yasal parametre segment tarihi {} dönemin dışında ({}–{}).",
+                    segment.effectiveFrom, period.baslangicTarihi, period.bitisTarihi
+                )));
+            }
+            if previous_date.is_some_and(|previous| effective <= previous) {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Yasal parametre segmentleri strictly artan tarihte ve tekrarsız olmalıdır."
+                        .into(),
+                ));
+            }
+            previous_date = Some(effective);
+
+            if segment.gunlukAsgariUcret.is_none()
+                && segment.pekTavanKatsayisi.is_none()
+                && segment.gunlukYemekIstisnasiSGK.is_none()
+                && segment.gunlukYemekIstisnasiGV.is_none()
+            {
+                return Err(crate::domain::DomainError::ValidationError(format!(
+                    "{} tarihli yasal parametre segmentinde en az bir override bulunmalıdır.",
+                    segment.effectiveFrom
+                )));
+            }
+            if segment
+                .gunlukAsgariUcret
+                .is_some_and(|value| value <= rust_decimal::Decimal::ZERO)
+            {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Segment günlük asgari ücret değeri sıfırdan büyük olmalıdır.".into(),
+                ));
+            }
+            if segment
+                .pekTavanKatsayisi
+                .is_some_and(|value| value < rust_decimal::Decimal::ONE)
+            {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Segment PEK tavan katsayısı en az 1 olmalıdır.".into(),
+                ));
+            }
+            if segment
+                .gunlukYemekIstisnasiSGK
+                .is_some_and(|value| value < rust_decimal::Decimal::ZERO)
+                || segment
+                    .gunlukYemekIstisnasiGV
+                    .is_some_and(|value| value < rust_decimal::Decimal::ZERO)
+            {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Segment yemek istisnası negatif olamaz.".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn save_institution_settings(conn: &Connection, k: &DonemselKurumDegerleri) -> Result<()> {
+        let period = PeriodRepository::get_by_id(conn, &k.donemId)?.ok_or_else(|| {
+            crate::domain::DomainError::ValidationError(format!(
+                "Kurum ayarı için bordro dönemi bulunamadı: {}.",
+                k.donemId
+            ))
+        })?;
+        let mut normalized = k.clone();
+        if normalized.gunlukYemekIstisnasiGV.is_none() {
+            normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
+        }
+        Self::validate_statutory_segments_for_period(&period, &normalized)?;
+
         let now = Utc::now().to_rfc3339();
-        let json_str = serde_json::to_string(k)
+        let json_str = serde_json::to_string(&normalized)
             .map_err(|e| crate::domain::DomainError::InvalidData(e.to_string()))?;
 
         conn.execute(

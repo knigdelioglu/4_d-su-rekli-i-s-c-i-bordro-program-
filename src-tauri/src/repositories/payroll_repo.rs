@@ -442,7 +442,7 @@ impl PayrollRepository {
                         total_deductions, net_payment, status, puantaj_summary_json,
                         pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                         calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
-                        is_primi_snapshot_json, gv_snapshot_json, notlar
+                        is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json, notlar
                  FROM payroll_records ORDER BY calculated_at ASC, id ASC",
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -469,6 +469,7 @@ impl PayrollRepository {
                     row.get::<_, Option<String>>(21)?,
                     row.get::<_, Option<String>>(22)?,
                     row.get::<_, Option<String>>(23)?,
+                    row.get::<_, Option<String>>(24)?,
                 ))
             })
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -542,6 +543,7 @@ impl PayrollRepository {
             odenen_raporlu_gun,
             is_primi_snapshot_json,
             gv_snapshot_json,
+            statutory_snapshot_json,
             notlar,
         ) in raw_records
         {
@@ -568,6 +570,10 @@ impl PayrollRepository {
             let gv_detay = Self::parse_optional_json(
                 gv_snapshot_json.as_deref(),
                 &format!("{} GV snapshot'ı", id),
+            )?;
+            let statutory_snapshot = Self::parse_optional_json(
+                statutory_snapshot_json.as_deref(),
+                &format!("{} yasal parametre snapshot'ı", id),
             )?;
             let gelirler = income_by_payroll.remove(&id).unwrap_or_default();
             let kesintiler = deductions_by_payroll.remove(&id).unwrap_or_default();
@@ -597,6 +603,7 @@ impl PayrollRepository {
                 pekDetay: pek_detay,
                 isPrimiDetay: is_primi_detay,
                 gvDetay: gv_detay,
+                statutorySnapshot: statutory_snapshot,
                 odenenRaporluGun: odenen_raporlu_gun,
                 raporluGun: raporlu_gun,
             });
@@ -674,21 +681,26 @@ impl PayrollRepository {
         let is_primi_snapshot_json =
             Self::serialize_optional_json(b.isPrimiDetay.as_ref(), "İş primi snapshot'ı")?;
         let gv_snapshot_json = Self::serialize_optional_json(b.gvDetay.as_ref(), "GV snapshot'ı")?;
+        let statutory_snapshot_json = Self::serialize_optional_json(
+            b.statutorySnapshot.as_ref(),
+            "Yasal parametre snapshot'ı",
+        )?;
 
         conn.execute(
             "INSERT INTO payroll_records (
                 id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                 new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
-                raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json, notlar,
-                calculated_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json,
+                statutory_snapshot_json, notlar, calculated_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
              ON CONFLICT(personnel_id, period_id) DO UPDATE SET
                 gross_total=?4, sgk_base=?5, gv_base=?6, previous_cumulative_gv=?7, new_cumulative_gv=?8,
                 income_tax=?9, stamp_tax=?10, total_deductions=?11, net_payment=?12, status=?13,
                 puantaj_summary_json=?14, pek_detail_json=?15, devreden_pek_gelen_json=?16,
                 sonraki_devreden_pek_json=?17, raporlu_gun=?18, odenen_raporlu_gun=?19,
-                is_primi_snapshot_json=?20, gv_snapshot_json=?21, notlar=?22, updated_at=?24",
+                is_primi_snapshot_json=?20, gv_snapshot_json=?21, statutory_snapshot_json=?22,
+                notlar=?23, updated_at=?25",
             params![
                 b.id,
                 b.personelId,
@@ -711,6 +723,7 @@ impl PayrollRepository {
                 b.odenenRaporluGun,
                 is_primi_snapshot_json,
                 gv_snapshot_json,
+                statutory_snapshot_json,
                 b.notlar,
                 now,
                 now,

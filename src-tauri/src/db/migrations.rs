@@ -230,6 +230,11 @@ pub fn get_migrations() -> Migrations<'static> {
             );
             "#,
         ),
+        M::up(
+            r#"
+            ALTER TABLE payroll_records ADD COLUMN statutory_snapshot_json TEXT;
+            "#,
+        ),
     ])
 }
 
@@ -332,6 +337,7 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
         ("odenen_raporlu_gun", "INTEGER"),
         ("is_primi_snapshot_json", "TEXT"),
         ("gv_snapshot_json", "TEXT"),
+        ("statutory_snapshot_json", "TEXT"),
         ("notlar", "TEXT"),
     ] {
         add_column_if_missing(

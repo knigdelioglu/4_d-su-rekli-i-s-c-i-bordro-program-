@@ -119,6 +119,7 @@ fn payroll(
         pekDetay: Some(pek_detay(final_pek)),
         isPrimiDetay: None,
         gvDetay: Some(gv_detay(gv_base, previous_gv)),
+        statutorySnapshot: None,
         odenenRaporluGun: None,
         raporluGun: None,
     }

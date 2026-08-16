@@ -102,7 +102,9 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   sabitBesTutar: 0,
 
   // 2026 SGK PEK (Prime Esas Kazanç) Varsayılan Parametreleri
-  gunlukYemekIstisnasiSGK: 300.00, // 2026-08 (17.04.2026 sonrası) Günlük SGK yemek istisnası = 300 TL
+  gunlukYemekIstisnasiSGK: 300.00, // Dönem baseline değeri; mevzuat değişimi segment ile girilebilir.
+  gunlukYemekIstisnasiGV: 300.00, // SGK'dan bağımsız GV yemek istisnası baseline değeri.
+  statutoryParameterSegments: [],
   pekTavanKatsayisi: 9, // 2026 PEK Tavan Katsayısı = 9
   gunlukAsgariUcret: 1101.00, // 2026 Günlük Brüt Asgari Ücret (TL) - PEK Alt Sınır Birimi
 
