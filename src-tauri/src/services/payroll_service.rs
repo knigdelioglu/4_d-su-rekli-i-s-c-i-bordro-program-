@@ -190,15 +190,16 @@ impl PayrollService {
             split_puantaj_by_zam_tarihi(&attendance, &period, &zam_aylari)?;
         let mut effective_kurum_degerleri = kurum_degerleri.clone();
 
-        let annual_parameters =
-            AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?.ok_or_else(
-                || {
-                    DomainError::InvalidData(format!(
-                        "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
-                        period.taxYear
-                    ))
-                },
-            )?;
+        let annual_parameters = AnnualPayrollParametersRepository::get_by_year(
+            conn,
+            period.taxYear,
+        )?
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} vergi yılı yıllık bordro parametreleri bulunamadı; bordro hesaplanamaz.",
+                period.taxYear
+            ))
+        })?;
 
         let (mut gelirler, mut is_primi_detay) = auto_fill_gelirler_from_puantaj(
             &summary,
