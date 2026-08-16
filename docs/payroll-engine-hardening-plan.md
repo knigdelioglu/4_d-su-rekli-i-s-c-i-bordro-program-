@@ -12,7 +12,8 @@
 - ✅ Faz 3 — Kümülatif GV / STALE / FINALIZED zinciri tamamlandı.
 - ✅ Faz 4 — Örtüşen rapor kayıtları write path'te fail-closed reddediliyor; adjacency ayrı episode olarak kalıyor.
 - ✅ Faz 5 — Period-local effective-date segmentleri, bağımsız SGK/GV yemek istisnaları ve resolved statutory snapshot tamamlandı.
-- ⏳ Faz 6–11 bu planın kalan işleri olarak devam ediyor.
+- ✅ Faz 6–10 — kalan P1 hardening işleri tamamlandı.
+- 🧪 Faz 11 — Tediye/TİS manuel-only akışı uygulandı; final test/CI doğrulaması bekliyor.
 
 ---
 
@@ -515,7 +516,7 @@ Kalan borcun sonraki aya devri gerekiyorsa bu ayrı bir debt/remaining-balance m
 
 ---
 
-## Faz 11 — P2: Tediye ve TİS'i manuel ürün kararına hizala
+## Faz 11 — P2: Tediye ve TİS'i manuel ürün kararına hizala [UYGULANDI — TEST BEKLİYOR]
 
 ### Mevcut sorun
 

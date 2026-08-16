@@ -190,6 +190,15 @@ pub struct GelirKalemleri {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct ManualPayrollIncomeInput {
+    /// Tediye tutarı kullanıcı tarafından kişi+dönem bazında girilir.
+    pub tediye: Option<Decimal>,
+    /// TİS ikramiyesi tutarı kullanıcı tarafından kişi+dönem bazında girilir.
+    pub tisIkramiyesi: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct KesintiKalemleri {
     pub isciSgkPrimi: Option<Decimal>,
     pub isciIssizlikPrimi: Option<Decimal>,

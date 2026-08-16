@@ -357,6 +357,38 @@ fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
     SettingsRepository::normalize_zam_aylari(&months)
 }
 
+fn validate_manual_payroll_income_input(input: &ManualPayrollIncomeInput) -> Result<()> {
+    for (field, value) in [
+        ("tediye", input.tediye),
+        ("tisIkramiyesi", input.tisIkramiyesi),
+    ] {
+        if value.is_some_and(|amount| amount < Decimal::ZERO) {
+            return Err(DomainError::ValidationError(format!(
+                "Manuel {} tutarı negatif olamaz.",
+                field
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn apply_manual_payroll_income(
+    gelirler: &mut GelirKalemleri,
+    input: Option<&ManualPayrollIncomeInput>,
+) -> Result<()> {
+    if let Some(input) = input {
+        validate_manual_payroll_income_input(input)?;
+        gelirler.tediye = input.tediye.map(|value| value.round_dp(2));
+        gelirler.tisIkramiyesi = input.tisIkramiyesi.map(|value| value.round_dp(2));
+    } else {
+        // Manual-only contract: an omitted input means no Tediye/TİS amount.
+        // Never fall back to period-level day × wage formulas.
+        gelirler.tediye = None;
+        gelirler.tisIkramiyesi = None;
+    }
+    Ok(())
+}
+
 pub struct PayrollService;
 
 impl PayrollService {
@@ -365,6 +397,23 @@ impl PayrollService {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<BordroKaydi> {
+        Self::calculate_payroll_for_personnel_with_manual_income(
+            conn,
+            personnel_id,
+            period_id,
+            None,
+        )
+    }
+
+    pub fn calculate_payroll_for_personnel_with_manual_income(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+    ) -> Result<BordroKaydi> {
+        if let Some(input) = manual_income {
+            validate_manual_payroll_income_input(input)?;
+        }
         let personel = PersonnelRepository::get_by_id(conn, personnel_id)?.ok_or_else(|| {
             DomainError::NotFound(format!("Personel bulunamadı: {}", personnel_id))
         })?;
@@ -438,6 +487,7 @@ impl PayrollService {
             personel.hizmetYili,
             Some(&personel.grup),
         )?;
+        apply_manual_payroll_income(&mut gelirler, manual_income)?;
 
         if let Some(cutoff) = zam_tarihi {
             let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?

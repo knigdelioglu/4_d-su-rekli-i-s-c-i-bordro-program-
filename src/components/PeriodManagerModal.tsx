@@ -460,7 +460,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                 Bordro Dönemi ve Kurum Değerleri
               </h3>
               <p className="text-xs text-slate-400">
-                15 - 14 Tarih aralıkları, dönemsel parametreler, Tediye ve TİS ikramiyeleri
+                15 - 14 tarih aralıkları, dönemsel parametreler ve Tediye/TİS referans takvimi
               </p>
             </div>
           </div>
@@ -1406,6 +1406,12 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
           {/* TAB 2: Tediye & TİS İkramiyeleri Tab */}
           {activeTab === 'tediyeTis' && (
             <form onSubmit={handleSaveParams} className="space-y-6">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 text-xs text-indigo-950 leading-relaxed">
+                <strong className="block mb-1">Manuel bordro girdisi</strong>
+                Bu sekmedeki Tediye/TİS listeleri yalnız referans takvim ve açıklama amacıyla korunur.
+                Bordro motoru buradaki gün sayısı, aktiflik veya sabit tutardan otomatik ödeme üretmez.
+                Gerçek brüt Tediye ve TİS ikramiyesi tutarını Bordro Hesaplama ekranında her personel için manuel girin.
+              </div>
               {/* Note banner (Editable) */}
               <div className="bg-amber-50/90 border border-amber-200 rounded-2xl p-4 space-y-2">
                 <div className="flex items-center justify-between">
@@ -1433,7 +1439,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
               {savedSuccess && (
                 <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
                   <Check className="w-4 h-4 text-emerald-600" />
-                  <span>Tediye ve TİS ikramiye ayarları başarıyla kaydedildi!</span>
+                  <span>Tediye ve TİS referans ayarları başarıyla kaydedildi!</span>
                 </div>
               )}
 
@@ -1460,9 +1466,6 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {(paramsForm.tediyeListesi || DEFAULT_TEDIYE_LISTESI).map((t) => {
-                    const calculatedAmount = t.sabitTutar && t.sabitTutar > 0
-                      ? t.sabitTutar
-                      : (t.gunSayisi || 13) * (paramsForm.gunlukTabanUcret || 0);
 
                     return (
                       <div
@@ -1500,7 +1503,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                               {t.aktifDonemdeOdensin ? (
                                 <>
                                   <Check className="w-3 h-3" />
-                                  <span>Ödeniyor</span>
+                                  <span>Referans aktif</span>
                                 </>
                               ) : (
                                 <span>Pasif</span>
@@ -1558,10 +1561,8 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                         </div>
 
                         <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                          <span className="text-slate-500">Tediye Brüt Tutar:</span>
-                          <span className="font-bold font-mono text-amber-900">
-                            {formatTL(calculatedAmount)}
-                          </span>
+                          <span className="text-slate-500">Bordro tutarı:</span>
+                          <span className="font-bold text-amber-900">Personel bazında manuel girilir</span>
                         </div>
                       </div>
                     );
@@ -1594,9 +1595,6 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                   {(
                     paramsForm.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI
                   ).map((tis) => {
-                    const calculatedAmount = tis.sabitTutar && tis.sabitTutar > 0
-                      ? tis.sabitTutar
-                      : (tis.gunSayisi || 0) * (paramsForm.gunlukTabanUcret || 0);
 
                     return (
                       <div
@@ -1634,7 +1632,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                               {tis.aktifDonemdeOdensin ? (
                                 <>
                                   <Check className="w-3 h-3" />
-                                  <span>Ödeniyor</span>
+                                  <span>Referans aktif</span>
                                 </>
                               ) : (
                                 <span>Pasif</span>
@@ -1694,10 +1692,8 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                         </div>
 
                         <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
-                          <span className="text-slate-500">TİS İkramiye Brüt Tutar:</span>
-                          <span className="font-bold font-mono text-indigo-900">
-                            {formatTL(calculatedAmount)}
-                          </span>
+                          <span className="text-slate-500">Bordro tutarı:</span>
+                          <span className="font-bold text-indigo-900">Personel bazında manuel girilir</span>
                         </div>
                       </div>
                     );
@@ -1712,7 +1708,7 @@ export const PeriodManagerModal: React.FC<PeriodManagerModalProps> = ({
                   className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
                 >
                   <Save className="w-4 h-4" />
-                  <span>Tediye & TİS Ayarlarını Kaydet</span>
+                  <span>Tediye & TİS Referanslarını Kaydet</span>
                 </button>
               </div>
             </form>

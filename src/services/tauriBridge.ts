@@ -8,6 +8,7 @@ import {
   PersonelPuantaj,
   PersonelTaxOpening,
   SickLeaveRecord,
+  ManualPayrollIncomeInput,
 } from '../types/payroll';
 
 // Type-safe IPC invoke helper with window fallback detection
@@ -79,8 +80,16 @@ export const tauriBridge = {
     return invokeTauri<BordroKaydi[]>('get_payroll_list');
   },
 
-  async calculatePayroll(personnelId: string, periodId: string): Promise<BordroKaydi> {
-    return invokeTauri<BordroKaydi>('calculate_payroll', { personnelId, periodId });
+  async calculatePayroll(
+    personnelId: string,
+    periodId: string,
+    manualIncome?: ManualPayrollIncomeInput
+  ): Promise<BordroKaydi> {
+    return invokeTauri<BordroKaydi>('calculate_payroll', {
+      personnelId,
+      periodId,
+      manualIncome: manualIncome ?? null,
+    });
   },
 
   async setPayrollStatus(personnelId: string, periodId: string, status: BordroStatus): Promise<void> {

@@ -720,28 +720,11 @@ pub fn auto_fill_gelirler_from_puantaj(
     let giyim_yardimi = kurum_degerleri.giyimYardimi;
     let hizmet_zammi = round2(Decimal::from(hizmet_yili) * kurum_degerleri.hizmetZammiBirimi);
 
-    let mut tediye: Option<Decimal> = None;
-    if let Some(ref t_list) = kurum_degerleri.tediyeListesi {
-        if let Some(active) = t_list.iter().find(|t| t.aktifDonemdeOdensin) {
-            tediye = Some(match active.sabitTutar {
-                Some(sabit) if sabit > dec!(0) => sabit,
-                _ => round2(Decimal::from(active.gunSayisi) * kurum_degerleri.gunlukTabanUcret),
-            });
-        }
-    }
-
-    let mut tis_ikramiyesi: Option<Decimal> = None;
-    if let Some(ref tis_list) = kurum_degerleri.tisIkramiyeListesi {
-        if let Some(active) = tis_list.iter().find(|t| t.aktifDonemdeOdensin) {
-            tis_ikramiyesi = Some(match active.sabitTutar {
-                Some(sabit) if sabit > dec!(0) => sabit,
-                _ => round2(Decimal::from(active.gunSayisi) * kurum_degerleri.gunlukTabanUcret),
-            });
-        }
-    }
-
-    gelirler.tediye = tediye;
-    gelirler.tisIkramiyesi = tis_ikramiyesi;
+    // Tediye ve TİS ikramiyesi authoritative olarak otomatik üretilmez.
+    // Dönem ayarlarındaki legacy takvim/listeler yalnız referans/migration verisidir;
+    // production bordro yolu kişi+dönem bazındaki ManualPayrollIncomeInput'u uygular.
+    gelirler.tediye = None;
+    gelirler.tisIkramiyesi = None;
     gelirler.ekOdeme = kurum_degerleri.ekOdeme;
     gelirler.birlestirilmisSosyalYardim = Some(birlestirilmis_sosyal_yardim);
     gelirler.giyimYardimi = Some(giyim_yardimi);
