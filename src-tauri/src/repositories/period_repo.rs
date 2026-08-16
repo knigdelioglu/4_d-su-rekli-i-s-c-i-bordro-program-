@@ -1,6 +1,6 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -50,6 +50,45 @@ impl PeriodRepository {
                 "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
             ));
         }
+
+        // Bu uygulamanın authoritative çalışma dönemi 15-14'tür. Serbest tarih
+        // aralığı kabul etmek SGK gün hesabını ve vergi ayı/yılı zincirini belirsiz
+        // hale getirir; invalid state hesap aşamasına kadar yaşayamaz.
+        if start.day() != 15 || end.day() != 14 {
+            return Err(DomainError::ValidationError(format!(
+                "Bordro dönemi 15-14 olmalıdır: {} - {}.",
+                period.baslangicTarihi, period.bitisTarihi
+            )));
+        }
+
+        let (expected_end_year, expected_end_month) = if start.month() == 12 {
+            (start.year() + 1, 1)
+        } else {
+            (start.year(), start.month() + 1)
+        };
+        if end.year() != expected_end_year || end.month() != expected_end_month {
+            return Err(DomainError::ValidationError(format!(
+                "Bordro dönemi başlangıç ayını izleyen ayın 14'ünde bitmelidir: {} - {}.",
+                period.baslangicTarihi, period.bitisTarihi
+            )));
+        }
+
+        if period.yil != start.year() || period.ay != start.month() as i32 {
+            return Err(DomainError::ValidationError(format!(
+                "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
+                period.yil, period.ay, period.baslangicTarihi
+            )));
+        }
+
+        // 15-14 bordroda vergi dönemi kapanış/ödeme ayıdır. Özellikle Aralık-Ocak
+        // geçişinde yanlış taxYear yıllık vergi tarifesini de yanlış seçtirir.
+        if period.taxYear != end.year() || period.taxMonth != end.month() as i32 {
+            return Err(DomainError::ValidationError(format!(
+                "Vergi yılı/ayı dönem bitiş ayıyla uyuşmuyor: {}-{:02} / {}.",
+                period.taxYear, period.taxMonth, period.bitisTarihi
+            )));
+        }
+
         Ok(())
     }
 
