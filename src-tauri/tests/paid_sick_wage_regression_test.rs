@@ -50,15 +50,16 @@ fn july_period() -> BordroDonemi {
 }
 
 fn settings(period_id: &str, daily_wage: Decimal) -> DonemselKurumDegerleri {
-    let mut value = DonemselKurumDegerleri::default();
-    value.donemId = period_id.into();
-    value.gunlukTabanUcret = daily_wage;
-    value.gunlukYemek = dec!(100);
-    value.gunlukVasitaYol = dec!(50);
-    value.birlestirilmisSosyalYardim = dec!(0);
-    value.giyimYardimi = dec!(0);
-    value.hizmetZammiBirimi = dec!(0);
-    value
+    DonemselKurumDegerleri {
+        donemId: period_id.into(),
+        gunlukTabanUcret: daily_wage,
+        gunlukYemek: dec!(100),
+        gunlukVasitaYol: dec!(50),
+        birlestirilmisSosyalYardim: dec!(0),
+        giyimYardimi: dec!(0),
+        hizmetZammiBirimi: dec!(0),
+        ..Default::default()
+    }
 }
 
 fn save_annual_parameters(conn: &rusqlite::Connection) -> Result<(), Box<dyn std::error::Error>> {
