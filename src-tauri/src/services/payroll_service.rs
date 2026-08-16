@@ -1,4 +1,5 @@
 use super::cumulative_tax_service::CumulativeTaxService;
+use super::sick_leave_service::SickLeaveService;
 use crate::domain::calculations::*;
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
@@ -127,6 +128,41 @@ fn merge_is_primi_details(
     }
 }
 
+fn validate_paid_sick_dates_against_attendance(
+    attendance: &PersonelPuantaj,
+    paid_sick_dates: &[NaiveDate],
+    period_id: &str,
+) -> Result<()> {
+    for date in paid_sick_dates {
+        let date_text = date.format("%Y-%m-%d").to_string();
+        match attendance.gunler.get(&date_text).map(String::as_str) {
+            Some("R") => {}
+            Some(code) => {
+                return Err(DomainError::InvalidData(format!(
+                    "{} döneminde kurumca ödenecek rapor günü {} puantajda '{}' olarak kayıtlı. Aynı gün hem başka bir puantaj koduyla hem rapor ücretiyle ödenemez.",
+                    period_id, date_text, code
+                )))
+            }
+            None => {
+                return Err(DomainError::InvalidData(format!(
+                    "{} döneminde kurumca ödenecek rapor günü {} puantajda bulunmuyor. Rapor kaydı ile puantajı eşleştirin.",
+                    period_id, date_text
+                )))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn add_paid_sick_wage(field: &mut Option<Decimal>, paid_days: i32, daily_wage: Decimal) {
+    if paid_days <= 0 {
+        return;
+    }
+    let current = (*field).unwrap_or_default();
+    let sick_wage = (daily_wage * Decimal::from(paid_days)).round_dp(2);
+    *field = Some((current + sick_wage).round_dp(2));
+}
+
 fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
     let Some(raw) = SettingsRepository::get_app_setting(conn, ZAM_AYLARI_SETTING_KEY)? else {
         return Ok(Vec::new());
@@ -173,6 +209,13 @@ impl PayrollService {
             add_puantaj_kodu(&mut summary, code, period_id)?;
         }
 
+        // Calculate exact payable sick dates before any income is produced. A payable date must
+        // be represented as R in attendance; otherwise payroll fails closed to prevent double pay.
+        let paid_sick_dates =
+            SickLeaveService::calculate_paid_sick_dates_for_period(conn, personnel_id, &period)?;
+        validate_paid_sick_dates_against_attendance(&attendance, &paid_sick_dates, period_id)?;
+        let odenen_raporlu_gun = paid_sick_dates.len() as i32;
+
         let kurum_degerleri =
             crate::repositories::settings_repo::SettingsRepository::get_institution_settings(
                 conn, period_id,
@@ -206,7 +249,7 @@ impl PayrollService {
             Some(&personel.grup),
         )?;
 
-        if zam_tarihi.is_some() {
+        if let Some(cutoff) = zam_tarihi {
             let previous_period = PeriodRepository::get_previous_by_work_period(conn, &period)?
                 .ok_or_else(|| {
                     DomainError::InvalidData(format!(
@@ -237,10 +280,27 @@ impl PayrollService {
                     Some(&personel.grup),
                 )?;
 
-            gelirler.tabanBrutAylik = sum_income_field(
+            let paid_before = paid_sick_dates.iter().filter(|date| **date < cutoff).count() as i32;
+            let paid_after = odenen_raporlu_gun - paid_before;
+
+            let mut taban_brut = sum_income_field(
                 zam_oncesi_gelirler.tabanBrutAylik,
                 zam_sonrasi_gelirler.tabanBrutAylik,
             );
+            add_paid_sick_wage(
+                &mut taban_brut,
+                paid_before,
+                previous_kurum_degerleri.gunlukTabanUcret,
+            );
+            add_paid_sick_wage(
+                &mut taban_brut,
+                paid_after,
+                kurum_degerleri.gunlukTabanUcret,
+            );
+            gelirler.tabanBrutAylik = taban_brut;
+
+            // Rapor günü ücretlidir ancak fiili çalışma değildir: yemek, yol, iş primi ve gece
+            // kalemlerine eklenmez. Bu alanlar yalnız mevcut puantaj özetlerinden birleşir.
             gelirler.yemek =
                 sum_income_field(zam_oncesi_gelirler.yemek, zam_sonrasi_gelirler.yemek);
             gelirler.vasitaYol = sum_income_field(
@@ -259,17 +319,29 @@ impl PayrollService {
             );
             is_primi_detay = merge_is_primi_details(&zam_oncesi_is_primi, &zam_sonrasi_is_primi);
 
-            let zam_oncesi_hakedis = hakedis_gun(&zam_oncesi_ozet);
-            let zam_sonrasi_hakedis = hakedis_gun(&zam_sonrasi_ozet);
-            let toplam_hakedis = zam_oncesi_hakedis + zam_sonrasi_hakedis;
-            if toplam_hakedis > 0 {
+            // Effective daily base must represent every wage-bearing day, including institution-paid
+            // sick dates, otherwise percentage-based fallback deductions can use a distorted rate.
+            let zam_oncesi_ucret_gunu = hakedis_gun(&zam_oncesi_ozet) + paid_before;
+            let zam_sonrasi_ucret_gunu = hakedis_gun(&zam_sonrasi_ozet) + paid_after;
+            let toplam_ucret_gunu = zam_oncesi_ucret_gunu + zam_sonrasi_ucret_gunu;
+            if toplam_ucret_gunu > 0 {
                 effective_kurum_degerleri.gunlukTabanUcret =
-                    (previous_kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_oncesi_hakedis)
-                        + kurum_degerleri.gunlukTabanUcret * Decimal::from(zam_sonrasi_hakedis))
-                    .checked_div(Decimal::from(toplam_hakedis))
+                    (previous_kurum_degerleri.gunlukTabanUcret
+                        * Decimal::from(zam_oncesi_ucret_gunu)
+                        + kurum_degerleri.gunlukTabanUcret
+                            * Decimal::from(zam_sonrasi_ucret_gunu))
+                    .checked_div(Decimal::from(toplam_ucret_gunu))
                     .unwrap_or(kurum_degerleri.gunlukTabanUcret)
                     .round_dp(6);
             }
+        } else {
+            // Institution-paid sick days restore only the base wage. Attendance remains unchanged,
+            // therefore meal/road/is-primi stay based on actual worked days.
+            add_paid_sick_wage(
+                &mut gelirler.tabanBrutAylik,
+                odenen_raporlu_gun,
+                kurum_degerleri.gunlukTabanUcret,
+            );
         }
 
         let prev_gv =
@@ -348,13 +420,6 @@ impl PayrollService {
         // Alt seviye statutory helper eski yalın GV matrah formülünü kullanıyor.
         // Production bordro yolu authoritative GV snapshot üzerinden doğru vergiyi uygular.
         kesintiler.gelirVergisi = Some(gv_detay.kesilenGelirVergisi);
-
-        let odenen_raporlu_gun =
-            super::sick_leave_service::SickLeaveService::calculate_paid_sick_days_for_period(
-                conn,
-                personnel_id,
-                &period,
-            )?;
 
         let kesinti_toplam = calculate_kesinti_toplam(&kesintiler);
         let net_odeme = (gelir_toplam - kesinti_toplam).round_dp(2);
