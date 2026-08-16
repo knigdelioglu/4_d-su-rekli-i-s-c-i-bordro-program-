@@ -1453,7 +1453,6 @@ mod tests {
         use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
         use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
         use bordro_programi_lib::services::payroll_service::PayrollService;
-        use std::collections::HashMap;
         use std::fs;
         use std::path::PathBuf;
 
