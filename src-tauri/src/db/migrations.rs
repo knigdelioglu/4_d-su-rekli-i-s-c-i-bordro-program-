@@ -230,11 +230,23 @@ pub fn get_migrations() -> Migrations<'static> {
             );
             "#,
         ),
-        // The additive column itself is installed by ensure_optional_columns() via
-        // add_column_if_missing(). Keep this migration as a version marker so databases
-        // that already received the column through a repair/pre-release path do not fail
-        // with a duplicate-column ALTER TABLE during normal migration replay.
-        M::up("SELECT 1;"),
+        // Keep this migration self-contained for callers that use get_migrations()
+        // directly, while remaining safe for pre-release databases that already have the
+        // additive column. The hook runs in the migration transaction after the no-op SQL.
+        M::up_with_hook("SELECT 1;", |tx| {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('payroll_records') WHERE name = 'statutory_snapshot_json'",
+                [],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                tx.execute(
+                    "ALTER TABLE payroll_records ADD COLUMN statutory_snapshot_json TEXT",
+                    [],
+                )?;
+            }
+            Ok(())
+        }),
     ])
 }
 
