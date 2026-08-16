@@ -188,19 +188,15 @@ fn backend_rejects_invalid_dates_codes_and_unsafe_tax_limit() -> Result<()> {
 }
 
 #[test]
-fn missing_legal_setting_fails_payroll_instead_of_defaulting() -> Result<()> {
+fn missing_legal_setting_is_rejected_before_payroll_instead_of_defaulting() -> Result<()> {
     let conn =
         create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    let personnel = person("missing-legal");
-    PersonnelRepository::save(&conn, &personnel)?;
     let payroll_period = period("2026-05", 2026);
     PeriodRepository::save(&conn, &payroll_period)?;
+
     let mut incomplete = settings("2026-05");
     incomplete.sgkIsciOraniYuzde = None;
-    SettingsRepository::save_institution_settings(&conn, &incomplete)?;
-    AttendanceRepository::save(&conn, &attendance("missing-legal", "2026-05", "Ç"))?;
-
-    let result = PayrollService::calculate_payroll_for_personnel(&conn, "missing-legal", "2026-05");
+    let result = SettingsRepository::save_institution_settings(&conn, &incomplete);
     assert!(
         matches!(result, Err(DomainError::ValidationError(message)) if message.contains("sgkIsciOraniYuzde"))
     );
