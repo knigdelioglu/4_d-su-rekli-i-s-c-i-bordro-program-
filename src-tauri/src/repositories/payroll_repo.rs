@@ -441,9 +441,17 @@ impl PayrollRepository {
         let sgk_base = dec_to_kurus(b.pekDetay.as_ref().map(|p| p.finalPek));
         let isci_sgk = b.kesintiler.isciSgkPrimi.unwrap_or_default();
         let isci_issizlik = b.kesintiler.isciIssizlikPrimi.unwrap_or_default();
-        let gv_base = dec_to_kurus(Some(
-            (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO),
-        ));
+        // Production bordrosunda authoritative GV matrahı, hesap sırasında oluşturulan
+        // GvHesapDetayi snapshot'ıdır. Eski kayıt/migration yolları için snapshot yoksa
+        // geriye dönük yalın formül fallback olarak korunur.
+        let gv_base_decimal = b
+            .gvDetay
+            .as_ref()
+            .map(|g| g.cariGvMatrahi)
+            .unwrap_or_else(|| {
+                (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO)
+            });
+        let gv_base = dec_to_kurus(Some(gv_base_decimal));
         let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi);
         let new_gv = prev_gv + gv_base;
         let income_tax = dec_to_kurus(b.kesintiler.gelirVergisi);
