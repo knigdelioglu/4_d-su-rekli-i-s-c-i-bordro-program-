@@ -171,6 +171,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       (b) => b.personelId === person.id && b.donemId === aktifDonem.id
     );
 
+    if (bordro?.status === 'STALE') {
+      setErrorMessage(
+        `${person.ad} ${person.soyad} bordrosu önceki dönem değişikliği nedeniyle güncelliğini yitirdi. Bordro zarfını açmadan/yazdırmadan önce yeniden hesaplayın.`
+      );
+      return;
+    }
+    if (bordro?.status === 'DRAFT') {
+      setErrorMessage(`${person.ad} ${person.soyad} bordrosu taslak durumda. Önce bordroyu hesaplayın.`);
+      return;
+    }
+
     if (!bordro) {
       const hasPuantaj = puantajlar.some(
         (p) => p.personelId === person.id && p.donemId === aktifDonem.id
@@ -224,6 +235,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return;
     }
     if (bordro.status === 'FINALIZED') return;
+    if (bordro.status === 'STALE') {
+      setErrorMessage('Güncelliğini yitirmiş (STALE) bordro kesinleştirilemez. Önce yeniden hesaplayın.');
+      return;
+    }
+    if (bordro.status === 'DRAFT') {
+      setErrorMessage('Taslak (DRAFT) bordro kesinleştirilemez. Önce hesaplayın.');
+      return;
+    }
     if (!window.confirm(`${person.ad} ${person.soyad} bordrosu kesinleştirilsin mi? Kesinleştirilen bordro değiştirilemez.`)) {
       return;
     }
@@ -251,8 +270,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       (p.unvan && p.unvan.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  // Period statistics
-  const activePeriodBordrolar = bordrolar.filter((b) => b.donemId === aktifDonem.id);
+  // Period statistics include only authoritative snapshots. STALE/DRAFT values
+  // remain visible on their row for diagnosis but must not contaminate totals.
+  const activePeriodBordrolar = bordrolar.filter(
+    (b) =>
+      b.donemId === aktifDonem.id &&
+      (b.status === 'CALCULATED' || b.status === 'FINALIZED')
+  );
   const totalGross = activePeriodBordrolar.reduce((acc, b) => acc + (b.gelirToplam || 0), 0);
   const totalNet = activePeriodBordrolar.reduce((acc, b) => acc + (b.netOdeme || 0), 0);
   const totalDeductions = activePeriodBordrolar.reduce((acc, b) => acc + (b.kesintiToplam || 0), 0);
@@ -411,7 +435,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
           <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-            <span>İsme tıklayarak detaylı bordro zarfını açabilirsiniz</span>
+            <span>Güncel bordrolarda isme tıklayarak bordro zarfını açabilirsiniz</span>
           </div>
         </div>
 
@@ -453,8 +477,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     Object.keys(pPuantaj.gunler).length > 0
                   );
 
-                  const isCalculated = !!bordro;
+                  const hasPayrollSnapshot = !!bordro;
                   const isFinalized = bordro?.status === 'FINALIZED';
+                  const isStale = bordro?.status === 'STALE';
+                  const isDraft = bordro?.status === 'DRAFT';
+                  const isCalculated = bordro?.status === 'CALCULATED' || isFinalized;
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
@@ -463,7 +490,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     <tr
                       key={person.id}
                       onClick={() => handleOpenPaySlip(person)}
-                      className="hover:bg-indigo-50/50 transition-colors cursor-pointer group"
+                      className={`transition-colors group ${isStale || isDraft ? 'bg-amber-50/40 cursor-default' : 'hover:bg-indigo-50/50 cursor-pointer'}`}
                     >
                       <td className="py-3 px-4 font-mono text-slate-400 font-medium">
                         {idx + 1}
@@ -479,7 +506,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           <div>
                             <div className="font-bold text-slate-900 group-hover:text-indigo-700 transition-colors flex items-center gap-1">
                               <span>{person.ad} {person.soyad}</span>
-                              <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                              {!isStale && !isDraft && <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity" />}
                             </div>
                             <span className="font-mono text-[11px] text-slate-500">
                               TC: {person.tcNo}
@@ -556,7 +583,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           if (val > 0) {
                             return (
                               <div className="flex flex-col items-end">
-                                <span className="font-bold text-slate-800">{formatTL(val)}</span>
+                                <span className={`font-bold ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>{formatTL(val)}</span>
                                 {isManual && (
                                   <span className="text-[10px] text-indigo-600 font-semibold">(Manuel)</span>
                                 )}
@@ -583,18 +610,18 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       </td>
 
                       {/* Brüt */}
-                      <td className="py-3 px-4 text-right font-mono font-medium text-slate-800">
-                        {isCalculated ? formatTL(brut) : '—'}
+                      <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
+                        {hasPayrollSnapshot ? formatTL(brut) : '—'}
                       </td>
 
                       {/* Kesintiler */}
-                      <td className="py-3 px-4 text-right font-mono font-medium text-rose-700">
-                        {isCalculated ? formatTL(kesinti) : '—'}
+                      <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
+                        {hasPayrollSnapshot ? formatTL(kesinti) : '—'}
                       </td>
 
                       {/* Net */}
-                      <td className="py-3 px-4 text-right font-mono font-bold text-emerald-700 text-sm">
-                        {isCalculated ? formatTL(net) : '—'}
+                      <td className={`py-3 px-4 text-right font-mono font-bold text-sm ${isStale ? 'text-amber-700 line-through' : 'text-emerald-700'}`}>
+                        {hasPayrollSnapshot ? formatTL(net) : '—'}
                       </td>
 
                       {/* Durum */}
@@ -603,6 +630,16 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-200 text-slate-800 border border-slate-300">
                             <CheckCircle2 className="w-3 h-3 text-slate-700" />
                             <span>Kesinleştirildi</span>
+                          </span>
+                        ) : isStale ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-900 border border-amber-300">
+                            <AlertTriangle className="w-3 h-3 text-amber-700" />
+                            <span>Yeniden Hesaplanmalı</span>
+                          </span>
+                        ) : isDraft ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300">
+                            <Clock className="w-3 h-3 text-slate-600" />
+                            <span>Taslak</span>
                           </span>
                         ) : isCalculated ? (
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
@@ -630,25 +667,27 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               {!isFinalized && (
                                 <button
                                   onClick={(e) => handleCalculateSingle(person, e)}
-                                  title="Bordroyu Hesapla/Yeniden Hesapla"
+                                  title={isStale ? 'Güncelliğini yitiren bordroyu yeniden hesapla' : 'Bordroyu Hesapla/Yeniden Hesapla'}
                                   className="p-1.5 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
                                 >
                                   <RefreshCw className="w-3.5 h-3.5" />
-                                  <span>Hesapla</span>
+                                  <span>{isStale ? 'Yeniden Hesapla' : 'Hesapla'}</span>
                                 </button>
                               )}
 
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleOpenPaySlip(person);
-                                }}
-                                title="Bordro Zarfını Görüntüle & Yazdır"
-                                className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
-                              >
-                                <FileText className="w-3.5 h-3.5" />
-                                <span>Bordro Gör</span>
-                              </button>
+                              {!isStale && !isDraft && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenPaySlip(person);
+                                  }}
+                                  title="Bordro Zarfını Görüntüle & Yazdır"
+                                  className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                >
+                                  <FileText className="w-3.5 h-3.5" />
+                                  <span>Bordro Gör</span>
+                                </button>
+                              )}
 
                               {isCalculated && !isFinalized && (
                                 <button
