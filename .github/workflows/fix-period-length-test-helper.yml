@@ -1,0 +1,35 @@
+name: Period-length fixture helper repair
+
+on:
+  push:
+    branches:
+      - agent/fix-period-length-test-helper
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/fix-period-length-test-helper
+          fetch-depth: 0
+      - run: python3 .github/scripts/fix_period_length_test_helper.py
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          cache: false
+      - run: cargo fmt
+        working-directory: src-tauri
+      - name: Commit repaired helper
+        run: |
+          rm .github/scripts/fix_period_length_test_helper.py
+          rm .github/workflows/fix-period-length-test-helper.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: make attendance fixture helper period-aware"
+          git push origin HEAD:agent/fix-period-length-test-helper
