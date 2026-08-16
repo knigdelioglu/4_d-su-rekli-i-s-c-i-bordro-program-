@@ -1,0 +1,44 @@
+name: Remove stale domain test import
+
+on:
+  push:
+    branches:
+      - agent/remove-unused-domain-import
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/remove-unused-domain-import
+          fetch-depth: 0
+      - name: Remove unused local HashMap import
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src-tauri/tests/domain_tests.rs')
+          s = p.read_text()
+          marker = 'fn test_raporlu_gun_persistence_and_finalized_reload()'
+          start = s.index(marker)
+          end = s.find('\n    #[test]', start + len(marker))
+          if end < 0:
+              end = len(s)
+          block = s[start:end]
+          old = '        use std::collections::HashMap;\n'
+          if block.count(old) != 1:
+              raise SystemExit(f'expected exactly one local HashMap import, found {block.count(old)}')
+          block = block.replace(old, '', 1)
+          p.write_text(s[:start] + block + s[end:])
+          PY
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/remove-unused-domain-import.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: remove unused domain fixture import"
+          git push origin HEAD:agent/remove-unused-domain-import
