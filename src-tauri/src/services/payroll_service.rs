@@ -76,10 +76,9 @@ fn days_in_month(date: NaiveDate) -> Result<u32> {
         .ok_or_else(|| DomainError::InvalidData("Ay sonu çözümlenemedi.".into()))
 }
 
-/// Kamu 15-14 bildiriminde tam dönem 30 SGK günüdür. Ayın 15'inden ay
-/// sonuna düşen kısım 16, takip eden ayın 1-14 kısmı 14 SGK günü taşır.
-/// Böylece 31 günlük ayda 31. gün 0 ek SGK günü, Şubat sonunda ise eksik
-/// takvim günleri aynı ilk parçaya sanal SGK günleri olarak eklenir.
+/// Kamu 15-14 bildiriminde eksiksiz tam dönem 30 SGK günüdür. Ayın 15'inden
+/// ay sonuna düşen tam kısım 16, takip eden ayın 1-14 kısmı 14 SGK günü taşır.
+/// Bu normalizasyon yalnız hiç eksik gün bulunmayan tam dönem için kullanılır.
 fn full_period_sgk_day_weight(date: NaiveDate, period_start: NaiveDate) -> Result<i32> {
     if date.year() == period_start.year() && date.month() == period_start.month() {
         let month_days = days_in_month(period_start)?;
@@ -121,6 +120,27 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let calendar_day_count = (end - start).num_days() + 1;
     let full_calendar_coverage = attendance.gunler.len() as i64 == calendar_day_count;
+
+    // SGK eksik-gün mantığında tam ay/dönem normalizasyonu yalnız eksik gün yokken
+    // uygulanır. Ücretsiz R gibi en az bir ücret hakkı olmayan gün varsa prim günü
+    // gerçek takvimdeki primli günlerden oluşur; böylece 31 günlük dönemde tek R'nin
+    // hangi tarihe geldiği sonucu değiştirmez ve Şubat'taki sanal tamamlama günleri
+    // ücretsiz R'nin üzerine yanlışlıkla eklenmez.
+    let full_calendar_has_non_prim_day = if full_calendar_coverage {
+        let mut found = false;
+        for (date_text, code) in &attendance.gunler {
+            let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|_| {
+                DomainError::InvalidData(format!("Puantaj tarihi geçersiz: {}", date_text))
+            })?;
+            if !is_prim_bearing_code(code, date, paid_sick_dates) {
+                found = true;
+                break;
+            }
+        }
+        found
+    } else {
+        false
+    };
 
     let base_gv_meal = k
         .gunlukYemekIstisnasiGV
@@ -181,7 +201,7 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
                 continue;
             }
             if is_prim_bearing_code(code, date, paid_sick_dates) {
-                segment_sgk_days += if full_calendar_coverage {
+                segment_sgk_days += if full_calendar_coverage && !full_calendar_has_non_prim_day {
                     full_period_sgk_day_weight(date, start)?
                 } else {
                     1
