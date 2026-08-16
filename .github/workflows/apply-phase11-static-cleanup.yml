@@ -1,0 +1,35 @@
+name: Apply Phase 11 Static Cleanup
+
+on:
+  push:
+    branches:
+      - agent/phase11-manual-tediye-tis
+    paths:
+      - .github/workflows/apply-phase11-static-cleanup.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/phase11-manual-tediye-tis
+          fetch-depth: 0
+
+      - name: Apply source cleanup
+        run: python3 scripts/apply_phase11_static_cleanup.py
+
+      - name: Format Rust sources
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all
+
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: scope manual Tediye and TIS input by period"
+          git push origin HEAD:agent/phase11-manual-tediye-tis
