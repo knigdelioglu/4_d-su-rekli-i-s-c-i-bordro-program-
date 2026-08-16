@@ -183,8 +183,10 @@ fn pek_bounds_fail_closed_when_ceiling_is_below_floor() {
 
 #[test]
 fn institution_validation_rejects_pek_multiplier_below_one() {
-    let mut settings = DonemselKurumDegerleri::default();
-    settings.pekTavanKatsayisi = Some(dec!(0.5));
+    let settings = DonemselKurumDegerleri {
+        pekTavanKatsayisi: Some(dec!(0.5)),
+        ..DonemselKurumDegerleri::default()
+    };
     let err = validate_kurum_degerleri_for_payroll(&settings).unwrap_err();
     assert!(
         matches!(err, DomainError::ValidationError(message) if message.contains("PEK tavan katsayısı"))
