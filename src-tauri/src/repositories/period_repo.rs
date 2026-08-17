@@ -1,7 +1,7 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
-use chrono::{Datelike, NaiveDate};
 use chrono::Utc;
+use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct PeriodRepository;
@@ -22,38 +22,34 @@ impl PeriodRepository {
 
     pub fn validate_period(period: &BordroDonemi) -> Result<()> {
         if period.yil <= 0 || !(1..=12).contains(&period.ay) {
-            return Err(crate::domain::DomainError::ValidationError(
+            return Err(DomainError::ValidationError(
                 "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),
             ));
         }
         if period.taxYear <= 0 || !(1..=12).contains(&period.taxMonth) {
-            return Err(crate::domain::DomainError::ValidationError(
+            return Err(DomainError::ValidationError(
                 "Vergi yılı geçerli olmalı ve vergi ayı 1-12 arasında olmalıdır.".into(),
             ));
         }
 
-        let start =
-            NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
-                crate::domain::DomainError::ValidationError(format!(
-                    "Dönem başlangıç tarihi geçersiz: {}.",
-                    period.baslangicTarihi
-                ))
-            })?;
+        let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "Dönem başlangıç tarihi geçersiz: {}.",
+                period.baslangicTarihi
+            ))
+        })?;
         let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
-            crate::domain::DomainError::ValidationError(format!(
+            DomainError::ValidationError(format!(
                 "Dönem bitiş tarihi geçersiz: {}.",
                 period.bitisTarihi
             ))
         })?;
         if start > end {
-            return Err(crate::domain::DomainError::ValidationError(
+            return Err(DomainError::ValidationError(
                 "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
             ));
         }
 
-        // Bu uygulamanın authoritative çalışma dönemi 15-14'tür. Serbest tarih
-        // aralığı kabul etmek SGK gün hesabını ve dönem bazlı gelir üretimini
-        // belirsiz hale getirir; invalid state hesap aşamasına kadar yaşayamaz.
         if start.day() != 15 || end.day() != 14 {
             return Err(DomainError::ValidationError(format!(
                 "Bordro dönemi 15-14 olmalıdır: {} - {}.",
@@ -73,8 +69,6 @@ impl PeriodRepository {
             )));
         }
 
-        // `ay` dönem başlangıç ayıdır; taxYear/taxMonth ise ayrı ödeme/tahakkuk
-        // metadata'sıdır ve ürün sözleşmesi gereği kullanıcı tarafından seçilebilir.
         if period.yil != start.year() || period.ay != start.month() as i32 {
             return Err(DomainError::ValidationError(format!(
                 "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
@@ -89,17 +83,18 @@ impl PeriodRepository {
         let mut stmt = conn
             .prepare(
                 "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
-             FROM payroll_periods ORDER BY yil ASC, ay ASC",
+                 FROM payroll_periods
+                 ORDER BY baslangic_tarihi ASC, bitis_tarihi ASC",
             )
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
             .query_map([], Self::from_row)
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let mut result = Vec::new();
         for r in rows {
-            let period = r.map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            let period = r.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
             Self::validate_period(&period)?;
             result.push(period);
         }
@@ -110,12 +105,12 @@ impl PeriodRepository {
         let period = conn
             .query_row(
                 "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
-             FROM payroll_periods WHERE id = ?1",
+                 FROM payroll_periods WHERE id = ?1",
                 params![id],
                 Self::from_row,
             )
             .optional()
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         period
             .map(|period| {
@@ -135,38 +130,41 @@ impl PeriodRepository {
                 "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
                  FROM payroll_periods
                  WHERE tax_year = ?1 AND tax_month < ?2
-                 ORDER BY tax_month ASC, id ASC",
+                 ORDER BY tax_month ASC, baslangic_tarihi ASC",
             )
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let rows = stmt
             .query_map(params![tax_year, tax_month], Self::from_row)
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let mut periods = Vec::new();
         for row in rows {
-            let period =
-                row.map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            let period = row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
             Self::validate_period(&period)?;
             periods.push(period);
         }
         Ok(periods)
     }
 
+    /// Previous work period is resolved from the authoritative 15-14 timeline,
+    /// never from IDs. Unique work-period constraints guarantee there is at most
+    /// one predecessor for a given start date.
     pub fn get_previous_by_work_period(
         conn: &Connection,
         active_period: &BordroDonemi,
     ) -> Result<Option<BordroDonemi>> {
+        Self::validate_period(active_period)?;
         let period = conn
             .query_row(
                 "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
                  FROM payroll_periods
-                 WHERE yil < ?1 OR (yil = ?1 AND ay < ?2)
-                 ORDER BY yil DESC, ay DESC, id DESC
+                 WHERE baslangic_tarihi < ?1
+                 ORDER BY baslangic_tarihi DESC, bitis_tarihi DESC
                  LIMIT 1",
-                params![active_period.yil, active_period.ay],
+                params![active_period.baslangicTarihi],
                 Self::from_row,
             )
             .optional()
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         period
             .map(|period| {
                 Self::validate_period(&period)?;
@@ -177,7 +175,8 @@ impl PeriodRepository {
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
         Self::validate_period(d)?;
-        let collision: Option<String> = conn
+
+        let tax_collision: Option<String> = conn
             .query_row(
                 "SELECT id FROM payroll_periods
                  WHERE tax_year = ?1 AND tax_month = ?2 AND id <> ?3
@@ -187,10 +186,44 @@ impl PeriodRepository {
             )
             .optional()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        if let Some(conflicting_id) = collision {
+        if let Some(conflicting_id) = tax_collision {
             return Err(DomainError::ValidationError(format!(
                 "Vergi yılı/ayı çakışması: {}-{:02} zaten {} döneminde kullanılıyor.",
                 d.taxYear, d.taxMonth, conflicting_id
+            )));
+        }
+
+        let work_month_collision: Option<String> = conn
+            .query_row(
+                "SELECT id FROM payroll_periods
+                 WHERE yil = ?1 AND ay = ?2 AND id <> ?3
+                 LIMIT 1",
+                params![d.yil, d.ay, d.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some(conflicting_id) = work_month_collision {
+            return Err(DomainError::ValidationError(format!(
+                "Çalışma dönemi çakışması: {}-{:02} zaten {} döneminde kayıtlı.",
+                d.yil, d.ay, conflicting_id
+            )));
+        }
+
+        let date_collision: Option<String> = conn
+            .query_row(
+                "SELECT id FROM payroll_periods
+                 WHERE baslangic_tarihi = ?1 AND bitis_tarihi = ?2 AND id <> ?3
+                 LIMIT 1",
+                params![d.baslangicTarihi, d.bitisTarihi, d.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some(conflicting_id) = date_collision {
+            return Err(DomainError::ValidationError(format!(
+                "Çalışma dönemi tarih aralığı çakışması: {}–{} zaten {} döneminde kayıtlı.",
+                d.baslangicTarihi, d.bitisTarihi, conflicting_id
             )));
         }
 
@@ -200,8 +233,19 @@ impl PeriodRepository {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
                 yil=?2, ay=?3, baslangic_tarihi=?4, bitis_tarihi=?5, donem_adi=?6, tax_year=?7, tax_month=?8",
-            params![d.id, d.yil, d.ay, d.baslangicTarihi, d.bitisTarihi, d.donemAdi, d.taxYear, d.taxMonth, now],
-        ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            params![
+                d.id,
+                d.yil,
+                d.ay,
+                d.baslangicTarihi,
+                d.bitisTarihi,
+                d.donemAdi,
+                d.taxYear,
+                d.taxMonth,
+                now
+            ],
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         Ok(())
     }
