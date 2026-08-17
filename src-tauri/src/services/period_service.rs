@@ -101,13 +101,17 @@ impl PeriodService {
 
         if let Some(old) = PeriodRepository::get_by_id(&tx, &period.id)? {
             Self::ensure_period_identity_mutation_allowed(&tx, &old, period)?;
+        }
 
-            if Self::has_finalized_settings_dependency(&tx, &old)? {
-                return Err(DomainError::PayrollFinalized(
-                    "Bu dönemin kurum ayarları kesinleşmiş bordro zincirinde kullanıldığından değiştirilemez."
-                        .into(),
-                ));
-            }
+        // Apply the dependency guard to both updates and new historical rows.
+        // Otherwise a missing old period/settings row could be inserted after a
+        // later payroll was finalized and retroactively change its reference
+        // cumulative when that payroll is reproduced.
+        if Self::has_finalized_settings_dependency(&tx, period)? {
+            return Err(DomainError::PayrollFinalized(
+                "Bu dönemin kurum ayarları kesinleşmiş bordro zincirini geriye dönük değiştireceğinden kaydedilemez."
+                    .into(),
+            ));
         }
 
         PeriodRepository::save(&tx, period)?;
