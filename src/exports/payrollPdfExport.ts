@@ -6,49 +6,45 @@ import {
   periodExportFileStem,
 } from './payrollExportModel';
 
-const PAGE_WIDTH = 1400;
-const PAGE_HEIGHT = 1980;
+const CANVAS_WIDTH = 1240;
+const CANVAS_HEIGHT = 1754;
 const PDF_WIDTH = 595.28;
 const PDF_HEIGHT = 841.89;
 
-function formatMoney(value: number): string {
-  return new Intl.NumberFormat('tr-TR', {
+function money(value: number): string {
+  return `${new Intl.NumberFormat('tr-TR', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  }).format(value) + ' TL';
+  }).format(value)} TL`;
 }
 
-function safeText(value: string | number | null | undefined): string {
-  return value === null || value === undefined ? '—' : String(value);
-}
-
-function fitText(
+function clippedText(
   ctx: CanvasRenderingContext2D,
-  text: string,
+  value: string,
   maxWidth: number
 ): string {
-  if (ctx.measureText(text).width <= maxWidth) return text;
-  let value = text;
-  while (value.length > 3 && ctx.measureText(`${value}…`).width > maxWidth) {
-    value = value.slice(0, -1);
+  if (ctx.measureText(value).width <= maxWidth) return value;
+  let result = value;
+  while (result.length > 2 && ctx.measureText(`${result}…`).width > maxWidth) {
+    result = result.slice(0, -1);
   }
-  return `${value}…`;
+  return `${result}…`;
 }
 
-function drawText(
+function text(
   ctx: CanvasRenderingContext2D,
-  text: string,
+  value: string,
   x: number,
   y: number,
-  maxWidth?: number,
+  maxWidth: number,
   align: CanvasTextAlign = 'left'
 ): void {
   ctx.textAlign = align;
-  ctx.fillText(maxWidth ? fitText(ctx, text, maxWidth) : text, x, y);
+  ctx.fillText(clippedText(ctx, value, maxWidth), x, y);
   ctx.textAlign = 'left';
 }
 
-function drawSectionHeader(
+function sectionTitle(
   ctx: CanvasRenderingContext2D,
   title: string,
   x: number,
@@ -56,32 +52,16 @@ function drawSectionHeader(
   width: number
 ): number {
   ctx.fillStyle = '#eef2ff';
-  ctx.fillRect(x, y, width, 38);
+  ctx.fillRect(x, y, width, 34);
   ctx.strokeStyle = '#c7d2fe';
-  ctx.strokeRect(x, y, width, 38);
+  ctx.strokeRect(x, y, width, 34);
   ctx.fillStyle = '#1e293b';
-  ctx.font = '700 22px Arial, Segoe UI, sans-serif';
-  drawText(ctx, title, x + 14, y + 26, width - 28);
-  return y + 48;
+  ctx.font = '700 19px Arial, Segoe UI, sans-serif';
+  text(ctx, title, x + 12, y + 23, width - 24);
+  return y + 44;
 }
 
-function drawKeyValue(
-  ctx: CanvasRenderingContext2D,
-  label: string,
-  value: string,
-  x: number,
-  y: number,
-  width: number
-): void {
-  ctx.fillStyle = '#64748b';
-  ctx.font = '600 18px Arial, Segoe UI, sans-serif';
-  drawText(ctx, label, x, y, width * 0.43);
-  ctx.fillStyle = '#0f172a';
-  ctx.font = '700 18px Arial, Segoe UI, sans-serif';
-  drawText(ctx, value, x + width * 0.43, y, width * 0.57);
-}
-
-function drawMoneyLines(
+function moneyRows(
   ctx: CanvasRenderingContext2D,
   lines: PayrollExportLine[],
   x: number,
@@ -91,27 +71,43 @@ function drawMoneyLines(
 ): number {
   const visible = lines.filter((line) => Math.abs(line.amount) > 0.0001).slice(0, maxRows);
   let cursor = y;
+  if (visible.length === 0) {
+    ctx.fillStyle = '#64748b';
+    ctx.font = '500 15px Arial, Segoe UI, sans-serif';
+    text(ctx, 'Tutar oluşmadı.', x, cursor, width);
+    return cursor + 28;
+  }
   for (const line of visible) {
-    ctx.fillStyle = '#334155';
-    ctx.font = '500 17px Arial, Segoe UI, sans-serif';
-    drawText(ctx, line.label, x, cursor, width - 190);
+    ctx.fillStyle = '#475569';
+    ctx.font = '500 15px Arial, Segoe UI, sans-serif';
+    text(ctx, line.label, x, cursor, width - 170);
     ctx.fillStyle = '#0f172a';
-    ctx.font = '700 17px Arial, Segoe UI, sans-serif';
-    drawText(ctx, formatMoney(line.amount), x + width, cursor, 180, 'right');
+    ctx.font = '700 15px Arial, Segoe UI, sans-serif';
+    text(ctx, money(line.amount), x + width, cursor, 160, 'right');
     ctx.strokeStyle = '#e2e8f0';
     ctx.beginPath();
-    ctx.moveTo(x, cursor + 10);
-    ctx.lineTo(x + width, cursor + 10);
+    ctx.moveTo(x, cursor + 8);
+    ctx.lineTo(x + width, cursor + 8);
     ctx.stroke();
-    cursor += 31;
-  }
-  if (visible.length === 0) {
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '500 17px Arial, Segoe UI, sans-serif';
-    drawText(ctx, 'Tutar oluşmadı.', x, cursor);
-    cursor += 31;
+    cursor += 26;
   }
   return cursor;
+}
+
+function keyValue(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  value: string,
+  x: number,
+  y: number,
+  width: number
+): void {
+  ctx.fillStyle = '#64748b';
+  ctx.font = '600 15px Arial, Segoe UI, sans-serif';
+  text(ctx, label, x, y, width * 0.4);
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '700 15px Arial, Segoe UI, sans-serif';
+  text(ctx, value, x + width * 0.4, y, width * 0.6);
 }
 
 export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasElement {
@@ -119,165 +115,155 @@ export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasEle
     throw new Error('PDF üretimi için tarayıcı/Tauri belge bağlamı gerekli.');
   }
   const canvas = document.createElement('canvas');
-  canvas.width = PAGE_WIDTH;
-  canvas.height = PAGE_HEIGHT;
+  canvas.width = CANVAS_WIDTH;
+  canvas.height = CANVAS_HEIGHT;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('PDF canvas bağlamı oluşturulamadı.');
 
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, PAGE_WIDTH, PAGE_HEIGHT);
-
-  const margin = 70;
-  const contentWidth = PAGE_WIDTH - margin * 2;
-  const columnGap = 46;
-  const columnWidth = (contentWidth - columnGap) / 2;
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  const margin = 55;
+  const contentWidth = CANVAS_WIDTH - margin * 2;
+  const gap = 36;
+  const columnWidth = (contentWidth - gap) / 2;
 
   ctx.fillStyle = '#0f172a';
-  ctx.font = '800 34px Arial, Segoe UI, sans-serif';
-  drawText(ctx, '4/D SÜREKLİ İŞÇİ ÜCRET PUSULASI', PAGE_WIDTH / 2, 72, contentWidth, 'center');
+  ctx.font = '800 29px Arial, Segoe UI, sans-serif';
+  text(ctx, '4/D SÜREKLİ İŞÇİ ÜCRET PUSULASI', CANVAS_WIDTH / 2, 58, contentWidth, 'center');
   ctx.fillStyle = '#475569';
-  ctx.font = '600 20px Arial, Segoe UI, sans-serif';
-  drawText(
+  ctx.font = '600 16px Arial, Segoe UI, sans-serif';
+  text(
     ctx,
-    `${model.periodName}  |  ${model.periodStart} - ${model.periodEnd}  |  Vergi: ${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}`,
-    PAGE_WIDTH / 2,
-    108,
+    `${model.periodName} | ${model.periodStart} - ${model.periodEnd} | Vergi ${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}`,
+    CANVAS_WIDTH / 2,
+    88,
     contentWidth,
     'center'
   );
   ctx.strokeStyle = '#0f172a';
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.moveTo(margin, 132);
-  ctx.lineTo(PAGE_WIDTH - margin, 132);
+  ctx.moveTo(margin, 108);
+  ctx.lineTo(CANVAS_WIDTH - margin, 108);
   ctx.stroke();
 
-  let y = 172;
-  y = drawSectionHeader(ctx, 'PERSONEL BİLGİLERİ', margin, y, contentWidth);
-  const metaLeft = [
+  let y = 136;
+  y = sectionTitle(ctx, 'PERSONEL BİLGİLERİ', margin, y, contentWidth);
+  const leftMeta = [
     ['T.C. Kimlik No', model.employee.tcNo],
     ['Adı Soyadı', model.employee.fullName],
     ['SGK Sicil No', model.employee.sgkRegistryNo],
     ['İş Primi Grubu', model.employee.group],
   ];
-  const metaRight = [
+  const rightMeta = [
     ['Ünvan', model.employee.title],
-    ['Hizmet Yılı', `${model.employee.serviceYears}`],
+    ['Hizmet Yılı', String(model.employee.serviceYears)],
     ['IBAN', model.employee.iban],
     ['Bordro Durumu', model.status],
   ];
-  for (let index = 0; index < 4; index += 1) {
-    drawKeyValue(ctx, metaLeft[index][0], metaLeft[index][1], margin + 12, y + index * 32, columnWidth - 12);
-    drawKeyValue(
-      ctx,
-      metaRight[index][0],
-      metaRight[index][1],
-      margin + columnWidth + columnGap + 12,
-      y + index * 32,
-      columnWidth - 12
-    );
+  for (let i = 0; i < 4; i += 1) {
+    keyValue(ctx, leftMeta[i][0], leftMeta[i][1], margin + 8, y + i * 26, columnWidth - 8);
+    keyValue(ctx, rightMeta[i][0], rightMeta[i][1], margin + columnWidth + gap + 8, y + i * 26, columnWidth - 8);
   }
-  y += 142;
+  y += 116;
 
-  y = drawSectionHeader(ctx, 'PUANTAJ ÖZETİ (15-14)', margin, y, contentWidth);
+  y = sectionTitle(ctx, 'PUANTAJ ÖZETİ (15-14)', margin, y, contentWidth);
   const attendance = model.attendanceSummary;
-  const boxGap = 10;
+  const boxGap = 7;
   const boxWidth = (contentWidth - boxGap * Math.max(0, attendance.length - 1)) / Math.max(1, attendance.length);
   attendance.forEach((item, index) => {
     const x = margin + index * (boxWidth + boxGap);
     ctx.fillStyle = '#f8fafc';
-    ctx.fillRect(x, y, boxWidth, 72);
+    ctx.fillRect(x, y, boxWidth, 62);
     ctx.strokeStyle = '#cbd5e1';
-    ctx.strokeRect(x, y, boxWidth, 72);
+    ctx.strokeRect(x, y, boxWidth, 62);
     ctx.fillStyle = '#64748b';
-    ctx.font = '600 14px Arial, Segoe UI, sans-serif';
-    drawText(ctx, `${item.label} (${item.code})`, x + boxWidth / 2, y + 25, boxWidth - 12, 'center');
+    ctx.font = '600 12px Arial, Segoe UI, sans-serif';
+    text(ctx, `${item.label} (${item.code})`, x + boxWidth / 2, y + 22, boxWidth - 10, 'center');
     ctx.fillStyle = '#0f172a';
-    ctx.font = '800 25px Arial, Segoe UI, sans-serif';
-    drawText(ctx, safeText(item.count), x + boxWidth / 2, y + 55, boxWidth - 12, 'center');
+    ctx.font = '800 22px Arial, Segoe UI, sans-serif';
+    text(ctx, String(item.count), x + boxWidth / 2, y + 49, boxWidth - 10, 'center');
   });
-  y += 98;
+  y += 84;
 
   const leftX = margin;
-  const rightX = margin + columnWidth + columnGap;
-  const incomeHeaderY = y;
-  let leftY = drawSectionHeader(ctx, 'GELİRLER', leftX, incomeHeaderY, columnWidth);
-  let rightY = drawSectionHeader(ctx, 'KESİNTİLER', rightX, incomeHeaderY, columnWidth);
-  leftY = drawMoneyLines(ctx, model.incomes, leftX + 8, leftY + 6, columnWidth - 16, 13);
-  rightY = drawMoneyLines(ctx, model.deductions, rightX + 8, rightY + 6, columnWidth - 16, 13);
+  const rightX = margin + columnWidth + gap;
+  let leftY = sectionTitle(ctx, 'GELİRLER', leftX, y, columnWidth);
+  let rightY = sectionTitle(ctx, 'KESİNTİLER', rightX, y, columnWidth);
+  leftY = moneyRows(ctx, model.incomes, leftX + 6, leftY + 4, columnWidth - 12, 13);
+  rightY = moneyRows(ctx, model.deductions, rightX + 6, rightY + 4, columnWidth - 12, 13);
 
   ctx.fillStyle = '#eef2ff';
-  ctx.fillRect(leftX, leftY + 4, columnWidth, 42);
+  ctx.fillRect(leftX, leftY + 2, columnWidth, 36);
   ctx.fillStyle = '#1e1b4b';
-  ctx.font = '800 19px Arial, Segoe UI, sans-serif';
-  drawText(ctx, 'BRÜT GELİR TOPLAMI', leftX + 12, leftY + 31, columnWidth - 210);
-  drawText(ctx, formatMoney(model.totals.gross), leftX + columnWidth - 12, leftY + 31, 190, 'right');
+  ctx.font = '800 16px Arial, Segoe UI, sans-serif';
+  text(ctx, 'BRÜT GELİR TOPLAMI', leftX + 10, leftY + 26, columnWidth - 175);
+  text(ctx, money(model.totals.gross), leftX + columnWidth - 10, leftY + 26, 165, 'right');
 
   ctx.fillStyle = '#fff7ed';
-  ctx.fillRect(rightX, rightY + 4, columnWidth, 42);
+  ctx.fillRect(rightX, rightY + 2, columnWidth, 36);
   ctx.fillStyle = '#7c2d12';
-  drawText(ctx, 'KESİNTİ TOPLAMI', rightX + 12, rightY + 31, columnWidth - 210);
-  drawText(ctx, formatMoney(model.totals.deductions), rightX + columnWidth - 12, rightY + 31, 190, 'right');
+  text(ctx, 'KESİNTİ TOPLAMI', rightX + 10, rightY + 26, columnWidth - 175);
+  text(ctx, money(model.totals.deductions), rightX + columnWidth - 10, rightY + 26, 165, 'right');
 
-  y = Math.max(leftY, rightY) + 78;
-  let sgkY = drawSectionHeader(ctx, 'SGK / VERGİ DENETİMİ', leftX, y, columnWidth);
-  let employerY = drawSectionHeader(ctx, 'KURUM MALİYET BİLGİSİ', rightX, y, columnWidth);
-  sgkY = drawMoneyLines(ctx, model.sgkTax, leftX + 8, sgkY + 6, columnWidth - 16, 13);
-  employerY = drawMoneyLines(ctx, model.employer, rightX + 8, employerY + 6, columnWidth - 16, 8);
+  y = Math.max(leftY, rightY) + 58;
+  let sgkY = sectionTitle(ctx, 'SGK / VERGİ DENETİMİ', leftX, y, columnWidth);
+  let employerY = sectionTitle(ctx, 'KURUM MALİYET BİLGİSİ', rightX, y, columnWidth);
+  sgkY = moneyRows(ctx, model.sgkTax, leftX + 6, sgkY + 4, columnWidth - 12, 13);
+  employerY = moneyRows(ctx, model.employer, rightX + 6, employerY + 4, columnWidth - 12, 8);
 
-  y = Math.max(sgkY, employerY) + 34;
+  y = Math.max(sgkY, employerY) + 20;
   ctx.fillStyle = '#0f172a';
-  ctx.fillRect(margin, y, contentWidth, 92);
+  ctx.fillRect(margin, y, contentWidth, 76);
   ctx.fillStyle = '#cbd5e1';
-  ctx.font = '700 19px Arial, Segoe UI, sans-serif';
-  drawText(ctx, 'NET ÖDEME', margin + 24, y + 37);
+  ctx.font = '700 16px Arial, Segoe UI, sans-serif';
+  text(ctx, 'NET ÖDEME', margin + 18, y + 31, 220);
   ctx.fillStyle = '#ffffff';
-  ctx.font = '900 38px Arial, Segoe UI, sans-serif';
-  drawText(ctx, formatMoney(model.totals.net), PAGE_WIDTH - margin - 24, y + 58, 420, 'right');
-  y += 116;
+  ctx.font = '900 32px Arial, Segoe UI, sans-serif';
+  text(ctx, money(model.totals.net), CANVAS_WIDTH - margin - 18, y + 49, 380, 'right');
+  y += 96;
 
-  const relevantNotices = model.notices.filter((notice) => notice.severity !== 'SUCCESS').slice(0, 4);
-  if (relevantNotices.length > 0 && y < PAGE_HEIGHT - 150) {
-    y = drawSectionHeader(ctx, 'BORDRO KONTROL NOTLARI', margin, y, contentWidth);
-    ctx.font = '500 16px Arial, Segoe UI, sans-serif';
-    relevantNotices.forEach((notice, index) => {
+  const notices = model.notices.filter((notice) => notice.severity !== 'SUCCESS').slice(0, 3);
+  if (notices.length > 0 && y < CANVAS_HEIGHT - 135) {
+    y = sectionTitle(ctx, 'BORDRO KONTROL NOTLARI', margin, y, contentWidth);
+    ctx.font = '500 13px Arial, Segoe UI, sans-serif';
+    notices.forEach((notice, index) => {
       ctx.fillStyle = notice.severity === 'CRITICAL' ? '#991b1b' : notice.severity === 'WARNING' ? '#92400e' : '#334155';
-      drawText(ctx, `• ${notice.title}: ${notice.message}`, margin + 10, y + index * 28, contentWidth - 20);
+      text(ctx, `• ${notice.title}: ${notice.message}`, margin + 8, y + index * 24, contentWidth - 16);
     });
   }
 
   ctx.fillStyle = '#64748b';
-  ctx.font = '500 14px Arial, Segoe UI, sans-serif';
-  drawText(
+  ctx.font = '500 12px Arial, Segoe UI, sans-serif';
+  text(
     ctx,
-    `Kaynak bordro güncelleme: ${model.sourceUpdatedAt}  |  Belge authoritative ${model.status} snapshot'tan üretilmiştir.`,
+    `Kaynak güncelleme: ${model.sourceUpdatedAt} | Belge ${model.status} bordro snapshot'ından üretilmiştir.`,
     margin,
-    PAGE_HEIGHT - 52,
+    CANVAS_HEIGHT - 38,
     contentWidth
   );
-
   return canvas;
-}
-
-function concatBytes(parts: Uint8Array[]): Uint8Array {
-  const total = parts.reduce((sum, part) => sum + part.length, 0);
-  const result = new Uint8Array(total);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
 }
 
 function ascii(value: string): Uint8Array {
   return new TextEncoder().encode(value);
 }
 
-async function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+function joinBytes(parts: Uint8Array[]): Uint8Array {
+  const size = parts.reduce((sum, part) => sum + part.length, 0);
+  const output = new Uint8Array(size);
+  let cursor = 0;
+  for (const part of parts) {
+    output.set(part, cursor);
+    cursor += part.length;
+  }
+  return output;
+}
+
+async function canvasJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
-      (value) => (value ? resolve(value) : reject(new Error('PDF sayfası JPEG'e dönüştürülemedi.'))),
+      (value) => (value ? resolve(value) : reject(new Error("PDF sayfası JPEG'e dönüştürülemedi."))),
       'image/jpeg',
       0.93
     );
@@ -287,76 +273,74 @@ async function canvasToJpeg(canvas: HTMLCanvasElement): Promise<Uint8Array> {
 
 export async function canvasesToPdfBlob(canvases: HTMLCanvasElement[]): Promise<Blob> {
   if (canvases.length === 0) throw new Error('PDF için en az bir sayfa gerekli.');
-  const images = await Promise.all(canvases.map(canvasToJpeg));
+  const images = await Promise.all(canvases.map(canvasJpeg));
   const objectCount = 2 + canvases.length * 3;
   const offsets = new Array<number>(objectCount + 1).fill(0);
-  const chunks: Uint8Array[] = [];
-  let byteLength = 0;
+  const parts: Uint8Array[] = [];
+  let length = 0;
 
   const push = (part: Uint8Array) => {
-    chunks.push(part);
-    byteLength += part.length;
+    parts.push(part);
+    length += part.length;
   };
-  const pushAscii = (value: string) => push(ascii(value));
-  const beginObject = (id: number) => {
-    offsets[id] = byteLength;
-    pushAscii(`${id} 0 obj\n`);
+  const pushText = (value: string) => push(ascii(value));
+  const begin = (id: number) => {
+    offsets[id] = length;
+    pushText(`${id} 0 obj\n`);
   };
-  const endObject = () => pushAscii('endobj\n');
+  const end = () => pushText('endobj\n');
 
-  pushAscii('%PDF-1.4\n');
+  pushText('%PDF-1.4\n');
   push(new Uint8Array([0x25, 0xff, 0xff, 0xff, 0xff, 0x0a]));
 
-  beginObject(1);
-  pushAscii('<< /Type /Catalog /Pages 2 0 R >>\n');
-  endObject();
+  begin(1);
+  pushText('<< /Type /Catalog /Pages 2 0 R >>\n');
+  end();
 
   const pageIds = canvases.map((_, index) => 3 + index * 3);
-  beginObject(2);
-  pushAscii(`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] >>\n`);
-  endObject();
+  begin(2);
+  pushText(`<< /Type /Pages /Count ${pageIds.length} /Kids [${pageIds.map((id) => `${id} 0 R`).join(' ')}] >>\n`);
+  end();
 
   canvases.forEach((canvas, index) => {
     const pageId = 3 + index * 3;
     const imageId = pageId + 1;
     const contentId = pageId + 2;
     const image = images[index];
-    const content = `q\n${PDF_WIDTH} 0 0 ${PDF_HEIGHT} 0 0 cm\n/Im0 Do\nQ\n`;
-    const contentBytes = ascii(content);
+    const content = ascii(`q\n${PDF_WIDTH} 0 0 ${PDF_HEIGHT} 0 0 cm\n/Im0 Do\nQ\n`);
 
-    beginObject(pageId);
-    pushAscii(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_WIDTH} ${PDF_HEIGHT}] /Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>\n`
-    );
-    endObject();
+    begin(pageId);
+    pushText(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${PDF_WIDTH} ${PDF_HEIGHT}] /Resources << /XObject << /Im0 ${imageId} 0 R >> >> /Contents ${contentId} 0 R >>\n`);
+    end();
 
-    beginObject(imageId);
-    pushAscii(
-      `<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.length} >>\nstream\n`
-    );
+    begin(imageId);
+    pushText(`<< /Type /XObject /Subtype /Image /Width ${canvas.width} /Height ${canvas.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${image.length} >>\nstream\n`);
     push(image);
-    pushAscii('\nendstream\n');
-    endObject();
+    pushText('\nendstream\n');
+    end();
 
-    beginObject(contentId);
-    pushAscii(`<< /Length ${contentBytes.length} >>\nstream\n`);
-    push(contentBytes);
-    pushAscii('endstream\n');
-    endObject();
+    begin(contentId);
+    pushText(`<< /Length ${content.length} >>\nstream\n`);
+    push(content);
+    pushText('endstream\n');
+    end();
   });
 
-  const xrefOffset = byteLength;
-  pushAscii(`xref\n0 ${objectCount + 1}\n`);
-  pushAscii('0000000000 65535 f \n');
+  const xrefOffset = length;
+  pushText(`xref\n0 ${objectCount + 1}\n`);
+  pushText('0000000000 65535 f \n');
   for (let id = 1; id <= objectCount; id += 1) {
-    pushAscii(`${String(offsets[id]).padStart(10, '0')} 00000 n \n`);
+    pushText(`${String(offsets[id]).padStart(10, '0')} 00000 n \n`);
   }
-  pushAscii(`trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
+  pushText(`trailer\n<< /Size ${objectCount + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`);
 
-  return new Blob([concatBytes(chunks)], { type: 'application/pdf' });
+  const bytes = joinBytes(parts);
+  return new Blob([bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)], {
+    type: 'application/pdf',
+  });
 }
 
-function downloadBlob(blob: Blob, fileName: string): void {
+function download(blob: Blob, fileName: string): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -369,8 +353,10 @@ function downloadBlob(blob: Blob, fileName: string): void {
 }
 
 export async function exportSinglePayrollPdf(model: PayrollExportModel): Promise<void> {
-  const blob = await canvasesToPdfBlob([renderPayrollPdfCanvas(model)]);
-  downloadBlob(blob, `${payrollExportFileStem(model)}.pdf`);
+  download(
+    await canvasesToPdfBlob([renderPayrollPdfCanvas(model)]),
+    `${payrollExportFileStem(model)}.pdf`
+  );
 }
 
 export async function exportPeriodPayrollPdf(
@@ -380,7 +366,8 @@ export async function exportPeriodPayrollPdf(
   if (models.length === 0) {
     throw new Error('Bu dönem için CALCULATED veya FINALIZED bordro bulunamadı.');
   }
-  const canvases = models.map(renderPayrollPdfCanvas);
-  const blob = await canvasesToPdfBlob(canvases);
-  downloadBlob(blob, `${periodExportFileStem(period)}_Ucret_Pusulalari.pdf`);
+  download(
+    await canvasesToPdfBlob(models.map(renderPayrollPdfCanvas)),
+    `${periodExportFileStem(period)}_Ucret_Pusulalari.pdf`
+  );
 }
