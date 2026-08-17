@@ -1,5 +1,6 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -247,10 +248,21 @@ impl SettingsRepository {
         crate::domain::calculations::validate_kurum_degerleri_for_payroll(&normalized)?;
         Self::validate_statutory_segments_for_period(&period, &normalized)?;
 
-        let now = Utc::now().to_rfc3339();
         let json_str = serde_json::to_string(&normalized)
             .map_err(|e| crate::domain::DomainError::InvalidData(e.to_string()))?;
+        let existing_json = conn
+            .query_row(
+                "SELECT settings_json FROM institution_settings WHERE period_id = ?1",
+                params![k.donemId],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if existing_json.as_deref() != Some(json_str.as_str()) {
+            PayrollInvalidationRepository::mark_period_and_dependents_stale(conn, &k.donemId)?;
+        }
 
+        let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO institution_settings (period_id, settings_json, updated_at)
              VALUES (?1, ?2, ?3)
@@ -282,6 +294,11 @@ impl SettingsRepository {
     }
 
     pub fn set_app_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
+        let previous = Self::get_app_setting(conn, key)?;
+        if key == ZAM_AYLARI_SETTING_KEY && previous.as_deref() != Some(value) {
+            PayrollInvalidationRepository::mark_all_calculated_stale(conn)?;
+        }
+
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO app_settings (key, value, updated_at)
