@@ -39,6 +39,16 @@
 - `taxYear/taxMonth` çalışma döneminden ayrı ödeme/tahakkuk metadata'sıdır. Varsayılan öneri bitiş ayıdır fakat kullanıcı tarafından değiştirilebilir; backend bunu zorla bitiş ayına eşitlemez.
 - Serbest uzunlukta, 60/100 günlük veya ardışık ay yapısını bozan dönemler veritabanına kaydedilemez.
 
+## TEMPORAL / FINALIZED BÜTÜNLÜĞÜ (2026-08-17 ikinci stres hardening)
+- Çalışma dönemi kimliği `(yil, ay, baslangicTarihi, bitisTarihi, taxYear, taxMonth)` puantaj veya bordro bağlandıktan sonra değiştirilemez; aynı çalışma ayı ve aynı 15–14 tarih aralığı ikinci ID ile oluşturulamaz.
+- Önceki çalışma dönemi ID sırasından değil authoritative başlangıç tarihinden çözülür; devreden PEK zinciri `id DESC` gibi tesadüfi tie-break'e dayanamaz.
+- FINALIZED bordro bulunan dönemin puantajı normal düzenleme yoluyla değiştirilemez.
+- Asgari ücret GV referans kümülatifini etkileyen geçmiş kurum ayarı, aynı vergi yılında o ayı veya sonraki ayları kullanan FINALIZED bordro bulunduğunda değiştirilemez; birebir aynı değerlerin yeniden kaydı idempotent kabul edilir.
+- Personelin kümülatif vergi açılışı ve legacy personel kartındaki GV/asgari GV devir temeli, ilgili tarihsel zincir FINALIZED olduktan sonra normal CRUD ile değiştirilemez.
+- Rapor episode sırası yıllık tarihsel zincirdir. FINALIZED bordroları etkileyebilecek geçmiş rapor ekleme/değiştirme/silme normal CRUD ile yapılamaz.
+- Yıllık vergi parametreleri için ayrı mevzuat-düzeltme/version workflow'u bulunana kadar, ilgili vergi yılında FINALIZED bordro oluştuktan sonra gerçek parametre mutasyonu fail-closed engellenir; birebir aynı payload no-op'tur.
+- Temel deterministik invariant: **aynı FINALIZED geçmiş + aynı cari dönem girdileri + aynı kural bağlamı = aynı bordro sonucu**.
+
 ## DOKUNULMAZ / AYRI SÖZLEŞMELER
 - GÇ/GÇT günlerinin fiili çalışma modeli, PEK alt sınırının yalnız işverene ait tamamlama farkı, SGK prim yuvarlaması, işveren prim oranlarının parametrelerden çözülmesi, yemek SGK/GV istisnalarının ayrı parametre olması ve iş primi grup/oran mantığı mevcut sözleşmelerini korur.
 - Tediye/TİS otomatik üretilmez; kişi+dönem bazında manuel gelir girdisidir.
