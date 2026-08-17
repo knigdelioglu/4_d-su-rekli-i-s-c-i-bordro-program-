@@ -12,6 +12,11 @@ import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 import { PayrollNotice, PayrollNoticeSeverity } from '../types/payrollNotice';
 import { formatTL } from '../utils/payrollUtils';
 import { tauriBridge } from '../services/tauriBridge';
+import {
+  canFinalizePayrollReview,
+  filterFinalizeNotices,
+  hasBlockingFinalizeNotice,
+} from './payrollFinalizeRules';
 
 interface PayrollFinalizeModalProps {
   personel: Personel;
@@ -81,14 +86,13 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
     }),
     [relevantNotices]
   );
-  const hasCritical = counts.critical > 0;
+  const hasCritical = hasBlockingFinalizeNotice(relevantNotices);
   const authoritativeBordro = review?.bordro ?? bordro;
   const canFinalize =
     !isLoading &&
     !isFinalizing &&
     !reviewError &&
-    authoritativeBordro.status === 'CALCULATED' &&
-    !hasCritical;
+    canFinalizePayrollReview(authoritativeBordro.status, relevantNotices);
 
   const loadReview = async (showLoading: boolean): Promise<ReviewSnapshot> => {
     if (!tauriBridge.isTauriAvailable()) {
@@ -108,13 +112,9 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
         throw new Error('Native veritabanında kesinleştirilecek bordro kaydı bulunamadı.');
       }
 
-      const filtered = allNotices
-        .filter(
-          (notice) =>
-            notice.scope === 'PERIOD' ||
-            (notice.scope === 'PERSONNEL' && notice.personnelId === personel.id)
-        )
-        .sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
+      const filtered = filterFinalizeNotices(allNotices, personel.id).sort(
+        (a, b) => severityRank[a.severity] - severityRank[b.severity]
+      );
 
       const snapshot = { bordro: current, notices: filtered };
       setReview(snapshot);
@@ -153,17 +153,19 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
       // Modal açık kaldığı sırada başka bir girdi değişmiş olabilir. Kilitlemeden
       // hemen önce native bordro ve notice listesi ikinci kez authoritative kaynaktan okunur.
       const latest = await loadReview(false);
-      const critical = latest.notices.filter((notice) => notice.severity === 'CRITICAL');
-      if (latest.bordro.status !== 'CALCULATED') {
+      if (!canFinalizePayrollReview(latest.bordro.status, latest.notices)) {
+        if (latest.bordro.status !== 'CALCULATED') {
+          throw new Error(
+            latest.bordro.status === 'STALE'
+              ? 'Bordro bu sırada güncelliğini yitirdi. Önce yeniden hesaplayın.'
+              : `Bordro CALCULATED durumda değil: ${latest.bordro.status}.`
+          );
+        }
+        const criticalCount = latest.notices.filter(
+          (notice) => notice.severity === 'CRITICAL'
+        ).length;
         throw new Error(
-          latest.bordro.status === 'STALE'
-            ? 'Bordro bu sırada güncelliğini yitirdi. Önce yeniden hesaplayın.'
-            : `Bordro CALCULATED durumda değil: ${latest.bordro.status}.`
-        );
-      }
-      if (critical.length > 0) {
-        throw new Error(
-          `Kesinleştirme durduruldu: ${critical.length} kritik bordro kontrolü çözülmeden bordro kilitlenemez.`
+          `Kesinleştirme durduruldu: ${criticalCount} kritik bordro kontrolü çözülmeden bordro kilitlenemez.`
         );
       }
 
