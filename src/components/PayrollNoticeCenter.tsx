@@ -124,6 +124,7 @@ export const PayrollNoticeCenter: React.FC = () => {
     () => ({
       critical: notices.filter((notice) => notice.severity === 'CRITICAL').length,
       warning: notices.filter((notice) => notice.severity === 'WARNING').length,
+      info: notices.filter((notice) => notice.severity === 'INFO').length,
     }),
     [notices]
   );
@@ -145,8 +146,9 @@ export const PayrollNoticeCenter: React.FC = () => {
             <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] font-semibold">
               {counts.critical > 0 && <span className="text-rose-700">{counts.critical} kritik</span>}
               {counts.warning > 0 && <span className="text-amber-700">{counts.warning} kontrol</span>}
-              {counts.critical === 0 && counts.warning === 0 && !loadError && (
-                <span className="text-emerald-700">Aktif uyarı yok</span>
+              {counts.info > 0 && <span className="text-blue-700">{counts.info} bilgi</span>}
+              {counts.critical === 0 && counts.warning === 0 && counts.info === 0 && !loadError && (
+                <span className="text-emerald-700">Aktif bildirim yok</span>
               )}
             </div>
           </div>
