@@ -146,7 +146,13 @@ impl AnnualPayrollParametersRepository {
 
     pub fn save(conn: &Connection, parameters: &AnnualPayrollParameters) -> Result<()> {
         Self::validate(parameters)?;
-        let params_json = serde_json::to_string(parameters).map_err(|e| {
+
+        // `updatedAt` DB metadata'sıdır; domain parametresi değildir. JSON içinde
+        // timestamp değişmesi no-op bir kaydı gerçek mevzuat değişikliği gibi
+        // gösterip bordroları gereksiz STALE yapmamalıdır.
+        let mut persisted = parameters.clone();
+        persisted.updatedAt = None;
+        let params_json = serde_json::to_string(&persisted).map_err(|e| {
             DomainError::InvalidData(format!(
                 "Yıllık bordro parametreleri serileştirilemedi: {}",
                 e
