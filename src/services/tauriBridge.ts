@@ -25,7 +25,11 @@ async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Prom
 }
 
 function emitPayrollDataChanged(): void {
-  if (typeof window !== 'undefined') {
+  if (
+    typeof window !== 'undefined' &&
+    typeof window.dispatchEvent === 'function' &&
+    typeof CustomEvent === 'function'
+  ) {
     window.dispatchEvent(new CustomEvent('payroll:data-changed'));
   }
 }
