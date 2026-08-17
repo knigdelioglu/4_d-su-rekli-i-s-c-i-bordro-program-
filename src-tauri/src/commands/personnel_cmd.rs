@@ -3,7 +3,16 @@ use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
+use rusqlite::params;
 use tauri::State;
+
+fn legacy_tax_basis_changed(old: &Personel, new: &Personel) -> bool {
+    old.devirKumulatifGvMatrahi != new.devirKumulatifGvMatrahi
+        || old.devirKumulatifGvMatrahiYili != new.devirKumulatifGvMatrahiYili
+        || old.devirKumulatifGvMatrahiBaslangicAyi != new.devirKumulatifGvMatrahiBaslangicAyi
+        || old.devirKumulatifAsgariGvMatrahi != new.devirKumulatifAsgariGvMatrahi
+        || old.devirKumulatifAsgariGvMatrahiYili != new.devirKumulatifAsgariGvMatrahiYili
+}
 
 #[tauri::command]
 pub fn get_personnel_list(db: State<'_, DbState>) -> Result<Vec<Personel>> {
@@ -18,6 +27,30 @@ pub fn save_personnel(db: State<'_, DbState>, personel: Personel) -> Result<()> 
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
+
+    if let Some(existing) = PersonnelRepository::get_by_id(&conn, &personel.id)? {
+        if legacy_tax_basis_changed(&existing, &personel) {
+            let finalized_exists: i64 = conn
+                .query_row(
+                    "SELECT EXISTS(
+                        SELECT 1
+                        FROM payroll_records
+                        WHERE personnel_id = ?1 AND status = 'FINALIZED'
+                     )",
+                    params![personel.id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+            if finalized_exists != 0 {
+                return Err(DomainError::PayrollFinalized(
+                    "Bu personelin kesinleşmiş bordrosu bulunduğundan geçmiş kümülatif GV/asgari GV devir temeli personel kartından değiştirilemez."
+                        .into(),
+                ));
+            }
+        }
+    }
+
     PersonnelRepository::save(&conn, &personel)
 }
 
@@ -42,5 +75,43 @@ pub fn save_tax_opening(db: State<'_, DbState>, tax_opening: PersonelTaxOpening)
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
+
+    let finalized_exists: i64 = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM payroll_records AS pr
+                JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                WHERE pr.personnel_id = ?1
+                  AND pp.tax_year = ?2
+                  AND pr.status = 'FINALIZED'
+             )",
+            params![tax_opening.personnelId, tax_opening.year],
+            |row| row.get(0),
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+    if finalized_exists != 0 {
+        // Treat an exact re-save as an idempotent no-op. Any creation or real
+        // mutation after the tax chain has a FINALIZED payroll would rewrite the
+        // opening basis used by later cumulative tax calculations.
+        if let Some(existing) = TaxOpeningRepository::get_by_personnel_and_year(
+            &conn,
+            &tax_opening.personnelId,
+            tax_opening.year,
+        )? {
+            if existing.gvCumulativeOpening == tax_opening.gvCumulativeOpening
+                && existing.effectiveFromPeriodId == tax_opening.effectiveFromPeriodId
+            {
+                return Ok(());
+            }
+        }
+
+        return Err(DomainError::PayrollFinalized(
+            "Bu personelin ilgili vergi yılında kesinleşmiş bordrosu bulunduğundan kümülatif vergi açılışı değiştirilemez."
+                .into(),
+        ));
+    }
+
     TaxOpeningRepository::save(&conn, &tax_opening)
 }
