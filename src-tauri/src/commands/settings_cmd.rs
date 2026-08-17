@@ -7,6 +7,14 @@ use rusqlite::params;
 use std::collections::HashMap;
 use tauri::State;
 
+fn normalized_settings_json(settings: &DonemselKurumDegerleri) -> Result<String> {
+    let mut normalized = settings.clone();
+    if normalized.gunlukYemekIstisnasiGV.is_none() {
+        normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
+    }
+    serde_json::to_string(&normalized).map_err(|e| DomainError::InvalidData(e.to_string()))
+}
+
 #[tauri::command]
 pub fn get_institution_settings(
     db: State<'_, DbState>,
@@ -53,6 +61,14 @@ pub fn save_institution_settings(
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
     if finalized_dependency != 0 {
+        // Saving the exact same effective values is harmless and keeps UI save
+        // actions idempotent. Only a real historical mutation is prohibited.
+        if let Some(existing) = SettingsRepository::get_institution_settings(&conn, &settings.donemId)? {
+            if normalized_settings_json(&existing)? == normalized_settings_json(&settings)? {
+                return Ok(());
+            }
+        }
+
         return Err(DomainError::PayrollFinalized(
             "Bu dönemin kurum ayarları kesinleşmiş bordro zincirinde kullanıldığından değiştirilemez."
                 .into(),
