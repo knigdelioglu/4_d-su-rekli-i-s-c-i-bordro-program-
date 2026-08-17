@@ -237,6 +237,16 @@ impl PayrollPreflightService {
             return Ok(());
         }
 
+        let skipped_months = (distance - 1) as i32;
+        let still_live = positive
+            .iter()
+            .any(|item| item.kalanAySayisi - skipped_months > 0);
+        if !still_live {
+            // Taşıma penceresi aradaki aylar içinde zaten dolmuşsa aktif
+            // dönemde boş PEK gelmesi doğru davranıştır; gereksiz bloklama yapma.
+            return Ok(());
+        }
+
         if status != "CALCULATED" && status != "FINALIZED" {
             return Err(DomainError::ValidationError(format!(
                 "{} dönemindeki son önceki bordro {} durumda ve devreden PEK taşıyor. Önce bu bordroyu yeniden hesaplayın.",
@@ -261,7 +271,7 @@ impl PayrollPreflightService {
         match expected_previous_period_id {
             None => {
                 return Err(DomainError::ValidationError(format!(
-                    "{} personelinde {} döneminden gelen devreden PEK var fakat {}-{:02} ara çalışma dönemi oluşturulmamış. PEK süresini yanlış taşımamak için eksik dönemi tamamlayın.",
+                    "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli fakat {}-{:02} ara çalışma dönemi oluşturulmamış. PEK süresini yanlış taşımamak için eksik dönemi tamamlayın.",
                     personnel_id, source_period_id, expected_previous_year, expected_previous_month
                 )));
             }
@@ -280,19 +290,11 @@ impl PayrollPreflightService {
                     return Ok(());
                 }
 
-                let skipped_months = (distance - 1) as i32;
-                let still_live = positive
-                    .iter()
-                    .any(|item| item.kalanAySayisi - skipped_months > 0);
-                if still_live {
-                    return Err(DomainError::ValidationError(format!(
-                        "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
-                        personnel_id, source_period_id, previous_period_id
-                    )));
-                }
+                return Err(DomainError::ValidationError(format!(
+                    "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
+                    personnel_id, source_period_id, previous_period_id
+                )));
             }
         }
-
-        Ok(())
     }
 }
