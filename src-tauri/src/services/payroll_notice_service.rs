@@ -136,7 +136,11 @@ impl PayrollNoticeService {
 
             let missing_dates: Vec<String> = period_dates
                 .iter()
-                .filter(|date| !attendance.gunler.contains_key(&date.format("%Y-%m-%d").to_string()))
+                .filter(|date| {
+                    !attendance
+                        .gunler
+                        .contains_key(&date.format("%Y-%m-%d").to_string())
+                })
                 .map(|date| date.format("%Y-%m-%d").to_string())
                 .collect();
 
@@ -171,9 +175,9 @@ impl PayrollNoticeService {
                 .filter(|(_, code)| code.as_str() == "R")
                 .filter_map(|(date_text, _)| {
                     let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").ok()?;
-                    let covered = report_ranges
-                        .iter()
-                        .any(|(report_start, report_end)| date >= *report_start && date <= *report_end);
+                    let covered = report_ranges.iter().any(|(report_start, report_end)| {
+                        date >= *report_start && date <= *report_end
+                    });
                     (!covered).then(|| date_text.clone())
                 })
                 .collect();
@@ -197,9 +201,9 @@ impl PayrollNoticeService {
             let report_without_r: Vec<String> = period_dates
                 .iter()
                 .filter(|date| {
-                    report_ranges
-                        .iter()
-                        .any(|(report_start, report_end)| **date >= *report_start && **date <= *report_end)
+                    report_ranges.iter().any(|(report_start, report_end)| {
+                        **date >= *report_start && **date <= *report_end
+                    })
                 })
                 .filter_map(|date| {
                     let date_text = date.format("%Y-%m-%d").to_string();
@@ -235,7 +239,10 @@ impl PayrollNoticeService {
         annual_parameters: Option<&AnnualPayrollParameters>,
         notices: &mut Vec<PayrollNotice>,
     ) {
-        if !matches!(payroll.status, BordroStatus::CALCULATED | BordroStatus::FINALIZED) {
+        if !matches!(
+            payroll.status,
+            BordroStatus::CALCULATED | BordroStatus::FINALIZED
+        ) {
             return;
         }
 
@@ -321,8 +328,8 @@ impl PayrollNoticeService {
         let Some(gv_detail) = payroll.gvDetay.as_ref() else {
             return;
         };
-        let previous_cumulative = (gv_detail.yeniKumulatifGvMatrahi - gv_detail.cariGvMatrahi)
-            .max(Decimal::ZERO);
+        let previous_cumulative =
+            (gv_detail.yeniKumulatifGvMatrahi - gv_detail.cariGvMatrahi).max(Decimal::ZERO);
         let slices = Self::tax_slices(
             previous_cumulative,
             gv_detail.yeniKumulatifGvMatrahi,
@@ -382,7 +389,10 @@ impl PayrollNoticeService {
             if end < start {
                 continue;
             }
-            year_groups.entry(start.year()).or_default().push((start, end));
+            year_groups
+                .entry(start.year())
+                .or_default()
+                .push((start, end));
         }
 
         for (year, mut episodes) in year_groups {
@@ -522,10 +532,16 @@ impl PayrollNoticeService {
         };
 
         let previous_period = PeriodRepository::get_previous_by_work_period(conn, period)?;
-        let mut details = vec![format!("Zam yürürlük tarihi: {}", raise_date.format("%Y-%m-%d"))];
+        let mut details = vec![format!(
+            "Zam yürürlük tarihi: {}",
+            raise_date.format("%Y-%m-%d")
+        )];
 
         if let Some(current) = current_settings.as_ref() {
-            details.push(format!("Yeni günlük taban: {} TL", current.gunlukTabanUcret));
+            details.push(format!(
+                "Yeni günlük taban: {} TL",
+                current.gunlukTabanUcret
+            ));
         }
 
         match previous_period {
@@ -639,7 +655,8 @@ impl PayrollNoticeService {
                     continue;
                 };
                 if candidate >= start && candidate <= end {
-                    result = Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
+                    result =
+                        Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
                 }
             }
         }
@@ -647,9 +664,8 @@ impl PayrollNoticeService {
     }
 
     fn parse_date(value: &str, label: &str) -> Result<NaiveDate> {
-        NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| {
-            DomainError::InvalidData(format!("Geçersiz {label} tarihi: {value}"))
-        })
+        NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .map_err(|_| DomainError::InvalidData(format!("Geçersiz {label} tarihi: {value}")))
     }
 
     fn date_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
@@ -676,6 +692,9 @@ impl PayrollNoticeService {
     }
 
     fn format_rate(rate: Decimal) -> String {
-        (rate * Decimal::from(100)).round_dp(2).normalize().to_string()
+        (rate * Decimal::from(100))
+            .round_dp(2)
+            .normalize()
+            .to_string()
     }
 }
