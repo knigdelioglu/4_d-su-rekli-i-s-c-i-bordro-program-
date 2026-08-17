@@ -1,5 +1,5 @@
 use crate::domain::models::*;
-use crate::domain::Result;
+use crate::domain::{DomainError, Result};
 use crate::repositories::period_repo::PeriodRepository;
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
@@ -38,6 +38,31 @@ impl SettingsRepository {
             value.gunlukYemekIstisnasiGV = value.gunlukYemekIstisnasiSGK;
         }
         Ok(value)
+    }
+
+    fn ensure_period_settings_mutable(conn: &Connection, period_id: &str) -> Result<()> {
+        let closed: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payroll_records AS pr
+                    JOIN payroll_periods AS finalized_period ON finalized_period.id = pr.period_id
+                    JOIN payroll_periods AS target_period ON target_period.id = ?1
+                    WHERE pr.status = 'FINALIZED'
+                      AND finalized_period.baslangic_tarihi >= target_period.baslangic_tarihi
+                 )",
+                params![period_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if closed != 0 {
+            return Err(DomainError::PayrollFinalized(
+                "Kesinleştirilmiş bordro tarihçesinde kullanılan bu dönem kurum/TİS ayarları değiştirilemez."
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn get_all_institution_settings(
@@ -213,6 +238,8 @@ impl SettingsRepository {
                 k.donemId
             ))
         })?;
+        Self::ensure_period_settings_mutable(conn, &k.donemId)?;
+
         let mut normalized = k.clone();
         if normalized.gunlukYemekIstisnasiGV.is_none() {
             normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
