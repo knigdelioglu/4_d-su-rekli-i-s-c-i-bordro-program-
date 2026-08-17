@@ -122,7 +122,15 @@ fn period_repository_rejects_duplicate_tax_year_month() {
     let p2 = period("2026-06", 2026, 6, 2026, 6);
     PeriodRepository::save(&conn, &p1).unwrap();
     let err = PeriodRepository::save(&conn, &p2).unwrap_err();
-    assert!(matches!(err, DomainError::ValidationError(message) if message.contains("çakışması")));
+    // Ardışık iki çalışma döneminin aynı vergi ayını paylaşması hem duplicate
+    // tax-month hem de strict vergi kronolojisi ihlalidir. Repository her iki
+    // yoldan da fail-closed davranabilir; aşağıdaki raw SQL testi unique index'i
+    // ayrıca doğrular.
+    assert!(matches!(
+        err,
+        DomainError::ValidationError(message)
+            if message.contains("çakışması") || message.contains("Vergi kronolojisi")
+    ));
 }
 
 #[test]
