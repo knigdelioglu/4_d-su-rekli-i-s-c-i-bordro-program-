@@ -36,6 +36,7 @@ import {
   formatTL,
 } from '../utils/payrollUtils';
 import { PaySlipModal } from './PaySlipModal';
+import { PayrollFinalizeModal } from './PayrollFinalizeModal';
 import { tauriBridge } from '../services/tauriBridge';
 
 function formatPayrollError(err: unknown): string {
@@ -291,39 +292,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     }
   };
 
-  const handleFinalize = async (person: Personel, e: React.MouseEvent) => {
-    e.stopPropagation();
-    const bordro = bordrolar.find(
-      (item) => item.personelId === person.id && item.donemId === aktifDonem.id
-    );
-    if (!bordro) {
-      setErrorMessage('Kesinleştirme için önce bordroyu hesaplayın.');
-      return;
-    }
-    if (bordro.status === 'FINALIZED') return;
-    if (bordro.status === 'STALE') {
-      setErrorMessage('Güncelliğini yitirmiş (STALE) bordro kesinleştirilemez. Önce yeniden hesaplayın.');
-      return;
-    }
-    if (bordro.status === 'DRAFT') {
-      setErrorMessage('Taslak (DRAFT) bordro kesinleştirilemez. Önce hesaplayın.');
-      return;
-    }
-    if (!window.confirm(`${person.ad} ${person.soyad} bordrosu kesinleştirilsin mi? Kesinleştirilen bordro değiştirilemez.`)) {
-      return;
-    }
-
-    try {
-      if (tauriBridge.isTauriAvailable()) {
-        await tauriBridge.setPayrollStatus(person.id, aktifDonem.id, 'FINALIZED');
-      }
-      await onSaveBordro({ ...bordro, status: 'FINALIZED' as BordroStatus });
-      setErrorMessage(null);
-      setSuccessMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildi.`);
-      setTimeout(() => setSuccessMessage(null), 3500);
-    } catch (err) {
-      setErrorMessage(`Bordro kesinleştirilemedi: ${String(err)}`);
-    }
+  const handleFinalizeSuccess = async (person: Personel, finalizedBordro: BordroKaydi) => {
+    await onSaveBordro({ ...finalizedBordro, status: 'FINALIZED' as BordroStatus });
+    setErrorMessage(null);
+    setSuccessMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildi.`);
+    setTimeout(() => setSuccessMessage(null), 3500);
   };
 
   // Filtered personnel list
@@ -798,15 +771,19 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                 </button>
                               )}
 
-                              {isCalculated && !isFinalized && (
-                                <button
-                                  onClick={(e) => handleFinalize(person, e)}
-                                  title="Bordroyu kesinleştir"
-                                  className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
-                                >
-                                  <CheckCircle2 className="w-3.5 h-3.5" />
-                                  <span>Kesinleştir</span>
-                                </button>
+                              {isCalculated && !isFinalized && bordro && (
+                                <PayrollFinalizeModal
+                                  personel={person}
+                                  bordro={bordro}
+                                  donem={aktifDonem}
+                                  onFinalized={(finalizedBordro) =>
+                                    handleFinalizeSuccess(person, finalizedBordro)
+                                  }
+                                  onError={(message) => {
+                                    setSuccessMessage(null);
+                                    setErrorMessage(message);
+                                  }}
+                                />
                               )}
                             </>
                           ) : (
