@@ -34,7 +34,7 @@ describe('payroll finalize review rules', () => {
     const notices = [notice('MISSING_ATTENDANCE', 'CRITICAL', 'PERSONNEL', 'p2')];
     const relevant = filterFinalizeNotices(notices, 'p1');
 
-    expect(relevant).toHaveLength(0);
+    expect(relevant.length).toBe(0);
     expect(canFinalizePayrollReview('CALCULATED', relevant)).toBe(true);
   });
 
@@ -45,7 +45,7 @@ describe('payroll finalize review rules', () => {
     ];
     const relevant = filterFinalizeNotices(notices, 'p1');
 
-    expect(relevant).toHaveLength(2);
+    expect(relevant.length).toBe(2);
     expect(hasBlockingFinalizeNotice(relevant)).toBe(false);
     expect(canFinalizePayrollReview('CALCULATED', relevant)).toBe(true);
   });
