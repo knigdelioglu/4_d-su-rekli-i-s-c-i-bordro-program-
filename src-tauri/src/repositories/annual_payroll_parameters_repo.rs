@@ -1,5 +1,6 @@
 use crate::domain::models::{AnnualPayrollParameters, TaxBracket, OPEN_ENDED_TAX_BRACKET_LIMIT};
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_decimal::Decimal;
@@ -145,14 +146,25 @@ impl AnnualPayrollParametersRepository {
 
     pub fn save(conn: &Connection, parameters: &AnnualPayrollParameters) -> Result<()> {
         Self::validate(parameters)?;
-        let now = Utc::now().to_rfc3339();
         let params_json = serde_json::to_string(parameters).map_err(|e| {
             DomainError::InvalidData(format!(
                 "Yıllık bordro parametreleri serileştirilemedi: {}",
                 e
             ))
         })?;
+        let previous_json = conn
+            .query_row(
+                "SELECT params_json FROM annual_payroll_parameters WHERE year = ?1",
+                params![parameters.year],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if previous_json.as_deref() != Some(params_json.as_str()) {
+            PayrollInvalidationRepository::mark_tax_year_stale(conn, parameters.year)?;
+        }
 
+        let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO annual_payroll_parameters (year, params_json, updated_at)
              VALUES (?1, ?2, ?3)
