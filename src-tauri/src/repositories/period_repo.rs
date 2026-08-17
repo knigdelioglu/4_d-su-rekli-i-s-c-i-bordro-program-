@@ -102,9 +102,10 @@ impl PeriodRepository {
         Ok(())
     }
 
-    /// Vergi ayı ayrı metadata olabilir ancak bordro döneminden kopuk, üçüncü bir
-    /// aya atanamaz. 15-14 döneminde vergi/tahakkuk ayı yalnız başlangıç veya bitiş
-    /// takvim aylarından biri olabilir.
+    /// Production bordro hesabında vergi ayı 15-14 çalışma döneminin başlangıç
+    /// veya bitiş takvim ayıyla örtüşmelidir. Bu kontrol hesaplama preflight'ında
+    /// çağrılır; repository save ise eski fixture/legacy kayıtlarını salt bu nedenle
+    /// kullanılamaz hale getirmez.
     pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
         Self::validate_period(period)?;
         let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
@@ -129,7 +130,7 @@ impl PeriodRepository {
     /// bağımlılık doğurur. Çalışma dönemi ilerledikçe vergi sırası da strictly
     /// ileri gitmek zorundadır.
     pub fn validate_tax_chronology(conn: &Connection, period: &BordroDonemi) -> Result<()> {
-        Self::validate_tax_month_overlap(period)?;
+        Self::validate_period(period)?;
         let current_key = Self::tax_ordinal(period.taxYear, period.taxMonth);
 
         let previous = conn
