@@ -1,5 +1,6 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -210,6 +211,20 @@ impl AttendanceRepository {
         let period = Self::period_for_attendance(conn, &p.donemId)?;
         Self::validate_attendance_for_period(p, &period)?;
         Self::ensure_not_finalized(conn, &p.personelId, &p.donemId)?;
+
+        let changed = Self::get_by_personnel_and_period(conn, &p.personelId, &p.donemId)?
+            .map(|existing| existing.gunler != p.gunler)
+            .unwrap_or(true);
+        if changed {
+            // Önce STALE yap: puantaj yazımı sonradan hata verse bile yalnız
+            // gereksiz bir yeniden hesaplama gerekir; eski bordronun güncel
+            // sanılması hiçbir durumda mümkün olmaz.
+            PayrollInvalidationRepository::mark_person_period_and_dependents_stale(
+                conn,
+                &p.personelId,
+                &p.donemId,
+            )?;
+        }
 
         let now = Utc::now().to_rfc3339();
         let json_str = serde_json::to_string(&p.gunler)
