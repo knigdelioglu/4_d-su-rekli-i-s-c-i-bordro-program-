@@ -1,13 +1,19 @@
+use crate::domain::models::{
+    AnnualPayrollParameters, BordroKaydi, BordroStatus, SickLeaveRecord, TaxBracket,
+};
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::attendance_repo::AttendanceRepository;
+use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use chrono::{Datelike, Duration, NaiveDate};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::Connection;
+use rust_decimal::Decimal;
 use serde::Serialize;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -51,23 +57,29 @@ impl PayrollNoticeService {
         let end = Self::parse_date(&period.bitisTarihi, "dönem bitiş")?;
         let period_dates = Self::date_range(start, end);
         let personnel = PersonnelRepository::get_all(conn)?;
+        let annual_parameters =
+            AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?;
+        let payrolls_by_person: HashMap<String, BordroKaydi> = PayrollRepository::get_all(conn)?
+            .into_iter()
+            .filter(|payroll| payroll.donemId == period_id)
+            .map(|payroll| (payroll.personelId.clone(), payroll))
+            .collect();
 
         let mut notices = Vec::new();
-        Self::append_period_parameter_notices(conn, &period, start, end, &mut notices)?;
+        Self::append_period_parameter_notices(
+            conn,
+            &period,
+            start,
+            end,
+            annual_parameters.as_ref(),
+            &mut notices,
+        )?;
 
         for person in personnel {
             let full_name = format!("{} {}", person.ad, person.soyad);
+            let payroll = payrolls_by_person.get(&person.id);
 
-            let payroll_status = conn
-                .query_row(
-                    "SELECT status FROM payroll_records WHERE personnel_id = ?1 AND period_id = ?2",
-                    params![person.id, period_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-
-            if payroll_status.as_deref() == Some("STALE") {
+            if payroll.is_some_and(|record| record.status == BordroStatus::STALE) {
                 notices.push(PayrollNotice {
                     code: "STALE_PAYROLL".into(),
                     severity: PayrollNoticeSeverity::Critical,
@@ -81,6 +93,26 @@ impl PayrollNoticeService {
                     action: Some("RECALCULATE_PAYROLL".into()),
                 });
             }
+
+            if let Some(record) = payroll {
+                Self::append_payroll_result_notices(
+                    &person.id,
+                    &full_name,
+                    record,
+                    annual_parameters.as_ref(),
+                    &mut notices,
+                );
+            }
+
+            let sick_records = SickLeaveRepository::get_by_personnel(conn, &person.id)?;
+            Self::append_sick_leave_quota_notices(
+                &person.id,
+                &full_name,
+                &sick_records,
+                start,
+                end,
+                &mut notices,
+            );
 
             let attendance =
                 AttendanceRepository::get_by_personnel_and_period(conn, &person.id, period_id)?;
@@ -124,9 +156,8 @@ impl PayrollNoticeService {
                 });
             }
 
-            let sick_records = SickLeaveRepository::get_by_personnel(conn, &person.id)?;
             let mut report_ranges = Vec::new();
-            for record in sick_records {
+            for record in &sick_records {
                 let record_start = Self::parse_date(&record.startDate, "rapor başlangıç")?;
                 let record_end = Self::parse_date(&record.endDate, "rapor bitiş")?;
                 if record_start <= end && record_end >= start {
@@ -197,15 +228,230 @@ impl PayrollNoticeService {
         Ok(notices)
     }
 
+    fn append_payroll_result_notices(
+        personnel_id: &str,
+        full_name: &str,
+        payroll: &BordroKaydi,
+        annual_parameters: Option<&AnnualPayrollParameters>,
+        notices: &mut Vec<PayrollNotice>,
+    ) {
+        if !matches!(payroll.status, BordroStatus::CALCULATED | BordroStatus::FINALIZED) {
+            return;
+        }
+
+        let incoming = payroll.devredenPekGelen.as_deref().unwrap_or(&[]);
+        let outgoing = payroll.sonrakiDevredenPek.as_deref().unwrap_or(&[]);
+        let incoming_total = incoming
+            .iter()
+            .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
+            .fold(Decimal::ZERO, |total, item| total + item.tutar)
+            .round_dp(2);
+        let outgoing_total = outgoing
+            .iter()
+            .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
+            .fold(Decimal::ZERO, |total, item| total + item.tutar)
+            .round_dp(2);
+        let used = payroll
+            .pekDetay
+            .as_ref()
+            .map_or(Decimal::ZERO, |detail| detail.devredenPekKullanilan)
+            .round_dp(2);
+
+        if incoming_total > Decimal::ZERO {
+            let mut details = vec![format!("Bu ay kullanılan: {}", Self::format_money(used))];
+            if outgoing_total > Decimal::ZERO {
+                details.push(format!(
+                    "Sonraki döneme devreden: {}",
+                    Self::format_money(outgoing_total)
+                ));
+            }
+            notices.push(PayrollNotice {
+                code: "INCOMING_PEK_CARRY".into(),
+                severity: PayrollNoticeSeverity::Info,
+                scope: PayrollNoticeScope::Personnel,
+                personnel_id: Some(personnel_id.to_string()),
+                title: "Devreden PEK uygulanıyor".into(),
+                message: format!(
+                    "{full_name} için önceki dönemlerden {} PEK geldi. Cari ay tavanına sığan kısım prim matrahına dahil edildi.",
+                    Self::format_money(incoming_total)
+                ),
+                details,
+                action: Some("REVIEW_PEK".into()),
+            });
+        } else if outgoing_total > Decimal::ZERO {
+            notices.push(PayrollNotice {
+                code: "OUTGOING_PEK_CARRY".into(),
+                severity: PayrollNoticeSeverity::Info,
+                scope: PayrollNoticeScope::Personnel,
+                personnel_id: Some(personnel_id.to_string()),
+                title: "PEK sonraki döneme devredilecek".into(),
+                message: format!(
+                    "{full_name} bordrosunda PEK tavanını aşan/kullanılamayan {} sonraki döneme taşınacak.",
+                    Self::format_money(outgoing_total)
+                ),
+                details: Vec::new(),
+                action: Some("REVIEW_PEK".into()),
+            });
+        }
+
+        let last_month_total = incoming
+            .iter()
+            .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi == 1)
+            .fold(Decimal::ZERO, |total, item| total + item.tutar)
+            .round_dp(2);
+        if last_month_total > Decimal::ZERO {
+            notices.push(PayrollNotice {
+                code: "PEK_CARRY_LAST_MONTH".into(),
+                severity: PayrollNoticeSeverity::Warning,
+                scope: PayrollNoticeScope::Personnel,
+                personnel_id: Some(personnel_id.to_string()),
+                title: "Devreden PEK için son kullanım ayı".into(),
+                message: format!(
+                    "{full_name} için {} tutarındaki devreden PEK kaydının kullanım hakkı bu ay sona eriyor. Cari ay tavanına sığmayan kısmı sonraki döneme taşınmayacak.",
+                    Self::format_money(last_month_total)
+                ),
+                details: Vec::new(),
+                action: Some("REVIEW_PEK".into()),
+            });
+        }
+
+        let Some(parameters) = annual_parameters else {
+            return;
+        };
+        let Some(gv_detail) = payroll.gvDetay.as_ref() else {
+            return;
+        };
+        let previous_cumulative = (gv_detail.yeniKumulatifGvMatrahi - gv_detail.cariGvMatrahi)
+            .max(Decimal::ZERO);
+        let slices = Self::tax_slices(
+            previous_cumulative,
+            gv_detail.yeniKumulatifGvMatrahi,
+            &parameters.gelirVergisiDilimleri,
+        );
+        let Some((_, first_rate)) = slices.first() else {
+            return;
+        };
+        let Some((_, last_rate)) = slices.last() else {
+            return;
+        };
+        if slices.len() < 2 || first_rate == last_rate {
+            return;
+        }
+
+        notices.push(PayrollNotice {
+            code: "INCOME_TAX_BRACKET_TRANSITION".into(),
+            severity: PayrollNoticeSeverity::Warning,
+            scope: PayrollNoticeScope::Personnel,
+            personnel_id: Some(personnel_id.to_string()),
+            title: "Gelir vergisi dilimi değişti".into(),
+            message: format!(
+                "{full_name} bordrosunda kümülatif GV matrahı bu ay %{} diliminden %{} dilimine geçti.",
+                Self::format_rate(*first_rate),
+                Self::format_rate(*last_rate)
+            ),
+            details: slices
+                .iter()
+                .map(|(amount, rate)| {
+                    format!(
+                        "{} matrah %{}",
+                        Self::format_money(*amount),
+                        Self::format_rate(*rate)
+                    )
+                })
+                .collect(),
+            action: Some("REVIEW_TAX_DETAIL".into()),
+        });
+    }
+
+    fn append_sick_leave_quota_notices(
+        personnel_id: &str,
+        full_name: &str,
+        records: &[SickLeaveRecord],
+        period_start: NaiveDate,
+        period_end: NaiveDate,
+        notices: &mut Vec<PayrollNotice>,
+    ) {
+        let mut year_groups: BTreeMap<i32, Vec<(NaiveDate, NaiveDate)>> = BTreeMap::new();
+        for record in records {
+            let (Ok(start), Ok(end)) = (
+                NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d"),
+                NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d"),
+            ) else {
+                continue;
+            };
+            if end < start {
+                continue;
+            }
+            year_groups.entry(start.year()).or_default().push((start, end));
+        }
+
+        for (year, mut episodes) in year_groups {
+            episodes.sort_by_key(|episode| (episode.0, episode.1));
+            episodes.dedup();
+
+            for (index, (start, end)) in episodes.iter().enumerate() {
+                if *start < period_start || *start > period_end {
+                    continue;
+                }
+                let episode_number = index + 1;
+                let details = vec![format!(
+                    "Rapor: {} – {}",
+                    start.format("%Y-%m-%d"),
+                    end.format("%Y-%m-%d")
+                )];
+
+                if episode_number < 5 {
+                    notices.push(PayrollNotice {
+                        code: "SICK_LEAVE_QUOTA_INFO".into(),
+                        severity: PayrollNoticeSeverity::Info,
+                        scope: PayrollNoticeScope::Personnel,
+                        personnel_id: Some(personnel_id.to_string()),
+                        title: format!("Rapor kotası: {episode_number}. vaka"),
+                        message: format!(
+                            "{full_name} için bu kayıt {year} yılındaki {episode_number}. rapor vakasıdır. Raporun ilk en fazla 2 günü kurumca ödenir."
+                        ),
+                        details,
+                        action: Some("CHECK_SICK_LEAVE".into()),
+                    });
+                } else if episode_number == 5 {
+                    notices.push(PayrollNotice {
+                        code: "SICK_LEAVE_QUOTA_LAST_PAID".into(),
+                        severity: PayrollNoticeSeverity::Warning,
+                        scope: PayrollNoticeScope::Personnel,
+                        personnel_id: Some(personnel_id.to_string()),
+                        title: "Kurum ödemeli son rapor vakası".into(),
+                        message: format!(
+                            "{full_name} için bu kayıt {year} yılındaki 5. rapor vakasıdır. İlk en fazla 2 gün kurumca ödenir; bu yıldaki sonraki rapor vakalarında ilk iki gün kurumca ödenmeyecektir."
+                        ),
+                        details,
+                        action: Some("CHECK_SICK_LEAVE".into()),
+                    });
+                } else {
+                    notices.push(PayrollNotice {
+                        code: "SICK_LEAVE_QUOTA_EXHAUSTED".into(),
+                        severity: PayrollNoticeSeverity::Warning,
+                        scope: PayrollNoticeScope::Personnel,
+                        personnel_id: Some(personnel_id.to_string()),
+                        title: "Yıllık rapor kotası dolu".into(),
+                        message: format!(
+                            "{full_name} için bu kayıt {year} yılındaki {episode_number}. rapor vakasıdır. Yıllık ilk 5 vaka kotası dolduğu için bu raporun ilk iki günü kurumca ödenmeyecektir."
+                        ),
+                        details,
+                        action: Some("CHECK_SICK_LEAVE".into()),
+                    });
+                }
+            }
+        }
+    }
+
     fn append_period_parameter_notices(
         conn: &Connection,
         period: &crate::domain::models::BordroDonemi,
         start: NaiveDate,
         end: NaiveDate,
+        annual_parameters: Option<&AnnualPayrollParameters>,
         notices: &mut Vec<PayrollNotice>,
     ) -> Result<()> {
-        let annual_parameters =
-            AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?;
         match annual_parameters {
             None => notices.push(PayrollNotice {
                 code: "MISSING_ANNUAL_PAYROLL_PARAMETERS".into(),
@@ -343,6 +589,38 @@ impl PayrollNoticeService {
         Ok(())
     }
 
+    fn tax_slices(
+        previous_cumulative: Decimal,
+        new_cumulative: Decimal,
+        brackets: &[TaxBracket],
+    ) -> Vec<(Decimal, Decimal)> {
+        let mut result = Vec::new();
+        let mut lower = previous_cumulative.max(Decimal::ZERO);
+        let upper_total = new_cumulative.max(lower);
+
+        for bracket in brackets {
+            if lower >= upper_total {
+                break;
+            }
+            if lower >= bracket.limit {
+                continue;
+            }
+            let upper = upper_total.min(bracket.limit);
+            if upper > lower {
+                result.push(((upper - lower).round_dp(2), bracket.oran));
+                lower = upper;
+            }
+        }
+
+        if lower < upper_total {
+            if let Some(last) = brackets.last() {
+                result.push(((upper_total - lower).round_dp(2), last.oran));
+            }
+        }
+
+        result
+    }
+
     fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
         let Some(raw) = SettingsRepository::get_app_setting(conn, ZAM_AYLARI_SETTING_KEY)? else {
             return Ok(Vec::new());
@@ -391,5 +669,13 @@ impl PayrollNoticeService {
             details.push(format!("+{} gün daha", dates.len() - PREVIEW_LIMIT));
         }
         details
+    }
+
+    fn format_money(value: Decimal) -> String {
+        format!("{:.2} TL", value.round_dp(2))
+    }
+
+    fn format_rate(rate: Decimal) -> String {
+        (rate * Decimal::from(100)).round_dp(2).normalize().to_string()
     }
 }
