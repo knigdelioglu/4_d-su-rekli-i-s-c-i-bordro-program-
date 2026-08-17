@@ -23,16 +23,18 @@ pub fn save_attendance(db: State<'_, DbState>, attendance: PersonelPuantaj) -> R
         .query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM payroll_records
-                WHERE period_id = ?1 AND status = 'FINALIZED'
+                WHERE personnel_id = ?1
+                  AND period_id = ?2
+                  AND status = 'FINALIZED'
              )",
-            params![attendance.donemId],
+            params![attendance.personelId, attendance.donemId],
             |row| row.get(0),
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
     if has_finalized != 0 {
         return Err(DomainError::PayrollFinalized(
-            "Bu dönemin puantajı kesinleşmiş bordro bulunduğundan değiştirilemez.".into(),
+            "Bu personelin kesinleşmiş bordrosuna ait puantaj değiştirilemez.".into(),
         ));
     }
 
