@@ -28,6 +28,14 @@ impl PeriodService {
         Ok(exists != 0)
     }
 
+    fn normalized_settings_json(settings: &DonemselKurumDegerleri) -> Result<String> {
+        let mut normalized = settings.clone();
+        if normalized.gunlukYemekIstisnasiGV.is_none() {
+            normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
+        }
+        serde_json::to_string(&normalized).map_err(|e| DomainError::InvalidData(e.to_string()))
+    }
+
     fn ensure_period_identity_mutation_allowed(
         conn: &Connection,
         old: &BordroDonemi,
@@ -104,10 +112,18 @@ impl PeriodService {
         }
 
         // Apply the dependency guard to both updates and new historical rows.
-        // Otherwise a missing old period/settings row could be inserted after a
-        // later payroll was finalized and retroactively change its reference
-        // cumulative when that payroll is reproduced.
-        if Self::has_finalized_settings_dependency(&tx, period)? {
+        // An exact re-save is allowed so harmless label/UI saves remain
+        // idempotent; any new or changed historical setting is rejected.
+        let finalized_dependency = Self::has_finalized_settings_dependency(&tx, period)?;
+        let existing_settings = SettingsRepository::get_institution_settings(&tx, &period.id)?;
+        let same_settings = match existing_settings.as_ref() {
+            Some(existing) => {
+                Self::normalized_settings_json(existing)? == Self::normalized_settings_json(settings)?
+            }
+            None => false,
+        };
+
+        if finalized_dependency && !same_settings {
             return Err(DomainError::PayrollFinalized(
                 "Bu dönemin kurum ayarları kesinleşmiş bordro zincirini geriye dönük değiştireceğinden kaydedilemez."
                     .into(),
@@ -115,7 +131,9 @@ impl PeriodService {
         }
 
         PeriodRepository::save(&tx, period)?;
-        SettingsRepository::save_institution_settings(&tx, settings)?;
+        if !same_settings {
+            SettingsRepository::save_institution_settings(&tx, settings)?;
+        }
         tx.commit()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
