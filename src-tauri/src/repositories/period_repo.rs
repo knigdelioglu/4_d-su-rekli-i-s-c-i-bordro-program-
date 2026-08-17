@@ -20,6 +20,15 @@ impl PeriodRepository {
         })
     }
 
+    fn latest_finalized_period_start(conn: &Connection) -> Result<Option<String>> {
+        conn.query_row(
+            "SELECT MAX(pp.baslangic_tarihi)\n             FROM payroll_records AS pr\n             JOIN payroll_periods AS pp ON pp.id = pr.period_id\n             WHERE pr.status = 'FINALIZED'",
+            [],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))
+    }
+
     pub fn validate_period(period: &BordroDonemi) -> Result<()> {
         if period.yil <= 0 || !(1..=12).contains(&period.ay) {
             return Err(crate::domain::DomainError::ValidationError(
@@ -155,28 +164,100 @@ impl PeriodRepository {
         conn: &Connection,
         active_period: &BordroDonemi,
     ) -> Result<Option<BordroDonemi>> {
-        let period = conn
-            .query_row(
+        Self::validate_period(active_period)?;
+
+        let mut stmt = conn
+            .prepare(
                 "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
                  FROM payroll_periods
-                 WHERE yil < ?1 OR (yil = ?1 AND ay < ?2)
-                 ORDER BY yil DESC, ay DESC, id DESC
-                 LIMIT 1",
-                params![active_period.yil, active_period.ay],
-                Self::from_row,
+                 WHERE baslangic_tarihi < ?1
+                 ORDER BY baslangic_tarihi DESC, id DESC
+                 LIMIT 2",
             )
-            .optional()
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
-        period
-            .map(|period| {
-                Self::validate_period(&period)?;
-                Ok(period)
-            })
-            .transpose()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![active_period.baslangicTarihi], Self::from_row)
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        let mut candidates = Vec::new();
+        for row in rows {
+            let period = row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_period(&period)?;
+            candidates.push(period);
+        }
+
+        if candidates.len() >= 2
+            && candidates[0].baslangicTarihi == candidates[1].baslangicTarihi
+        {
+            return Err(DomainError::InvalidData(format!(
+                "Önceki çalışma dönemi belirsiz: {} başlangıç tarihine sahip birden fazla dönem var.",
+                candidates[0].baslangicTarihi
+            )));
+        }
+
+        Ok(candidates.into_iter().next())
     }
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
         Self::validate_period(d)?;
+
+        let latest_finalized_start = Self::latest_finalized_period_start(conn)?;
+        let existing = Self::get_by_id(conn, &d.id)?;
+        match existing.as_ref() {
+            Some(old) => {
+                let causal_fields_changed = old.yil != d.yil
+                    || old.ay != d.ay
+                    || old.baslangicTarihi != d.baslangicTarihi
+                    || old.bitisTarihi != d.bitisTarihi
+                    || old.taxYear != d.taxYear
+                    || old.taxMonth != d.taxMonth;
+
+                if causal_fields_changed {
+                    if let Some(latest) = latest_finalized_start.as_deref() {
+                        let earliest_affected = if old.baslangicTarihi <= d.baslangicTarihi {
+                            old.baslangicTarihi.as_str()
+                        } else {
+                            d.baslangicTarihi.as_str()
+                        };
+                        if latest >= earliest_affected {
+                            return Err(DomainError::PayrollFinalized(
+                                "Kesinleştirilmiş bordro tarihçesini etkileyen dönem yıl/ay, tarih veya vergi metadata'sı değiştirilemez."
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
+            }
+            None => {
+                if latest_finalized_start
+                    .as_deref()
+                    .is_some_and(|latest| latest >= d.baslangicTarihi.as_str())
+                {
+                    return Err(DomainError::PayrollFinalized(
+                        "Kesinleştirilmiş bordro tarihçesine geriye dönük yeni çalışma dönemi eklenemez."
+                            .into(),
+                    ));
+                }
+            }
+        }
+
+        let work_period_collision: Option<String> = conn
+            .query_row(
+                "SELECT id FROM payroll_periods
+                 WHERE yil = ?1 AND ay = ?2 AND id <> ?3
+                 LIMIT 1",
+                params![d.yil, d.ay, d.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some(conflicting_id) = work_period_collision {
+            return Err(DomainError::ValidationError(format!(
+                "Çalışma dönemi çakışması: {}-{:02} zaten {} döneminde tanımlı.",
+                d.yil, d.ay, conflicting_id
+            )));
+        }
+
         let collision: Option<String> = conn
             .query_row(
                 "SELECT id FROM payroll_periods
