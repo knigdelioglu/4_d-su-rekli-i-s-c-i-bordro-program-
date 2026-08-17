@@ -1,5 +1,6 @@
 use crate::domain::models::SickLeaveRecord;
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -137,7 +138,8 @@ impl SickLeaveRepository {
     pub fn save(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         Self::validate_record(record)?;
 
-        if let Some(existing) = Self::get_by_id(conn, &record.id)? {
+        let existing = Self::get_by_id(conn, &record.id)?;
+        if let Some(existing) = existing.as_ref() {
             Self::ensure_after_finalized_boundary(
                 conn,
                 &existing.personnelId,
@@ -146,6 +148,26 @@ impl SickLeaveRepository {
         }
         Self::ensure_after_finalized_boundary(conn, &record.personnelId, &record.startDate)?;
         Self::validate_no_overlap(conn, record)?;
+
+        let changed = existing
+            .as_ref()
+            .map(|old| {
+                old.personnelId != record.personnelId
+                    || old.startDate != record.startDate
+                    || old.endDate != record.endDate
+            })
+            .unwrap_or(true);
+        if changed {
+            if let Some(old) = existing.as_ref() {
+                PayrollInvalidationRepository::mark_personnel_stale(conn, &old.personnelId)?;
+            }
+            if existing
+                .as_ref()
+                .is_none_or(|old| old.personnelId != record.personnelId)
+            {
+                PayrollInvalidationRepository::mark_personnel_stale(conn, &record.personnelId)?;
+            }
+        }
 
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
@@ -183,6 +205,7 @@ impl SickLeaveRepository {
                 &existing.personnelId,
                 &existing.startDate,
             )?;
+            PayrollInvalidationRepository::mark_personnel_stale(conn, &existing.personnelId)?;
         }
 
         conn.execute("DELETE FROM sick_leave_records WHERE id = ?1", params![id])
