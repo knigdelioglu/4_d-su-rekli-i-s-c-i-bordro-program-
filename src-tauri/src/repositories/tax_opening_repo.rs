@@ -1,6 +1,7 @@
 use super::{dec_to_kurus, kurus_to_dec};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -99,6 +100,21 @@ impl TaxOpeningRepository {
         }
 
         Self::ensure_mutable(conn, &t.personnelId, t.year)?;
+        let existing = Self::get_by_personnel_and_year(conn, &t.personnelId, t.year)?;
+        let changed = existing
+            .as_ref()
+            .map(|old| {
+                old.gvCumulativeOpening != t.gvCumulativeOpening
+                    || old.effectiveFromPeriodId != t.effectiveFromPeriodId
+            })
+            .unwrap_or(true);
+        if changed {
+            PayrollInvalidationRepository::mark_personnel_tax_year_stale(
+                conn,
+                &t.personnelId,
+                t.year,
+            )?;
+        }
 
         let now = Utc::now().to_rfc3339();
         let opening_kurus = dec_to_kurus(Some(t.gvCumulativeOpening))?;
@@ -126,6 +142,11 @@ impl TaxOpeningRepository {
 
         if let Some((personnel_id, year)) = owner {
             Self::ensure_mutable(conn, &personnel_id, year)?;
+            PayrollInvalidationRepository::mark_personnel_tax_year_stale(
+                conn,
+                &personnel_id,
+                year,
+            )?;
         }
 
         conn.execute(
