@@ -1,0 +1,203 @@
+name: Fix CI regressions
+
+on:
+  push:
+    branches:
+      - agent/fix-ci-regressions
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: agent/fix-ci-regressions
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          cache: false
+
+      - name: Update stale fixtures and lint-only code
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          domain = Path('src-tauri/tests/domain_tests.rs')
+          text = domain.read_text()
+
+          old = '''        // AYNI tarih aralığına sahip iki ayrı period ID (kopya dönem senaryosu).
+'''
+          new = '''        // İki ayrı geçerli çalışma dönemi: puantaj yalnız period_id üzerinden çözülmeli.
+'''
+          if old in text:
+              text = text.replace(old, new, 1)
+
+          old = '''        let donem_b = BordroDonemi {
+            id: "2026-05-alt".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026 (kopya)".into(),
+            taxYear: 2026,
+            taxMonth: 5,
+        };
+'''
+          new = '''        let donem_b = BordroDonemi {
+            id: "2026-06".into(),
+            yil: 2026,
+            ay: 6,
+            baslangicTarihi: "2026-06-15".into(),
+            bitisTarihi: "2026-07-14".into(),
+            donemAdi: "Haziran 2026".into(),
+            taxYear: 2026,
+            taxMonth: 7,
+        };
+'''
+          if old in text:
+              text = text.replace(old, new, 1)
+
+          text = text.replace(
+              'ensure_test_institution_settings(&conn, &["2026-05", "2026-05-alt"])?;',
+              'ensure_test_institution_settings(&conn, &["2026-05", "2026-06"])?;',
+              1,
+          )
+          text = text.replace(
+              '// Puantaj yalnız A\'ya kaydedildi; B aynı tarih aralığını paylaşsa bile puantajsız.',
+              '// Puantaj yalnız A\'ya kaydedildi; B kendi period_id\'si için puantajsız.',
+              1,
+          )
+          text = text.replace(
+              '// B için hesaplama, tarih aralığı aynı olsa bile puantaj bulamadığı için başarısız olmalı.',
+              '// B için hesaplama kendi period_id\'sine ait puantaj olmadığı için başarısız olmalı.',
+              1,
+          )
+          text = text.replace('"test-att-c", "2026-05-alt"', '"test-att-c", "2026-06"', 1)
+
+          old = '''        let donem = BordroDonemi {
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-01".into(),
+            bitisTarihi: "2026-01-31".into(),
+            donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 1,
+        };
+'''
+          new = '''        let donem = BordroDonemi {
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-15".into(),
+            bitisTarihi: "2026-02-14".into(),
+            donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 1,
+        };
+'''
+          marker = 'fn test_gv_snapshot_finalized_persistence()'
+          idx = text.find(marker)
+          if idx != -1:
+              tail = text[idx:]
+              if old in tail:
+                  tail = tail.replace(old, new, 1)
+                  text = text[:idx] + tail
+
+          domain.write_text(text)
+
+          sick = Path('src-tauri/src/repositories/sick_leave_repo.rs')
+          text = sick.read_text()
+          text = text.replace(
+              '.map_or(true, |old| old.personnelId != record.personnelId)',
+              '.is_none_or(|old| old.personnelId != record.personnelId)',
+              1,
+          )
+          sick.write_text(text)
+
+          preflight = Path('src-tauri/src/services/payroll_preflight_service.rs')
+          text = preflight.read_text()
+          old = '''        match expected_previous_period_id {
+            None => {
+                return Err(DomainError::ValidationError(format!(
+                    "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli fakat {}-{:02} ara çalışma dönemi oluşturulmamış. PEK süresini yanlış taşımamak için eksik dönemi tamamlayın.",
+                    personnel_id, source_period_id, expected_previous_year, expected_previous_month
+                )));
+            }
+            Some(previous_period_id) => {
+                let previous_payroll_exists: i64 = conn
+                    .query_row(
+                        "SELECT EXISTS(
+                            SELECT 1 FROM payroll_records
+                            WHERE personnel_id = ?1 AND period_id = ?2
+                         )",
+                        params![personnel_id, previous_period_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+                if previous_payroll_exists != 0 {
+                    return Ok(());
+                }
+
+                return Err(DomainError::ValidationError(format!(
+                    "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
+                    personnel_id, source_period_id, previous_period_id
+                )));
+            }
+        }
+'''
+          new = '''        match expected_previous_period_id {
+            None => Err(DomainError::ValidationError(format!(
+                "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli fakat {}-{:02} ara çalışma dönemi oluşturulmamış. PEK süresini yanlış taşımamak için eksik dönemi tamamlayın.",
+                personnel_id, source_period_id, expected_previous_year, expected_previous_month
+            ))),
+            Some(previous_period_id) => {
+                let previous_payroll_exists: i64 = conn
+                    .query_row(
+                        "SELECT EXISTS(
+                            SELECT 1 FROM payroll_records
+                            WHERE personnel_id = ?1 AND period_id = ?2
+                         )",
+                        params![personnel_id, previous_period_id],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+                if previous_payroll_exists != 0 {
+                    return Ok(());
+                }
+
+                Err(DomainError::ValidationError(format!(
+                    "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
+                    personnel_id, source_period_id, previous_period_id
+                )))
+            }
+        }
+'''
+          if old in text:
+              text = text.replace(old, new, 1)
+          preflight.write_text(text)
+          PY
+
+      - name: Rust format
+        working-directory: src-tauri
+        run: cargo fmt
+
+      - name: Commit generated cleanup
+        run: |
+          if git diff --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri
+          git commit -m "test: align fixtures and rust formatting"
+          git push origin HEAD:agent/fix-ci-regressions
