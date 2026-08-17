@@ -1,9 +1,11 @@
 use crate::domain::{DomainError, Result};
+use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
+use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
@@ -51,6 +53,7 @@ impl PayrollNoticeService {
         let personnel = PersonnelRepository::get_all(conn)?;
 
         let mut notices = Vec::new();
+        Self::append_period_parameter_notices(conn, &period, start, end, &mut notices)?;
 
         for person in personnel {
             let full_name = format!("{} {}", person.ad, person.soyad);
@@ -192,6 +195,177 @@ impl PayrollNoticeService {
         }
 
         Ok(notices)
+    }
+
+    fn append_period_parameter_notices(
+        conn: &Connection,
+        period: &crate::domain::models::BordroDonemi,
+        start: NaiveDate,
+        end: NaiveDate,
+        notices: &mut Vec<PayrollNotice>,
+    ) -> Result<()> {
+        let annual_parameters =
+            AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?;
+        match annual_parameters {
+            None => notices.push(PayrollNotice {
+                code: "MISSING_ANNUAL_PAYROLL_PARAMETERS".into(),
+                severity: PayrollNoticeSeverity::Critical,
+                scope: PayrollNoticeScope::Period,
+                personnel_id: None,
+                title: "Yıllık vergi parametreleri eksik".into(),
+                message: format!(
+                    "{} vergi yılı için gelir vergisi dilimleri tanımlı değil. Bordro hesabı bu paket olmadan güvenilir biçimde tamamlanamaz.",
+                    period.taxYear
+                ),
+                details: vec![format!("Vergi dönemi: {}-{:02}", period.taxYear, period.taxMonth)],
+                action: Some("CHECK_ANNUAL_PARAMETERS".into()),
+            }),
+            Some(parameters) if period.taxMonth == 1 => {
+                notices.push(PayrollNotice {
+                    code: "NEW_TAX_YEAR_PARAMETERS_ACTIVE".into(),
+                    severity: PayrollNoticeSeverity::Info,
+                    scope: PayrollNoticeScope::Period,
+                    personnel_id: None,
+                    title: "Yeni vergi yılı parametreleri devrede".into(),
+                    message: format!(
+                        "{} vergi yılının ilk ayında {} gelir vergisi dilimli yıllık parametre paketi kullanılacak.",
+                        period.taxYear,
+                        parameters.gelirVergisiDilimleri.len()
+                    ),
+                    details: vec![format!("Vergi dönemi: {}-01", period.taxYear)],
+                    action: Some("CHECK_ANNUAL_PARAMETERS".into()),
+                });
+            }
+            Some(_) => {}
+        }
+
+        let current_settings = SettingsRepository::get_institution_settings(conn, &period.id)?;
+        if current_settings.is_none() {
+            notices.push(PayrollNotice {
+                code: "MISSING_PERIOD_SETTINGS".into(),
+                severity: PayrollNoticeSeverity::Critical,
+                scope: PayrollNoticeScope::Period,
+                personnel_id: None,
+                title: "Dönem kurum parametreleri eksik".into(),
+                message: format!(
+                    "{} dönemi için ücret ve kurum parametreleri bulunmuyor. Bordro hesaplamadan önce dönem parametrelerini kaydedin.",
+                    period.donemAdi
+                ),
+                details: Vec::new(),
+                action: Some("CHECK_PERIOD_PARAMETERS".into()),
+            });
+        }
+
+        let zam_aylari = Self::get_zam_aylari(conn)?;
+        if zam_aylari.is_empty() {
+            notices.push(PayrollNotice {
+                code: "RAISE_MONTHS_NOT_CONFIGURED".into(),
+                severity: PayrollNoticeSeverity::Warning,
+                scope: PayrollNoticeScope::Period,
+                personnel_id: None,
+                title: "Zam yürürlük ayları tanımlı değil".into(),
+                message: "Kurum genelinde zam yürürlük ayı seçilmedi. Bu durumda dönem bordrosu tek ücret setiyle hesaplanır; kurumunuzda dönem içi zam uygulanıyorsa ayları tanımlayın.".into(),
+                details: Vec::new(),
+                action: Some("CHECK_RAISE_PARAMETERS".into()),
+            });
+            return Ok(());
+        }
+
+        let Some(raise_date) = Self::find_raise_date(start, end, &zam_aylari) else {
+            return Ok(());
+        };
+
+        let previous_period = PeriodRepository::get_previous_by_work_period(conn, period)?;
+        let mut details = vec![format!("Zam yürürlük tarihi: {}", raise_date.format("%Y-%m-%d"))];
+
+        if let Some(current) = current_settings.as_ref() {
+            details.push(format!("Yeni günlük taban: {} TL", current.gunlukTabanUcret));
+        }
+
+        match previous_period {
+            None => notices.push(PayrollNotice {
+                code: "MISSING_PRE_RAISE_PERIOD".into(),
+                severity: PayrollNoticeSeverity::Critical,
+                scope: PayrollNoticeScope::Period,
+                personnel_id: None,
+                title: "Zam öncesi dönem bulunamadı".into(),
+                message: format!(
+                    "{} dönemi {} tarihinde zam geçişi içeriyor ancak zam öncesi ücret setini sağlayacak önceki çalışma dönemi yok.",
+                    period.donemAdi,
+                    raise_date.format("%Y-%m-%d")
+                ),
+                details,
+                action: Some("CHECK_RAISE_PARAMETERS".into()),
+            }),
+            Some(previous) => {
+                let previous_settings =
+                    SettingsRepository::get_institution_settings(conn, &previous.id)?;
+                if let Some(previous_settings) = previous_settings {
+                    details.push(format!(
+                        "Eski günlük taban: {} TL ({})",
+                        previous_settings.gunlukTabanUcret, previous.donemAdi
+                    ));
+                    notices.push(PayrollNotice {
+                        code: "RAISE_TRANSITION_PERIOD".into(),
+                        severity: PayrollNoticeSeverity::Warning,
+                        scope: PayrollNoticeScope::Period,
+                        personnel_id: None,
+                        title: "Bu bordro zam geçişi içeriyor".into(),
+                        message: format!(
+                            "{} tarihinde ücret seti değişiyor. Motor zam öncesi günlerde {} döneminin, zam sonrası günlerde {} döneminin kurum değerlerini kullanacak; eski ve yeni tutarları kontrol edin.",
+                            raise_date.format("%Y-%m-%d"),
+                            previous.donemAdi,
+                            period.donemAdi
+                        ),
+                        details,
+                        action: Some("CHECK_RAISE_PARAMETERS".into()),
+                    });
+                } else {
+                    details.push(format!("Zam öncesi dönem: {}", previous.donemAdi));
+                    notices.push(PayrollNotice {
+                        code: "MISSING_PRE_RAISE_SETTINGS".into(),
+                        severity: PayrollNoticeSeverity::Critical,
+                        scope: PayrollNoticeScope::Period,
+                        personnel_id: None,
+                        title: "Zam öncesi ücret parametreleri eksik".into(),
+                        message: format!(
+                            "{} tarihinde zam geçişi var ancak {} döneminin kurum değerleri bulunamadı. Zam öncesi günlerin doğru hesaplanması için bu kayıt zorunludur.",
+                            raise_date.format("%Y-%m-%d"),
+                            previous.donemAdi
+                        ),
+                        details,
+                        action: Some("CHECK_RAISE_PARAMETERS".into()),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
+        let Some(raw) = SettingsRepository::get_app_setting(conn, ZAM_AYLARI_SETTING_KEY)? else {
+            return Ok(Vec::new());
+        };
+        let months: Vec<i32> = serde_json::from_str(&raw).map_err(|e| {
+            DomainError::InvalidData(format!("Kurum zam ayarı bozuk JSON içeriyor: {e}"))
+        })?;
+        SettingsRepository::normalize_zam_aylari(&months)
+    }
+
+    fn find_raise_date(start: NaiveDate, end: NaiveDate, zam_aylari: &[i32]) -> Option<NaiveDate> {
+        let mut result = None;
+        for year in (start.year() - 1)..=(end.year() + 1) {
+            for month in zam_aylari {
+                let Some(candidate) = NaiveDate::from_ymd_opt(year, *month as u32, 1) else {
+                    continue;
+                };
+                if candidate >= start && candidate <= end {
+                    result = Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
+                }
+            }
+        }
+        result
     }
 
     fn parse_date(value: &str, label: &str) -> Result<NaiveDate> {
