@@ -38,10 +38,7 @@ impl PayrollInvalidationRepository {
         .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
 
-    pub fn mark_period_and_dependents_stale(
-        conn: &Connection,
-        period_id: &str,
-    ) -> Result<usize> {
+    pub fn mark_period_and_dependents_stale(conn: &Connection, period_id: &str) -> Result<usize> {
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "UPDATE payroll_records

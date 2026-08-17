@@ -147,11 +147,7 @@ fn calculated_payroll(
     }
 }
 
-fn status(
-    conn: &rusqlite::Connection,
-    personnel_id: &str,
-    period_id: &str,
-) -> BordroStatus {
+fn status(conn: &rusqlite::Connection, personnel_id: &str, period_id: &str) -> BordroStatus {
     PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)
         .unwrap()
         .unwrap()
@@ -305,8 +301,8 @@ fn tax_month_minimum_wage_reference_mismatch_fails_closed() {
     }]);
     SettingsRepository::save_institution_settings(&conn, &k).unwrap();
 
-    let error = PayrollPreflightService::validate_for_calculation(&conn, &p.id, &active.id)
-        .unwrap_err();
+    let error =
+        PayrollPreflightService::validate_for_calculation(&conn, &p.id, &active.id).unwrap_err();
     assert!(error.to_string().contains("Yanlış GV/DV istisnası"));
 }
 
@@ -322,7 +318,8 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
     PeriodRepository::save(&conn, &june).unwrap();
     PeriodRepository::save(&conn, &july).unwrap();
     PeriodRepository::save(&conn, &august).unwrap();
-    SettingsRepository::save_institution_settings(&conn, &settings(&august.id, dec!(1000))).unwrap();
+    SettingsRepository::save_institution_settings(&conn, &settings(&august.id, dec!(1000)))
+        .unwrap();
 
     PayrollRepository::save(
         &conn,
@@ -338,8 +335,8 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
     )
     .unwrap();
 
-    let error = PayrollPreflightService::validate_for_calculation(&conn, &p.id, &august.id)
-        .unwrap_err();
+    let error =
+        PayrollPreflightService::validate_for_calculation(&conn, &p.id, &august.id).unwrap_err();
     assert!(error.to_string().contains("devreden PEK"));
     assert!(error.to_string().contains("ara dönem bordrosunu"));
 }

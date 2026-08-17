@@ -166,10 +166,13 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
         if effective == start {
             apply_statutory_segment(&mut points[0].1, segment);
         } else {
-            let mut next_values = points
-                .last()
-                .map(|(_, values)| values.clone())
-                .ok_or_else(|| DomainError::InvalidData("Yasal parametre baseline eksik.".into()))?;
+            let mut next_values =
+                points
+                    .last()
+                    .map(|(_, values)| values.clone())
+                    .ok_or_else(|| {
+                        DomainError::InvalidData("Yasal parametre baseline eksik.".into())
+                    })?;
             apply_statutory_segment(&mut next_values, segment);
             points.push((effective, next_values));
         }
@@ -274,7 +277,8 @@ fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<N
                 continue;
             };
             if candidate >= start && candidate <= end {
-                result = Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
+                result =
+                    Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
             }
         }
     }
@@ -429,7 +433,12 @@ impl PayrollService {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<BordroKaydi> {
-        Self::calculate_payroll_for_personnel_with_manual_income(conn, personnel_id, period_id, None)
+        Self::calculate_payroll_for_personnel_with_manual_income(
+            conn,
+            personnel_id,
+            period_id,
+            None,
+        )
     }
 
     pub fn calculate_payroll_for_personnel_with_manual_income(
@@ -538,18 +547,23 @@ impl PayrollService {
                     })?;
             validate_kurum_degerleri_for_payroll(&previous_kurum_degerleri)?;
 
-            let (zam_oncesi_gelirler, zam_oncesi_is_primi) = calculate_gunluk_gelirler_from_puantaj(
-                &zam_oncesi_ozet,
-                &previous_kurum_degerleri,
-                Some(&personel.grup),
-            )?;
-            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) = calculate_gunluk_gelirler_from_puantaj(
-                &zam_sonrasi_ozet,
-                &kurum_degerleri,
-                Some(&personel.grup),
-            )?;
+            let (zam_oncesi_gelirler, zam_oncesi_is_primi) =
+                calculate_gunluk_gelirler_from_puantaj(
+                    &zam_oncesi_ozet,
+                    &previous_kurum_degerleri,
+                    Some(&personel.grup),
+                )?;
+            let (zam_sonrasi_gelirler, zam_sonrasi_is_primi) =
+                calculate_gunluk_gelirler_from_puantaj(
+                    &zam_sonrasi_ozet,
+                    &kurum_degerleri,
+                    Some(&personel.grup),
+                )?;
 
-            let paid_before = paid_sick_dates.iter().filter(|date| **date < cutoff).count() as i32;
+            let paid_before = paid_sick_dates
+                .iter()
+                .filter(|date| **date < cutoff)
+                .count() as i32;
             let paid_after = odenen_raporlu_gun - paid_before;
 
             let mut taban_brut = sum_income_field(
@@ -655,8 +669,11 @@ impl PayrollService {
             (statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30)).round_dp(2);
         let ham_damga_vergisi = (gelir_toplam * damga_orani).round_dp(2);
         let damga_istisnasi = (damga_asgari_aylik * damga_orani).round_dp(2);
-        kesintiler.damgaVergisi =
-            Some((ham_damga_vergisi - damga_istisnasi).max(Decimal::ZERO).round_dp(2));
+        kesintiler.damgaVergisi = Some(
+            (ham_damga_vergisi - damga_istisnasi)
+                .max(Decimal::ZERO)
+                .round_dp(2),
+        );
 
         // GV detay snapshot: gerçek kümülatif ile asgari takvim referansı açıkça ayrılır.
         let sgk_orani = kurum_degerleri
@@ -824,7 +841,8 @@ impl PayrollService {
         personnel_id: &str,
         active_period: &BordroDonemi,
     ) -> Result<Vec<DevredenPekKaydi>> {
-        let Some(immediately_prior) = PeriodRepository::get_previous_by_work_period(conn, active_period)?
+        let Some(immediately_prior) =
+            PeriodRepository::get_previous_by_work_period(conn, active_period)?
         else {
             return Ok(Vec::new());
         };

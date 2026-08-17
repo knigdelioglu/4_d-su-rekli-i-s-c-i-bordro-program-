@@ -133,7 +133,11 @@ fn full_attendance_with_unpaid_r(
     let mut date = start;
     while date <= end {
         let date_text = date.format("%Y-%m-%d").to_string();
-        let code = if date_text == unpaid_r_date { "R" } else { "Ç" };
+        let code = if date_text == unpaid_r_date {
+            "R"
+        } else {
+            "Ç"
+        };
         gunler.insert(date_text, code.to_string());
         date += Duration::days(1);
     }
@@ -205,7 +209,10 @@ fn setup_devreden_case(
         &conn,
         &prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2),
     )?;
-    AttendanceRepository::save(&conn, &attendance_from_codes(personnel_id, &active, active_codes))?;
+    AttendanceRepository::save(
+        &conn,
+        &attendance_from_codes(personnel_id, &active, active_codes),
+    )?;
 
     Ok((conn, active))
 }
@@ -216,12 +223,8 @@ fn unpaid_r_is_not_sgk_day_but_paid_r_is() -> Result<(), Box<dyn std::error::Err
     let k = settings(&p.id);
     let attendance = attendance_from_codes("r-person", &p, &["Ç", "R"]);
 
-    let unpaid = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
-        &attendance,
-        &p,
-        &k,
-        &[],
-    )?;
+    let unpaid =
+        resolve_statutory_snapshot_for_period_with_paid_sick_dates(&attendance, &p, &k, &[])?;
     assert_eq!(unpaid.sgkPrimGunSayisi, 1);
 
     let paid_date = NaiveDate::parse_from_str("2026-07-16", "%Y-%m-%d")?;
@@ -275,7 +278,8 @@ fn incoming_devreden_pek_is_not_used_but_ages_when_period_has_no_prim_day(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conn, active) = setup_devreden_case("no-prim-day", false, &["R"])?;
 
-    let payroll = PayrollService::calculate_payroll_for_personnel(&conn, "no-prim-day", &active.id)?;
+    let payroll =
+        PayrollService::calculate_payroll_for_personnel(&conn, "no-prim-day", &active.id)?;
     assert_eq!(
         payroll
             .statutorySnapshot
@@ -290,7 +294,10 @@ fn incoming_devreden_pek_is_not_used_but_ages_when_period_has_no_prim_day(
             .map(|pek| pek.devredenPekKullanilan),
         Some(dec!(0))
     );
-    let carried = payroll.sonrakiDevredenPek.as_ref().expect("devreden PEK taşınmalı");
+    let carried = payroll
+        .sonrakiDevredenPek
+        .as_ref()
+        .expect("devreden PEK taşınmalı");
     assert_eq!(carried.len(), 1);
     assert_eq!(carried[0].tutar, dec!(20000));
     assert_eq!(carried[0].kalanAySayisi, 1);
@@ -303,7 +310,8 @@ fn oks_uses_worker_pek_including_devreden_amount_used_this_period(
     let work_codes = vec!["Ç"; 30];
     let (conn, active) = setup_devreden_case("oks-devreden", true, &work_codes)?;
 
-    let payroll = PayrollService::calculate_payroll_for_personnel(&conn, "oks-devreden", &active.id)?;
+    let payroll =
+        PayrollService::calculate_payroll_for_personnel(&conn, "oks-devreden", &active.id)?;
     let pek = payroll.pekDetay.as_ref().expect("PEK detayı olmalı");
     assert_eq!(pek.hesaplananPek, dec!(30000));
     assert_eq!(pek.devredenPekKullanilan, dec!(20000));
@@ -355,10 +363,7 @@ fn period_validation_enforces_15_14_but_keeps_tax_month_configurable(
     };
     assert!(PeriodRepository::validate_period(&bad_geometry).is_err());
 
-    let bad_metadata = BordroDonemi {
-        ay: 8,
-        ..good
-    };
+    let bad_metadata = BordroDonemi { ay: 8, ..good };
     assert!(PeriodRepository::validate_period(&bad_metadata).is_err());
     Ok(())
 }

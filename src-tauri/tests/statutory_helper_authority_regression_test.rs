@@ -1,6 +1,5 @@
 use bordro_programi_lib::domain::calculations::{
-    calculate_statutory_deductions_with_tax_brackets,
-    default_gelir_vergisi_dilimleri_2026,
+    calculate_statutory_deductions_with_tax_brackets, default_gelir_vergisi_dilimleri_2026,
     StatutoryDeductionTaxInputs,
 };
 use bordro_programi_lib::domain::models::*;

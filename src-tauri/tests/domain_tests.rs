@@ -2152,8 +2152,8 @@ mod tests {
             id: "2026-01".into(),
             yil: 2026,
             ay: 1,
-            baslangicTarihi: "2026-01-01".into(),
-            bitisTarihi: "2026-01-31".into(),
+            baslangicTarihi: "2026-01-15".into(),
+            bitisTarihi: "2026-02-14".into(),
             donemAdi: "Ocak 2026".into(),
             taxYear: 2026,
             taxMonth: 1,
@@ -3459,7 +3459,7 @@ mod tests {
         let person = setup_test_person("test-att-c");
         PersonnelRepository::save(&conn, &person)?;
 
-        // AYNI tarih aralığına sahip iki ayrı period ID (kopya dönem senaryosu).
+        // İki ayrı geçerli çalışma dönemi: puantaj yalnız period_id üzerinden çözülmeli.
         let donem_a = BordroDonemi {
             id: "2026-05".into(),
             yil: 2026,
@@ -3471,20 +3471,20 @@ mod tests {
             taxMonth: 6,
         };
         let donem_b = BordroDonemi {
-            id: "2026-05-alt".into(),
+            id: "2026-06".into(),
             yil: 2026,
-            ay: 5,
-            baslangicTarihi: "2026-05-15".into(),
-            bitisTarihi: "2026-06-14".into(),
-            donemAdi: "Mayıs 2026 (kopya)".into(),
+            ay: 6,
+            baslangicTarihi: "2026-06-15".into(),
+            bitisTarihi: "2026-07-14".into(),
+            donemAdi: "Haziran 2026".into(),
             taxYear: 2026,
-            taxMonth: 5,
+            taxMonth: 7,
         };
         PeriodRepository::save(&conn, &donem_a)?;
         PeriodRepository::save(&conn, &donem_b)?;
-        ensure_test_institution_settings(&conn, &["2026-05", "2026-05-alt"])?;
+        ensure_test_institution_settings(&conn, &["2026-05", "2026-06"])?;
 
-        // Puantaj yalnız A'ya kaydedildi; B aynı tarih aralığını paylaşsa bile puantajsız.
+        // Puantaj yalnız A'ya kaydedildi; B kendi period_id'si için puantajsız.
         let gunler = thirty_work_days(&donem_a);
         AttendanceRepository::save(
             &conn,
@@ -3501,9 +3501,8 @@ mod tests {
             PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05").is_ok()
         );
 
-        // B için hesaplama, tarih aralığı aynı olsa bile puantaj bulamadığı için başarısız olmalı.
-        let res =
-            PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-05-alt");
+        // B için hesaplama kendi period_id'sine ait puantaj olmadığı için başarısız olmalı.
+        let res = PayrollService::calculate_payroll_for_personnel(&conn, "test-att-c", "2026-06");
         assert!(
             matches!(res, Err(DomainError::NotFound(msg)) if msg.contains("puantaj")),
             "Başka period_id'ye ait attendance aktif dönemin puantajı kabul edilmemeli"

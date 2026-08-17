@@ -39,11 +39,7 @@ impl AttendanceRepository {
         Ok(())
     }
 
-    fn ensure_not_finalized(
-        conn: &Connection,
-        personnel_id: &str,
-        period_id: &str,
-    ) -> Result<()> {
+    fn ensure_not_finalized(conn: &Connection, personnel_id: &str, period_id: &str) -> Result<()> {
         let finalized: i64 = conn
             .query_row(
                 "SELECT EXISTS(

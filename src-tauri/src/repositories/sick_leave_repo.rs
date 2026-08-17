@@ -163,7 +163,7 @@ impl SickLeaveRepository {
             }
             if existing
                 .as_ref()
-                .map_or(true, |old| old.personnelId != record.personnelId)
+                .is_none_or(|old| old.personnelId != record.personnelId)
             {
                 PayrollInvalidationRepository::mark_personnel_stale(conn, &record.personnelId)?;
             }

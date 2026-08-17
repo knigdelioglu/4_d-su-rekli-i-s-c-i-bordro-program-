@@ -1,8 +1,8 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
-use chrono::{Datelike, NaiveDate};
 use chrono::Utc;
+use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct PeriodRepository;
@@ -112,10 +112,9 @@ impl PeriodRepository {
             .map_err(|e| DomainError::ValidationError(e.to_string()))?;
         let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
             .map_err(|e| DomainError::ValidationError(e.to_string()))?;
-        let tax_matches_start = period.taxYear == start.year()
-            && period.taxMonth == start.month() as i32;
-        let tax_matches_end =
-            period.taxYear == end.year() && period.taxMonth == end.month() as i32;
+        let tax_matches_start =
+            period.taxYear == start.year() && period.taxMonth == start.month() as i32;
+        let tax_matches_end = period.taxYear == end.year() && period.taxMonth == end.month() as i32;
         if !tax_matches_start && !tax_matches_end {
             return Err(DomainError::ValidationError(format!(
                 "Vergi yılı/ayı {}-{:02}, {}–{} çalışma dönemiyle örtüşmüyor. Vergi ayı dönemin başlangıç veya bitiş ayı olmalıdır.",
@@ -282,9 +281,7 @@ impl PeriodRepository {
             candidates.push(period);
         }
 
-        if candidates.len() >= 2
-            && candidates[0].baslangicTarihi == candidates[1].baslangicTarihi
-        {
+        if candidates.len() >= 2 && candidates[0].baslangicTarihi == candidates[1].baslangicTarihi {
             return Err(DomainError::InvalidData(format!(
                 "Önceki çalışma dönemi belirsiz: {} başlangıç tarihine sahip birden fazla dönem var.",
                 candidates[0].baslangicTarihi

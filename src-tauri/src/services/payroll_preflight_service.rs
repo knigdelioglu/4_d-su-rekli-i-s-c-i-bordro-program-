@@ -37,8 +37,9 @@ impl PayrollPreflightService {
             return Ok(());
         }
 
-        let personel = PersonnelRepository::get_by_id(conn, personnel_id)?
-            .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", personnel_id)))?;
+        let personel = PersonnelRepository::get_by_id(conn, personnel_id)?.ok_or_else(|| {
+            DomainError::NotFound(format!("Personel bulunamadı: {}", personnel_id))
+        })?;
 
         // Yıl ortasında sisteme geçişte kullanıcı asgari GV referans devrini
         // açıkça girdiyse, eksiksiz dönem beklentisi bu başlangıç ayından başlar.
@@ -49,9 +50,7 @@ impl PayrollPreflightService {
                 .unwrap_or(period.taxYear)
                 == period.taxYear;
         let start_month = if has_asgari_opening {
-            personel
-                .devirKumulatifGvMatrahiBaslangicAyi
-                .unwrap_or(1)
+            personel.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(1)
         } else {
             1
         };
@@ -82,9 +81,10 @@ impl PayrollPreflightService {
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let rows = stmt
-            .query_map(params![period.taxYear, start_month, period.taxMonth], |row| {
-                row.get::<_, i32>(0)
-            })
+            .query_map(
+                params![period.taxYear, start_month, period.taxMonth],
+                |row| row.get::<_, i32>(0),
+            )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let mut present = std::collections::BTreeSet::new();
         for row in rows {
@@ -113,8 +113,8 @@ impl PayrollPreflightService {
         conn: &Connection,
         period: &BordroDonemi,
     ) -> Result<()> {
-        let settings = SettingsRepository::get_institution_settings(conn, &period.id)?
-            .ok_or_else(|| {
+        let settings =
+            SettingsRepository::get_institution_settings(conn, &period.id)?.ok_or_else(|| {
                 DomainError::InvalidData(format!(
                     "{} dönemi kurum ayarları bulunamadı; bordro hesaplanamaz.",
                     period.id
@@ -127,29 +127,32 @@ impl PayrollPreflightService {
         let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
             .map_err(|e| DomainError::InvalidData(e.to_string()))?;
 
-        let target_date = if period.taxYear == start.year()
-            && period.taxMonth == start.month() as i32
-        {
-            start
-        } else if period.taxYear == end.year() && period.taxMonth == end.month() as i32 {
-            NaiveDate::from_ymd_opt(end.year(), end.month(), 1).ok_or_else(|| {
-                DomainError::InvalidData("Vergi ayı referans tarihi çözümlenemedi.".into())
-            })?
-        } else {
-            return Err(DomainError::ValidationError(format!(
-                "Vergi ayı {}-{:02} çalışma dönemiyle örtüşmüyor.",
-                period.taxYear, period.taxMonth
-            )));
-        };
+        let target_date =
+            if period.taxYear == start.year() && period.taxMonth == start.month() as i32 {
+                start
+            } else if period.taxYear == end.year() && period.taxMonth == end.month() as i32 {
+                NaiveDate::from_ymd_opt(end.year(), end.month(), 1).ok_or_else(|| {
+                    DomainError::InvalidData("Vergi ayı referans tarihi çözümlenemedi.".into())
+                })?
+            } else {
+                return Err(DomainError::ValidationError(format!(
+                    "Vergi ayı {}-{:02} çalışma dönemiyle örtüşmüyor.",
+                    period.taxYear, period.taxMonth
+                )));
+            };
 
-        let base = settings.gunlukAsgariUcret.ok_or_else(|| {
-            DomainError::ValidationError("Günlük asgari ücret eksik.".into())
-        })?;
+        let base = settings
+            .gunlukAsgariUcret
+            .ok_or_else(|| DomainError::ValidationError("Günlük asgari ücret eksik.".into()))?;
         let mut target_value = base;
         let mut final_value = base;
-        for segment in settings.statutoryParameterSegments.as_deref().unwrap_or(&[]) {
-            let effective = NaiveDate::parse_from_str(&segment.effectiveFrom, "%Y-%m-%d")
-                .map_err(|_| {
+        for segment in settings
+            .statutoryParameterSegments
+            .as_deref()
+            .unwrap_or(&[])
+        {
+            let effective =
+                NaiveDate::parse_from_str(&segment.effectiveFrom, "%Y-%m-%d").map_err(|_| {
                     DomainError::ValidationError(format!(
                         "Yasal parametre segment tarihi geçersiz: {}.",
                         segment.effectiveFrom
@@ -269,12 +272,10 @@ impl PayrollPreflightService {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         match expected_previous_period_id {
-            None => {
-                return Err(DomainError::ValidationError(format!(
-                    "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli fakat {}-{:02} ara çalışma dönemi oluşturulmamış. PEK süresini yanlış taşımamak için eksik dönemi tamamlayın.",
-                    personnel_id, source_period_id, expected_previous_year, expected_previous_month
-                )));
-            }
+            None => Err(DomainError::ValidationError(format!(
+                "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli fakat {}-{:02} ara çalışma dönemi oluşturulmamış. PEK süresini yanlış taşımamak için eksik dönemi tamamlayın.",
+                personnel_id, source_period_id, expected_previous_year, expected_previous_month
+            ))),
             Some(previous_period_id) => {
                 let previous_payroll_exists: i64 = conn
                     .query_row(
@@ -290,10 +291,10 @@ impl PayrollPreflightService {
                     return Ok(());
                 }
 
-                return Err(DomainError::ValidationError(format!(
+                Err(DomainError::ValidationError(format!(
                     "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
                     personnel_id, source_period_id, previous_period_id
-                )));
+                )))
             }
         }
     }
