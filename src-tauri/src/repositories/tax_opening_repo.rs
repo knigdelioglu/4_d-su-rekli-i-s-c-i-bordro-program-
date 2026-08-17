@@ -1,12 +1,37 @@
 use super::{dec_to_kurus, kurus_to_dec};
 use crate::domain::models::*;
-use crate::domain::Result;
+use crate::domain::{DomainError, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 
 pub struct TaxOpeningRepository;
 
 impl TaxOpeningRepository {
+    fn ensure_mutable(conn: &Connection, personnel_id: &str, year: i32) -> Result<()> {
+        let finalized: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payroll_records AS pr
+                    JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                    WHERE pr.personnel_id = ?1
+                      AND pp.tax_year = ?2
+                      AND pr.status = 'FINALIZED'
+                 )",
+                params![personnel_id, year],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if finalized != 0 {
+            return Err(DomainError::PayrollFinalized(format!(
+                "{} vergi yılında kesinleştirilmiş bordro bulunduğundan bu personelin GV açılış matrahı değiştirilemez.",
+                year
+            )));
+        }
+        Ok(())
+    }
+
     pub fn get_all(conn: &Connection) -> Result<Vec<PersonelTaxOpening>> {
         let mut stmt = conn.prepare(
             "SELECT id, personnel_id, year, gv_cumulative_opening, effective_from_period_id, created_at, updated_at
@@ -73,6 +98,8 @@ impl TaxOpeningRepository {
             ));
         }
 
+        Self::ensure_mutable(conn, &t.personnelId, t.year)?;
+
         let now = Utc::now().to_rfc3339();
         let opening_kurus = dec_to_kurus(Some(t.gvCumulativeOpening))?;
 
@@ -88,6 +115,19 @@ impl TaxOpeningRepository {
     }
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
+        let owner = conn
+            .query_row(
+                "SELECT personnel_id, year FROM personnel_tax_opening WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?)),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if let Some((personnel_id, year)) = owner {
+            Self::ensure_mutable(conn, &personnel_id, year)?;
+        }
+
         conn.execute(
             "DELETE FROM personnel_tax_opening WHERE id = ?1",
             params![id],
