@@ -1,9 +1,4 @@
-import {
-  BordroDonemi,
-  BordroKaydi,
-  Personel,
-  PersonelPuantaj,
-} from '../types/payroll';
+import { BordroDonemi, BordroKaydi, Personel, PersonelPuantaj } from '../types/payroll';
 import { PayrollNotice } from '../types/payrollNotice';
 
 export interface PayrollExportLine {
@@ -103,14 +98,14 @@ function numberOrZero(value: number | null | undefined): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function mapMoneyLines<T extends Record<string, number | null | undefined>>(
+function mapMoneyLines<T extends object>(
   source: T,
   labels: Array<[keyof T, string]>
 ): PayrollExportLine[] {
   return labels.map(([key, label]) => ({
     key: String(key),
     label,
-    amount: numberOrZero(source[key]),
+    amount: numberOrZero(source[key] as number | null | undefined),
   }));
 }
 
@@ -120,7 +115,9 @@ export function isAuthoritativePayroll(
   return payroll?.status === 'CALCULATED' || payroll?.status === 'FINALIZED';
 }
 
-export function assertPayrollExportable(payroll: BordroKaydi): void {
+export function assertPayrollExportable(
+  payroll: BordroKaydi
+): asserts payroll is BordroKaydi & { status: 'CALCULATED' | 'FINALIZED' } {
   if (!isAuthoritativePayroll(payroll)) {
     throw new Error(
       `Bordro resmi çıktıya uygun değil. Durum: ${payroll.status}. Yalnız CALCULATED veya FINALIZED bordrolar dışa aktarılabilir.`
@@ -130,8 +127,6 @@ export function assertPayrollExportable(payroll: BordroKaydi): void {
 
 export function sanitizeExportFilePart(value: string): string {
   return value
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
     .replace(/ı/g, 'i')
     .replace(/İ/g, 'I')
     .replace(/ş/g, 's')
@@ -171,23 +166,13 @@ export function buildPayrollExportModel(args: {
   const { person, payroll, period, attendance, notices = [] } = args;
   assertPayrollExportable(payroll);
 
-  const incomeLines = mapMoneyLines(payroll.gelirler, INCOME_LABELS);
-  const deductionLines = mapMoneyLines(payroll.kesintiler, DEDUCTION_LABELS);
-  const incomingPek = (payroll.devredenPekGelen ?? []).reduce(
-    (sum, item) => sum + numberOrZero(item.tutar),
-    0
-  );
-  const outgoingPek = (payroll.sonrakiDevredenPek ?? []).reduce(
-    (sum, item) => sum + numberOrZero(item.tutar),
-    0
-  );
+  const incomingPek = (payroll.devredenPekGelen ?? []).reduce((sum, item) => sum + numberOrZero(item.tutar), 0);
+  const outgoingPek = (payroll.sonrakiDevredenPek ?? []).reduce((sum, item) => sum + numberOrZero(item.tutar), 0);
   const calculatedPek = numberOrZero(payroll.pekDetay?.hesaplananPek);
   const finalPek = numberOrZero(payroll.pekDetay?.finalPek);
   const previousCumulativeGv = numberOrZero(
     payroll.oncekiKumulatifGvMatrahi ??
-      (payroll.gvDetay
-        ? payroll.gvDetay.yeniKumulatifGvMatrahi - payroll.gvDetay.cariGvMatrahi
-        : 0)
+      (payroll.gvDetay ? payroll.gvDetay.yeniKumulatifGvMatrahi - payroll.gvDetay.cariGvMatrahi : 0)
   );
   const newCumulativeGv = numberOrZero(payroll.gvDetay?.yeniKumulatifGvMatrahi);
 
@@ -196,74 +181,30 @@ export function buildPayrollExportModel(args: {
     { key: 'finalPek', label: 'Nihai / Bildirim PEK', amount: finalPek },
     { key: 'incomingPek', label: 'Önceki Dönemden Gelen PEK', amount: incomingPek },
     { key: 'outgoingPek', label: 'Sonraki Döneme Devreden PEK', amount: outgoingPek },
-    {
-      key: 'isciSgkPrimi',
-      label: 'SGK Primi - İşçi Payı',
-      amount: numberOrZero(payroll.kesintiler.isciSgkPrimi),
-    },
-    {
-      key: 'isciIssizlikPrimi',
-      label: 'İşsizlik Primi - İşçi Payı',
-      amount: numberOrZero(payroll.kesintiler.isciIssizlikPrimi),
-    },
-    {
-      key: 'cariGvMatrahi',
-      label: 'Cari Gelir Vergisi Matrahı',
-      amount: numberOrZero(payroll.gvDetay?.cariGvMatrahi),
-    },
-    {
-      key: 'previousCumulativeGv',
-      label: 'Önceki Kümülatif GV Matrahı',
-      amount: previousCumulativeGv,
-    },
-    {
-      key: 'newCumulativeGv',
-      label: 'Yeni Kümülatif GV Matrahı',
-      amount: newCumulativeGv,
-    },
-    {
-      key: 'brutGelirVergisi',
-      label: 'Hesaplanan Gelir Vergisi',
-      amount: numberOrZero(payroll.gvDetay?.brutGelirVergisi),
-    },
-    {
-      key: 'gvIstisnasi',
-      label: 'Gelir Vergisi İstisnası',
-      amount: numberOrZero(payroll.gvDetay?.uygulananGvIstisnasi),
-    },
+    { key: 'isciSgkPrimi', label: 'SGK Primi - İşçi Payı', amount: numberOrZero(payroll.kesintiler.isciSgkPrimi) },
+    { key: 'isciIssizlikPrimi', label: 'İşsizlik Primi - İşçi Payı', amount: numberOrZero(payroll.kesintiler.isciIssizlikPrimi) },
+    { key: 'cariGvMatrahi', label: 'Cari Gelir Vergisi Matrahı', amount: numberOrZero(payroll.gvDetay?.cariGvMatrahi) },
+    { key: 'previousCumulativeGv', label: 'Önceki Kümülatif GV Matrahı', amount: previousCumulativeGv },
+    { key: 'newCumulativeGv', label: 'Yeni Kümülatif GV Matrahı', amount: newCumulativeGv },
+    { key: 'brutGelirVergisi', label: 'Hesaplanan Gelir Vergisi', amount: numberOrZero(payroll.gvDetay?.brutGelirVergisi) },
+    { key: 'gvIstisnasi', label: 'Gelir Vergisi İstisnası', amount: numberOrZero(payroll.gvDetay?.uygulananGvIstisnasi) },
     {
       key: 'kesilenGelirVergisi',
       label: 'Kesilen Gelir Vergisi',
       amount: numberOrZero(payroll.gvDetay?.kesilenGelirVergisi ?? payroll.kesintiler.gelirVergisi),
     },
-    {
-      key: 'damgaVergisi',
-      label: 'Damga Vergisi',
-      amount: numberOrZero(payroll.kesintiler.damgaVergisi),
-    },
+    { key: 'damgaVergisi', label: 'Damga Vergisi', amount: numberOrZero(payroll.kesintiler.damgaVergisi) },
   ];
 
   const employer: PayrollExportLine[] = [
-    {
-      key: 'isverenSgkPrimi',
-      label: 'SGK Primi - İşveren Payı',
-      amount: numberOrZero(payroll.pekDetay?.isverenSgkPrimi),
-    },
-    {
-      key: 'isverenIssizlikPrimi',
-      label: 'İşsizlik Primi - İşveren Payı',
-      amount: numberOrZero(payroll.pekDetay?.isverenIssizlikPrimi),
-    },
+    { key: 'isverenSgkPrimi', label: 'SGK Primi - İşveren Payı', amount: numberOrZero(payroll.pekDetay?.isverenSgkPrimi) },
+    { key: 'isverenIssizlikPrimi', label: 'İşsizlik Primi - İşveren Payı', amount: numberOrZero(payroll.pekDetay?.isverenIssizlikPrimi) },
     {
       key: 'altSinirTamamlama',
       label: 'PEK Alt Sınır Tamamlama - İşveren',
       amount: numberOrZero(payroll.pekDetay?.pekAltSinirTamamlamaIsverenPrimi),
     },
-    {
-      key: 'isverenPrimToplami',
-      label: 'Toplam İşveren Prim Maliyeti',
-      amount: numberOrZero(payroll.pekDetay?.isverenPrimToplami),
-    },
+    { key: 'isverenPrimToplami', label: 'Toplam İşveren Prim Maliyeti', amount: numberOrZero(payroll.pekDetay?.isverenPrimToplami) },
   ];
 
   const attendanceDays = Object.entries(attendance?.gunler ?? {})
@@ -297,8 +238,8 @@ export function buildPayrollExportModel(args: {
       count: numberOrZero(count),
     })),
     attendanceDays,
-    incomes: incomeLines,
-    deductions: deductionLines,
+    incomes: mapMoneyLines(payroll.gelirler, INCOME_LABELS),
+    deductions: mapMoneyLines(payroll.kesintiler, DEDUCTION_LABELS),
     sgkTax,
     employer,
     totals: {
@@ -312,9 +253,7 @@ export function buildPayrollExportModel(args: {
       previousCumulativeGv,
       newCumulativeGv,
     },
-    notices: notices.filter(
-      (notice) => notice.scope === 'PERIOD' || notice.personnelId === person.id
-    ),
+    notices: notices.filter((notice) => notice.scope === 'PERIOD' || notice.personnelId === person.id),
     sourceUpdatedAt: payroll.sonGuncellemeTarihi,
   };
 }
@@ -329,9 +268,7 @@ export function buildPeriodPayrollExportModels(args: {
   const { period, people, payrolls, attendances = [], notices = [] } = args;
   const peopleById = new Map(people.map((person) => [person.id, person]));
   const attendanceByPerson = new Map(
-    attendances
-      .filter((item) => item.donemId === period.id)
-      .map((item) => [item.personelId, item])
+    attendances.filter((item) => item.donemId === period.id).map((item) => [item.personelId, item])
   );
 
   return payrolls
