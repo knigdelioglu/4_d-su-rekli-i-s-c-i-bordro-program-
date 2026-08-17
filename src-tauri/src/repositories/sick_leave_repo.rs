@@ -32,6 +32,58 @@ impl SickLeaveRepository {
         Ok(())
     }
 
+    fn latest_finalized_end_date(
+        conn: &Connection,
+        personnel_id: &str,
+    ) -> Result<Option<NaiveDate>> {
+        let end_date = conn
+            .query_row(
+                "SELECT MAX(pp.bitis_tarihi)
+                 FROM payroll_records AS pr
+                 JOIN payroll_periods AS pp ON pp.id = pr.period_id
+                 WHERE pr.personnel_id = ?1
+                   AND pr.status = 'FINALIZED'",
+                params![personnel_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        end_date
+            .map(|value| {
+                NaiveDate::parse_from_str(&value, "%Y-%m-%d").map_err(|_| {
+                    DomainError::InvalidData(format!(
+                        "Kesinleştirilmiş bordro dönem bitiş tarihi geçersiz: {}",
+                        value
+                    ))
+                })
+            })
+            .transpose()
+    }
+
+    fn ensure_after_finalized_boundary(
+        conn: &Connection,
+        personnel_id: &str,
+        start_date: &str,
+    ) -> Result<()> {
+        let Some(boundary) = Self::latest_finalized_end_date(conn, personnel_id)? else {
+            return Ok(());
+        };
+        let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "Rapor başlangıç tarihi geçersiz: {}.",
+                start_date
+            ))
+        })?;
+
+        if start <= boundary {
+            return Err(DomainError::PayrollFinalized(format!(
+                "{} tarihine kadar kesinleştirilmiş bordro bulunduğundan kapanmış rapor geçmişi değiştirilemez.",
+                boundary.format("%Y-%m-%d")
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_no_overlap(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         let overlap = conn
             .query_row(
@@ -84,7 +136,17 @@ impl SickLeaveRepository {
 
     pub fn save(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         Self::validate_record(record)?;
+
+        if let Some(existing) = Self::get_by_id(conn, &record.id)? {
+            Self::ensure_after_finalized_boundary(
+                conn,
+                &existing.personnelId,
+                &existing.startDate,
+            )?;
+        }
+        Self::ensure_after_finalized_boundary(conn, &record.personnelId, &record.startDate)?;
         Self::validate_no_overlap(conn, record)?;
+
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
         let updated_at = &now;
@@ -115,6 +177,14 @@ impl SickLeaveRepository {
     }
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
+        if let Some(existing) = Self::get_by_id(conn, id)? {
+            Self::ensure_after_finalized_boundary(
+                conn,
+                &existing.personnelId,
+                &existing.startDate,
+            )?;
+        }
+
         conn.execute("DELETE FROM sick_leave_records WHERE id = ?1", params![id])
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         Ok(())
