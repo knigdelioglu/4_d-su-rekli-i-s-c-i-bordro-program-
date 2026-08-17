@@ -44,6 +44,23 @@ const severityStyles: Record<
   },
 };
 
+function actionLabel(action?: string): string | null {
+  switch (action) {
+    case 'GO_TO_PUANTAJ':
+      return 'Puantaj kontrolü gerekli';
+    case 'RECALCULATE_PAYROLL':
+      return 'Bordro yeniden hesaplanmalı';
+    case 'CHECK_ANNUAL_PARAMETERS':
+      return 'Yıllık vergi parametrelerini kontrol edin';
+    case 'CHECK_PERIOD_PARAMETERS':
+      return 'Dönem kurum parametrelerini kontrol edin';
+    case 'CHECK_RAISE_PARAMETERS':
+      return 'Zam parametrelerini kontrol edin';
+    default:
+      return action ? 'Kontrol gerekli' : null;
+  }
+}
+
 export const PayrollNoticeCenter: React.FC = () => {
   const [notices, setNotices] = useState<PayrollNotice[]>([]);
   const [isOpen, setIsOpen] = useState(true);
@@ -156,6 +173,7 @@ export const PayrollNoticeCenter: React.FC = () => {
           {notices.map((notice, index) => {
             const style = severityStyles[notice.severity];
             const Icon = style.Icon;
+            const label = actionLabel(notice.action);
             return (
               <div
                 key={`${notice.code}:${notice.personnelId ?? 'period'}:${index}`}
@@ -180,11 +198,9 @@ export const PayrollNoticeCenter: React.FC = () => {
                         ))}
                       </div>
                     )}
-                    {notice.action && (
+                    {label && (
                       <div className="mt-2 text-[10px] font-bold uppercase tracking-wide opacity-70">
-                        {notice.action === 'GO_TO_PUANTAJ'
-                          ? 'Puantaj kontrolü gerekli'
-                          : 'Bordro yeniden hesaplanmalı'}
+                        {label}
                       </div>
                     )}
                   </div>
