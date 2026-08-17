@@ -202,7 +202,10 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
       {isOpen && (
         <div
           className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/65 p-4 backdrop-blur-sm"
-          onClick={close}
+          onClick={(event) => {
+            event.stopPropagation();
+            close();
+          }}
         >
           <div
             className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"
