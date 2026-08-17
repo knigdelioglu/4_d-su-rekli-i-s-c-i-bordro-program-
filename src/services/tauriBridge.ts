@@ -10,6 +10,7 @@ import {
   SickLeaveRecord,
   ManualPayrollIncomeInput,
 } from '../types/payroll';
+import { PayrollNotice } from '../types/payrollNotice';
 
 // Type-safe IPC invoke helper with window fallback detection
 async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
@@ -21,6 +22,18 @@ async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Prom
     return await win.__TAURI__.core.invoke(cmd, args);
   }
   throw new Error(`Tauri IPC context not available for command "${cmd}".`);
+}
+
+function emitPayrollDataChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('payroll:data-changed'));
+  }
+}
+
+async function mutateTauri<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
+  const result = await invokeTauri<T>(cmd, args);
+  emitPayrollDataChanged();
+  return result;
 }
 
 export const tauriBridge = {
@@ -38,11 +51,11 @@ export const tauriBridge = {
   },
 
   async savePersonnel(personel: Personel): Promise<void> {
-    return invokeTauri<void>('save_personnel', { personel });
+    return mutateTauri<void>('save_personnel', { personel });
   },
 
   async deletePersonnel(id: string): Promise<void> {
-    return invokeTauri<void>('delete_personnel', { id });
+    return mutateTauri<void>('delete_personnel', { id });
   },
 
   async getTaxOpenings(): Promise<PersonelTaxOpening[]> {
@@ -50,7 +63,7 @@ export const tauriBridge = {
   },
 
   async saveTaxOpening(taxOpening: PersonelTaxOpening): Promise<void> {
-    return invokeTauri<void>('save_tax_opening', { taxOpening });
+    return mutateTauri<void>('save_tax_opening', { taxOpening });
   },
 
   async getPeriods(): Promise<BordroDonemi[]> {
@@ -58,14 +71,14 @@ export const tauriBridge = {
   },
 
   async savePeriod(period: BordroDonemi): Promise<void> {
-    return invokeTauri<void>('save_period', { period });
+    return mutateTauri<void>('save_period', { period });
   },
 
   async savePeriodWithSettings(
     period: BordroDonemi,
     settings: DönemselKurumDegerleri
   ): Promise<void> {
-    return invokeTauri<void>('save_period_with_settings', { period, settings });
+    return mutateTauri<void>('save_period_with_settings', { period, settings });
   },
 
   async getAttendanceList(): Promise<PersonelPuantaj[]> {
@@ -73,11 +86,15 @@ export const tauriBridge = {
   },
 
   async saveAttendance(attendance: PersonelPuantaj): Promise<void> {
-    return invokeTauri<void>('save_attendance', { attendance });
+    return mutateTauri<void>('save_attendance', { attendance });
   },
 
   async getPayrollList(): Promise<BordroKaydi[]> {
     return invokeTauri<BordroKaydi[]>('get_payroll_list');
+  },
+
+  async getPayrollNotices(periodId: string): Promise<PayrollNotice[]> {
+    return invokeTauri<PayrollNotice[]>('get_payroll_notices', { periodId });
   },
 
   async calculatePayroll(
@@ -85,7 +102,7 @@ export const tauriBridge = {
     periodId: string,
     manualIncome?: ManualPayrollIncomeInput
   ): Promise<BordroKaydi> {
-    return invokeTauri<BordroKaydi>('calculate_payroll', {
+    return mutateTauri<BordroKaydi>('calculate_payroll', {
       personnelId,
       periodId,
       manualIncome: manualIncome ?? null,
@@ -93,7 +110,7 @@ export const tauriBridge = {
   },
 
   async setPayrollStatus(personnelId: string, periodId: string, status: BordroStatus): Promise<void> {
-    return invokeTauri<void>('set_payroll_status', { personnelId, periodId, status });
+    return mutateTauri<void>('set_payroll_status', { personnelId, periodId, status });
   },
 
   async getInstitutionSettings(): Promise<Record<string, DönemselKurumDegerleri>> {
@@ -101,7 +118,7 @@ export const tauriBridge = {
   },
 
   async saveInstitutionSettings(settings: DönemselKurumDegerleri): Promise<void> {
-    return invokeTauri<void>('save_institution_settings', { settings });
+    return mutateTauri<void>('save_institution_settings', { settings });
   },
 
   async getAppSetting(key: string): Promise<string | null> {
@@ -109,7 +126,7 @@ export const tauriBridge = {
   },
 
   async setAppSetting(key: string, value: string): Promise<void> {
-    return invokeTauri<void>('set_app_setting', { key, value });
+    return mutateTauri<void>('set_app_setting', { key, value });
   },
 
   async checkLegacyMigrated(): Promise<boolean> {
@@ -117,11 +134,11 @@ export const tauriBridge = {
   },
 
   async migrateLegacyPayload(payloadJson: string): Promise<void> {
-    return invokeTauri<void>('migrate_legacy_payload', { payloadJson });
+    return mutateTauri<void>('migrate_legacy_payload', { payloadJson });
   },
 
   async replaceBackupPayload(payloadJson: string): Promise<void> {
-    return invokeTauri<void>('replace_backup_payload', { payloadJson });
+    return mutateTauri<void>('replace_backup_payload', { payloadJson });
   },
 
   async getAnnualPayrollParameters(): Promise<AnnualPayrollParameters[]> {
@@ -129,7 +146,7 @@ export const tauriBridge = {
   },
 
   async saveAnnualPayrollParameters(parameters: AnnualPayrollParameters): Promise<void> {
-    return invokeTauri<void>('save_annual_payroll_parameters', { parameters });
+    return mutateTauri<void>('save_annual_payroll_parameters', { parameters });
   },
 
   async getSickLeaveRecords(personnelId?: string): Promise<SickLeaveRecord[]> {
@@ -137,10 +154,10 @@ export const tauriBridge = {
   },
 
   async saveSickLeaveRecord(record: SickLeaveRecord): Promise<void> {
-    return invokeTauri<void>('save_sick_leave_record', { record });
+    return mutateTauri<void>('save_sick_leave_record', { record });
   },
 
   async deleteSickLeaveRecord(id: string): Promise<void> {
-    return invokeTauri<void>('delete_sick_leave_record', { id });
+    return mutateTauri<void>('delete_sick_leave_record', { id });
   },
 };
