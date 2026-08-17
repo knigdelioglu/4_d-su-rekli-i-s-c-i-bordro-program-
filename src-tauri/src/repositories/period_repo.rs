@@ -1,5 +1,6 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use chrono::{Datelike, NaiveDate};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Row};
@@ -20,9 +21,16 @@ impl PeriodRepository {
         })
     }
 
+    fn tax_ordinal(year: i32, month: i32) -> i64 {
+        i64::from(year) * 12 + i64::from(month)
+    }
+
     fn latest_finalized_period_start(conn: &Connection) -> Result<Option<String>> {
         conn.query_row(
-            "SELECT MAX(pp.baslangic_tarihi)\n             FROM payroll_records AS pr\n             JOIN payroll_periods AS pp ON pp.id = pr.period_id\n             WHERE pr.status = 'FINALIZED'",
+            "SELECT MAX(pp.baslangic_tarihi)
+             FROM payroll_records AS pr
+             JOIN payroll_periods AS pp ON pp.id = pr.period_id
+             WHERE pr.status = 'FINALIZED'",
             [],
             |row| row.get::<_, Option<String>>(0),
         )
@@ -89,6 +97,93 @@ impl PeriodRepository {
                 "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
                 period.yil, period.ay, period.baslangicTarihi
             )));
+        }
+
+        Ok(())
+    }
+
+    /// Vergi ayı ayrı metadata olabilir ancak bordro döneminden kopuk, üçüncü bir
+    /// aya atanamaz. 15-14 döneminde vergi/tahakkuk ayı yalnız başlangıç veya bitiş
+    /// takvim aylarından biri olabilir.
+    pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
+        Self::validate_period(period)?;
+        let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
+            .map_err(|e| DomainError::ValidationError(e.to_string()))?;
+        let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
+            .map_err(|e| DomainError::ValidationError(e.to_string()))?;
+        let tax_matches_start = period.taxYear == start.year()
+            && period.taxMonth == start.month() as i32;
+        let tax_matches_end =
+            period.taxYear == end.year() && period.taxMonth == end.month() as i32;
+        if !tax_matches_start && !tax_matches_end {
+            return Err(DomainError::ValidationError(format!(
+                "Vergi yılı/ayı {}-{:02}, {}–{} çalışma dönemiyle örtüşmüyor. Vergi ayı dönemin başlangıç veya bitiş ayı olmalıdır.",
+                period.taxYear, period.taxMonth, period.baslangicTarihi, period.bitisTarihi
+            )));
+        }
+        Ok(())
+    }
+
+    /// PEK çalışma kronolojisine, kümülatif vergi ise taxYear/taxMonth
+    /// kronolojisine bağlıdır. Bu iki sıranın ters düşmesine izin vermek dairesel
+    /// bağımlılık doğurur. Çalışma dönemi ilerledikçe vergi sırası da strictly
+    /// ileri gitmek zorundadır.
+    pub fn validate_tax_chronology(conn: &Connection, period: &BordroDonemi) -> Result<()> {
+        Self::validate_tax_month_overlap(period)?;
+        let current_key = Self::tax_ordinal(period.taxYear, period.taxMonth);
+
+        let previous = conn
+            .query_row(
+                "SELECT id, tax_year, tax_month
+                 FROM payroll_periods
+                 WHERE id <> ?1 AND baslangic_tarihi < ?2
+                 ORDER BY baslangic_tarihi DESC, id DESC
+                 LIMIT 1",
+                params![period.id, period.baslangicTarihi],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some((previous_id, year, month)) = previous {
+            if Self::tax_ordinal(year, month) >= current_key {
+                return Err(DomainError::ValidationError(format!(
+                    "Vergi kronolojisi çalışma dönemiyle ters düşüyor: önceki {} dönemi {}-{:02}, {} dönemi ise {}-{:02}. Vergi ayları çalışma sırasıyla ileri gitmelidir.",
+                    previous_id, year, month, period.id, period.taxYear, period.taxMonth
+                )));
+            }
+        }
+
+        let next = conn
+            .query_row(
+                "SELECT id, tax_year, tax_month
+                 FROM payroll_periods
+                 WHERE id <> ?1 AND baslangic_tarihi > ?2
+                 ORDER BY baslangic_tarihi ASC, id ASC
+                 LIMIT 1",
+                params![period.id, period.baslangicTarihi],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if let Some((next_id, year, month)) = next {
+            if current_key >= Self::tax_ordinal(year, month) {
+                return Err(DomainError::ValidationError(format!(
+                    "Vergi kronolojisi çalışma dönemiyle ters düşüyor: {} dönemi {}-{:02}, sonraki {} dönemi ise {}-{:02}. Vergi ayları çalışma sırasıyla ileri gitmelidir.",
+                    period.id, period.taxYear, period.taxMonth, next_id, year, month
+                )));
+            }
         }
 
         Ok(())
@@ -200,18 +295,21 @@ impl PeriodRepository {
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
         Self::validate_period(d)?;
+        Self::validate_tax_chronology(conn, d)?;
 
         let latest_finalized_start = Self::latest_finalized_period_start(conn)?;
         let existing = Self::get_by_id(conn, &d.id)?;
+        let causal_fields_changed = existing.as_ref().is_some_and(|old| {
+            old.yil != d.yil
+                || old.ay != d.ay
+                || old.baslangicTarihi != d.baslangicTarihi
+                || old.bitisTarihi != d.bitisTarihi
+                || old.taxYear != d.taxYear
+                || old.taxMonth != d.taxMonth
+        });
+
         match existing.as_ref() {
             Some(old) => {
-                let causal_fields_changed = old.yil != d.yil
-                    || old.ay != d.ay
-                    || old.baslangicTarihi != d.baslangicTarihi
-                    || old.bitisTarihi != d.bitisTarihi
-                    || old.taxYear != d.taxYear
-                    || old.taxMonth != d.taxMonth;
-
                 if causal_fields_changed {
                     if let Some(latest) = latest_finalized_start.as_deref() {
                         let earliest_affected = if old.baslangicTarihi <= d.baslangicTarihi {
@@ -273,6 +371,32 @@ impl PeriodRepository {
                 "Vergi yılı/ayı çakışması: {}-{:02} zaten {} döneminde kullanılıyor.",
                 d.taxYear, d.taxMonth, conflicting_id
             )));
+        }
+
+        if let Some(old) = existing.as_ref() {
+            if causal_fields_changed {
+                PayrollInvalidationRepository::mark_from_period_position_stale(
+                    conn,
+                    &old.baslangicTarihi,
+                    old.taxYear,
+                    old.taxMonth,
+                )?;
+                PayrollInvalidationRepository::mark_from_period_position_stale(
+                    conn,
+                    &d.baslangicTarihi,
+                    d.taxYear,
+                    d.taxMonth,
+                )?;
+            }
+        } else {
+            // Yeni bir geçmiş/ara dönem, önceden hesaplanmış sonraki bordroların
+            // vergi veya PEK zincirine yeni bir düğüm ekleyebilir.
+            PayrollInvalidationRepository::mark_from_period_position_stale(
+                conn,
+                &d.baslangicTarihi,
+                d.taxYear,
+                d.taxMonth,
+            )?;
         }
 
         let now = Utc::now().to_rfc3339();
