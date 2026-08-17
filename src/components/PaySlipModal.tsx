@@ -1,12 +1,30 @@
-/**
- * Print Modal for 4/D Sürekli İşçi Ücret Pusulası / Bordro Zarfı
- */
-
-import React from 'react';
-import { Printer, X, Download, Shield, Building2 } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  Building2,
+  FileArchive,
+  FileDown,
+  FileSpreadsheet,
+  Printer,
+  Shield,
+  X,
+} from 'lucide-react';
 import { BordroDonemi, BordroKaydi, IsPrimiGrupItem, Personel } from '../types/payroll';
-import { formatDateTR, formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
+import { formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
 import { printElement } from '../utils/excelExport';
+import { tauriBridge } from '../services/tauriBridge';
+import {
+  buildPayrollExportModel,
+  buildPeriodPayrollExportModels,
+  PayrollExportModel,
+} from '../exports/payrollExportModel';
+import {
+  exportPeriodPayrollExcel,
+  exportSinglePayrollExcel,
+} from '../exports/payrollExcelExport';
+import {
+  exportPeriodPayrollPdf,
+  exportSinglePayrollPdf,
+} from '../exports/payrollPdfExport';
 
 interface PaySlipModalProps {
   isOpen: boolean;
@@ -17,6 +35,8 @@ interface PaySlipModalProps {
   isPrimiGruplari?: IsPrimiGrupItem[];
 }
 
+type ExportAction = 'single-pdf' | 'single-xlsx' | 'period-pdf' | 'period-xlsx' | null;
+
 export const PaySlipModal: React.FC<PaySlipModalProps> = ({
   isOpen,
   onClose,
@@ -25,11 +45,78 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
   donem,
   isPrimiGruplari,
 }) => {
+  const [busyAction, setBusyAction] = useState<ExportAction>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+
+  const previewModel = useMemo(
+    () =>
+      buildPayrollExportModel({
+        person: personel,
+        payroll: bordro,
+        period: donem,
+      }),
+    [personel, bordro, donem]
+  );
+
   if (!isOpen) return null;
 
-  const handlePrint = () => {
-    printElement('payslip-print-container');
+  const withBusy = async (action: Exclude<ExportAction, null>, fn: () => Promise<void> | void) => {
+    setBusyAction(action);
+    setExportError(null);
+    try {
+      await fn();
+    } catch (error) {
+      console.error('Payroll export failed:', error);
+      setExportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
   };
+
+  const loadSingleModel = async (): Promise<PayrollExportModel> => {
+    if (!tauriBridge.isTauriAvailable()) return previewModel;
+    const [attendances, notices] = await Promise.all([
+      tauriBridge.getAttendanceList(),
+      tauriBridge.getPayrollNotices(donem.id),
+    ]);
+    return buildPayrollExportModel({
+      person: personel,
+      payroll: bordro,
+      period: donem,
+      attendance: attendances.find(
+        (item) => item.personelId === personel.id && item.donemId === donem.id
+      ),
+      notices,
+    });
+  };
+
+  const loadPeriodContext = async () => {
+    if (!tauriBridge.isTauriAvailable()) {
+      throw new Error('Dönem toplu çıktıları yalnızca Tauri masaüstü uygulamasında hazırlanabilir.');
+    }
+    const [people, payrolls, attendances, notices] = await Promise.all([
+      tauriBridge.getPersonnelList(),
+      tauriBridge.getPayrollList(),
+      tauriBridge.getAttendanceList(),
+      tauriBridge.getPayrollNotices(donem.id),
+    ]);
+    const models = buildPeriodPayrollExportModels({
+      period: donem,
+      people,
+      payrolls,
+      attendances,
+      notices,
+    });
+    if (models.length === 0) {
+      throw new Error('Bu dönem için resmi çıktıya uygun CALCULATED veya FINALIZED bordro bulunamadı.');
+    }
+    return { people, payrolls, notices, models };
+  };
+
+  const handlePrint = () => printElement('payslip-print-container');
+
+  const visibleIncomeLines = previewModel.incomes.filter((line) => Math.abs(line.amount) > 0.0001);
+  const visibleDeductionLines = previewModel.deductions.filter((line) => Math.abs(line.amount) > 0.0001);
 
   return (
     <div
@@ -37,28 +124,87 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden my-auto"
-        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-5xl w-full max-h-[94vh] flex flex-col overflow-hidden my-auto"
+        onClick={(event) => event.stopPropagation()}
       >
-        {/* Header Actions */}
-        <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between no-print shrink-0">
-          <div className="flex items-center gap-2">
+        <div className="bg-slate-900 text-white px-5 py-4 flex flex-col xl:flex-row xl:items-center justify-between gap-3 no-print shrink-0">
+          <div className="flex items-center gap-2.5">
             <Shield className="w-5 h-5 text-indigo-400" />
-            <h3 className="font-semibold text-sm">Ücret Pusulası (Bordro Zarfı) Önizleme</h3>
+            <div>
+              <h3 className="font-semibold text-sm">Ücret Pusulası / Bordro Zarfı</h3>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                PDF ve Excel çıktıları aynı authoritative bordro snapshot'ından üretilir.
+              </p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                void withBusy('single-pdf', async () => exportSinglePayrollPdf(await loadSingleModel()))
+              }
+              className="px-3 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
+            >
+              <FileDown className="w-4 h-4" />
+              PDF İndir
+            </button>
+            <button
+              type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                void withBusy('single-xlsx', async () => exportSinglePayrollExcel(await loadSingleModel()))
+              }
+              className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              Excel İndir
+            </button>
             <button
               type="button"
               onClick={handlePrint}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              disabled={busyAction !== null}
+              className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
             >
               <Printer className="w-4 h-4" />
-              <span>Yazdır / PDF İndir</span>
+              Yazdır
+            </button>
+            <div className="w-px h-7 bg-slate-700 hidden xl:block" />
+            <button
+              type="button"
+              disabled={busyAction !== null || !tauriBridge.isTauriAvailable()}
+              onClick={() =>
+                void withBusy('period-xlsx', async () => {
+                  const context = await loadPeriodContext();
+                  exportPeriodPayrollExcel({ period: donem, ...context });
+                })
+              }
+              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+              title="Dönemin Bordro İcmali, Gelirler, Kesintiler, SGK-Vergi, Puantaj, Banka ve Kontrol sayfalarını tek çalışma kitabında oluşturur"
+            >
+              <FileArchive className="w-4 h-4" />
+              Dönem Excel
+            </button>
+            <button
+              type="button"
+              disabled={busyAction !== null || !tauriBridge.isTauriAvailable()}
+              onClick={() =>
+                void withBusy('period-pdf', async () => {
+                  const context = await loadPeriodContext();
+                  await exportPeriodPayrollPdf(donem, context.models);
+                })
+              }
+              className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+              title="CALCULATED/FINALIZED bordroları tek çok sayfalı PDF içinde oluşturur"
+            >
+              <FileDown className="w-4 h-4" />
+              Tüm Bordrolar PDF
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="p-2 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+              className="p-2 text-slate-400 hover:text-white rounded-lg transition-colors"
               title="Kapat"
             >
               <X className="w-5 h-5" />
@@ -66,308 +212,133 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
           </div>
         </div>
 
-        {/* Printable Document Area */}
-        <div id="payslip-print-container" className="p-8 space-y-6 text-slate-900 bg-white overflow-y-auto flex-1">
-          {/* Header Title */}
-          <div className="border-b-2 border-slate-900 pb-4 text-center space-y-1">
-            <div className="flex items-center justify-center gap-2 text-slate-700 text-xs font-semibold uppercase tracking-widest">
+        {exportError && (
+          <div className="no-print px-5 py-3 bg-rose-50 border-b border-rose-200 text-xs font-semibold text-rose-800">
+            Çıktı oluşturulamadı: {exportError}
+          </div>
+        )}
+        {busyAction && (
+          <div className="no-print px-5 py-2 bg-indigo-50 border-b border-indigo-100 text-[11px] font-semibold text-indigo-800">
+            Çıktı hazırlanıyor…
+          </div>
+        )}
+
+        <div
+          id="payslip-print-container"
+          className="p-7 bg-white overflow-y-auto flex-1 text-slate-900 print:p-0"
+        >
+          <div className="border-b-2 border-slate-900 pb-4 text-center">
+            <div className="flex items-center justify-center gap-2 text-slate-600 text-xs font-semibold uppercase tracking-wider">
               <Building2 className="w-4 h-4" />
-              <span>T.C. Kamu Kurumu 4/D Sürekli İşçi Bordro Birimi</span>
+              <span>4/D Sürekli İşçi Bordro Birimi</span>
             </div>
-            <h1 className="text-xl font-black uppercase tracking-wide text-slate-900">
-              SÜREKLİ İŞÇİ ÜCRET PUSULASI / BORDRO ZARFI
-            </h1>
-            <div className="text-xs font-bold text-indigo-800 font-mono">
-              BORDRO DÖNEMİ: {donem.donemAdi}
+            <h1 className="text-xl font-black uppercase mt-1">SÜREKLİ İŞÇİ ÜCRET PUSULASI</h1>
+            <div className="text-xs font-bold text-indigo-800 font-mono mt-1">
+              {donem.donemAdi} · {donem.baslangicTarihi} - {donem.bitisTarihi} · Vergi {donem.taxYear}-{String(donem.taxMonth).padStart(2, '0')}
             </div>
           </div>
 
-          {/* Employee Header Metadata */}
-          <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200 text-xs">
-            <div className="space-y-1">
-              <div><strong className="text-slate-600">T.C. Kimlik No:</strong> <span className="font-mono">{personel.tcNo}</span></div>
-              <div><strong className="text-slate-600">Adı Soyadı:</strong> <span className="font-bold">{personel.ad} {personel.soyad}</span></div>
-              <div><strong className="text-slate-600">İş Primi Grubu:</strong> <span className="font-semibold text-indigo-900">{personel.grup || personel.unvan || '1. Grup'} (%{getGrupIsPrimiOraniDisplay(personel.grup, isPrimiGruplari) ?? '—'})</span></div>
-              <div><strong className="text-slate-600">Kıdem Yılı:</strong> {personel.hizmetYili} Yıl</div>
-            </div>
-            <div className="space-y-1">
-              <div><strong className="text-slate-600">SGK Sicil No:</strong> <span className="font-mono">{personel.sgkSicilNo || '—'}</span></div>
-              <div><strong className="text-slate-600">Maaş IBAN:</strong> <span className="font-mono text-[11px]">{personel.iban}</span></div>
-              <div><strong className="text-slate-600">Hesaplama Tarihi:</strong> {formatDateTR(bordro.sonGuncellemeTarihi.split('T')[0])}</div>
-              <div><strong className="text-slate-600">Birim/Not:</strong> {personel.aciklama || '—'}</div>
-            </div>
-          </div>
-
-          {/* Puantaj Breakdown Summary */}
-          <div className="space-y-1">
-            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center justify-between">
-              <span>Puantaj İcmal Özeti (15-14 Dönemi)</span>
-              {bordro.odenenRaporluGun !== undefined && (
-                <span className="text-[10px] text-rose-700 font-mono">
-                  Ödeme Yapılan Rapor: <strong>{bordro.odenenRaporluGun} Gün</strong> (Toplam R: {bordro.puantajOzeti.R} Gün)
-                </span>
-              )}
-            </div>
-            <div className="grid grid-cols-7 gap-1 text-center text-xs font-mono">
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">Çalışılan (Ç)</div><div className="font-bold">{bordro.puantajOzeti.Ç}</div></div>
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">H. Tatili (T)</div><div className="font-bold">{bordro.puantajOzeti.T}</div></div>
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">G. Tatil (G)</div><div className="font-bold">{bordro.puantajOzeti.G}</div></div>
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">İzin (İ)</div><div className="font-bold">{bordro.puantajOzeti.İ}</div></div>
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">Gece Ç. (GÇ)</div><div className="font-bold">{bordro.puantajOzeti.GÇ}</div></div>
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">Gece T. (GÇT)</div><div className="font-bold">{bordro.puantajOzeti.GÇT}</div></div>
-              <div className="p-1.5 bg-slate-100 rounded border"><div className="text-[10px] text-slate-500 font-sans">Rapor (R)</div><div className="font-bold">{bordro.puantajOzeti.R}</div></div>
-            </div>
-          </div>
-
-          {/* SGK PEK & Devreden PEK & Yemek İstisnası Bilgilendirme Kartı */}
-          {bordro.pekDetay && (
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs space-y-2">
-              <div className="flex items-center justify-between text-[11px] font-bold text-slate-700">
-                <span>SGK Prime Esas Kazanç (PEK) ve Yemek İstisnası Detayları:</span>
-                <span className="text-indigo-700 font-mono">PEK Matrahı (Nihai): {formatTL(bordro.pekDetay.finalPek)}</span>
+          <div className="grid md:grid-cols-2 gap-3 mt-5 text-xs">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5">
+              <div><strong>T.C. Kimlik No:</strong> <span className="font-mono">{personel.tcNo}</span></div>
+              <div><strong>Adı Soyadı:</strong> {personel.ad} {personel.soyad}</div>
+              <div><strong>SGK Sicil No:</strong> <span className="font-mono">{personel.sgkSicilNo || '—'}</span></div>
+              <div>
+                <strong>İş Primi Grubu:</strong> {personel.grup || personel.unvan || '1. Grup'}
+                {getGrupIsPrimiOraniDisplay(personel.grup, isPrimiGruplari) !== undefined
+                  ? ` (%${getGrupIsPrimiOraniDisplay(personel.grup, isPrimiGruplari)})`
+                  : ''}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px] text-slate-600 pt-1 border-t border-slate-200">
-                <div>
-                  <span className="text-slate-500">Ham PEK (Gerçek): </span>
-                  <span className="font-semibold font-mono">{formatTL(bordro.pekDetay.hesaplananPek)}</span>
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5">
+              <div><strong>Ünvan:</strong> {personel.unvan || '—'}</div>
+              <div><strong>Hizmet Yılı:</strong> {personel.hizmetYili}</div>
+              <div><strong>IBAN:</strong> <span className="font-mono text-[11px]">{personel.iban || '—'}</span></div>
+              <div><strong>Durum:</strong> {bordro.status}</div>
+            </div>
+          </div>
+
+          <section className="mt-5">
+            <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Puantaj Özeti</h2>
+            <div className="grid grid-cols-7 gap-1.5">
+              {previewModel.attendanceSummary.map((item) => (
+                <div key={item.code} className="rounded-lg border border-slate-200 bg-slate-50 p-2 text-center">
+                  <div className="text-[9px] text-slate-500 font-semibold">{item.label}</div>
+                  <div className="text-sm font-black font-mono">{item.count}</div>
+                  <div className="text-[9px] font-mono text-slate-400">{item.code}</div>
                 </div>
-                <div>
-                  <span className="text-slate-500">Nihai / Bildirim PEK: </span>
-                  <span className="font-semibold font-mono text-indigo-900">{formatTL(bordro.pekDetay.finalPek)}</span>
-                </div>
-                {(bordro.pekDetay.altSinirTamamlamaFarki ?? (bordro.pekDetay.finalPek > bordro.pekDetay.hesaplananPek ? bordro.pekDetay.finalPek - bordro.pekDetay.hesaplananPek : 0)) > 0 && (
-                  <div>
-                    <span className="text-slate-500">Alt Sınır Farkı: </span>
-                    <span className="font-semibold font-mono text-amber-700">
-                      {formatTL(bordro.pekDetay.altSinirTamamlamaFarki ?? (bordro.pekDetay.finalPek - bordro.pekDetay.hesaplananPek))}
-                    </span>
+              ))}
+            </div>
+          </section>
+
+          <div className="grid md:grid-cols-2 gap-5 mt-5">
+            <section>
+              <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Gelirler</h2>
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                {visibleIncomeLines.map((line) => (
+                  <div key={line.key} className="flex justify-between gap-3 px-3 py-1.5 border-b border-slate-100 text-xs last:border-b-0">
+                    <span>{line.label}</span><span className="font-mono font-bold">{formatTL(line.amount)}</span>
                   </div>
-                )}
-                <div>
-                  <span className="text-slate-500">SGK Yemek İstisnası ({bordro.pekDetay.fiiliYemekGunu} Gün): </span>
-                  <span className="font-semibold font-mono text-emerald-700">
-                    {formatTL(bordro.pekDetay.yemekIstisnasiTutar)}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500">Sonraki Aya Devreden PEK: </span>
-                  <span className="font-semibold font-mono text-rose-700">
-                    {bordro.sonrakiDevredenPek && bordro.sonrakiDevredenPek.length > 0
-                      ? formatTL(bordro.sonrakiDevredenPek.reduce((a, b) => a + b.tutar, 0))
-                      : '0,00 TL'}
-                  </span>
+                ))}
+                <div className="flex justify-between px-3 py-2 bg-indigo-50 text-indigo-950 font-black text-xs">
+                  <span>BRÜT GELİR TOPLAMI</span><span className="font-mono">{formatTL(previewModel.totals.gross)}</span>
                 </div>
               </div>
-            </div>
-          )}
+            </section>
 
-          {/* İşveren Prim ve Maliyet Detayları (Kurum Payı) Kartı */}
-          {bordro.pekDetay && (
-            <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-3 text-xs space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] font-bold text-indigo-950">
-                <div className="flex items-center gap-1.5">
-                  <Building2 className="w-3.5 h-3.5 text-indigo-700" />
-                  <span>İşveren SGK ve İşsizlik Prim Maliyeti (Kurum Maliyet Kalemleri):</span>
-                </div>
-                <span className="text-indigo-900 font-mono font-bold">
-                  Toplam İşveren Primi: {formatTL(bordro.pekDetay.isverenPrimToplami)}
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 text-[11px] text-slate-700 pt-1 border-t border-indigo-200 font-mono">
-                <div>
-                  <span className="text-slate-500 font-sans">SSK Primi — İşveren Payı{bordro.pekDetay.sgkIsverenOraniYuzde !== undefined ? ` (%${bordro.pekDetay.sgkIsverenOraniYuzde})` : ''}: </span>
-                  <span className="font-bold text-indigo-900">{formatTL(bordro.pekDetay.isverenSgkPrimi)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 font-sans">İşsizlik Primi — İşveren Payı{bordro.pekDetay.isverenIssizlikOraniYuzde !== undefined ? ` (%${bordro.pekDetay.isverenIssizlikOraniYuzde})` : ''}: </span>
-                  <span className="font-bold text-indigo-900">{formatTL(bordro.pekDetay.isverenIssizlikPrimi)}</span>
-                </div>
-                {(bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi ?? 0) > 0 && (
-                  <div>
-                    <span className="text-slate-500 font-sans">PEK Alt Sınır Tamamlama — İşveren: </span>
-                    <span className="font-bold text-amber-900">
-                      {formatTL(bordro.pekDetay.pekAltSinirTamamlamaIsverenPrimi)}
-                    </span>
+            <section>
+              <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Kesintiler</h2>
+              <div className="border border-slate-200 rounded-xl overflow-hidden">
+                {visibleDeductionLines.map((line) => (
+                  <div key={line.key} className="flex justify-between gap-3 px-3 py-1.5 border-b border-slate-100 text-xs last:border-b-0">
+                    <span>{line.label}</span><span className="font-mono font-bold">{formatTL(line.amount)}</span>
                   </div>
+                ))}
+                <div className="flex justify-between px-3 py-2 bg-amber-50 text-amber-950 font-black text-xs">
+                  <span>KESİNTİ TOPLAMI</span><span className="font-mono">{formatTL(previewModel.totals.deductions)}</span>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div className="grid md:grid-cols-2 gap-5 mt-5">
+            <section>
+              <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">SGK / Vergi Denetimi</h2>
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1">
+                {previewModel.sgkTax.filter((line) => Math.abs(line.amount) > 0.0001).map((line) => (
+                  <div key={line.key} className="flex justify-between gap-3 text-[11px]">
+                    <span className="text-slate-600">{line.label}</span>
+                    <span className="font-mono font-bold">{formatTL(line.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section>
+              <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Kurum Maliyet Bilgisi</h2>
+              <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-1">
+                {previewModel.employer.filter((line) => Math.abs(line.amount) > 0.0001).map((line) => (
+                  <div key={line.key} className="flex justify-between gap-3 text-[11px]">
+                    <span className="text-slate-600">{line.label}</span>
+                    <span className="font-mono font-bold">{formatTL(line.amount)}</span>
+                  </div>
+                ))}
+                {previewModel.employer.every((line) => Math.abs(line.amount) <= 0.0001) && (
+                  <div className="text-[11px] text-slate-500">Kurum maliyet detayı bulunmuyor.</div>
                 )}
-                <div>
-                  <span className="text-slate-500 font-sans">Toplam İşveren Prim Maliyeti: </span>
-                  <span className="font-black text-indigo-950">
-                    {formatTL(bordro.pekDetay.isverenPrimToplami)}
-                  </span>
-                </div>
               </div>
-              <div className="text-[10px] text-slate-500 italic pt-0.5">
-                * Bu primler işveren/kurum maliyeti olup personelin net ödemesinden kesilmez.
-              </div>
-            </div>
-          )}
-
-          {/* Gelir Vergisi Kümülatif Matrah Bilgilendirme Kartı */}
-          {bordro.gvDetay && (
-          <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-3 text-xs space-y-1">
-            <div className="flex items-center justify-between text-[11px] font-bold text-amber-900">
-              <span>Gelir Vergisi Kümülatif Matrah Bilgileri:</span>
-              {bordro.manuelKumulatifGvMatrahi !== undefined && (
-                <span className="px-2 py-0.5 rounded bg-amber-200 text-amber-900 text-[10px] font-bold">
-                  Manuel Giriş Kullanıldı
-                </span>
-              )}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-700 pt-1 border-t border-amber-200 font-mono">
-              <div>
-                <span className="text-slate-500 font-sans">Önceki Küm. GV Matrahı: </span>
-                <span className="font-bold text-slate-900">{formatTL(bordro.oncekiKumulatifGvMatrahi)}</span>
-              </div>
-              <div>
-                <span className="text-slate-500 font-sans">Cari Dönem GV Matrahı: </span>
-                <span className="font-bold text-slate-900">
-                  {formatTL(bordro.gvDetay.cariGvMatrahi)}
-                </span>
-              </div>
-              <div>
-                <span className="text-slate-500 font-sans">Dönem Sonu Küm. Matrah: </span>
-                <span className="font-bold text-indigo-900">
-                  {formatTL(bordro.gvDetay.yeniKumulatifGvMatrahi)}
-                </span>
-              </div>
-            </div>
-          </div>
-          )}
-
-          {/* Asgari Ücret Gelir Vergisi İstisnası Detay Kartı (GİB 7349 S.K.) */}
-          {bordro.gvDetay && (
-            <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 text-xs space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] font-bold text-emerald-950">
-                <div className="flex items-center gap-1.5">
-                  <Shield className="w-3.5 h-3.5 text-emerald-700" />
-                  <span>Asgari Ücret Gelir Vergisi İstisnası Detayları (7349 Sayılı Kanun):</span>
-                </div>
-                <span className="text-emerald-900 font-mono font-bold">
-                  Kesilen Gelir Vergisi: {formatTL(bordro.gvDetay.kesilenGelirVergisi)}
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-700 pt-1 border-t border-emerald-200 font-mono">
-                <div>
-                  <span className="text-slate-500 font-sans">Asgari Ücret Aylık GV Matrahı: </span>
-                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.asgariUcretGvMatrahi)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 font-sans">Takvim Referans Küm. Matrah: </span>
-                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.asgariUcretReferansKumulatifMatrahi)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 font-sans">Aylık İstisna Hakkı (Vergi): </span>
-                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.asgariUcretGvIstisnasi)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 font-sans">Brüt Gelir Vergisi (İstisna Öncesi): </span>
-                  <span className="font-semibold text-slate-900">{formatTL(bordro.gvDetay.brutGelirVergisi)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 font-sans">Uygulanan İstisna: </span>
-                  <span className="font-semibold text-emerald-900">{formatTL(bordro.gvDetay.uygulananGvIstisnasi)}</span>
-                </div>
-                <div>
-                  <span className="text-slate-500 font-sans">Kesilecek Gelir Vergisi: </span>
-                  <span className="font-bold text-rose-900">{formatTL(bordro.gvDetay.kesilenGelirVergisi)}</span>
-                </div>
-              </div>
-              <div className="text-[10px] text-slate-500 italic pt-0.5">
-                * Cari GV matrahı: {formatTL(bordro.gvDetay.cariGvMatrahi)} · Dönem sonu kümülatif matrah: {formatTL(bordro.gvDetay.yeniKumulatifGvMatrahi)}. İstisna, çalışanın kendi bordrosuna değil takvim konumuna göre hesaplanır.
-              </div>
-            </div>
-          )}
-
-          {/* Income & Deduction Tables */}
-          <div className="grid grid-cols-2 gap-6 text-xs">
-            {/* GELİRLER */}
-            <div className="space-y-2">
-              <div className="bg-emerald-700 text-white font-bold p-2 text-center rounded-t-lg uppercase text-[11px] tracking-wider">
-                GELİR KALEMLERİ
-              </div>
-              <table className="w-full text-left border-collapse border border-slate-200">
-                <tbody className="divide-y divide-slate-200 font-mono">
-                  <tr><td className="p-1.5 font-sans">Taban / Brüt Aylık</td><td className="p-1.5 text-right font-bold">{formatTL(bordro.gelirler.tabanBrutAylik)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Tediye</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.tediye)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">TİS İkramiyesi</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.tisIkramiyesi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Ek Ödeme</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.ekOdeme)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Yemek Yardım</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.yemek)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Sosyal Yardım</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.birlestirilmisSosyalYardim)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Vasıta / Yol</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.vasitaYol)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Giyim Yardımı</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.giyimYardimi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">İş Primi</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.isPrimi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Gece Çalışması Ücreti</td><td className="p-1.5 text-right font-semibold text-indigo-700">{formatTL(bordro.gelirler.geceCalismasiUcreti)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Gece Çalışması Tatili Ücreti</td><td className="p-1.5 text-right font-semibold text-teal-700">{formatTL(bordro.gelirler.geceCalismasiTatiliUcreti)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Hizmet Zammı</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.hizmetZammi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Diğer Gelir</td><td className="p-1.5 text-right">{formatTL(bordro.gelirler.digerGelir)}</td></tr>
-                </tbody>
-                <tfoot>
-                  <tr className="bg-emerald-50 border-t-2 border-emerald-300 font-bold font-mono">
-                    <td className="p-2 font-sans text-emerald-900">GELİRLER TOPLAMI</td>
-                    <td className="p-2 text-right text-emerald-900">{formatTL(bordro.gelirToplam)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-
-            {/* KESİNTİLER */}
-            <div className="space-y-2">
-              <div className="bg-rose-700 text-white font-bold p-2 text-center rounded-t-lg uppercase text-[11px] tracking-wider">
-                KESİNTİ KALEMLERİ
-              </div>
-              <table className="w-full text-left border-collapse border border-slate-200">
-                <tbody className="divide-y divide-slate-200 font-mono">
-                  <tr><td className="p-1.5 font-sans">İşçi SGK Primi</td><td className="p-1.5 text-right font-bold">{formatTL(bordro.kesintiler.isciSgkPrimi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">İşçi İşsizlik Primi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.isciIssizlikPrimi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Gelir Vergisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.gelirVergisi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Damga Vergisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.damgaVergisi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Sendika Aidatı</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.sendikaAidati)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">BES Kesintisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.bes)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">İcra Kesintisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.icra)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Kişi Borcu Kesintisi</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.kisiBorcu)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Doğum/Askerlik Borç.</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.dogumAskerlikBorclanmasi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Hayat/Sağlık Sigortası</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.hayatSaglikSigortasi)}</td></tr>
-                  <tr><td className="p-1.5 font-sans">Diğer Kesinti</td><td className="p-1.5 text-right">{formatTL(bordro.kesintiler.digerKesinti)}</td></tr>
-                </tbody>
-                <tfoot>
-                  <tr className="bg-rose-50 border-t-2 border-rose-300 font-bold font-mono">
-                    <td className="p-2 font-sans text-rose-900">KESİNTİLER TOPLAMI</td>
-                    <td className="p-2 text-right text-rose-900">{formatTL(bordro.kesintiToplam)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
+            </section>
           </div>
 
-          {/* NET PAYMENT BANNER */}
-          <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white p-5 rounded-2xl flex items-center justify-between shadow-md">
+          <div className="mt-6 rounded-2xl bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
             <div>
-              <div className="text-xs uppercase font-bold text-indigo-300 tracking-wider">
-                Banka Hesabına Yatırılacak Tutar
-              </div>
-              <div className="text-xs text-slate-300 mt-0.5">
-                NET ÖDEME = Gelirler Toplamı − Kesintiler Toplamı
-              </div>
+              <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400 font-bold">Net Ödeme</div>
+              <div className="text-xs text-slate-300 mt-1">Gelir toplamı - kesinti toplamı</div>
             </div>
-
-            <div className="text-right">
-              <div className="text-3xl font-black text-amber-400 font-mono">
-                {formatTL(bordro.netOdeme)}
-              </div>
-            </div>
+            <div className="text-3xl font-black font-mono">{formatTL(previewModel.totals.net)}</div>
           </div>
 
-          {/* Signatures */}
-          <div className="pt-8 grid grid-cols-2 gap-12 text-center text-xs">
-            <div className="space-y-8">
-              <div><strong>Bordro Düzenleyen Yetkili</strong></div>
-              <div className="text-slate-400 italic">İmza / Mühür</div>
-            </div>
-            <div className="space-y-8">
-              <div><strong>İşçi Teslim / Onay</strong></div>
-              <div className="text-slate-400 italic">{personel.ad} {personel.soyad}</div>
-            </div>
+          <div className="mt-4 text-[9px] text-slate-400 border-t border-slate-200 pt-2">
+            Kaynak bordro güncelleme: {bordro.sonGuncellemeTarihi}. Bu belge {bordro.status} bordro snapshot'ından üretilmiştir.
           </div>
         </div>
       </div>
