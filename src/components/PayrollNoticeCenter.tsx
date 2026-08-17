@@ -56,6 +56,12 @@ function actionLabel(action?: string): string | null {
       return 'Dönem kurum parametrelerini kontrol edin';
     case 'CHECK_RAISE_PARAMETERS':
       return 'Zam parametrelerini kontrol edin';
+    case 'CHECK_SICK_LEAVE':
+      return 'Rapor kotasını kontrol edin';
+    case 'REVIEW_PEK':
+      return 'PEK devrini kontrol edin';
+    case 'REVIEW_TAX_DETAIL':
+      return 'Vergi hesap detayını inceleyin';
     default:
       return action ? 'Kontrol gerekli' : null;
   }
