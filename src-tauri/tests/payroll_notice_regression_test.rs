@@ -5,7 +5,9 @@ use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
 use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
-use bordro_programi_lib::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
+use bordro_programi_lib::repositories::settings_repo::{
+    SettingsRepository, ZAM_AYLARI_SETTING_KEY,
+};
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
 use bordro_programi_lib::services::payroll_notice_service::{
     PayrollNoticeService, PayrollNoticeSeverity,
@@ -174,11 +176,7 @@ fn payroll_with_snapshots(personnel_id: &str, period_id: &str) -> BordroKaydi {
     }
 }
 
-fn setup_period_basics(
-    conn: &rusqlite::Connection,
-    p: &BordroDonemi,
-    worker: &Personel,
-) {
+fn setup_period_basics(conn: &rusqlite::Connection, p: &BordroDonemi, worker: &Personel) {
     PersonnelRepository::save(conn, worker).unwrap();
     PeriodRepository::save(conn, p).unwrap();
     SettingsRepository::save_institution_settings(conn, &settings(&p.id, dec!(1000))).unwrap();
@@ -216,7 +214,8 @@ fn raise_transition_notice_shows_previous_and_current_daily_wages() {
     PeriodRepository::save(&conn, &active).unwrap();
     SettingsRepository::save_institution_settings(&conn, &settings(&previous.id, dec!(1000)))
         .unwrap();
-    SettingsRepository::save_institution_settings(&conn, &settings(&active.id, dec!(1100))).unwrap();
+    SettingsRepository::save_institution_settings(&conn, &settings(&active.id, dec!(1100)))
+        .unwrap();
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
         .unwrap();
     SettingsRepository::set_app_setting(&conn, ZAM_AYLARI_SETTING_KEY, "[8]").unwrap();
