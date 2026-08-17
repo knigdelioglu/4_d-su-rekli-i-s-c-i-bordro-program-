@@ -38,6 +38,33 @@ impl AttendanceRepository {
         Ok(())
     }
 
+    fn ensure_not_finalized(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<()> {
+        let finalized: i64 = conn
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM payroll_records
+                    WHERE personnel_id = ?1
+                      AND period_id = ?2
+                      AND status = 'FINALIZED'
+                 )",
+                params![personnel_id, period_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if finalized != 0 {
+            return Err(DomainError::PayrollFinalized(
+                "Bu personelin kesinleştirilmiş bordrosuna ait puantaj değiştirilemez.".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Puantajın bordro dönemiyle birebir uyumlu olmasını sağlayan authoritative
     /// backend doğrulaması. UI doğrulamasına güvenmez; repository save/read ve
     /// PayrollService aynı invariantı kullanır.
@@ -182,6 +209,7 @@ impl AttendanceRepository {
     pub fn save(conn: &Connection, p: &PersonelPuantaj) -> Result<()> {
         let period = Self::period_for_attendance(conn, &p.donemId)?;
         Self::validate_attendance_for_period(p, &period)?;
+        Self::ensure_not_finalized(conn, &p.personelId, &p.donemId)?;
 
         let now = Utc::now().to_rfc3339();
         let json_str = serde_json::to_string(&p.gunler)
