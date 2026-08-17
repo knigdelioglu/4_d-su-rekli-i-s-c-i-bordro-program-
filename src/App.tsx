@@ -376,6 +376,7 @@ export default function App() {
       await tauriBridge.savePersonnel(newPersonel);
       setPersoneller(await tauriBridge.getPersonnelList());
       setTaxOpenings(await tauriBridge.getTaxOpenings());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setPersoneller((previous) => {
@@ -411,6 +412,7 @@ export default function App() {
       await tauriBridge.savePeriodWithSettings(newDonem, kurumDegerleri);
       setDonemler(await tauriBridge.getPeriods());
       setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setDonemler((previous) =>
@@ -423,6 +425,7 @@ export default function App() {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveInstitutionSettings(settings);
       setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setKurumDegerleriMap((previous) => ({ ...previous, [settings.donemId]: settings }));
@@ -432,6 +435,7 @@ export default function App() {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveAttendance(updatedPuantaj);
       setPuantajlar(await tauriBridge.getAttendanceList());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setPuantajlar((previous) => {
@@ -447,6 +451,7 @@ export default function App() {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveTaxOpening(opening);
       setTaxOpenings(await tauriBridge.getTaxOpenings());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setTaxOpenings((previous) => {
@@ -462,6 +467,7 @@ export default function App() {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveSickLeaveRecord(record);
       setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setSickLeaveRecords((previous) => [...previous, record]);
@@ -471,6 +477,7 @@ export default function App() {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveAnnualPayrollParameters(parameters);
       setAnnualPayrollParameters(await tauriBridge.getAnnualPayrollParameters());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setAnnualPayrollParameters((previous) => {
@@ -486,6 +493,7 @@ export default function App() {
     const normalized = normalizeZamAylari(months);
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.setAppSetting(ZAM_AYLARI_SETTING_KEY, JSON.stringify(normalized));
+      setBordrolar(await tauriBridge.getPayrollList());
     }
     setZamAylari(normalized);
   };
@@ -494,6 +502,7 @@ export default function App() {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.deleteSickLeaveRecord(id);
       setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
+      setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
     setSickLeaveRecords((previous) => previous.filter((record) => record.id !== id));
