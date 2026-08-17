@@ -114,19 +114,27 @@ fn first_five_episode_rule_and_sixth_episode_behavior_preserved(
         let end = format!("2026-04-{:02}", day + 1);
         SickLeaveRepository::save(&conn, &leave(&format!("e{i}"), &start, &end))?;
     }
+
+    // İlk dört rapor 15 Nisan'dan önce kotayı tüketir. Gerçek 15–14 bordro
+    // döneminde 5. raporun (17–18 Nisan) iki günü ödenir; 6. raporun
+    // (21–22 Nisan) günleri yıllık ilk-beş-rapor kuralı nedeniyle ödenmez.
     let period = BordroDonemi {
-        id: "2026-all".into(),
+        id: "2026-04".into(),
         yil: 2026,
-        ay: 1,
-        baslangicTarihi: "2026-01-01".into(),
-        bitisTarihi: "2026-12-31".into(),
-        donemAdi: "2026".into(),
+        ay: 4,
+        baslangicTarihi: "2026-04-15".into(),
+        bitisTarihi: "2026-05-14".into(),
+        donemAdi: "Nisan 2026".into(),
         taxYear: 2026,
-        taxMonth: 12,
+        taxMonth: 5,
     };
     let paid =
         SickLeaveService::calculate_paid_sick_dates_for_period(&conn, "p-sick-overlap", &period)?;
-    assert_eq!(paid.len(), 10);
+    let paid_text = paid
+        .iter()
+        .map(|date| date.format("%Y-%m-%d").to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(paid_text, vec!["2026-04-17", "2026-04-18"]);
     Ok(())
 }
 
