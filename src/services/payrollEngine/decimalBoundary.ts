@@ -212,8 +212,11 @@ export function encodeDecimalValues<T>(value: T): Exactify<T> {
 function assertExactDecimals(value: unknown, key?: string, path = '$'): void {
   if (key && DECIMAL_KEYS.has(key as DecimalKey)) {
     if (value === null || value === undefined) return;
-    if (!isExactDecimalString(value)) {
+    if (typeof value !== 'string') {
       throw new Error(`${path} Decimal değeri string olmalıdır; JS number kabul edilmez.`);
+    }
+    if (!isExactDecimalString(value)) {
+      throw new Error(`${path} Decimal metni exact plain formatta olmalıdır.`);
     }
     return;
   }

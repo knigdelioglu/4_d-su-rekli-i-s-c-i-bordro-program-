@@ -39,14 +39,16 @@ import type {
 } from './services/payrollEngine';
 import {
   mergePayrollUiIntoBoundary,
-  parseLegacyPayrollStorage,
-  parsePayrollStorage,
   serializePayrollStorage,
   toPayrollBoundaryDto,
   toPayrollUiModel,
   type PayrollStorageDto,
   type PayrollStorageFields,
 } from './services/payrollEngine/decimalBoundary';
+import {
+  parseCurrentBrowserSnapshot,
+  parseImportedBackup,
+} from './services/storage/payrollPayload';
 import { PayrollNoticeCenter } from './components/PayrollNoticeCenter';
 import { getInitialDataset } from './utils/sampleData';
 
@@ -82,65 +84,20 @@ function makeBackupPayload(data: DatasetFields): PayrollStorageDto {
   };
 }
 
-function parseBackupPayload(json: string): PayrollStorageDto {
-  type PartialPayload = Partial<PayrollStorageDto> & Record<string, unknown>;
-  let parsed: PartialPayload;
-  try {
-    // Current IndexedDB/backup data must already be exact. The fallback is a
-    // one-time compatibility path for pre-boundary numeric localStorage files.
-    parsed = parsePayrollStorage<PartialPayload>(json);
-  } catch {
-    parsed = parseLegacyPayrollStorage<PartialPayload>(json);
-  }
-  const version = typeof parsed.backupVersion === 'number' ? parsed.backupVersion : 1;
-  if (version <= 0 || version > BACKUP_FORMAT_VERSION) {
-    throw new Error(`Desteklenmeyen yedek sürümü: ${version}`);
-  }
-  if (!Array.isArray(parsed.donemler) || !Array.isArray(parsed.personeller)) {
-    throw new Error('Yedek dosyasında dönem veya personel listesi bulunamadı.');
-  }
-  if (
-    version >= 2 &&
-    (!Array.isArray(parsed.puantajlar) ||
-      !Array.isArray(parsed.bordrolar) ||
-      !Array.isArray(parsed.taxOpenings) ||
-      !Array.isArray(parsed.sickLeaveRecords) ||
-      !Array.isArray(parsed.annualPayrollParameters))
-  ) {
-    throw new Error('V2 yedek dosyasında tüm domain kayıt listeleri bulunmalıdır.');
-  }
-  const periods = parsed.donemler as PayrollStorageDto['donemler'];
-  const bordrolar = (
-    (parsed.bordrolar as Array<
-      Partial<PayrollStorageDto['bordrolar'][number]>
-    > | undefined) || []
-  ).map(
-    (bordro) => ({
-      ...bordro,
-      // V1 localStorage kayıtlarında durum alanı yoktu. Sınırda bir kez
-      // normalize edilir; uygulama içindeki sözleşme Rust ile aynıdır.
-      status: bordro.status || 'CALCULATED',
-    })
-  ) as PayrollStorageDto['bordrolar'];
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
-  return makeBackupPayload({
-    donemler: periods,
-    aktifDonemId:
-      typeof parsed.aktifDonemId === 'string'
-        ? parsed.aktifDonemId
-        : periods[0]?.id || '',
-    personeller: parsed.personeller as PayrollStorageDto['personeller'],
-    kurumDegerleriMap:
-      (parsed.kurumDegerleriMap as PayrollStorageDto['kurumDegerleriMap'] | undefined) || {},
-    puantajlar: (parsed.puantajlar as PayrollStorageDto['puantajlar'] | undefined) || [],
-    bordrolar,
-    taxOpenings: (parsed.taxOpenings as PayrollStorageDto['taxOpenings'] | undefined) || [],
-    sickLeaveRecords:
-      (parsed.sickLeaveRecords as PayrollStorageDto['sickLeaveRecords'] | undefined) || [],
-    annualPayrollParameters:
-      (parsed.annualPayrollParameters as PayrollStorageDto['annualPayrollParameters'] | undefined) || [],
-    zamAylari: normalizeZamAylari(parsed.zamAylari),
-  });
+function formatBrowserStorageLoadError(error: unknown): string {
+  return `Tarayıcıdaki mevcut bordro snapshotı geçersiz veya okunamadı: ${getErrorMessage(
+    error
+  )} Finansal alanların exact Decimal string olması gerekiyor. Veri otomatik dönüştürülmedi ve mevcut snapshot değiştirilmedi.`;
+}
+
+function formatBrowserStorageSaveError(error: unknown): string {
+  return `Tarayıcı verisi kaydedilemedi: ${getErrorMessage(
+    error
+  )} IndexedDB snapshotı değiştirilmedi; başka bir storage kullanılmadı.`;
 }
 
 const EMPTY_UI_DATASET: UiDatasetFields = {
@@ -270,7 +227,7 @@ export default function App() {
 
       const saved = await browserPayrollStore.loadPayload();
       if (saved) {
-        const payload = parseBackupPayload(saved);
+        const payload = parseCurrentBrowserSnapshot(saved);
         applyDataset(payload);
       } else {
         applyDataset(toPayrollBoundaryDto({
@@ -288,7 +245,9 @@ export default function App() {
       }
       setIsDataLoaded(true);
     } catch (err) {
-      const message = `Veri yüklenemedi: ${String(err)}`;
+      const message = isNative
+        ? `Veri yüklenemedi: ${getErrorMessage(err)}`
+        : formatBrowserStorageLoadError(err);
       console.error(message, err);
       setLoadError(message);
       // Native failures stop here. Browser failures also remain visible rather
@@ -307,7 +266,7 @@ export default function App() {
   useEffect(() => {
     if (!isDataLoaded || tauriBridge.isTauriAvailable() || !authoritativePayload) return;
     void browserPayrollStore.savePayload(serializePayrollStorage(authoritativePayload)).catch((err) => {
-      const message = `Tarayıcı verisi kaydedilemedi: ${String(err)}`;
+      const message = formatBrowserStorageSaveError(err);
       console.error(message, err);
       setLoadError(message);
     });
@@ -427,7 +386,7 @@ export default function App() {
 
   const handleImportBackup = async (jsonStr: string) => {
     try {
-      const payload = parseBackupPayload(jsonStr);
+      const payload = parseImportedBackup(jsonStr);
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();
@@ -442,7 +401,7 @@ export default function App() {
       alert('Yedek başarıyla yüklendi!');
     } catch (err) {
       console.error('Yedek yükleme başarısız:', err);
-      alert(`Yedek yüklenemedi: ${String(err)}`);
+      alert(`Yedek yüklenemedi: ${getErrorMessage(err)}`);
     }
   };
 
@@ -803,12 +762,7 @@ export default function App() {
             data-testid="storage-error"
             className="mb-5 p-4 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold"
           >
-            {loadError}{' '}
-            {tauriBridge.isTauriAvailable()
-              ? 'Native veritabanı yüklenemedi; ekrandaki veriler değiştirilmedi.'
-              : loadError.includes('kaydedilemedi')
-                ? 'Veriler kaydedilemedi. IndexedDB kullanılamıyor veya snapshot doğrulaması başarısız; başka bir storage kullanılmadı.'
-                : 'IndexedDB kullanılamıyor veya veri okunamadı. Veriler değiştirilmedi; başka bir storage kullanılmadı.'}
+            {loadError}
           </div>
         )}
 

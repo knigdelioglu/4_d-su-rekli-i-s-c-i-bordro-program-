@@ -5,6 +5,25 @@ import {
   isMigratableBackupPayload,
   SerializedWriteQueue,
 } from './browserPayrollStore';
+import {
+  isSupportedLegacyBackupPayload,
+  parseCurrentBrowserSnapshot,
+  parseImportedBackup,
+  parseLegacyBackup,
+} from './payrollPayload';
+
+function makeV2Snapshot(netOdeme: unknown): string {
+  return JSON.stringify({
+    backupVersion: 2,
+    donemler: [],
+    personeller: [],
+    puantajlar: [],
+    bordrolar: [{ netOdeme }],
+    taxOpenings: [],
+    sickLeaveRecords: [],
+    annualPayrollParameters: [],
+  });
+}
 
 describe('BrowserPayrollStore', () => {
   test('does not fall back to localStorage when IndexedDB is unavailable', async () => {
@@ -86,6 +105,51 @@ describe('BrowserPayrollStore', () => {
         })
       )
     ).toThrow('Geçersiz Decimal metni');
+  });
+
+  test('accepts exact Decimal strings in current IndexedDB snapshots', () => {
+    const parsed = parseCurrentBrowserSnapshot(makeV2Snapshot('64179.78'));
+
+    expect(parsed.backupVersion).toBe(2);
+    expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
+  });
+
+  test('rejects numeric and malformed Decimal values in current IndexedDB snapshots', () => {
+    const invalidValues = [
+      ['numeric Decimal', 64179.78, 'JS number kabul edilmez'],
+      ['locale-formatted Decimal', '64.179,78', 'exact plain formatta'],
+      ['non-Decimal text', 'not-a-decimal', 'exact plain formatta'],
+    ] as const;
+
+    for (const [_label, value, message] of invalidValues) {
+      expect(() => parseCurrentBrowserSnapshot(makeV2Snapshot(value))).toThrow(message);
+    }
+  });
+
+  test('keeps legacy migration and import compatibility on explicit paths', () => {
+    const legacyV1 = JSON.stringify({
+      backupVersion: 1,
+      donemler: [],
+      personeller: [],
+      bordrolar: [{ netOdeme: 64179.78 }],
+    });
+
+    expect(isSupportedLegacyBackupPayload(legacyV1)).toBe(true);
+    expect(parseLegacyBackup(legacyV1).bordrolar[0].netOdeme).toBe('64179.78');
+    expect(parseImportedBackup(legacyV1).bordrolar[0].netOdeme).toBe('64179.78');
+
+    const legacyV2 = makeV2Snapshot(64179.78);
+    expect(parseImportedBackup(legacyV2).bordrolar[0].netOdeme).toBe('64179.78');
+    expect(isSupportedLegacyBackupPayload(makeV2Snapshot(64179.78))).toBe(true);
+
+    const malformedCurrentShape = JSON.stringify({
+      backupVersion: 2,
+      donemler: [],
+      personeller: [],
+      bordrolar: [{ netOdeme: 64179.78 }],
+    });
+    expect(isSupportedLegacyBackupPayload(malformedCurrentShape)).toBe(false);
+    expect(() => parseImportedBackup(malformedCurrentShape)).toThrow('JS number kabul edilmez');
   });
 
   test('serializes concurrent saves and lets the latest completed operation win', async () => {

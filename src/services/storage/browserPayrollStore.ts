@@ -1,7 +1,10 @@
+import { serializePayrollStorage } from '../payrollEngine/decimalBoundary';
 import {
-  parseLegacyPayrollStorage,
-  serializePayrollStorage,
-} from '../payrollEngine/decimalBoundary';
+  isSupportedLegacyBackupPayload,
+  parseLegacyBackup,
+} from './payrollPayload';
+
+export { isSupportedLegacyBackupPayload as isMigratableBackupPayload } from './payrollPayload';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const DATABASE_NAME = '4d-bordro-programi';
@@ -18,42 +21,14 @@ function readLegacyLocalStorage(): string | null {
   return localStorage.getItem(STORAGE_KEY);
 }
 
-export function isMigratableBackupPayload(payload: string): boolean {
-  try {
-    const parsed = JSON.parse(payload) as Record<string, unknown>;
-    const versionValue = parsed.backupVersion;
-    if (
-      versionValue !== undefined &&
-      (typeof versionValue !== 'number' || !Number.isInteger(versionValue))
-    ) {
-      return false;
-    }
-    const version = typeof versionValue === 'number' ? versionValue : 1;
-    if (version <= 0 || version > 2) return false;
-    if (!Array.isArray(parsed.donemler) || !Array.isArray(parsed.personeller)) return false;
-    return (
-      version < 2 ||
-      (Array.isArray(parsed.puantajlar) &&
-        Array.isArray(parsed.bordrolar) &&
-        Array.isArray(parsed.taxOpenings) &&
-        Array.isArray(parsed.sickLeaveRecords) &&
-        Array.isArray(parsed.annualPayrollParameters))
-    );
-  } catch {
-    return false;
-  }
-}
-
 /** Validates old JSON and returns its canonical exact-Decimal representation. */
 export function canonicalizeLegacyBackupPayload(payload: string): string {
-  if (!isMigratableBackupPayload(payload)) {
+  if (!isSupportedLegacyBackupPayload(payload)) {
     throw new Error(
       'Eski localStorage yedeği geçersiz veya desteklenmiyor; IndexedDB snapshotı değiştirilmedi.'
     );
   }
-  return serializePayrollStorage(
-    parseLegacyPayrollStorage<Record<string, unknown>>(payload)
-  );
+  return serializePayrollStorage(parseLegacyBackup(payload));
 }
 
 /** Serializes every IndexedDB write so an older async save cannot finish last. */
@@ -92,7 +67,19 @@ function readFromDatabase(database: IDBDatabase): Promise<string | null> {
     request.onerror = () => reject(request.error ?? new Error('IndexedDB kaydı okunamadı.'));
     request.onsuccess = () => {
       const value = request.result;
-      resolve(typeof value === 'string' ? value : null);
+      if (value === undefined) {
+        resolve(null);
+        return;
+      }
+      if (typeof value !== 'string') {
+        reject(
+          new Error(
+            'IndexedDB mevcut snapshotı geçersiz; kayıt JSON string olmalıdır ve snapshot değiştirilmedi.'
+          )
+        );
+        return;
+      }
+      resolve(value);
     };
   });
 }
@@ -133,7 +120,7 @@ export class BrowserPayrollStore {
       // The legacy key is intentionally retained as a recovery copy.
       const legacy = readLegacyLocalStorage();
       if (!legacy) return null;
-      if (!isMigratableBackupPayload(legacy)) {
+      if (!isSupportedLegacyBackupPayload(legacy)) {
         throw new Error(
           'Eski localStorage yedeği geçersiz veya desteklenmiyor; IndexedDB snapshotı değiştirilmedi.'
         );

@@ -113,10 +113,10 @@ type StoredSnapshot = {
 const databaseName = '4d-bordro-programi';
 const objectStoreName = 'snapshots';
 
-async function readStoredSnapshot(page: Page): Promise<StoredSnapshot | null> {
+async function readStoredPayload(page: Page): Promise<string | null> {
   return page.evaluate(
     ({ databaseName: dbName, objectStoreName: storeName }) =>
-      new Promise<StoredSnapshot | null>((resolve, reject) => {
+      new Promise<string | null>((resolve, reject) => {
         const openRequest = indexedDB.open(dbName, 1);
         openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB açılamadı.'));
         openRequest.onsuccess = () => {
@@ -133,7 +133,7 @@ async function readStoredSnapshot(page: Page): Promise<StoredSnapshot | null> {
             request.onsuccess = () => {
               const payload = request.result;
               database.close();
-              resolve(typeof payload === 'string' ? (JSON.parse(payload) as StoredSnapshot) : null);
+              resolve(typeof payload === 'string' ? payload : null);
             };
           } catch (error) {
             database.close();
@@ -142,6 +142,34 @@ async function readStoredSnapshot(page: Page): Promise<StoredSnapshot | null> {
         };
       }),
     { databaseName, objectStoreName }
+  );
+}
+
+async function readStoredSnapshot(page: Page): Promise<StoredSnapshot | null> {
+  const payload = await readStoredPayload(page);
+  return payload ? (JSON.parse(payload) as StoredSnapshot) : null;
+}
+
+async function writeStoredPayload(page: Page, payload: string): Promise<void> {
+  await page.evaluate(
+    ({ databaseName: dbName, objectStoreName: storeName, payload }) =>
+      new Promise<void>((resolve, reject) => {
+        const openRequest = indexedDB.open(dbName, 1);
+        openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB açılamadı.'));
+        openRequest.onsuccess = () => {
+          const database = openRequest.result;
+          const transaction = database.transaction(storeName, 'readwrite');
+          const request = transaction.objectStore(storeName).put(payload, 'current');
+          request.onerror = () => reject(request.error ?? new Error('Snapshot yazılamadı.'));
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () =>
+            reject(transaction.error ?? new Error('Snapshot transaction başarısız.'));
+        };
+      }),
+    { databaseName, objectStoreName, payload }
   );
 }
 
@@ -339,6 +367,52 @@ test('browser WASM calculation persists in IndexedDB and survives reload', async
   await expect(page.getByTestId('payroll-screen')).toBeVisible();
   const reloaded = await waitForPayrollStatus(page, periodId, 'CALCULATED');
   expect(reloaded).toEqual(payroll);
+});
+
+test('browser rejects a corrupt authoritative IndexedDB snapshot without autosaving over it', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect.poll(() => readStoredPayload(page)).not.toBeNull();
+
+  const corruptSnapshot = JSON.stringify({
+    backupVersion: 2,
+    donemler: [],
+    personeller: [],
+    puantajlar: [],
+    bordrolar: [{ netOdeme: 64179.78 }],
+    taxOpenings: [],
+    sickLeaveRecords: [],
+    annualPayrollParameters: [],
+  });
+  await writeStoredPayload(page, corruptSnapshot);
+
+  await page.reload();
+  const storageError = page.getByTestId('storage-error');
+  await expect(storageError).toBeVisible();
+  await expect(storageError).toContainText('Decimal string');
+  await expect(storageError).toContainText('mevcut snapshot değiştirilmedi');
+  await expect(page.getByTestId('data-loading-state')).not.toBeVisible();
+  await expect(page.getByText('4/D Personel Kayıtları (0)')).not.toBeVisible();
+  await expect.poll(() => readStoredPayload(page)).toBe(corruptSnapshot);
+});
+
+test('browser migrates a numeric legacy localStorage backup into exact IndexedDB storage', async ({ page }) => {
+  const legacyPayload = JSON.stringify({
+    backupVersion: 1,
+    donemler: [],
+    personeller: [],
+    bordrolar: [{ netOdeme: 64179.78 }],
+  });
+  await page.addInitScript(
+    ({ storageKey, payload }) => localStorage.setItem(storageKey, payload),
+    { storageKey: '4d_bordro_programi_mvp_v2', payload: legacyPayload }
+  );
+
+  await page.goto('/');
+  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect
+    .poll(async () => (await readStoredSnapshot(page))?.bordrolar?.[0]?.netOdeme)
+    .toBe('64179.78');
 });
 
 test('browser exact Decimal survives WASM result, IndexedDB reload, and the next WASM request', async ({ page }) => {
