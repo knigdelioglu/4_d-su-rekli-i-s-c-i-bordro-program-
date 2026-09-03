@@ -120,4 +120,13 @@ doğrular.
 
 JSON yedekleri sürüm 2 sözleşmesiyle dönem, personel, kurum ayarları, puantaj, bordro, vergi açılışları, hastalık raporu kayıtları ve yıllık bordro parametrelerini birlikte içerir. Native içe aktarma ve örnek veri sıfırlama, mevcut domain verisini tek SQLite transaction içinde silip yükler; tarayıcı akışı aynı sözleşmeyi IndexedDB snapshot'ı olarak uygular. Kesinleştirilen (`FINALIZED`) bordrolar yeniden hesaplanamaz veya geriye alınamaz.
 
+Tarayıcıdaki mevcut IndexedDB snapshot'ı JSON parse ve V2 sürüm kontrolünden
+sonra `payrollPayloadSchema` içindeki tam domain şemasıyla doğrulanır; yalnız bu
+adım geçerse exact Decimal kontrolünden geçip authoritative state'e alınır.
+Bilinen alanların zorunluluk ve tip kontrolleri fail-closed'dur; mevcut V2
+nesnesindeki bilinmeyen ekstra alanlar ileriye dönük uyumluluk için reddedilmez
+ve korunur. Legacy JSON ise yalnız açık canonicalization adımından sonra aynı
+tam şema kontrolünü geçerse IndexedDB'ye yazılır. Bu yapısal kontrol Rust'taki
+bordro/mevzuat iş kurallarının yerine geçmez.
+
 Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.

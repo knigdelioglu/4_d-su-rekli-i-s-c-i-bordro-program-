@@ -173,6 +173,29 @@ async function writeStoredPayload(page: Page, payload: string): Promise<void> {
   );
 }
 
+async function deleteStoredPayload(page: Page): Promise<void> {
+  await page.evaluate(
+    ({ databaseName: dbName, objectStoreName: storeName }) =>
+      new Promise<void>((resolve, reject) => {
+        const openRequest = indexedDB.open(dbName, 1);
+        openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB açılamadı.'));
+        openRequest.onsuccess = () => {
+          const database = openRequest.result;
+          const transaction = database.transaction(storeName, 'readwrite');
+          const request = transaction.objectStore(storeName).delete('current');
+          request.onerror = () => reject(request.error ?? new Error('Snapshot silinemedi.'));
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () =>
+            reject(transaction.error ?? new Error('Snapshot delete transaction başarısız.'));
+        };
+      }),
+    { databaseName, objectStoreName }
+  );
+}
+
 async function installCalculableFixture(page: Page): Promise<void> {
   await page.evaluate(
     ({ databaseName: dbName, objectStoreName: storeName }) =>
@@ -342,6 +365,17 @@ async function calculateP1(page: Page, periodId: string): Promise<StoredPayroll>
   return waitForPayrollStatus(page, periodId, 'CALCULATED');
 }
 
+async function seedCalculatedSnapshot(page: Page): Promise<string> {
+  await page.goto('/');
+  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await loadSampleDataset(page);
+  const periodId = await openPayrollScreen(page);
+  await calculateP1(page, periodId);
+  const payload = await readStoredPayload(page);
+  expect(payload).not.toBeNull();
+  return payload!;
+}
+
 async function selectPeriod(page: Page, periodId: string): Promise<void> {
   await page.getByTestId('active-period-selector').selectOption(periodId);
   await expect(page.getByTestId('payroll-screen')).toHaveAttribute('data-period-id', periodId);
@@ -370,20 +404,11 @@ test('browser WASM calculation persists in IndexedDB and survives reload', async
 });
 
 test('browser rejects a corrupt authoritative IndexedDB snapshot without autosaving over it', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
-  await expect.poll(() => readStoredPayload(page)).not.toBeNull();
-
-  const corruptSnapshot = JSON.stringify({
-    backupVersion: 2,
-    donemler: [],
-    personeller: [],
-    puantajlar: [],
-    bordrolar: [{ netOdeme: 64179.78 }],
-    taxOpenings: [],
-    sickLeaveRecords: [],
-    annualPayrollParameters: [],
-  });
+  const validPayload = await seedCalculatedSnapshot(page);
+  const snapshot = JSON.parse(validPayload) as Record<string, unknown>;
+  const payrolls = snapshot.bordrolar as Array<Record<string, unknown>>;
+  payrolls[0].netOdeme = 64179.78;
+  const corruptSnapshot = JSON.stringify(snapshot);
   await writeStoredPayload(page, corruptSnapshot);
 
   await page.reload();
@@ -396,20 +421,41 @@ test('browser rejects a corrupt authoritative IndexedDB snapshot without autosav
   await expect.poll(() => readStoredPayload(page)).toBe(corruptSnapshot);
 });
 
+test('browser rejects a schema-corrupt authoritative snapshot without autosaving over it', async ({ page }) => {
+  const validPayload = await seedCalculatedSnapshot(page);
+  const snapshot = JSON.parse(validPayload) as Record<string, unknown>;
+  const payrolls = snapshot.bordrolar as Array<Record<string, unknown>>;
+  payrolls[0].status = 'DONE';
+  const corruptSnapshot = JSON.stringify(snapshot);
+  await writeStoredPayload(page, corruptSnapshot);
+
+  await page.reload();
+  const storageError = page.getByTestId('storage-error');
+  await expect(storageError).toBeVisible();
+  await expect(storageError).toContainText('status');
+  await expect(storageError).toContainText('DONE');
+  await expect(storageError).toContainText('mevcut snapshot değiştirilmedi');
+  await expect(page.getByTestId('payroll-screen')).not.toBeVisible();
+  await expect(page.getByText('4/D Personel Kayıtları (5)')).not.toBeVisible();
+  await expect.poll(() => readStoredPayload(page)).toBe(corruptSnapshot);
+});
+
 test('browser migrates a numeric legacy localStorage backup into exact IndexedDB storage', async ({ page }) => {
-  const legacyPayload = JSON.stringify({
-    backupVersion: 1,
-    donemler: [],
-    personeller: [],
-    bordrolar: [{ netOdeme: 64179.78 }],
-  });
-  await page.addInitScript(
+  const currentPayload = await seedCalculatedSnapshot(page);
+  const legacySnapshot = JSON.parse(currentPayload) as Record<string, unknown>;
+  legacySnapshot.backupVersion = 1;
+  const legacyPayroll = (legacySnapshot.bordrolar as Array<Record<string, unknown>>)[0];
+  legacyPayroll.netOdeme = 64179.78;
+  delete legacyPayroll.status;
+  const legacyPayload = JSON.stringify(legacySnapshot);
+  await page.evaluate(
     ({ storageKey, payload }) => localStorage.setItem(storageKey, payload),
     { storageKey: '4d_bordro_programi_mvp_v2', payload: legacyPayload }
   );
+  await deleteStoredPayload(page);
 
-  await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await page.reload();
+  await expect(page.getByTestId('payroll-screen')).toBeVisible();
   await expect
     .poll(async () => (await readStoredSnapshot(page))?.bordrolar?.[0]?.netOdeme)
     .toBe('64179.78');

@@ -5,8 +5,7 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    // GitHub Pages serves project repositories below /<repository-name>/.
-    // Local development and other static hosts keep the root-relative default.
+    // Static hosts may provide a subpath; Netlify and local development use `/`.
     base: process.env.VITE_BASE_PATH || '/',
     plugins: [react(), tailwindcss()],
     resolve: {

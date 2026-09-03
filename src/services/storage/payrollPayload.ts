@@ -1,33 +1,41 @@
 import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import {
   parseLegacyPayrollStorage,
-  parsePayrollStorage,
   type PayrollStorageDto,
 } from '../payrollEngine/decimalBoundary';
+import {
+  assertRecord,
+  parseAndValidatePayrollPayload,
+} from './payrollPayloadSchema';
 
-type PartialPayload = Partial<PayrollStorageDto> & Record<string, unknown>;
+type UnknownRecord = Record<string, unknown>;
 
-const REQUIRED_V2_COLLECTIONS = [
+const CURRENT_V2_ARRAY_FIELDS = [
+  'donemler',
+  'personeller',
   'puantajlar',
   'bordrolar',
   'taxOpenings',
   'sickLeaveRecords',
   'annualPayrollParameters',
+  'zamAylari',
 ] as const;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function hasOwn(record: UnknownRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function parseJsonObject(json: string): Record<string, unknown> {
+function parseJsonObject(json: string): UnknownRecord {
   const value: unknown = JSON.parse(json);
-  if (!isRecord(value)) {
-    throw new Error('Yedek JSON nesne içermiyor.');
-  }
+  assertRecord(value, '$');
   return value;
 }
 
-function getBackupVersion(parsed: Record<string, unknown>): number {
+function getBackupVersion(parsed: UnknownRecord): number {
   const versionValue = parsed.backupVersion;
   if (versionValue === undefined) return 1;
   if (typeof versionValue !== 'number' || !Number.isInteger(versionValue)) {
@@ -39,90 +47,116 @@ function getBackupVersion(parsed: Record<string, unknown>): number {
   return versionValue;
 }
 
-function validateBackupStructure(parsed: PartialPayload): number {
-  const version = getBackupVersion(parsed);
-  if (!Array.isArray(parsed.donemler) || !Array.isArray(parsed.personeller)) {
-    throw new Error('Yedek dosyasında dönem veya personel listesi bulunamadı.');
-  }
-  if (
-    version >= BACKUP_FORMAT_VERSION &&
-    REQUIRED_V2_COLLECTIONS.some((key) => !Array.isArray(parsed[key]))
-  ) {
-    throw new Error('V2 yedek dosyasında tüm domain kayıt listeleri bulunmalıdır.');
-  }
-  return version;
-}
-
-function normalizeZamAylari(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(
-    value.filter(
-      (month): month is number =>
-        typeof month === 'number' && Number.isInteger(month) && month >= 1 && month <= 12
-    )
-  )].sort((a, b) => a - b);
-}
-
-function toCanonicalBackupPayload(parsed: PartialPayload): PayrollStorageDto {
-  const periods = parsed.donemler as PayrollStorageDto['donemler'];
-  const bordrolar = (
-    (parsed.bordrolar as Array<Partial<PayrollStorageDto['bordrolar'][number]>> | undefined) || []
-  ).map(
-    (bordro) => ({
-      ...bordro,
-      // V1 legacy records did not have a status. Normalize it once at the
-      // explicit legacy/import boundary before the app uses the dataset.
-      status: bordro.status || 'CALCULATED',
-    })
-  ) as PayrollStorageDto['bordrolar'];
-
-  return {
-    backupVersion: BACKUP_FORMAT_VERSION,
-    exportedAt: new Date().toISOString(),
-    donemler: periods,
-    aktifDonemId:
-      typeof parsed.aktifDonemId === 'string'
-        ? parsed.aktifDonemId
-        : periods[0]?.id || '',
-    personeller: parsed.personeller as PayrollStorageDto['personeller'],
-    kurumDegerleriMap:
-      (parsed.kurumDegerleriMap as PayrollStorageDto['kurumDegerleriMap'] | undefined) || {},
-    puantajlar: (parsed.puantajlar as PayrollStorageDto['puantajlar'] | undefined) || [],
-    bordrolar,
-    taxOpenings: (parsed.taxOpenings as PayrollStorageDto['taxOpenings'] | undefined) || [],
-    sickLeaveRecords:
-      (parsed.sickLeaveRecords as PayrollStorageDto['sickLeaveRecords'] | undefined) || [],
-    annualPayrollParameters:
-      (parsed.annualPayrollParameters as PayrollStorageDto['annualPayrollParameters'] | undefined) || [],
-    zamAylari: normalizeZamAylari(parsed.zamAylari),
-  };
-}
-
-function isSupportedLegacyBackupRecord(parsed: Record<string, unknown>): boolean {
+/**
+ * Legacy classification only selects the explicit compatibility adapter. The
+ * resulting canonical object is still required to pass the full V2 validator.
+ */
+function isLegacyCandidate(parsed: UnknownRecord): boolean {
   try {
-    const versionValue = parsed.backupVersion;
-    if (
-      versionValue !== undefined &&
-      (typeof versionValue !== 'number' || !Number.isInteger(versionValue))
-    ) {
-      return false;
-    }
-    const version = typeof versionValue === 'number' ? versionValue : 1;
-    if (version <= 0 || version > BACKUP_FORMAT_VERSION) return false;
+    const version = getBackupVersion(parsed);
     if (!Array.isArray(parsed.donemler) || !Array.isArray(parsed.personeller)) return false;
-    return (
-      version < BACKUP_FORMAT_VERSION ||
-      REQUIRED_V2_COLLECTIONS.every((key) => Array.isArray(parsed[key]))
-    );
+
+    // A V2-shaped payload is only a legacy candidate when all fields that were
+    // required by the V2 collection contract are present. Missing current V2
+    // fields must not be repaired by this path.
+    if (version === BACKUP_FORMAT_VERSION) {
+      return CURRENT_V2_ARRAY_FIELDS.every((key) => Array.isArray(parsed[key])) &&
+        hasOwn(parsed, 'exportedAt') &&
+        typeof parsed.exportedAt === 'string' &&
+        hasOwn(parsed, 'aktifDonemId') &&
+        typeof parsed.aktifDonemId === 'string' &&
+        hasOwn(parsed, 'kurumDegerleriMap') &&
+        isRecord(parsed.kurumDegerleriMap);
+    }
+
+    return true;
   } catch {
     return false;
   }
 }
 
+function legacyValueOrDefault(
+  parsed: UnknownRecord,
+  key: string,
+  defaultValue: unknown
+): unknown {
+  return hasOwn(parsed, key) ? parsed[key] : defaultValue;
+}
+
+function canonicalizeLegacyPersonel(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+
+  const personel = { ...value };
+  // These defaults mirror MigrationService::LegacyPersonel and keep the
+  // supported V1 browser migration compatible with native migration.
+  if (!hasOwn(personel, 'sgkSicilNo') || personel.sgkSicilNo === null) {
+    personel.sgkSicilNo = '';
+  }
+  if (!hasOwn(personel, 'iban') || personel.iban === null) personel.iban = '';
+  if (!hasOwn(personel, 'hizmetYili') || personel.hizmetYili === null) personel.hizmetYili = 1;
+  return personel;
+}
+
+function firstPeriodId(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  const first = value[0];
+  return isRecord(first) && typeof first.id === 'string' ? first.id : '';
+}
+
+function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
+  const periods = legacyValueOrDefault(parsed, 'donemler', []);
+  const rawPayrolls = legacyValueOrDefault(parsed, 'bordrolar', []);
+  const payrolls = Array.isArray(rawPayrolls)
+    ? rawPayrolls.map((payroll) => {
+        if (!isRecord(payroll)) return payroll;
+        // V1 records did not have status. Only an absent field is defaulted;
+        // explicit null/invalid values remain visible to the validator.
+        return hasOwn(payroll, 'status')
+          ? payroll
+          : { ...payroll, status: 'CALCULATED' };
+      })
+    : rawPayrolls;
+
+  const rawPersonnel = legacyValueOrDefault(parsed, 'personeller', []);
+  const personnel = Array.isArray(rawPersonnel)
+    ? rawPersonnel.map(canonicalizeLegacyPersonel)
+    : rawPersonnel;
+
+  return {
+    backupVersion: BACKUP_FORMAT_VERSION,
+    exportedAt: legacyValueOrDefault(parsed, 'exportedAt', new Date().toISOString()),
+    donemler: periods,
+    aktifDonemId: legacyValueOrDefault(parsed, 'aktifDonemId', firstPeriodId(periods)),
+    personeller: personnel,
+    kurumDegerleriMap: legacyValueOrDefault(parsed, 'kurumDegerleriMap', {}),
+    puantajlar: legacyValueOrDefault(parsed, 'puantajlar', []),
+    bordrolar: payrolls,
+    taxOpenings: legacyValueOrDefault(parsed, 'taxOpenings', []),
+    sickLeaveRecords: legacyValueOrDefault(parsed, 'sickLeaveRecords', []),
+    annualPayrollParameters: legacyValueOrDefault(parsed, 'annualPayrollParameters', []),
+    zamAylari: legacyValueOrDefault(parsed, 'zamAylari', []),
+  };
+}
+
+function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
+  if (!isLegacyCandidate(raw)) {
+    throw new Error('Desteklenen legacy yedek yapısı bulunamadı.');
+  }
+
+  // This conversion is deliberately confined to the legacy adapter. No value
+  // becomes authoritative until the canonical object passes the full schema.
+  const encodedLegacy = parseLegacyPayrollStorage<unknown>(JSON.stringify(raw));
+  if (!isRecord(encodedLegacy)) {
+    throw new Error('Legacy yedek canonical nesne içermiyor.');
+  }
+  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(encodedLegacy));
+}
+
 /** Explicit structural/version predicate for legacy localStorage or imports. */
 export function isSupportedLegacyBackupPayload(payload: string): boolean {
   try {
-    return isSupportedLegacyBackupRecord(parseJsonObject(payload));
+    parseLegacyBackupRecord(parseJsonObject(payload));
+    return true;
   } catch {
     return false;
   }
@@ -132,24 +166,17 @@ export function isSupportedLegacyBackupPayload(payload: string): boolean {
 export const isMigratableBackupPayload = isSupportedLegacyBackupPayload;
 
 /**
- * Parses the authoritative IndexedDB snapshot. This path is deliberately
- * strict and never calls the legacy numeric compatibility adapter.
+ * Parses the authoritative IndexedDB snapshot. This path never calls the
+ * legacy numeric compatibility adapter and never canonicalizes current data.
  */
 export function parseCurrentBrowserSnapshot(json: string): PayrollStorageDto {
-  const parsed = parsePayrollStorage<PartialPayload>(json);
-  validateBackupStructure(parsed);
-  return toCanonicalBackupPayload(parsed);
+  const parsed: unknown = JSON.parse(json);
+  return parseAndValidatePayrollPayload(parsed);
 }
 
 /** Parses and canonicalizes a structurally supported legacy backup. */
 export function parseLegacyBackup(json: string): PayrollStorageDto {
-  const raw = parseJsonObject(json);
-  if (!isSupportedLegacyBackupRecord(raw)) {
-    throw new Error('Desteklenen legacy yedek yapısı bulunamadı.');
-  }
-  const parsed = parseLegacyPayrollStorage<PartialPayload>(json);
-  validateBackupStructure(parsed);
-  return toCanonicalBackupPayload(parsed);
+  return parseLegacyBackupRecord(parseJsonObject(json));
 }
 
 type ParseAttempt<T> =
@@ -166,7 +193,7 @@ function tryParseCurrentBrowserSnapshot(json: string): ParseAttempt<PayrollStora
 
 /**
  * User imports may use the strict current format or an explicitly supported
- * legacy format. Legacy parsing is reachable only after raw structure/version
+ * legacy format. Legacy parsing is reachable only after raw version/shape
  * classification, never as a generic strict-parser catch-all.
  */
 export function parseImportedBackup(json: string): PayrollStorageDto {
@@ -175,14 +202,13 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
 
   if (version === BACKUP_FORMAT_VERSION) {
     const strictResult = tryParseCurrentBrowserSnapshot(json);
-    if (strictResult.ok) return strictResult.value;
-    if ('error' in strictResult) {
-      if (isSupportedLegacyBackupRecord(raw)) return parseLegacyBackup(json);
-      throw strictResult.error;
+    if (strictResult.ok === false) {
+      if (!isLegacyCandidate(raw)) throw strictResult.error;
+      return parseLegacyBackupRecord(raw);
     }
-    throw new Error('Strict backup parser sonucu belirlenemedi.');
+    return strictResult.value;
   }
 
-  if (isSupportedLegacyBackupRecord(raw)) return parseLegacyBackup(json);
+  if (isLegacyCandidate(raw)) return parseLegacyBackupRecord(raw);
   return parseCurrentBrowserSnapshot(json);
 }

@@ -381,7 +381,8 @@ export interface PekDetayi {
   isverenIssizlikOraniYuzde?: number;
 }
 
-export type BordroStatus = 'DRAFT' | 'CALCULATED' | 'STALE' | 'FINALIZED';
+export const BORDRO_STATUS_VALUES = ['DRAFT', 'CALCULATED', 'STALE', 'FINALIZED'] as const;
+export type BordroStatus = (typeof BORDRO_STATUS_VALUES)[number];
 
 export interface BordroKaydi {
   id: string; // `${personelId}_${donemId}`

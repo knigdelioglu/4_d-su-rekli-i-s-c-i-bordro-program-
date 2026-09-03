@@ -1,6 +1,7 @@
 import { serializePayrollStorage } from '../payrollEngine/decimalBoundary';
 import {
   isSupportedLegacyBackupPayload,
+  parseCurrentBrowserSnapshot,
   parseLegacyBackup,
 } from './payrollPayload';
 
@@ -23,11 +24,6 @@ function readLegacyLocalStorage(): string | null {
 
 /** Validates old JSON and returns its canonical exact-Decimal representation. */
 export function canonicalizeLegacyBackupPayload(payload: string): string {
-  if (!isSupportedLegacyBackupPayload(payload)) {
-    throw new Error(
-      'Eski localStorage yedeği geçersiz veya desteklenmiyor; IndexedDB snapshotı değiştirilmedi.'
-    );
-  }
   return serializePayrollStorage(parseLegacyBackup(payload));
 }
 
@@ -142,6 +138,11 @@ export class BrowserPayrollStore {
         'Tarayıcı bordro verisi kaydedilemedi: IndexedDB desteği bulunamadı. Payroll persistence devre dışı bırakıldı.'
       );
     }
+
+    // Do not let a caller turn an unvalidated string into authoritative state.
+    // The same current V2 schema used on load protects every normal browser
+    // write; legacy conversion writes only its already-validated canonical form.
+    parseCurrentBrowserSnapshot(payload);
 
     return this.writeQueue.enqueue(async () => {
       const database = await openDatabase();
