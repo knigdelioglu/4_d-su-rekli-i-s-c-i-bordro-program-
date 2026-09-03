@@ -1,0 +1,14 @@
+{
+  "name": "payroll-wasm",
+  "type": "module",
+  "description": "Thin WebAssembly adapter for the portable payroll-core engine",
+  "version": "0.1.0",
+  "files": [
+    "payroll_wasm_bg.wasm",
+    "payroll_wasm.js"
+  ],
+  "main": "payroll_wasm.js",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

@@ -4,11 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "predev": "bun run wasm:build",
+    "predev": "if command -v wasm-pack >/dev/null 2>&1; then bun run wasm:build; fi",
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "prebuild": "bun run wasm:build",
     "build": "vite build",
-    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-typescript",
+    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-typescript && rm -f src/wasm/pkg/.gitignore",
     "wasm:test": "wasm-pack test --node crates/payroll-wasm",
     "web:build": "bun run wasm:build && vite build",
     "preview": "vite preview",
