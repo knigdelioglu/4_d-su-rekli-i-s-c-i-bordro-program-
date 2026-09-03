@@ -2,6 +2,16 @@
 
 React + TypeScript arayüzü, Tauri/Rust servisleri ve SQLite yerel veritabanı kullanan 4/D sürekli işçi bordro uygulamasıdır. Üretim bordro hesabı, native Tauri ve bağımsız tarayıcı çalışma zamanları tarafından paylaşılan tek Rust `payroll-core` motorunda yapılır.
 
+Tarayıcı production dağıtımı Netlify üzerinde statiktir:
+
+```text
+Netlify → HTML / JS / CSS / WASM → Browser CPU
+                           └────→ IndexedDB
+```
+
+Netlify yalnız static hosting/CDN görevi görür. Netlify Functions, payroll
+server'ı ve remote payroll backend yoktur.
+
 ## Gereksinimler
 
 - Bun
@@ -21,16 +31,23 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 bun run wasm:build
 bun run wasm:test
 bun run build
+bun run web:verify
+bun run verify:privacy
 bun run web:build
+bunx playwright install chromium
+bun run test:e2e:typecheck
+bun run test:e2e
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
-`bun run dev`, `bun run build` ve `bun run web:build` öncesinde tarayıcı motoru için
-`wasm-pack` ve `wasm32-unknown-unknown` hedefi gerekir. `wasm:build` komutu
-üretilen glue kodunu ve `.wasm` dosyasını `src/wasm/pkg/` altında oluşturur;
-bu çıktı kaynak kontrolüne alınmaz.
+`bun run build` yalnız Vite static build'idir; Netlify build aşamasında Rust
+server veya bordro hesabı çalışmaz. `wasm:build` komutu üretilen glue kodunu ve
+`.wasm` dosyasını `src/wasm/pkg/` altında oluşturur. Bu generated çıktı
+repository içinde tutulur; Netlify static build sırasında Rust toolchain
+gerektirmemesi için deploy'un parçasıdır. CI, `payroll-core` kaynağından yeniden
+üretilen WASM ile tracked `src/wasm/pkg` çıktısının aynı olduğunu doğrular.
 
 Rust test döngüsünü hızlandırmak için bağımlılık crate'leri `dev` ve `test`
 profillerinde 3. seviye optimizasyonla derlenir; uygulama kodu hızlı debug
@@ -59,10 +76,17 @@ Tauri geliştirme akışı için `bun tauri dev` kullanılabilir. SQLite verisi 
 
 ## Tarayıcı çalışma zamanı
 
-Tauri dışı kullanımda bordro hesaplama WASM üzerinden, veri kaydı ise yalnızca
-kullanıcının tarayıcısında yapılır. Uygulama önce IndexedDB'deki sürüm kontrollü
-snapshot'ı kullanır; eski `localStorage` yedeği ilk başarılı okumada IndexedDB'ye
-taşınır ve kurtarma amacıyla silinmez. Sunucu, API veya ortak backend yoktur.
+Tauri dışı kullanımda gerçek zincir `React → PayrollEngine → Rust/WASM →
+payroll-core` şeklindedir; bordro hesaplaması browser CPU üzerinde yapılır.
+Veri kaydı yalnızca kullanıcının tarayıcısındaki IndexedDB sürüm kontrollü
+atomic snapshot'ına yapılır. IndexedDB yoksa uygulama görünür hata verir ve
+payroll verisi başka bir browser storage'a yazılmaz. Eski `localStorage` yedeği
+yalnız migration read olarak, IndexedDB kullanılabilirken doğrulanıp taşınır;
+kurtarma amacıyla hemen silinmez. Küçük UI tercihleri (ör. aktif sekme)
+localStorage'da tutulabilir. Sunucu, API veya ortak backend yoktur.
+
+Personel, bordro, puantaj, dönem ve kurum verileri Netlify'a veya başka bir
+sunucuya gönderilmez.
 
 Tarayıcı hesaplaması da native akışla aynı 15–14 dönem, kümülatif GV, PEK,
 raporlu gün, STALE ve FINALIZED kurallarını uygular. Kaynak veri değişikliği

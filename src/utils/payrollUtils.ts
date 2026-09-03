@@ -1,5 +1,9 @@
 /**
- * 4/D Sürekli İşçi Bordro Programı - Utility Functions
+ * Test-only legacy TypeScript payroll fixture helpers.
+ *
+ * Production code must import `payrollPresentation` for display/input helpers
+ * and must use PayrollEngine for payroll results. `verify:production-graph`
+ * fails if this module or its calculation exports enter the application graph.
  */
 
 import {

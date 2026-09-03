@@ -360,6 +360,12 @@ export interface DevredenPekKaydi {
 
 export interface PekDetayi {
   hesaplananPek: number;
+  /** Rust core's current-period PEK before devreden PEK. */
+  hamPek?: number;
+  /** Devreden PEK actually fitted into the current period ceiling. */
+  devredenPekKullanilan?: number;
+  /** Authoritative worker-prime base before artificial lower-bound completion. */
+  primMatrahi?: number;
   finalPek: number;
   devredenPekAşanTutar: number;
   pekAltSinir: number;

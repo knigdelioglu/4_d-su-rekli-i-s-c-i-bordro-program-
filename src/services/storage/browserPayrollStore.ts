@@ -72,15 +72,16 @@ function writeToDatabase(database: IDBDatabase, payload: string): Promise<void> 
   });
 }
 
-/** Browser-only persistence. IndexedDB is preferred; localStorage is a legacy/fallback boundary. */
+/** Browser-only persistence. IndexedDB is the only authoritative payroll store. */
 export class BrowserPayrollStore {
   async loadPayload(): Promise<string | null> {
-    if (!hasIndexedDb()) return readLegacyLocalStorage();
-
     const database = await openDatabase();
     try {
       const stored = await readFromDatabase(database);
-      if (stored) return stored;
+      // A present but malformed/empty snapshot is still authoritative. Let
+      // App's version/shape validation surface it instead of silently
+      // replacing it with a legacy localStorage copy.
+      if (stored !== null) return stored;
 
       // Migrate only after the versioned payload has been read successfully.
       // The legacy key is intentionally retained as a recovery copy.
@@ -96,11 +97,9 @@ export class BrowserPayrollStore {
 
   async savePayload(payload: string): Promise<void> {
     if (!hasIndexedDb()) {
-      if (typeof localStorage === 'undefined') {
-        throw new Error('Tarayıcı kalıcı depolama desteği bulunamadı.');
-      }
-      localStorage.setItem(STORAGE_KEY, payload);
-      return;
+      throw new Error(
+        'Tarayıcı bordro verisi kaydedilemedi: IndexedDB desteği bulunamadı. Payroll persistence devre dışı bırakıldı.'
+      );
     }
 
     const database = await openDatabase();

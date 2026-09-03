@@ -23,7 +23,7 @@ import {
   DEFAULT_TEDIYE_LISTESI,
   DEFAULT_TIS_IKRAMIYE_LISTESI,
   formatTL,
-} from '../utils/payrollUtils';
+} from '../utils/payrollPresentation';
 
 interface PeriodManagerModalProps {
   isOpen: boolean;

@@ -15,7 +15,7 @@ import {
   List,
 } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
-import { getGrupIsPrimiOrani, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
+import { getGrupIsPrimiOrani, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 import { PersonelFormModal } from './PersonelFormModal';
 
 interface PersonelListProps {

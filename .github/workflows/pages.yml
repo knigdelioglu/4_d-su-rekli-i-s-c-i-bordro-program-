@@ -50,6 +50,9 @@ jobs:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
         run: bun run web:build
 
+      - name: Verify web artifact
+        run: bun run web:verify
+
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

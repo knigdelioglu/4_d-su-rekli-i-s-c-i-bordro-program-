@@ -19,6 +19,9 @@ jobs:
       - name: Install JavaScript dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install Playwright Chromium
+        run: bunx playwright install --with-deps chromium
+
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -57,6 +60,15 @@ jobs:
       - name: Build browser WASM package
         run: bun run wasm:build
 
+      - name: Verify committed WASM is synchronized with Rust source
+        run: |
+          if ! git diff --quiet -- src/wasm/pkg; then
+            echo "::error::Generated WASM drift detected in src/wasm/pkg. Run 'bun run wasm:build' and commit the generated output together with payroll-core changes."
+            git diff --stat -- src/wasm/pkg
+            exit 1
+          fi
+          echo "Generated WASM matches the committed Rust/WASM source output."
+
       - name: WASM adapter tests
         run: bun run wasm:test
 
@@ -68,6 +80,18 @@ jobs:
 
       - name: Vite build
         run: bun run build
+
+      - name: Verify production web output
+        run: bun run web:verify
+
+      - name: Verify browser privacy boundary
+        run: bun run verify:privacy
+
+      - name: Typecheck browser E2E tests
+        run: bun run test:e2e:typecheck
+
+      - name: Browser E2E smoke tests
+        run: bun run test:e2e
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2

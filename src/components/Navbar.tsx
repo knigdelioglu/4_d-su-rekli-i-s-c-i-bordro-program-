@@ -98,6 +98,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           <div className="flex items-center bg-slate-800/90 border border-slate-700 rounded-xl px-2.5 py-1 gap-2">
             <Calendar className="w-4 h-4 text-indigo-400 shrink-0" />
             <select
+              data-testid="active-period-selector"
               value={aktifDonemId}
               onChange={(e) => onSelectDonem(e.target.value)}
               className="bg-transparent text-xs font-bold text-white border-none focus:ring-0 cursor-pointer"

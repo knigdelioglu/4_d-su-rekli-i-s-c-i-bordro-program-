@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
+  isDecimalBoundaryKey,
   parsePayrollBoundaryJson,
   parsePayrollStorage,
   parseWasmPayrollResult,
@@ -7,7 +10,39 @@ import {
   serializePayrollStorage,
 } from './decimalBoundary';
 
+const rustModelsSource = readFileSync(
+  resolve(process.cwd(), 'src-tauri/src/domain/models.rs'),
+  'utf8'
+);
+const rustDecimalKeys = [
+  ...new Set(
+    [...rustModelsSource.matchAll(/\bpub\s+([A-Za-z0-9_]+):\s*(?:Option<)?Decimal\b/g)].map(
+      ([, key]) => key
+    )
+  ),
+];
+
 describe('WASM Decimal boundary', () => {
+  test('covers every Decimal field declared by the shared Rust models', () => {
+    expect(rustDecimalKeys.length).toBeGreaterThan(0);
+    const missing = rustDecimalKeys.filter((key) => !isDecimalBoundaryKey(key));
+    expect(missing).toEqual([]);
+  });
+
+  test('serializes a schema-derived representative DTO with string Decimals', () => {
+    const representativeDto = Object.fromEntries(
+      rustDecimalKeys.map((key) => [key, 1234.56])
+    );
+    const serialized = JSON.parse(serializePayrollStorage(representativeDto)) as Record<
+      string,
+      unknown
+    >;
+
+    for (const key of rustDecimalKeys) {
+      expect(typeof serialized[key]).toBe('string');
+    }
+  });
+
   test('serializes monetary fields as exact decimal strings and leaves chronology integers intact', () => {
     const json = serializePayrollRequestForWasm({
       personnelId: 'person-1',

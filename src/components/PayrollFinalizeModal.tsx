@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 import { PayrollNotice, PayrollNoticeSeverity } from '../types/payrollNotice';
-import { formatTL } from '../utils/payrollUtils';
+import { formatTL } from '../utils/payrollPresentation';
 import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
 import {
   filterFinalizeNotices,
@@ -321,7 +321,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
 
             <div className="flex flex-col gap-2 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-[10px] font-medium text-slate-500">
-                Kesinleştirilen bordro kilitlenir. Backend kesinleştirme sırasında güncellik kontrollerini yeniden uygular.
+                Kesinleştirilen bordro kilitlenir. Kesinleştirme sırasında güncellik kontrolleri yeniden uygulanır.
               </p>
               <div className="flex shrink-0 gap-2">
                 <button

@@ -13,7 +13,7 @@ import {
   createBordroDonemi,
   DEFAULT_KURUM_DEGERLERI,
   generateDefaultPuantajGunler,
-} from './payrollUtils';
+} from './payrollPresentation';
 
 export const INITIAL_PERSONELLER: Personel[] = [
   {

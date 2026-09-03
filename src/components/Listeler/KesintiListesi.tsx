@@ -17,7 +17,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
-import { formatTL } from '../../utils/payrollUtils';
+import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel, printElement } from '../../utils/excelExport';
 
 interface KesintiListesiProps {

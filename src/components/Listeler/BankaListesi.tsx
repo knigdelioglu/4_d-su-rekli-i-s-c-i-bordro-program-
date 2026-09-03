@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { Building2, Download, Printer, Copy, Check, Search } from 'lucide-react';
 import { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
-import { formatTL } from '../../utils/payrollUtils';
+import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel, printElement } from '../../utils/excelExport';
 
 interface BankaListesiProps {

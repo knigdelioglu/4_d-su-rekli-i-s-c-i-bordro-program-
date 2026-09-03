@@ -33,9 +33,7 @@ import {
   SickLeaveRecord,
   ManualPayrollIncomeInput,
 } from '../types/payroll';
-import {
-  formatTL,
-} from '../utils/payrollUtils';
+import { formatTL } from '../utils/payrollPresentation';
 import { PaySlipModal } from './PaySlipModal';
 import { PayrollFinalizeModal } from './PayrollFinalizeModal';
 import { getPayrollEngine, PayrollDatasetSnapshot } from '../services/payrollEngine';
@@ -338,7 +336,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   );
 
   return (
-    <div className="space-y-6">
+    <div
+      className="space-y-6"
+      data-testid="payroll-screen"
+      data-period-id={aktifDonem.id}
+      data-payroll-engine-kind={payrollEngine.kind}
+    >
       {/* Top Banner / Title */}
       <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -761,6 +764,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <>
                               {!isFinalized && (
                                 <button
+                                  data-testid={`calculate-payroll-${person.id}`}
                                   onClick={(e) => handleCalculateSingle(person, e)}
                                   title={isStale ? 'Güncelliğini yitiren bordroyu yeniden hesapla' : 'Bordroyu Hesapla/Yeniden Hesapla'}
                                   className="p-1.5 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"

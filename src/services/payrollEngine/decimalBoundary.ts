@@ -4,7 +4,7 @@ import type { PayrollCalculationRequest } from './types';
 // These are the Decimal-backed model fields. Integer day/month/year fields are
 // intentionally absent so the JSON boundary cannot turn tax chronology or
 // attendance counts into decimal strings by accident.
-const DECIMAL_KEYS = new Set([
+export const DECIMAL_KEYS = new Set([
   'dogumAskerlikGvIndirimTutar',
   'hayatSigortasiPrimiTutar',
   'saglikSigortasiPrimiTutar',
@@ -41,6 +41,7 @@ const DECIMAL_KEYS = new Set([
   'damgaVergisi',
   'sendikaAidati',
   'bes',
+  'icra',
   'kisiBorcu',
   'dogumAskerlikBorclanmasi',
   'hayatSaglikSigortasi',
@@ -105,6 +106,9 @@ const DECIMAL_KEYS = new Set([
   'oncekiKumulatifGvMatrahi',
   'oncekiKumulatifAsgariGvMatrahi',
   'manuelKumulatifGvMatrahi',
+  'sgkYemekIstisnasiToplam',
+  'gvYemekIstisnasiToplam',
+  'gvReferansGunlukAsgariUcret',
 ]);
 
 function exactDecimal(value: number): string {

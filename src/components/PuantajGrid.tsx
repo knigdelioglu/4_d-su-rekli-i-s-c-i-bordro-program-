@@ -25,7 +25,7 @@ import {
   calculatePuantajOzeti,
   generateDefaultPuantajGunler,
   getPeriodDaysList,
-} from '../utils/payrollUtils';
+} from '../utils/payrollPresentation';
 import { exportToExcel } from '../utils/excelExport';
 
 interface PuantajGridProps {
@@ -391,6 +391,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                 return (
                   <div
                     key={day.dateStr}
+                    data-testid={`attendance-day-${day.dateStr}`}
                     onClick={() => handleCellClick(day.dateStr)}
                     className={`cursor-pointer border rounded-2xl p-2 text-center transition-all hover:scale-105 hover:shadow-md select-none ${
                       day.isSunday

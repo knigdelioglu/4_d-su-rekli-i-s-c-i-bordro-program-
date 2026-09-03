@@ -7,6 +7,7 @@
     "predev": "if command -v wasm-pack >/dev/null 2>&1; then bun run wasm:build; fi",
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
+    "web:verify": "bun scripts/verify-web-build.mjs",
     "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-opt --no-typescript && rm -f src/wasm/pkg/.gitignore",
     "wasm:test": "wasm-pack test --node crates/payroll-wasm",
     "web:build": "bun run wasm:build && vite build",
@@ -16,7 +17,11 @@
     "test:rust": "if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run --manifest-path src-tauri/Cargo.toml; else cargo test --manifest-path src-tauri/Cargo.toml; fi",
     "test:rust:nextest": "cargo nextest run --manifest-path src-tauri/Cargo.toml",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit && bun run verify:production-graph",
+    "verify:production-graph": "bun scripts/verify-production-graph.mjs",
+    "verify:privacy": "bun scripts/verify-privacy-boundary.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:typecheck": "tsc -p tsconfig.e2e.json --noEmit"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",
@@ -28,6 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
+    "@playwright/test": "^1.55.0",
     "tailwindcss": "^4.1.14",
     "vite": "^6.2.3",
     "typescript": "~5.8.2"

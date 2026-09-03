@@ -15,7 +15,7 @@ import {
   IsPrimiGrupItem,
   Personel,
 } from '../types/payroll';
-import { formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
+import { formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 import { printElement } from '../utils/excelExport';
 import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
 import {

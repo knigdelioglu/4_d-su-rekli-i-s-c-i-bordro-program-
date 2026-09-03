@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Save, X, CreditCard, Shield, Briefcase, Calendar, Layers } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
-import { DEFAULT_IS_PRIMI_GRUPLARI, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
+import { DEFAULT_IS_PRIMI_GRUPLARI, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 
 interface PersonelFormModalProps {
   isOpen: boolean;
