@@ -1,5 +1,78 @@
 import { expect, test, type Page } from '@playwright/test';
 
+const runtimeIssues = new WeakMap<Page, string[]>();
+
+function installBrowserOutboundGuard(page: Page): void {
+  const issues: string[] = [];
+  runtimeIssues.set(page, issues);
+
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    const isSameOrigin = url.origin === 'http://127.0.0.1:4173';
+    const isStaticPath =
+      url.pathname === '/' ||
+      url.pathname === '/index.html' ||
+      url.pathname.startsWith('/assets/') ||
+      /^\/favicon(?:\.ico)?$/.test(url.pathname);
+    const isAllowed =
+      isSameOrigin &&
+      ['GET', 'HEAD'].includes(request.method()) &&
+      isStaticPath;
+
+    if (!isAllowed) {
+      issues.push(`${request.method()} ${request.url()} [${request.resourceType()}]`);
+    }
+  });
+  page.on('websocket', (socket) => {
+    issues.push(`WebSocket ${socket.url()}`);
+  });
+  page.on('console', (message) => {
+    if (
+      message.type() === 'error' &&
+      /CSP|content security|wasm|instantiate|blocked (?:script|worker)|network/i.test(
+        message.text()
+      )
+    ) {
+      issues.push(`console: ${message.text()}`);
+    }
+  });
+  page.on('pageerror', (error) => {
+    if (/CSP|wasm|instantiate|network/i.test(error.message)) {
+      issues.push(`pageerror: ${error.message}`);
+    }
+  });
+}
+
+async function installWasmRequestCapture(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const requestKey = '__payrollWasmRequests';
+    const windowWithCapture = window as Window & { [requestKey]?: string[] };
+    windowWithCapture[requestKey] = [];
+    const originalStringify = JSON.stringify;
+    JSON.stringify = function (value, replacer, space) {
+      const serialized = originalStringify.call(JSON, value, replacer, space);
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        'personnelId' in value &&
+        'dataset' in value
+      ) {
+        windowWithCapture[requestKey]?.push(serialized);
+      }
+      return serialized;
+    };
+  });
+}
+
+test.beforeEach(async ({ page }) => {
+  installBrowserOutboundGuard(page);
+});
+
+test.afterEach(async ({ page }) => {
+  expect(runtimeIssues.get(page) ?? []).toEqual([]);
+});
+
 type StoredPayroll = {
   id: string;
   personelId: string;
@@ -26,6 +99,13 @@ type StoredAnnualPayrollParameters = {
 type StoredSnapshot = {
   bordrolar: StoredPayroll[];
   puantajlar: Array<{ personelId: string; donemId: string; gunler: Record<string, string> }>;
+  taxOpenings?: Array<{
+    id: string;
+    personnelId: string;
+    year: number;
+    gvCumulativeOpening: string;
+    effectiveFromPeriodId: string;
+  }>;
   donemler?: StoredPeriod[];
   annualPayrollParameters?: StoredAnnualPayrollParameters[];
 };
@@ -120,6 +200,63 @@ async function installCalculableFixture(page: Page): Promise<void> {
   await expect(page.getByText(/4\/D Personel Kayıtları \(5\)/)).toBeVisible();
 }
 
+async function seedExactTaxOpening(page: Page, periodId: string, value: string): Promise<void> {
+  await page.evaluate(
+    ({ databaseName: dbName, objectStoreName: storeName, periodId: seededPeriodId, value }) =>
+      new Promise<void>((resolve, reject) => {
+        const openRequest = indexedDB.open(dbName, 1);
+        openRequest.onerror = () => reject(openRequest.error ?? new Error('IndexedDB açılamadı.'));
+        openRequest.onsuccess = () => {
+          const database = openRequest.result;
+          const transaction = database.transaction(storeName, 'readwrite');
+          const objectStore = transaction.objectStore(storeName);
+          const readRequest = objectStore.get('current');
+          readRequest.onerror = () => reject(readRequest.error ?? new Error('Snapshot okunamadı.'));
+          readRequest.onsuccess = () => {
+            try {
+              const snapshot = JSON.parse(readRequest.result as string) as StoredSnapshot;
+              snapshot.taxOpenings = [
+                {
+                  id: `exact-${seededPeriodId}`,
+                  personnelId: 'p-1',
+                  year: Number(seededPeriodId.slice(0, 4)),
+                  gvCumulativeOpening: value,
+                  effectiveFromPeriodId: seededPeriodId,
+                },
+              ];
+              const writeRequest = objectStore.put(JSON.stringify(snapshot), 'current');
+              writeRequest.onerror = () =>
+                reject(writeRequest.error ?? new Error('Exact tax opening yazılamadı.'));
+            } catch (error) {
+              reject(error);
+            }
+          };
+          transaction.oncomplete = () => {
+            database.close();
+            resolve();
+          };
+          transaction.onerror = () =>
+            reject(transaction.error ?? new Error('Exact tax opening transaction başarısız.'));
+        };
+      }),
+    { databaseName, objectStoreName, periodId, value }
+  );
+}
+
+async function readCapturedWasmRequests(page: Page): Promise<Array<Record<string, unknown>>> {
+  return page.evaluate(() => {
+    const requestKey = '__payrollWasmRequests';
+    const values = (window as Window & { [requestKey]?: string[] })[requestKey] ?? [];
+    return values.flatMap((value) => {
+      try {
+        return [JSON.parse(value) as Record<string, unknown>];
+      } catch {
+        return [];
+      }
+    });
+  });
+}
+
 async function waitForPayrollStatus(page: Page, periodId: string, status: string): Promise<StoredPayroll> {
   await expect
     .poll(async () => {
@@ -202,6 +339,52 @@ test('browser WASM calculation persists in IndexedDB and survives reload', async
   await expect(page.getByTestId('payroll-screen')).toBeVisible();
   const reloaded = await waitForPayrollStatus(page, periodId, 'CALCULATED');
   expect(reloaded).toEqual(payroll);
+});
+
+test('browser exact Decimal survives WASM result, IndexedDB reload, and the next WASM request', async ({ page }) => {
+  await installWasmRequestCapture(page);
+  await page.goto('/');
+  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await loadSampleDataset(page);
+
+  const periodId = await openPayrollScreen(page);
+  const exactFixtures = ['0.123456789012345678901', '123456789012345678.91'];
+
+  for (const exactValue of exactFixtures) {
+    await seedExactTaxOpening(page, periodId, exactValue);
+    await page.reload();
+    await expect(page.getByTestId('payroll-screen')).toBeVisible();
+
+    const reloaded = await readStoredSnapshot(page);
+    expect(reloaded?.taxOpenings?.[0]?.gvCumulativeOpening).toBe(exactValue);
+
+    await openPayrollScreen(page);
+    const tediyeInput = page
+      .locator('tbody tr')
+      .filter({ hasText: 'Ahmet Yılmaz' })
+      .first()
+      .locator('input[inputmode="decimal"]')
+      .first();
+    await tediyeInput.fill(exactValue);
+    expect(await tediyeInput.inputValue()).toBe(exactValue);
+
+    // The manual input and the cross-period tax opening are both sent to the
+    // next WASM request as their original strings. Core may round the official
+    // payroll display to two places; that is separate from boundary fidelity.
+    await calculateP1(page, periodId);
+    const requests = await readCapturedWasmRequests(page);
+    const calculationRequest = requests.find(
+      (request) =>
+        request.personnelId === 'p-1' &&
+        request.periodId === periodId &&
+        (request.manualIncome as { tediye?: unknown } | undefined)?.tediye === exactValue
+    );
+    expect(calculationRequest).toBeDefined();
+    expect(
+      (calculationRequest?.dataset as { taxOpenings?: Array<{ gvCumulativeOpening?: unknown }> })
+        ?.taxOpenings?.[0]?.gvCumulativeOpening
+    ).toBe(exactValue);
+  }
 });
 
 test('browser finalization uses WASM, persists FINALIZED, and rejects a finalized mutation', async ({ page }) => {

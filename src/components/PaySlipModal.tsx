@@ -17,7 +17,12 @@ import {
 } from '../types/payroll';
 import { formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 import { printElement } from '../utils/excelExport';
-import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
+import {
+  PayrollDatasetSnapshot,
+  PayrollDatasetSnapshotModel,
+  PayrollEngine,
+} from '../services/payrollEngine';
+import { toPayrollUiModel } from '../services/payrollEngine/decimalBoundary';
 import {
   buildPayrollExportModel,
   buildPeriodPayrollExportModels,
@@ -68,6 +73,10 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
 }) => {
   const [busyAction, setBusyAction] = useState<ExportAction>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const uiDataset = useMemo(
+    () => toPayrollUiModel(dataset) as unknown as PayrollDatasetSnapshotModel,
+    [dataset]
+  );
 
   const previewModel = useMemo(
     () =>
@@ -75,11 +84,11 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
         person: personel,
         payroll: bordro,
         period: donem,
-        attendance: dataset.attendances.find(
+        attendance: uiDataset.attendances.find(
           (item) => item.personelId === personel.id && item.donemId === donem.id
         ),
       }),
-    [dataset.attendances, personel, bordro, donem]
+    [uiDataset.attendances, personel, bordro, donem]
   );
 
   if (!isOpen) return null;
@@ -103,7 +112,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
       person: personel,
       payroll: bordro,
       period: donem,
-      attendance: dataset.attendances.find(
+      attendance: uiDataset.attendances.find(
         (item) => item.personelId === personel.id && item.donemId === donem.id
       ),
       notices,
@@ -112,9 +121,9 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
 
   const loadPeriodContext = async () => {
     const [notices] = await Promise.all([engine.getPayrollNotices(donem.id, dataset)]);
-    const people = dataset.personnel;
-    const payrolls = dataset.payrolls;
-    const attendances = dataset.attendances;
+    const people = uiDataset.personnel;
+    const payrolls = uiDataset.payrolls;
+    const attendances = uiDataset.attendances;
     const models = buildPeriodPayrollExportModels({
       period: donem,
       people,

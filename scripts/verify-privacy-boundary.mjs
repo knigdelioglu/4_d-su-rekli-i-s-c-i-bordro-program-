@@ -6,13 +6,21 @@ const sourceDir = resolve(root, 'src');
 const generatedWasmDir = resolve(sourceDir, 'wasm/pkg');
 const forbiddenPatterns = [
   ['fetch()', /\bfetch\s*\(/],
+  ['globalThis.fetch', /\bglobalThis\.fetch\s*\(/],
+  ['window.fetch', /\bwindow\.fetch\s*\(/],
   ['axios', /\baxios\b/],
   ['XMLHttpRequest', /\bXMLHttpRequest\b/],
+  ['new WebSocket', /\bnew\s+WebSocket\s*\(/],
   ['WebSocket', /\bWebSocket\b/],
+  ['navigator.sendBeacon', /\bnavigator\.sendBeacon\s*\(/],
   ['sendBeacon', /\.sendBeacon\s*\(/],
   ['supabase', /\bsupabase\b/i],
   ['firebase', /\bfirebase\b/i],
   ['/api/', /["'`]\/api(?:\/|["'`])/],
+  [
+    'dynamic network-client import',
+    /\bimport\s*\(\s*["'`][^"'`]*(?:axios|supabase|firebase|socket\.io|graphql-request)[^"'`]*["'`]/i,
+  ],
 ];
 
 function walk(directory) {

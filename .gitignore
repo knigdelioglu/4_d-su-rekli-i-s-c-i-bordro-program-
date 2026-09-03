@@ -56,3 +56,6 @@ tmp/
 .cache/
 coverage/
 .aider*
+
+# Local Netlify folder
+.netlify

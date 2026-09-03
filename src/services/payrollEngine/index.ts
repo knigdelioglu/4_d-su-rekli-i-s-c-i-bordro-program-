@@ -1,12 +1,14 @@
 import { tauriBridge } from '../tauriBridge';
 import {
-  encodeDecimalValues,
-  parseWasmPayrollResult,
+  assertExactDecimalDto,
+  parseWasmPayrollBoundaryResult,
   serializePayrollRequestForWasm,
+  toPayrollBoundaryDto,
 } from './decimalBoundary';
 import { getWasmRuntime } from './wasmRuntime';
 import {
   MutationImpact,
+  PayrollBoundaryPayroll,
   PayrollCalculationRequest,
   PayrollDatasetSnapshot,
   PayrollEngine,
@@ -15,18 +17,25 @@ import {
 
 const tauriEngine: PayrollEngine = {
   kind: 'tauri',
-  calculatePayroll: (request) =>
-    tauriBridge.calculatePayroll(
-      request.personnelId,
-      request.periodId,
-      request.manualIncome ?? null
-    ),
+  calculatePayroll: async (request) =>
+    toPayrollBoundaryDto(
+      await tauriBridge.calculatePayroll(
+        request.personnelId,
+        request.periodId,
+        toPayrollBoundaryDto(request.manualIncome ?? null) as unknown as Parameters<
+          typeof tauriBridge.calculatePayroll
+        >[2]
+      )
+    ) as PayrollBoundaryPayroll,
   // Tauri's command performs the authoritative database-backed preflight.
   validatePayroll: async () => undefined,
   getPayrollNotices: (periodId) => tauriBridge.getPayrollNotices(periodId),
-  getPayrolls: () => tauriBridge.getPayrollList(),
-  finalizePayroll: (personnelId, periodId) =>
-    tauriBridge.finalizePayroll(personnelId, periodId),
+  getPayrolls: async () =>
+    (await tauriBridge.getPayrollList()).map((payroll) =>
+      toPayrollBoundaryDto(payroll)
+    ) as PayrollBoundaryPayroll[],
+  finalizePayroll: async (personnelId, periodId) =>
+    toPayrollBoundaryDto(await tauriBridge.finalizePayroll(personnelId, periodId)) as PayrollBoundaryPayroll,
   evaluateMutationPolicy: (mutation, dataset) =>
     tauriBridge.evaluateMutationPolicy(mutation, dataset),
 };
@@ -35,7 +44,9 @@ function mutationPolicyRequest(
   mutation: PayrollMutation,
   dataset: PayrollDatasetSnapshot
 ): string {
-  return JSON.stringify(encodeDecimalValues({ dataset, mutation }));
+  const value = { dataset, mutation };
+  assertExactDecimalDto(value);
+  return JSON.stringify(value);
 }
 
 function parseMutationImpact(json: string): MutationImpact {
@@ -51,7 +62,7 @@ const wasmEngine: PayrollEngine = {
   calculatePayroll: async (request: PayrollCalculationRequest) => {
     const runtime = await getWasmRuntime();
     const json = runtime.calculate_payroll_json(serializePayrollRequestForWasm(request));
-    return parseWasmPayrollResult(json);
+    return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(json);
   },
   validatePayroll: async (request: PayrollCalculationRequest) => {
     const runtime = await getWasmRuntime();
@@ -89,7 +100,7 @@ const wasmEngine: PayrollEngine = {
         dataset,
       })
     );
-    return parseWasmPayrollResult(json);
+    return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(json);
   },
   evaluateMutationPolicy: async (mutation, dataset) => {
     const runtime = await getWasmRuntime();
@@ -106,9 +117,15 @@ export function getPayrollEngine(): PayrollEngine {
 
 export type {
   MutationImpact,
+  PayrollBoundaryManualIncomeInput,
+  PayrollBoundaryPayroll,
+  PayrollBoundaryPersonel,
+  PayrollBoundaryTaxOpening,
   PayrollCalculationRequest,
   PayrollDatasetSnapshot,
+  PayrollDatasetSnapshotModel,
   PayrollEngine,
   PayrollKey,
   PayrollMutation,
+  PayrollUiModel,
 } from './types';

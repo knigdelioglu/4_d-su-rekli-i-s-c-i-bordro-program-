@@ -31,12 +31,23 @@ import {
   PersonelPuantaj,
   PersonelTaxOpening,
   SickLeaveRecord,
-  ManualPayrollIncomeInput,
 } from '../types/payroll';
 import { formatTL } from '../utils/payrollPresentation';
 import { PaySlipModal } from './PaySlipModal';
 import { PayrollFinalizeModal } from './PayrollFinalizeModal';
-import { getPayrollEngine, PayrollDatasetSnapshot } from '../services/payrollEngine';
+import {
+  getPayrollEngine,
+  PayrollBoundaryPayroll,
+  PayrollBoundaryPersonel,
+  PayrollBoundaryTaxOpening,
+  PayrollCalculationRequest,
+  PayrollDatasetSnapshot,
+} from '../services/payrollEngine';
+import {
+  isExactDecimalString,
+  mergePayrollUiIntoBoundary,
+  toPayrollUiModel,
+} from '../services/payrollEngine/decimalBoundary';
 
 function formatPayrollError(err: unknown): string {
   if (err && typeof err === 'object') {
@@ -66,9 +77,12 @@ interface BordroHesaplamaProps {
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
   zamAylari: number[];
-  onSaveBordro: (bordro: BordroKaydi) => Promise<void> | void;
-  onSavePersonel?: (personel: Personel) => Promise<void> | void;
-  onSaveTaxOpening?: (opening: PersonelTaxOpening) => Promise<void> | void;
+  authoritativeDataset: PayrollDatasetSnapshot;
+  onSaveBordro: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
+  onSavePersonel?: (personel: Personel | PayrollBoundaryPersonel) => Promise<void> | void;
+  onSaveTaxOpening?: (
+    opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
+  ) => Promise<void> | void;
   initialPersonelId?: string;
   onGoToPuantaj?: (personelId?: string) => void;
 }
@@ -84,6 +98,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   sickLeaveRecords,
   annualPayrollParameters,
   zamAylari,
+  authoritativeDataset,
   onSaveBordro,
   onSavePersonel,
   onSaveTaxOpening,
@@ -104,7 +119,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
   // Manual cumulative GV override state per person for the current period
   const [manualKumulatifGvMap, setManualKumulatifGvMap] = useState<
-    Record<string, number>
+    Record<string, string>
   >({});
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState<boolean>(false);
 
@@ -113,21 +128,27 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const getManualIncomeStateKey = (personId: string): string =>
     `${aktifDonem.id}:${personId}`;
 
-  const getManualIncomeInput = (personId: string): ManualPayrollIncomeInput => {
+  const getManualIncomeInput = (personId: string): PayrollCalculationRequest['manualIncome'] => {
     const existingPayroll = bordrolar.find(
+      (item) => item.personelId === personId && item.donemId === aktifDonem.id
+    );
+    const exactPayroll = authoritativeDataset.payrolls.find(
       (item) => item.personelId === personId && item.donemId === aktifDonem.id
     );
     const draft = manualIncomeMap[getManualIncomeStateKey(personId)];
     const resolveAmount = (
       field: 'tediye' | 'tisIkramiyesi'
-    ): number | null => {
+    ): string | null => {
       const raw = draft?.[field];
       if (raw !== undefined) {
         if (raw.trim() === '') return null;
-        const parsed = Number(raw);
-        return Number.isFinite(parsed) ? parsed : null;
+        return isExactDecimalString(raw.trim()) ? raw.trim() : null;
       }
-      return existingPayroll?.gelirler[field] ?? null;
+      const exactValue = exactPayroll?.gelirler[field];
+      if (exactValue !== null && exactValue !== undefined) return exactValue;
+      return existingPayroll?.gelirler[field] == null
+        ? null
+        : String(existingPayroll.gelirler[field]);
     };
 
     return {
@@ -158,17 +179,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     return opening > 0 && (!openingYear || openingYear === activeTaxYear) ? opening : 0;
   };
 
-  const buildDataset = (): PayrollDatasetSnapshot => ({
-    personnel: personeller,
-    periods: donemler,
-    institutionSettings: kurumDegerleriMap,
-    attendances: puantajlar,
-    payrolls: bordrolar,
-    taxOpenings,
-    sickLeaveRecords,
-    annualPayrollParameters,
-    zamAylari,
-  });
+  const buildDataset = (): PayrollDatasetSnapshot => authoritativeDataset;
 
   const calculateAndSaveForPerson = async (
     person: Personel
@@ -199,7 +210,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         dataset: buildDataset(),
       });
       await onSaveBordro(calculated);
-      return calculated;
+      return toPayrollUiModel(calculated) as unknown as BordroKaydi;
     } catch (err) {
       console.error('Payroll engine calculation failed:', err);
       setErrorMessage(`Hesaplama hatası: ${formatPayrollError(err)}`);
@@ -303,7 +314,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     }
   };
 
-  const handleFinalizeSuccess = async (person: Personel, finalizedBordro: BordroKaydi) => {
+  const handleFinalizeSuccess = async (person: Personel, finalizedBordro: PayrollBoundaryPayroll) => {
     await onSaveBordro(finalizedBordro);
     setErrorMessage(null);
     setSuccessMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildi.`);
@@ -525,6 +536,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   const bordro = bordrolar.find(
                     (b) => b.personelId === person.id && b.donemId === aktifDonem.id
                   );
+                  const exactBordro = authoritativeDataset.payrolls.find(
+                    (b) => b.personelId === person.id && b.donemId === aktifDonem.id
+                  );
                   const pPuantaj = puantajlar.find(
                     (p) => p.personelId === person.id && p.donemId === aktifDonem.id
                   );
@@ -545,12 +559,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   const manualIncomeStateKey = getManualIncomeStateKey(person.id);
                   const tediyeInputValue =
                     manualIncomeMap[manualIncomeStateKey]?.tediye ??
-                    (bordro?.gelirler.tediye != null ? String(bordro.gelirler.tediye) : '');
+                    (exactBordro?.gelirler.tediye ??
+                      (bordro?.gelirler.tediye != null ? String(bordro.gelirler.tediye) : ''));
                   const tisInputValue =
                     manualIncomeMap[manualIncomeStateKey]?.tisIkramiyesi ??
-                    (bordro?.gelirler.tisIkramiyesi != null
-                      ? String(bordro.gelirler.tisIkramiyesi)
-                      : '');
+                    (exactBordro?.gelirler.tisIkramiyesi ??
+                      (bordro?.gelirler.tisIkramiyesi != null
+                        ? String(bordro.gelirler.tisIkramiyesi)
+                        : ''));
 
                   return (
                     <tr
@@ -640,11 +656,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         {(() => {
                           const sessionManual = manualKumulatifGvMap[person.id];
                           const isManual = sessionManual !== undefined || bordro?.manuelKumulatifGvMatrahi !== undefined;
-                          const val =
+                          const val = Number(
                             sessionManual ??
-                            bordro?.oncekiKumulatifGvMatrahi ??
-                            bordro?.manuelKumulatifGvMatrahi ??
-                            getDevirGvMatrahiForActiveYear(person);
+                              bordro?.oncekiKumulatifGvMatrahi ??
+                              bordro?.manuelKumulatifGvMatrahi ??
+                              getDevirGvMatrahiForActiveYear(person)
+                          ) || 0;
 
                           if (val > 0) {
                             return (
@@ -683,9 +700,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       {/* Manuel Tediye */}
                       <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <input
-                          type="number"
-                          min="0"
-                          step="0.01"
+                          type="text"
                           inputMode="decimal"
                           disabled={isFinalized}
                           value={tediyeInputValue}
@@ -699,9 +714,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       {/* Manuel TİS İkramiyesi */}
                       <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <input
-                          type="number"
-                          min="0"
-                          step="0.01"
+                          type="text"
                           inputMode="decimal"
                           disabled={isFinalized}
                           value={tisInputValue}
@@ -896,12 +909,24 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       const bordro = bordrolar.find(
                         (b) => b.personelId === person.id && b.donemId === aktifDonem.id
                       );
+                      const exactPerson = authoritativeDataset.personnel.find(
+                        (item) => item.id === person.id
+                      );
+                      const exactBordro = authoritativeDataset.payrolls.find(
+                        (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+                      );
                       const autoGv =
                         bordro?.oncekiKumulatifGvMatrahi ??
                         getDevirGvMatrahiForActiveYear(person);
 
                       const currentSession = manualKumulatifGvMap[person.id];
-                      const displayGv = currentSession ?? bordro?.manuelKumulatifGvMatrahi ?? autoGv;
+                      const displayGv =
+                        currentSession ??
+                        exactBordro?.manuelKumulatifGvMatrahi ??
+                        exactBordro?.oncekiKumulatifGvMatrahi ??
+                        exactPerson?.devirKumulatifGvMatrahi ??
+                        String(autoGv);
+                      const displayGvNumber = Number(displayGv) || 0;
 
                       return (
                         <tr key={person.id} className="hover:bg-slate-50">
@@ -916,16 +941,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           </td>
                           <td className="py-2.5 px-3">
                             <input
-                              type="number"
-                              step="0.01"
-                              min="0"
+                              type="text"
+                              inputMode="decimal"
                               placeholder={autoGv.toFixed(2)}
-                              value={displayGv || ''}
+                              value={displayGv}
                               onChange={(e) => {
-                                const val = parseFloat(e.target.value);
                                 setManualKumulatifGvMap((prev) => ({
                                   ...prev,
-                                  [person.id]: isNaN(val) ? 0 : val,
+                                  [person.id]: e.target.value,
                                 }));
                               }}
                               className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500"
@@ -965,13 +988,22 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         for (const pId of Object.keys(manualKumulatifGvMap)) {
                           const person = personeller.find((p) => p.id === pId);
                           if (person && onSavePersonel) {
-                            const val = manualKumulatifGvMap[pId];
+                            const val = manualKumulatifGvMap[pId].trim() || '0';
+                            if (!isExactDecimalString(val) || val.startsWith('-')) {
+                              throw new Error('Kümülatif GV matrahı geçerli, negatif olmayan bir Decimal olmalıdır.');
+                            }
+                            const exactPerson = mergePayrollUiIntoBoundary(
+                              authoritativeDataset.personnel.find((item) => item.id === person.id),
+                              {
+                                ...person,
+                                devirKumulatifGvMatrahi: val,
+                              }
+                            ) as PayrollBoundaryPersonel;
                             await onSavePersonel({
-                              ...person,
-                              devirKumulatifGvMatrahi: val,
+                              ...exactPerson,
                               devirKumulatifGvMatrahiYili: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
                               devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
-                            });
+                            } as PayrollBoundaryPersonel);
                             // The App owns persistence in both native and browser
                             // modes. Do not swallow an opening-table write failure.
                             if (onSaveTaxOpening) {

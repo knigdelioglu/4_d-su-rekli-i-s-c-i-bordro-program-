@@ -15,7 +15,6 @@ import {
   BACKUP_FORMAT_VERSION,
   BackupPayload,
   BordroDonemi,
-  BordroKaydi,
   DönemselKurumDegerleri,
   Personel,
   PersonelPuantaj,
@@ -30,14 +29,31 @@ import {
   assertBrowserMutationImpactAllowed,
 } from './services/storage/browserPayrollPolicies';
 import { getPayrollEngine } from './services/payrollEngine';
-import type { MutationImpact, PayrollMutation } from './services/payrollEngine';
-import { parsePayrollStorage, serializePayrollStorage } from './services/payrollEngine/decimalBoundary';
+import type {
+  MutationImpact,
+  PayrollBoundaryPayroll,
+  PayrollBoundaryPersonel,
+  PayrollBoundaryTaxOpening,
+  PayrollDatasetSnapshot,
+  PayrollMutation,
+} from './services/payrollEngine';
+import {
+  mergePayrollUiIntoBoundary,
+  parseLegacyPayrollStorage,
+  parsePayrollStorage,
+  serializePayrollStorage,
+  toPayrollBoundaryDto,
+  toPayrollUiModel,
+  type PayrollStorageDto,
+  type PayrollStorageFields,
+} from './services/payrollEngine/decimalBoundary';
 import { PayrollNoticeCenter } from './components/PayrollNoticeCenter';
 import { getInitialDataset } from './utils/sampleData';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 
-type DatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
+type DatasetFields = PayrollStorageFields;
+type UiDatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
 
 function normalizeZamAylari(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
@@ -58,7 +74,7 @@ function parseZamAylariSetting(value: string | null): number[] {
   }
 }
 
-function makeBackupPayload(data: DatasetFields): BackupPayload {
+function makeBackupPayload(data: DatasetFields): PayrollStorageDto {
   return {
     backupVersion: BACKUP_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
@@ -66,8 +82,16 @@ function makeBackupPayload(data: DatasetFields): BackupPayload {
   };
 }
 
-function parseBackupPayload(json: string): BackupPayload {
-  const parsed = parsePayrollStorage<Partial<BackupPayload> & Record<string, unknown>>(json);
+function parseBackupPayload(json: string): PayrollStorageDto {
+  type PartialPayload = Partial<PayrollStorageDto> & Record<string, unknown>;
+  let parsed: PartialPayload;
+  try {
+    // Current IndexedDB/backup data must already be exact. The fallback is a
+    // one-time compatibility path for pre-boundary numeric localStorage files.
+    parsed = parsePayrollStorage<PartialPayload>(json);
+  } catch {
+    parsed = parseLegacyPayrollStorage<PartialPayload>(json);
+  }
   const version = typeof parsed.backupVersion === 'number' ? parsed.backupVersion : 1;
   if (version <= 0 || version > BACKUP_FORMAT_VERSION) {
     throw new Error(`Desteklenmeyen yedek sürümü: ${version}`);
@@ -85,15 +109,19 @@ function parseBackupPayload(json: string): BackupPayload {
   ) {
     throw new Error('V2 yedek dosyasında tüm domain kayıt listeleri bulunmalıdır.');
   }
-  const periods = parsed.donemler as BordroDonemi[];
-  const bordrolar = ((parsed.bordrolar as Array<Partial<BordroKaydi>> | undefined) || []).map(
+  const periods = parsed.donemler as PayrollStorageDto['donemler'];
+  const bordrolar = (
+    (parsed.bordrolar as Array<
+      Partial<PayrollStorageDto['bordrolar'][number]>
+    > | undefined) || []
+  ).map(
     (bordro) => ({
       ...bordro,
       // V1 localStorage kayıtlarında durum alanı yoktu. Sınırda bir kez
       // normalize edilir; uygulama içindeki sözleşme Rust ile aynıdır.
       status: bordro.status || 'CALCULATED',
     })
-  ) as BordroKaydi[];
+  ) as PayrollStorageDto['bordrolar'];
 
   return makeBackupPayload({
     donemler: periods,
@@ -101,18 +129,32 @@ function parseBackupPayload(json: string): BackupPayload {
       typeof parsed.aktifDonemId === 'string'
         ? parsed.aktifDonemId
         : periods[0]?.id || '',
-    personeller: parsed.personeller as Personel[],
+    personeller: parsed.personeller as PayrollStorageDto['personeller'],
     kurumDegerleriMap:
-      (parsed.kurumDegerleriMap as Record<string, DönemselKurumDegerleri> | undefined) || {},
-    puantajlar: (parsed.puantajlar as PersonelPuantaj[] | undefined) || [],
+      (parsed.kurumDegerleriMap as PayrollStorageDto['kurumDegerleriMap'] | undefined) || {},
+    puantajlar: (parsed.puantajlar as PayrollStorageDto['puantajlar'] | undefined) || [],
     bordrolar,
-    taxOpenings: (parsed.taxOpenings as PersonelTaxOpening[] | undefined) || [],
-    sickLeaveRecords: (parsed.sickLeaveRecords as SickLeaveRecord[] | undefined) || [],
+    taxOpenings: (parsed.taxOpenings as PayrollStorageDto['taxOpenings'] | undefined) || [],
+    sickLeaveRecords:
+      (parsed.sickLeaveRecords as PayrollStorageDto['sickLeaveRecords'] | undefined) || [],
     annualPayrollParameters:
-      (parsed.annualPayrollParameters as AnnualPayrollParameters[] | undefined) || [],
+      (parsed.annualPayrollParameters as PayrollStorageDto['annualPayrollParameters'] | undefined) || [],
     zamAylari: normalizeZamAylari(parsed.zamAylari),
   });
 }
+
+const EMPTY_UI_DATASET: UiDatasetFields = {
+  donemler: [],
+  aktifDonemId: '',
+  personeller: [],
+  kurumDegerleriMap: {},
+  puantajlar: [],
+  bordrolar: [],
+  taxOpenings: [],
+  sickLeaveRecords: [],
+  annualPayrollParameters: [],
+  zamAylari: [],
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>(() => {
@@ -130,20 +172,7 @@ export default function App() {
     return 'personel';
   });
 
-  const [donemler, setDonemler] = useState<BordroDonemi[]>([]);
-  const [aktifDonemId, setAktifDonemId] = useState<string>('');
-  const [personeller, setPersoneller] = useState<Personel[]>([]);
-  const [kurumDegerleriMap, setKurumDegerleriMap] = useState<
-    Record<string, DönemselKurumDegerleri>
-  >({});
-  const [puantajlar, setPuantajlar] = useState<PersonelPuantaj[]>([]);
-  const [bordrolar, setBordrolar] = useState<BordroKaydi[]>([]);
-  const [taxOpenings, setTaxOpenings] = useState<PersonelTaxOpening[]>([]);
-  const [sickLeaveRecords, setSickLeaveRecords] = useState<SickLeaveRecord[]>([]);
-  const [annualPayrollParameters, setAnnualPayrollParameters] = useState<
-    AnnualPayrollParameters[]
-  >([]);
-  const [zamAylari, setZamAylari] = useState<number[]>([]);
+  const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -151,6 +180,24 @@ export default function App() {
     string | undefined
   >(undefined);
   const [isPeriodManagerOpen, setIsPeriodManagerOpen] = useState(false);
+
+  const uiDataset = useMemo<UiDatasetFields>(() => {
+    if (!authoritativePayload) return EMPTY_UI_DATASET;
+    return toPayrollUiModel(authoritativePayload) as unknown as UiDatasetFields;
+  }, [authoritativePayload]);
+
+  const {
+    donemler,
+    aktifDonemId,
+    personeller,
+    kurumDegerleriMap,
+    puantajlar,
+    bordrolar,
+    taxOpenings,
+    sickLeaveRecords,
+    annualPayrollParameters,
+    zamAylari,
+  } = uiDataset;
 
   useEffect(() => {
     try {
@@ -161,17 +208,19 @@ export default function App() {
   }, [activeTab]);
 
   const applyDataset = useCallback((data: DatasetFields) => {
-    setDonemler(data.donemler);
-    setAktifDonemId(data.aktifDonemId || data.donemler[0]?.id || '');
-    setPersoneller(data.personeller);
-    setKurumDegerleriMap(data.kurumDegerleriMap);
-    setPuantajlar(data.puantajlar);
-    setBordrolar(data.bordrolar);
-    setTaxOpenings(data.taxOpenings);
-    setSickLeaveRecords(data.sickLeaveRecords);
-    setAnnualPayrollParameters(data.annualPayrollParameters);
-    setZamAylari(normalizeZamAylari(data.zamAylari));
+    setAuthoritativePayload(makeBackupPayload(data));
   }, []);
+
+  const updateAuthoritativePayload = useCallback(
+    (update: (current: PayrollStorageDto) => PayrollStorageDto) => {
+      setAuthoritativePayload((current) => {
+        if (!current) return current;
+        const next = update(current);
+        return { ...next, exportedAt: new Date().toISOString() };
+      });
+    },
+    []
+  );
 
   const loadData = useCallback(async () => {
     setLoadError(null);
@@ -203,7 +252,7 @@ export default function App() {
             tauriBridge.getAppSetting(ZAM_AYLARI_SETTING_KEY),
           ]);
 
-        applyDataset({
+        applyDataset(toPayrollBoundaryDto({
           donemler: fetchedPeriods,
           aktifDonemId: savedActivePeriodId || fetchedPeriods[0]?.id || '',
           personeller: fetchedPersonnel,
@@ -214,7 +263,7 @@ export default function App() {
           sickLeaveRecords: fetchedSickLeaves,
           annualPayrollParameters: fetchedAnnualParameters,
           zamAylari: parseZamAylariSetting(savedZamAylari),
-        });
+        }));
         setIsDataLoaded(true);
         return;
       }
@@ -224,7 +273,7 @@ export default function App() {
         const payload = parseBackupPayload(saved);
         applyDataset(payload);
       } else {
-        applyDataset({
+        applyDataset(toPayrollBoundaryDto({
           donemler: [],
           aktifDonemId: '',
           personeller: [],
@@ -235,7 +284,7 @@ export default function App() {
           sickLeaveRecords: [],
           annualPayrollParameters: [],
           zamAylari: [],
-        });
+        }));
       }
       setIsDataLoaded(true);
     } catch (err) {
@@ -256,44 +305,20 @@ export default function App() {
   // mode. The loaded guard prevents the initial empty state from overwriting a
   // real saved dataset before the first read completes.
   useEffect(() => {
-    if (!isDataLoaded || tauriBridge.isTauriAvailable()) return;
-    const payload = makeBackupPayload({
-      donemler,
-      aktifDonemId,
-      personeller,
-      kurumDegerleriMap,
-      puantajlar,
-      bordrolar,
-      taxOpenings,
-      sickLeaveRecords,
-      annualPayrollParameters,
-      zamAylari,
-    });
-    void browserPayrollStore.savePayload(serializePayrollStorage(payload)).catch((err) => {
+    if (!isDataLoaded || tauriBridge.isTauriAvailable() || !authoritativePayload) return;
+    void browserPayrollStore.savePayload(serializePayrollStorage(authoritativePayload)).catch((err) => {
       const message = `Tarayıcı verisi kaydedilemedi: ${String(err)}`;
       console.error(message, err);
       setLoadError(message);
     });
-  }, [
-    isDataLoaded,
-    donemler,
-    aktifDonemId,
-    personeller,
-    kurumDegerleriMap,
-    puantajlar,
-    bordrolar,
-    taxOpenings,
-    sickLeaveRecords,
-    annualPayrollParameters,
-    zamAylari,
-  ]);
+  }, [authoritativePayload, isDataLoaded]);
 
   const handleSelectDonem = async (id: string) => {
     try {
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.setAppSetting('active_period_id', id);
       }
-      setAktifDonemId(id);
+      updateAuthoritativePayload((current) => ({ ...current, aktifDonemId: id }));
     } catch (err) {
       const message = `Aktif dönem kaydedilemedi: ${String(err)}`;
       console.error(message, err);
@@ -303,30 +328,22 @@ export default function App() {
 
   const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
   const payrollEngine = getPayrollEngine();
-  const payrollDataset = useMemo(
-    () => ({
-      personnel: personeller,
-      periods: donemler,
-      institutionSettings: kurumDegerleriMap,
-      attendances: puantajlar,
-      payrolls: bordrolar,
-      taxOpenings,
-      sickLeaveRecords,
-      annualPayrollParameters,
-      zamAylari,
-    }),
-    [
-      personeller,
-      donemler,
-      kurumDegerleriMap,
-      puantajlar,
-      bordrolar,
-      taxOpenings,
-      sickLeaveRecords,
-      annualPayrollParameters,
-      zamAylari,
-    ]
-  );
+  const payrollDataset = useMemo<PayrollDatasetSnapshot>(() => {
+    if (authoritativePayload) {
+      return {
+        personnel: authoritativePayload.personeller,
+        periods: authoritativePayload.donemler,
+        institutionSettings: authoritativePayload.kurumDegerleriMap,
+        attendances: authoritativePayload.puantajlar,
+        payrolls: authoritativePayload.bordrolar,
+        taxOpenings: authoritativePayload.taxOpenings,
+        sickLeaveRecords: authoritativePayload.sickLeaveRecords,
+        annualPayrollParameters: authoritativePayload.annualPayrollParameters,
+        zamAylari: authoritativePayload.zamAylari,
+      };
+    }
+    return toPayrollBoundaryDto(EMPTY_UI_DATASET) as unknown as PayrollDatasetSnapshot;
+  }, [authoritativePayload]);
 
   /**
    * Browser mutations are authorized by the same Rust policy as native
@@ -368,13 +385,13 @@ export default function App() {
     }
 
     const initialData = getInitialDataset();
-    const payload = makeBackupPayload({
+    const payload = makeBackupPayload(toPayrollBoundaryDto({
       ...initialData,
       taxOpenings: initialData.taxOpenings || [],
       sickLeaveRecords: initialData.sickLeaveRecords || [],
       annualPayrollParameters: initialData.annualPayrollParameters || [],
       zamAylari: initialData.zamAylari || [],
-    });
+    }));
 
     try {
       if (tauriBridge.isTauriAvailable()) {
@@ -395,19 +412,8 @@ export default function App() {
   };
 
   const handleExportBackup = () => {
-    const payload = makeBackupPayload({
-      donemler,
-      aktifDonemId,
-      personeller,
-      kurumDegerleriMap,
-      puantajlar,
-      bordrolar,
-      taxOpenings,
-      sickLeaveRecords,
-      annualPayrollParameters,
-      zamAylari,
-    });
-    const jsonStr = serializePayrollStorage(payload, 2);
+    if (!authoritativePayload) return;
+    const jsonStr = serializePayrollStorage(authoritativePayload, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -427,6 +433,9 @@ export default function App() {
         await loadData();
       } else {
         await evaluateBrowserMutations({ kind: 'ALL' });
+        // Import is a user-visible commit point. Verify the IndexedDB write
+        // before replacing the in-memory dataset or announcing success.
+        await browserPayrollStore.savePayload(serializePayrollStorage(payload));
         applyDataset(payload);
         setIsDataLoaded(true);
       }
@@ -437,48 +446,54 @@ export default function App() {
     }
   };
 
-  const handleSavePersonel = async (newPersonel: Personel) => {
+  const handleSavePersonel = async (newPersonel: Personel | PayrollBoundaryPersonel) => {
     if (tauriBridge.isTauriAvailable()) {
-      await tauriBridge.savePersonnel(newPersonel);
-      setPersoneller(await tauriBridge.getPersonnelList());
-      setTaxOpenings(await tauriBridge.getTaxOpenings());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await tauriBridge.savePersonnel(
+        toPayrollBoundaryDto(newPersonel) as unknown as Personel
+      );
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
       kind: 'PERSON',
       personnelId: newPersonel.id,
     });
-    setPersoneller((previous) => {
-      const exists = previous.some((p) => p.id === newPersonel.id);
-      return exists
-        ? previous.map((p) => (p.id === newPersonel.id ? newPersonel : p))
-        : [...previous, newPersonel];
+    updateAuthoritativePayload((current) => {
+      const existing = current.personeller.find((person) => person.id === newPersonel.id);
+      const exactPersonel = mergePayrollUiIntoBoundary(existing, newPersonel);
+      const personeller = existing
+        ? current.personeller.map((person) =>
+            person.id === newPersonel.id ? exactPersonel : person
+          )
+        : [...current.personeller, exactPersonel];
+      return {
+        ...current,
+        personeller,
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      };
     });
-    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleDeletePersonel = async (personelId: string) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.deletePersonnel(personelId);
-      setPersoneller(await tauriBridge.getPersonnelList());
-      setBordrolar(await tauriBridge.getPayrollList());
-      setPuantajlar(await tauriBridge.getAttendanceList());
-      setTaxOpenings(await tauriBridge.getTaxOpenings());
-      setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
       kind: 'PERSON',
       personnelId: personelId,
     });
-    setPersoneller((previous) => previous.filter((p) => p.id !== personelId));
-    setBordrolar((previous) =>
-      applyBrowserPayrollImpact(previous, impact).filter((b) => b.personelId !== personelId)
-    );
-    setPuantajlar((previous) => previous.filter((p) => p.personelId !== personelId));
-    setTaxOpenings((previous) => previous.filter((o) => o.personnelId !== personelId));
-    setSickLeaveRecords((previous) => previous.filter((r) => r.personnelId !== personelId));
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      personeller: current.personeller.filter((person) => person.id !== personelId),
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact).filter(
+        (payroll) => payroll.personelId !== personelId
+      ),
+      puantajlar: current.puantajlar.filter((attendance) => attendance.personelId !== personelId),
+      taxOpenings: current.taxOpenings.filter((opening) => opening.personnelId !== personelId),
+      sickLeaveRecords: current.sickLeaveRecords.filter((record) => record.personnelId !== personelId),
+    }));
   };
 
   const handleCreateDonem = async (
@@ -487,9 +502,7 @@ export default function App() {
   ) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.savePeriodWithSettings(newDonem, kurumDegerleri);
-      setDonemler(await tauriBridge.getPeriods());
-      setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const existing = donemler.find((period) => period.id === newDonem.id);
@@ -523,35 +536,59 @@ export default function App() {
       }
     }
     const impact = await evaluateBrowserMutations(positionMutations);
-    setDonemler((previous) =>
-      previous.some((d) => d.id === newDonem.id)
-        ? previous.map((d) => (d.id === newDonem.id ? newDonem : d))
-        : [...previous, newDonem]
-    );
-    setKurumDegerleriMap((previous) => ({ ...previous, [newDonem.id]: kurumDegerleri }));
-    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
+    updateAuthoritativePayload((current) => {
+      const exactPeriod = mergePayrollUiIntoBoundary(
+        current.donemler.find((period) => period.id === newDonem.id),
+        newDonem
+      );
+      const donemler = current.donemler.some((period) => period.id === newDonem.id)
+        ? current.donemler.map((period) =>
+            period.id === newDonem.id ? exactPeriod : period
+          )
+        : [...current.donemler, exactPeriod];
+      const exactSettings = mergePayrollUiIntoBoundary(
+        current.kurumDegerleriMap[newDonem.id],
+        kurumDegerleri
+      );
+      return {
+        ...current,
+        donemler,
+        kurumDegerleriMap: {
+          ...current.kurumDegerleriMap,
+          [newDonem.id]: exactSettings,
+        },
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      };
+    });
   };
 
   const handleSaveKurumDegerleri = async (settings: DönemselKurumDegerleri) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveInstitutionSettings(settings);
-      setKurumDegerleriMap(await tauriBridge.getInstitutionSettings());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
       kind: 'PERIOD',
       periodId: settings.donemId,
     });
-    setKurumDegerleriMap((previous) => ({ ...previous, [settings.donemId]: settings }));
-    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      kurumDegerleriMap: {
+        ...current.kurumDegerleriMap,
+        [settings.donemId]: mergePayrollUiIntoBoundary(
+          current.kurumDegerleriMap[settings.donemId],
+          settings
+        ),
+      },
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+    }));
   };
 
   const handleSavePuantaj = async (updatedPuantaj: PersonelPuantaj) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveAttendance(updatedPuantaj);
-      setPuantajlar(await tauriBridge.getAttendanceList());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
@@ -559,21 +596,31 @@ export default function App() {
       personnelId: updatedPuantaj.personelId,
       periodId: updatedPuantaj.donemId,
     });
-    setPuantajlar((previous) => {
-      const index = previous.findIndex((p) => p.id === updatedPuantaj.id);
-      if (index < 0) return [...previous, updatedPuantaj];
-      const next = [...previous];
-      next[index] = updatedPuantaj;
-      return next;
+    updateAuthoritativePayload((current) => {
+      const index = current.puantajlar.findIndex((attendance) => attendance.id === updatedPuantaj.id);
+      const puantajlar = [...current.puantajlar];
+      const exactAttendance = mergePayrollUiIntoBoundary(
+        index < 0 ? undefined : current.puantajlar[index],
+        updatedPuantaj
+      );
+      if (index < 0) puantajlar.push(exactAttendance);
+      else puantajlar[index] = exactAttendance;
+      return {
+        ...current,
+        puantajlar,
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      };
     });
-    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
-  const handleSaveTaxOpening = async (opening: PersonelTaxOpening) => {
+  const handleSaveTaxOpening = async (
+    opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
+  ) => {
     if (tauriBridge.isTauriAvailable()) {
-      await tauriBridge.saveTaxOpening(opening);
-      setTaxOpenings(await tauriBridge.getTaxOpenings());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await tauriBridge.saveTaxOpening(
+        toPayrollBoundaryDto(opening) as unknown as PersonelTaxOpening
+      );
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
@@ -581,21 +628,27 @@ export default function App() {
       personnelId: opening.personnelId,
       taxYear: opening.year,
     });
-    setTaxOpenings((previous) => {
-      const index = previous.findIndex((item) => item.id === opening.id);
-      if (index < 0) return [...previous, opening];
-      const next = [...previous];
-      next[index] = opening;
-      return next;
+    updateAuthoritativePayload((current) => {
+      const index = current.taxOpenings.findIndex((item) => item.id === opening.id);
+      const taxOpenings = [...current.taxOpenings];
+      const exactOpening = mergePayrollUiIntoBoundary(
+        index < 0 ? undefined : current.taxOpenings[index],
+        opening
+      );
+      if (index < 0) taxOpenings.push(exactOpening);
+      else taxOpenings[index] = exactOpening;
+      return {
+        ...current,
+        taxOpenings,
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      };
     });
-    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSaveSickLeaveRecord = async (record: SickLeaveRecord) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveSickLeaveRecord(record);
-      setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const existing = sickLeaveRecords.find((item) => item.id === record.id);
@@ -610,55 +663,68 @@ export default function App() {
       });
     }
     const impact = await evaluateBrowserMutations(mutations);
-    setSickLeaveRecords((previous) => {
-      const index = previous.findIndex((item) => item.id === record.id);
-      if (index < 0) return [...previous, record];
-      const next = [...previous];
-      next[index] = record;
-      return next;
+    updateAuthoritativePayload((current) => {
+      const index = current.sickLeaveRecords.findIndex((item) => item.id === record.id);
+      const sickLeaveRecords = [...current.sickLeaveRecords];
+      if (index < 0) sickLeaveRecords.push(record);
+      else sickLeaveRecords[index] = record;
+      return {
+        ...current,
+        sickLeaveRecords,
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      };
     });
-    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSaveAnnualPayrollParameters = async (parameters: AnnualPayrollParameters) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.saveAnnualPayrollParameters(parameters);
-      setAnnualPayrollParameters(await tauriBridge.getAnnualPayrollParameters());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
       kind: 'TAX_YEAR',
       taxYear: parameters.year,
     });
-    setAnnualPayrollParameters((previous) => {
-      const index = previous.findIndex((item) => item.year === parameters.year);
-      if (index < 0) return [...previous, parameters].sort((a, b) => a.year - b.year);
-      const next = [...previous];
-      next[index] = parameters;
-      return next;
+    updateAuthoritativePayload((current) => {
+      const index = current.annualPayrollParameters.findIndex(
+        (item) => item.year === parameters.year
+      );
+      const annualPayrollParameters = [...current.annualPayrollParameters];
+      const exactParameters = mergePayrollUiIntoBoundary(
+        index < 0 ? undefined : current.annualPayrollParameters[index],
+        parameters
+      );
+      if (index < 0) annualPayrollParameters.push(exactParameters);
+      else annualPayrollParameters[index] = exactParameters;
+      annualPayrollParameters.sort((a, b) => a.year - b.year);
+      return {
+        ...current,
+        annualPayrollParameters,
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      };
     });
-    setBordrolar((current) => applyBrowserPayrollImpact(current, impact));
   };
 
   const handleSaveZamAylari = async (months: number[]) => {
     const normalized = normalizeZamAylari(months);
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.setAppSetting(ZAM_AYLARI_SETTING_KEY, JSON.stringify(normalized));
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
+      return;
     }
-    if (!tauriBridge.isTauriAvailable()) {
-      const impact = await evaluateBrowserMutations({ kind: 'ALL' });
-      setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
-    }
-    setZamAylari(normalized);
+    const impact = await evaluateBrowserMutations({ kind: 'ALL' });
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      zamAylari: normalized,
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+    }));
   };
 
   const handleDeleteSickLeaveRecord = async (id: string) => {
     if (tauriBridge.isTauriAvailable()) {
       await tauriBridge.deleteSickLeaveRecord(id);
-      setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const record = sickLeaveRecords.find((item) => item.id === id);
@@ -669,17 +735,20 @@ export default function App() {
           effectiveFrom: record.startDate,
         })
       : null;
-    setSickLeaveRecords((previous) => previous.filter((record) => record.id !== id));
-    if (record) {
-      setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact!));
-    }
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      sickLeaveRecords: current.sickLeaveRecords.filter((item) => item.id !== id),
+      bordrolar: record
+        ? applyBrowserPayrollImpact(current.bordrolar, impact!)
+        : current.bordrolar,
+    }));
   };
 
-  const handleSaveBordro = async (updatedBordro: BordroKaydi) => {
+  const handleSaveBordro = async (updatedBordro: PayrollBoundaryPayroll) => {
     if (tauriBridge.isTauriAvailable()) {
       // Re-fetch the whole ledger: recalculating an earlier payroll may have marked
       // one or more downstream CALCULATED payrolls as STALE in the same transaction.
-      setBordrolar(await tauriBridge.getPayrollList());
+      await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
@@ -687,13 +756,13 @@ export default function App() {
       personnelId: updatedBordro.personelId,
       periodId: updatedBordro.donemId,
     });
-    setBordrolar((previous) => {
-      const invalidated = applyBrowserPayrollImpact(previous, impact);
+    updateAuthoritativePayload((current) => {
+      const invalidated = applyBrowserPayrollImpact(current.bordrolar, impact);
       const index = invalidated.findIndex((b) => b.id === updatedBordro.id);
-      if (index < 0) return [...invalidated, updatedBordro];
+      if (index < 0) return { ...current, bordrolar: [...invalidated, updatedBordro] };
       const next = [...invalidated];
       next[index] = updatedBordro;
-      return next;
+      return { ...current, bordrolar: next };
     });
   };
 
@@ -710,90 +779,113 @@ export default function App() {
         engine={payrollEngine}
         dataset={payrollDataset}
       />
-      <Navbar
-        activeTab={activeTab}
-        onTabChange={(tab) => {
-          if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
-          else setActiveTab(tab);
-        }}
-        donemler={donemler}
-        aktifDonemId={aktifDonemId}
-        onSelectDonem={handleSelectDonem}
-        onOpenPeriodManager={() => setIsPeriodManagerOpen(true)}
-        onExportBackup={handleExportBackup}
-        onImportBackup={handleImportBackup}
-        onResetSampleData={handleResetSampleData}
-      />
+      {isDataLoaded && (
+        <Navbar
+          activeTab={activeTab}
+          onTabChange={(tab) => {
+            if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
+            else setActiveTab(tab);
+          }}
+          donemler={donemler}
+          aktifDonemId={aktifDonemId}
+          onSelectDonem={handleSelectDonem}
+          onOpenPeriodManager={() => setIsPeriodManagerOpen(true)}
+          onExportBackup={handleExportBackup}
+          onImportBackup={handleImportBackup}
+          onResetSampleData={handleResetSampleData}
+        />
+      )}
 
       <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
         {loadError && (
-          <div className="mb-5 p-4 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold">
+          <div
+            role="alert"
+            data-testid="storage-error"
+            className="mb-5 p-4 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold"
+          >
             {loadError}{' '}
             {tauriBridge.isTauriAvailable()
               ? 'Native veritabanı yüklenemedi; ekrandaki veriler değiştirilmedi.'
-              : 'Tarayıcı verisi yüklenemedi; ekrandaki veriler değiştirilmedi.'}
+              : loadError.includes('kaydedilemedi')
+                ? 'Veriler kaydedilemedi. IndexedDB kullanılamıyor veya snapshot doğrulaması başarısız; başka bir storage kullanılmadı.'
+                : 'IndexedDB kullanılamıyor veya veri okunamadı. Veriler değiştirilmedi; başka bir storage kullanılmadı.'}
           </div>
         )}
 
-        {activeTab === 'personel' && (
-          <PersonelList
-            personeller={personeller}
-            onSavePersonel={handleSavePersonel}
-            onDeletePersonel={handleDeletePersonel}
-            onSelectPersonelForBordro={handleSelectPersonelForBordro}
-            isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
-          />
-        )}
-
-        {!aktifDonem && activeTab !== 'personel' && (
-          <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm text-center max-w-xl mx-auto my-12 space-y-4">
-            <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">!</div>
-            <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
-            </p>
-            <div className="flex items-center justify-center gap-3 pt-2">
-              <button type="button" onClick={() => setIsPeriodManagerOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors">Yeni Dönem Aç</button>
-              <button type="button" onClick={handleResetSampleData} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors">Örnek Verileri Yükle</button>
-            </div>
+        {!isDataLoaded && !loadError && (
+          <div
+            role="status"
+            data-testid="data-loading-state"
+            className="mx-auto my-16 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-600 shadow-sm"
+          >
+            Veriler yükleniyor…
           </div>
         )}
 
-        {aktifDonem && activeTab === 'puantaj' && (
-          <PuantajGrid
-            aktifDonem={aktifDonem}
-            personeller={personeller}
-            puantajlar={puantajlar}
-            onSavePuantaj={handleSavePuantaj}
-            onSelectPersonelForBordro={handleSelectPersonelForBordro}
-          />
-        )}
+        {isDataLoaded && (
+          <>
+            {activeTab === 'personel' && (
+              <PersonelList
+                personeller={personeller}
+                onSavePersonel={handleSavePersonel}
+                onDeletePersonel={handleDeletePersonel}
+                onSelectPersonelForBordro={handleSelectPersonelForBordro}
+                isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
+              />
+            )}
 
-        {aktifDonem && activeTab === 'bordro' && (
-          <BordroHesaplama
-            aktifDonem={aktifDonem}
-            donemler={donemler}
-            personeller={personeller}
-            kurumDegerleriMap={kurumDegerleriMap}
-            puantajlar={puantajlar}
-            bordrolar={bordrolar}
-            taxOpenings={taxOpenings}
-            sickLeaveRecords={sickLeaveRecords}
-            annualPayrollParameters={annualPayrollParameters}
-            zamAylari={zamAylari}
-            onSaveBordro={handleSaveBordro}
-            onSavePersonel={handleSavePersonel}
-            onSaveTaxOpening={handleSaveTaxOpening}
-            initialPersonelId={targetPersonelIdForBordro}
-            onGoToPuantaj={(personelId) => {
-              if (personelId) setTargetPersonelIdForBordro(personelId);
-              setActiveTab('puantaj');
-            }}
-          />
-        )}
+            {!aktifDonem && activeTab !== 'personel' && (
+              <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm text-center max-w-xl mx-auto my-12 space-y-4">
+                <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">!</div>
+                <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
+                </p>
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button type="button" onClick={() => setIsPeriodManagerOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors">Yeni Dönem Aç</button>
+                  <button type="button" onClick={handleResetSampleData} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors">Örnek Verileri Yükle</button>
+                </div>
+              </div>
+            )}
 
-        {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
-        {aktifDonem && activeTab === 'kesintiler' && <KesintiListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+            {aktifDonem && activeTab === 'puantaj' && (
+              <PuantajGrid
+                aktifDonem={aktifDonem}
+                personeller={personeller}
+                puantajlar={puantajlar}
+                onSavePuantaj={handleSavePuantaj}
+                onSelectPersonelForBordro={handleSelectPersonelForBordro}
+              />
+            )}
+
+            {aktifDonem && activeTab === 'bordro' && (
+              <BordroHesaplama
+                aktifDonem={aktifDonem}
+                donemler={donemler}
+                personeller={personeller}
+                kurumDegerleriMap={kurumDegerleriMap}
+                puantajlar={puantajlar}
+                bordrolar={bordrolar}
+                taxOpenings={taxOpenings}
+                sickLeaveRecords={sickLeaveRecords}
+                annualPayrollParameters={annualPayrollParameters}
+                zamAylari={zamAylari}
+                authoritativeDataset={payrollDataset}
+                onSaveBordro={handleSaveBordro}
+                onSavePersonel={handleSavePersonel}
+                onSaveTaxOpening={handleSaveTaxOpening}
+                initialPersonelId={targetPersonelIdForBordro}
+                onGoToPuantaj={(personelId) => {
+                  if (personelId) setTargetPersonelIdForBordro(personelId);
+                  setActiveTab('puantaj');
+                }}
+              />
+            )}
+
+            {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+            {aktifDonem && activeTab === 'kesintiler' && <KesintiListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+          </>
+        )}
       </main>
 
       <PeriodManagerModal

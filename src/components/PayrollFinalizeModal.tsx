@@ -11,7 +11,12 @@ import {
 import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 import { PayrollNotice, PayrollNoticeSeverity } from '../types/payrollNotice';
 import { formatTL } from '../utils/payrollPresentation';
-import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
+import {
+  PayrollBoundaryPayroll,
+  PayrollDatasetSnapshot,
+  PayrollEngine,
+} from '../services/payrollEngine';
+import { toPayrollUiModel } from '../services/payrollEngine/decimalBoundary';
 import {
   filterFinalizeNotices,
   hasBlockingFinalizeNotice,
@@ -23,7 +28,7 @@ interface PayrollFinalizeModalProps {
   donem: BordroDonemi;
   engine: PayrollEngine;
   dataset: PayrollDatasetSnapshot;
-  onFinalized: (bordro: BordroKaydi) => Promise<void> | void;
+  onFinalized: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
   onError?: (message: string) => void;
 }
 
@@ -111,7 +116,10 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
         (a, b) => severityRank[a.severity] - severityRank[b.severity]
       );
 
-      const snapshot = { bordro: current, notices: filtered };
+      const snapshot = {
+        bordro: toPayrollUiModel(current) as BordroKaydi,
+        notices: filtered,
+      };
       setReview(snapshot);
       setReviewError(null);
       return snapshot;

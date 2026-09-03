@@ -2,36 +2,72 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
+  assertExactDecimalDto,
   isDecimalBoundaryKey,
-  parsePayrollBoundaryJson,
+  isExactDecimalString,
   parsePayrollStorage,
+  parseWasmPayrollBoundaryResult,
   parseWasmPayrollResult,
+  mergePayrollUiIntoBoundary,
   serializePayrollRequestForWasm,
   serializePayrollStorage,
+  toPayrollBoundaryDto,
+  toPayrollUiModel,
 } from './decimalBoundary';
 
 const rustModelsSource = readFileSync(
   resolve(process.cwd(), 'src-tauri/src/domain/models.rs'),
   'utf8'
 );
+
+// Covers direct Decimal and Option<Decimal> fields. Nested DTOs such as
+// Option<Vec<DevredenPekKaydi>> and Vec<TaxBracket> are covered below through
+// their named child structs and representative recursive fixtures.
 const rustDecimalKeys = [
   ...new Set(
-    [...rustModelsSource.matchAll(/\bpub\s+([A-Za-z0-9_]+):\s*(?:Option<)?Decimal\b/g)].map(
-      ([, key]) => key
-    )
+    [
+      ...rustModelsSource.matchAll(
+        /\bpub\s+([A-Za-z0-9_]+):\s*(?:Option\s*<\s*)?Decimal\b/g
+      ),
+    ].map(([, key]) => key)
   ),
 ];
 
+const exactFixtures = [
+  '0.1',
+  '0.15',
+  '7.59',
+  '21.75',
+  '2443.28',
+  '999999999.99',
+  '0.123456789012345678901',
+  '123456789012345678.91',
+] as const;
+
 describe('WASM Decimal boundary', () => {
-  test('covers every Decimal field declared by the shared Rust models', () => {
+  test('covers every direct Decimal field declared by the shared Rust models', () => {
     expect(rustDecimalKeys.length).toBeGreaterThan(0);
     const missing = rustDecimalKeys.filter((key) => !isDecimalBoundaryKey(key));
     expect(missing).toEqual([]);
   });
 
+  test('covers nested Decimal DTOs without widening their child values to numbers', () => {
+    const nestedDto = {
+      annualPayrollParameters: [{ gelirVergisiDilimleri: [{ limit: '190000', oran: '0.15' }] }],
+      devredenPekGelen: [{ tutar: '123456789012345678.91', kalanAySayisi: 2 }],
+      statutorySnapshot: {
+        segments: [{ gunlukAsgariUcret: '2443.28', sgkPrimGunSayisi: 30 }],
+        pekUstSinir: '999999999.99',
+      },
+    };
+
+    expect(() => assertExactDecimalDto(nestedDto)).not.toThrow();
+    expect(JSON.parse(serializePayrollStorage(nestedDto))).toEqual(nestedDto);
+  });
+
   test('serializes a schema-derived representative DTO with string Decimals', () => {
     const representativeDto = Object.fromEntries(
-      rustDecimalKeys.map((key) => [key, 1234.56])
+      rustDecimalKeys.map((key) => [key, '1234.56'])
     );
     const serialized = JSON.parse(serializePayrollStorage(representativeDto)) as Record<
       string,
@@ -43,108 +79,85 @@ describe('WASM Decimal boundary', () => {
     }
   });
 
-  test('serializes monetary fields as exact decimal strings and leaves chronology integers intact', () => {
-    const json = serializePayrollRequestForWasm({
-      personnelId: 'person-1',
-      periodId: '2026-01',
-      calculatedAt: '2026-09-03T00:00:00.000Z',
-      manualIncome: { tediye: 75000.1, tisIkramiyesi: 0.15 },
-      dataset: {
-        personnel: [],
-        periods: [{ taxYear: 2026, taxMonth: 2 }],
-        institutionSettings: {
-          '2026-01': { gunlukAsgariUcret: 1101, damgaVergisiOraniBinde: 7.59 },
-        },
-        attendances: [],
-        payrolls: [],
-        taxOpenings: [],
-        sickLeaveRecords: [],
-        annualPayrollParameters: [
-          { year: 2026, gelirVergisiDilimleri: [{ limit: 190000, oran: 0.15 }] },
-        ],
-        zamAylari: [],
-      },
-    } as never);
+  test('preserves exact fixture strings through WASM result, storage reload, and next request', () => {
+    for (const fixture of exactFixtures) {
+      const wasmResult = parseWasmPayrollBoundaryResult<{ netOdeme: string; pekDetay: { finalPek: string } }>(
+        JSON.stringify({ netOdeme: fixture, pekDetay: { finalPek: fixture } })
+      );
+      expect(wasmResult.netOdeme).toBe(fixture);
+      expect(wasmResult.pekDetay.finalPek).toBe(fixture);
 
-    const value = JSON.parse(json) as Record<string, any>;
-    expect(value.manualIncome.tediye).toBe('75000.1');
-    expect(value.manualIncome.tisIkramiyesi).toBe('0.15');
-    expect(value.dataset.institutionSettings['2026-01'].gunlukAsgariUcret).toBe('1101');
-    expect(value.dataset.periods[0].taxYear).toBe(2026);
-    expect(value.dataset.periods[0].taxMonth).toBe(2);
-    expect(value.dataset.annualPayrollParameters[0].gelirVergisiDilimleri[0].limit).toBe(
-      '190000'
-    );
+      const storageJson = serializePayrollStorage({
+        backupVersion: 2,
+        bordrolar: [{ netOdeme: wasmResult.netOdeme, pekDetay: wasmResult.pekDetay }],
+      });
+      const reloaded = parsePayrollStorage<{
+        bordrolar: Array<{ netOdeme: string; pekDetay: { finalPek: string } }>;
+      }>(storageJson);
+      expect(reloaded.bordrolar[0].netOdeme).toBe(fixture);
+      expect(reloaded.bordrolar[0].pekDetay.finalPek).toBe(fixture);
+
+      const requestJson = serializePayrollRequestForWasm({
+        personnelId: 'person-1',
+        periodId: '2026-01',
+        calculatedAt: '2026-09-03T00:00:00.000Z',
+        manualIncome: { tediye: fixture, tisIkramiyesi: null },
+        dataset: {
+          personnel: [],
+          periods: [],
+          institutionSettings: {},
+          attendances: [],
+          payrolls: reloaded.bordrolar,
+          taxOpenings: [],
+          sickLeaveRecords: [],
+          annualPayrollParameters: [],
+          zamAylari: [],
+        },
+      } as never);
+      expect(JSON.parse(requestJson).manualIncome.tediye).toBe(fixture);
+    }
   });
 
-  test('round-trips representative monetary values without a binary number at the boundary', () => {
-    const request = {
-      calculatedAt: '2026-09-03T00:00:00.000Z',
-      manualIncome: { tediye: 0.1, tisIkramiyesi: 0.15 },
-      dataset: {
-        institutionSettings: {
-          '2026-01': {
-            gunlukTabanUcret: 75000.1,
-            damgaVergisiOraniBinde: 7.59,
-          },
-        },
-        payrolls: [
-          {
-            gelirToplam: 999999999.99,
-            kesintiToplam: 7.59,
-            netOdeme: 999999992.4,
-          },
-        ],
-      },
+  test('encodes normal UI inputs, but the production request serializer rejects numeric Decimal fields', () => {
+    const encoded = toPayrollBoundaryDto({ amount: 0.15, taxMonth: 3 });
+    expect(encoded).toEqual({ amount: '0.15', taxMonth: 3 });
+    expect(toPayrollBoundaryDto({ amount: 1e-7 })).toEqual({ amount: '0.0000001' });
+    expect(() =>
+      serializePayrollRequestForWasm({
+        manualIncome: { tediye: 0.1 },
+      } as never)
+    ).toThrow('JS number kabul edilmez');
+  });
+
+  test('accepts the intended Decimal text grammar and rejects binary/scientific output', () => {
+    expect(exactFixtures.every((value) => isExactDecimalString(value))).toBe(true);
+    expect(isExactDecimalString('0.12345678901234568')).toBe(true);
+    expect(isExactDecimalString('1e-7')).toBe(false);
+    expect(isExactDecimalString('NaN')).toBe(false);
+  });
+
+  test('UI adapter is the only place that turns exact Decimal text into numbers', () => {
+    const uiModel = toPayrollUiModel({ netOdeme: '999999999.99', taxMonth: 3 }) as unknown as {
+      netOdeme: number;
+      taxMonth: number;
     };
+    expect(uiModel.netOdeme).toBe(999999999.99);
+    expect(uiModel.taxMonth).toBe(3);
 
-    const encoded = JSON.parse(serializePayrollRequestForWasm(request as never)) as any;
-    expect(encoded.manualIncome.tediye).toBe('0.1');
-    expect(encoded.manualIncome.tisIkramiyesi).toBe('0.15');
-    expect(encoded.dataset.institutionSettings['2026-01'].gunlukTabanUcret).toBe('75000.1');
-    expect(encoded.dataset.payrolls[0].gelirToplam).toBe('999999999.99');
-    expect(encoded.dataset.payrolls[0].kesintiToplam).toBe('7.59');
-
-    const boundary = parsePayrollBoundaryJson(
-      JSON.stringify({
-        netOdeme: '999999999.99',
-        devredenPekGelen: [{ tutar: '7.59' }],
-        incomeItem: { amount: '0.15' },
-        taxMonth: 3,
-      })
-    ) as any;
-    expect(boundary.netOdeme).toBe('999999999.99');
-    expect(boundary.taxMonth).toBe(3);
-    expect((boundary.devredenPekGelen as any)[0].tutar).toBe('7.59');
-    expect((boundary.incomeItem as any).amount).toBe('0.15');
-    expect(JSON.parse(serializePayrollStorage({ amount: 0.15 })).amount).toBe('0.15');
+    const boundary = parseWasmPayrollResult<{ netOdeme: string }>(
+      JSON.stringify({ netOdeme: '0.123456789012345678901' })
+    );
+    expect(boundary.netOdeme).toBe('0.123456789012345678901');
   });
 
-  test('UI compatibility decoding does not change the Decimal-safe storage contract', () => {
-    const uiModel = parsePayrollStorage<{ netOdeme: number; taxMonth: number }>(
-      '{"netOdeme":"999999999.99","taxMonth":3}'
-    );
-    expect(uiModel.netOdeme).toBe(999999999.99);
-    expect(JSON.parse(serializePayrollStorage(uiModel))).toEqual({
-      netOdeme: '999999999.99',
-      taxMonth: 3,
-    });
+  test('UI projection round-trips unchanged long Decimals without rewriting their text', () => {
+    const exact = {
+      netOdeme: '0.123456789012345678901',
+      pekDetay: { finalPek: '123456789012345678.91' },
+    };
+    const ui = toPayrollUiModel(exact);
+    const roundTripped = mergePayrollUiIntoBoundary(exact, ui);
 
-    const payroll = parseWasmPayrollResult(
-      JSON.stringify({
-        id: 'p-1_2026-01',
-        personelId: 'p-1',
-        donemId: '2026-01',
-        gelirler: { tediye: '0.15' },
-        gelirToplam: '0.15',
-        kesintiler: {},
-        kesintiToplam: '0.00',
-        netOdeme: '0.15',
-        status: 'CALCULATED',
-      })
-    );
-    const persisted = JSON.parse(serializePayrollStorage(payroll)) as any;
-    expect(persisted.gelirler.tediye).toBe('0.15');
-    expect(persisted.netOdeme).toBe('0.15');
+    expect(roundTripped).toEqual(exact);
   });
 });

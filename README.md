@@ -14,9 +14,15 @@ server'ı ve remote payroll backend yoktur.
 
 ## Gereksinimler
 
-- Bun
+- Bun 1.3.14
 - Rust toolchain ve Cargo
+- `wasm-pack` 0.15.0
 - Tauri geliştirme bağımlılıkları
+
+Proje Rust toolchain'ini `rust-toolchain.toml` ile 1.97.1'e ve browser WASM
+üretim aracını CI ile 0.15.0'a sabitler. Böylece kaynak değişmediğinde
+üretilen `src/wasm/pkg/` çıktısının toolchain sürüm farkları yüzünden drift
+etmesi önlenir.
 
 ## Geliştirme ve doğrulama
 
@@ -33,10 +39,12 @@ bun run wasm:test
 bun run build
 bun run web:verify
 bun run verify:privacy
+bun run verify:wasm-package
 bun run web:build
 bunx playwright install chromium
 bun run test:e2e:typecheck
 bun run test:e2e
+bun run test:netlify-smoke
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
@@ -99,6 +107,14 @@ sorgusu veya sunucu tabanlı bir çıktı servisi yoktur.
 Native notice servisi repository-backed ayrıntılı bilgilendirme üretebilir; tarayıcı
 WASM notice katmanı ortak hesaplamayı etkileyen eksik veri, STALE ve rapor/puantaj
 uyumsuzluklarını görünür ve bloklayıcı şekilde raporlar.
+
+Tarayıcıdaki authoritative finansal değerler Decimal string olarak korunur:
+`Rust Decimal ↔ WASM JSON DTO ↔ browser domain/storage DTO ↔ IndexedDB`.
+`PayrollUiModel` yalnız sunum ve kullanıcı girişi için kullanılır; `Number`,
+`parseFloat` ve benzeri dönüşümler authoritative hesaplama veya persistence
+yoluna geri sokulmaz. `bun run test:netlify-smoke` gerçek Netlify local
+runtime'ında header, CSP, WASM yüklenmesi, IndexedDB ve hesaplama akışını
+doğrular.
 
 ## Veri güvenliği
 

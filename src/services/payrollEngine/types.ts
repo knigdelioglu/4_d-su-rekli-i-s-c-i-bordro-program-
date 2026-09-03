@@ -10,9 +10,10 @@ import {
   SickLeaveRecord,
 } from '../../types/payroll';
 import { PayrollNotice } from '../../types/payrollNotice';
+import type { Exactify } from './decimalBoundary';
 
-/** JSON shape shared by the native snapshot adapter and the WASM boundary. */
-export interface PayrollDatasetSnapshot {
+/** UI/native compatibility shape before the explicit Decimal boundary adapter. */
+export interface PayrollDatasetSnapshotModel {
   personnel: Personel[];
   periods: BordroDonemi[];
   institutionSettings: Record<string, DönemselKurumDegerleri>;
@@ -24,11 +25,21 @@ export interface PayrollDatasetSnapshot {
   zamAylari: number[];
 }
 
+/** Presentation-only snapshot shape; never use it for WASM or persistence. */
+export type PayrollUiModel = PayrollDatasetSnapshotModel;
+
+/** Exact JSON shape sent to WASM and retained by browser persistence. */
+export type PayrollDatasetSnapshot = Exactify<PayrollDatasetSnapshotModel>;
+export type PayrollBoundaryPayroll = Exactify<BordroKaydi>;
+export type PayrollBoundaryManualIncomeInput = Exactify<ManualPayrollIncomeInput>;
+export type PayrollBoundaryPersonel = Exactify<Personel>;
+export type PayrollBoundaryTaxOpening = Exactify<PersonelTaxOpening>;
+
 export interface PayrollCalculationRequest {
   personnelId: string;
   periodId: string;
   calculatedAt: string;
-  manualIncome?: ManualPayrollIncomeInput | null;
+  manualIncome?: PayrollBoundaryManualIncomeInput | null;
   dataset: PayrollDatasetSnapshot;
 }
 
@@ -55,18 +66,18 @@ export interface MutationImpact {
 
 export interface PayrollEngine {
   readonly kind: 'tauri' | 'wasm';
-  calculatePayroll(request: PayrollCalculationRequest): Promise<BordroKaydi>;
+  calculatePayroll(request: PayrollCalculationRequest): Promise<PayrollBoundaryPayroll>;
   validatePayroll(request: PayrollCalculationRequest): Promise<void>;
   getPayrollNotices(
     periodId: string,
     dataset: PayrollDatasetSnapshot
   ): Promise<PayrollNotice[]>;
-  getPayrolls(dataset: PayrollDatasetSnapshot): Promise<BordroKaydi[]>;
+  getPayrolls(dataset: PayrollDatasetSnapshot): Promise<PayrollBoundaryPayroll[]>;
   finalizePayroll(
     personnelId: string,
     periodId: string,
     dataset: PayrollDatasetSnapshot
-  ): Promise<BordroKaydi>;
+  ): Promise<PayrollBoundaryPayroll>;
   evaluateMutationPolicy(
     mutation: PayrollMutation,
     dataset: PayrollDatasetSnapshot

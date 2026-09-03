@@ -8,6 +8,7 @@
     "dev": "vite --port=3000 --host=0.0.0.0",
     "build": "vite build",
     "web:verify": "bun scripts/verify-web-build.mjs",
+    "verify:wasm-package": "bun scripts/verify-wasm-package.mjs",
     "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-opt --no-typescript && rm -f src/wasm/pkg/.gitignore",
     "wasm:test": "wasm-pack test --node crates/payroll-wasm",
     "web:build": "bun run wasm:build && vite build",
@@ -20,6 +21,7 @@
     "lint": "tsc --noEmit && bun run verify:production-graph",
     "verify:production-graph": "bun scripts/verify-production-graph.mjs",
     "verify:privacy": "bun scripts/verify-privacy-boundary.mjs",
+    "test:netlify-smoke": "bun scripts/test-netlify-smoke.mjs",
     "test:e2e": "playwright test",
     "test:e2e:typecheck": "tsc -p tsconfig.e2e.json --noEmit"
   },
@@ -32,10 +34,11 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@types/node": "^22.14.0",
     "@playwright/test": "^1.55.0",
+    "@types/node": "^22.14.0",
+    "netlify-cli": "27.4.2",
     "tailwindcss": "^4.1.14",
-    "vite": "^6.2.3",
-    "typescript": "~5.8.2"
+    "typescript": "~5.8.2",
+    "vite": "^6.2.3"
   }
 }

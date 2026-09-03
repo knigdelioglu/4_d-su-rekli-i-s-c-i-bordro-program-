@@ -1,4 +1,3 @@
-import type { BordroKaydi } from '../../types/payroll';
 import type { MutationImpact, PayrollMutation } from '../payrollEngine/types';
 
 /**
@@ -18,10 +17,15 @@ export function assertBrowserMutationImpactAllowed(impact: MutationImpact): void
   throw new Error(`Kesinleştirilmiş bordro tarihçesini etkileyen veri değiştirilemez: ${keys}.`);
 }
 
-export function applyBrowserPayrollImpact(
-  payrolls: BordroKaydi[],
+export function applyBrowserPayrollImpact<T extends {
+  id: string;
+  personelId: string;
+  donemId: string;
+  status: string;
+}>(
+  payrolls: T[],
   impact: MutationImpact
-): BordroKaydi[] {
+): T[] {
   const affected = new Set(
     impact.affectedPayrolls.map((key) => `${key.personnelId}\u0000${key.periodId}`)
   );

@@ -4,6 +4,15 @@ import { join, relative, resolve } from 'node:path';
 const root = process.cwd();
 const sourceDir = resolve(root, 'src');
 const legacyFixture = resolve(sourceDir, 'utils/payrollUtils.ts');
+const presentationBoundary = resolve(sourceDir, 'utils/payrollPresentation.ts');
+const forbiddenPresentationCalculations = [
+  'calculateNet',
+  'calculateTax',
+  'calculatePEK',
+  'calculateGv',
+  'calculateGelirVergisi',
+  'calculateStatutory',
+];
 const legacyNames = [
   'calculateGelirToplam',
   'calculateKesintiToplam',
@@ -32,6 +41,15 @@ function walk(directory) {
 }
 
 const violations = [];
+if (existsSync(presentationBoundary)) {
+  const presentationSource = readFileSync(presentationBoundary, 'utf8');
+  for (const name of forbiddenPresentationCalculations) {
+    if (new RegExp(`\\b${name}\\b`).test(presentationSource)) {
+      violations.push(`payrollPresentation.ts contains authoritative calculation ${name}`);
+    }
+  }
+}
+
 for (const path of walk(sourceDir)) {
   if (!/\.(?:ts|tsx)$/.test(path) || /\.test\.(?:ts|tsx)$/.test(path)) continue;
   if (path === legacyFixture || path.includes('/wasm/pkg/')) continue;
