@@ -10,6 +10,7 @@ import {
   buildPeriodPayrollWorkbook,
   buildSinglePayrollWorkbook,
 } from './payrollExcelExport';
+import { buildPeriodPayrollCsv, buildSinglePayrollCsv, escapeCsvCell } from './payrollCsvExport';
 import { canvasesToPdfBlob } from './payrollPdfExport';
 
 const period: BordroDonemi = {
@@ -178,6 +179,24 @@ describe('payroll export contracts', () => {
     const control = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets.Kontrol);
     expect(control.length).toBe(2);
     expect(control.find((row) => row['T.C. Kimlik No'] === '22222222222')?.['Resmi Çıktıya Dahil']).toBe('HAYIR');
+  });
+
+  test('CSV exports preserve UTF-8, Excel separators and authoritative payroll rows', () => {
+    const model = buildPayrollExportModel({
+      person,
+      payroll: payroll('CALCULATED'),
+      period,
+      attendance,
+    });
+    const singleCsv = buildSinglePayrollCsv(model);
+    expect(singleCsv.startsWith('\uFEFF')).toBeTruthy();
+    expect(singleCsv.includes('Şule Çığ')).toBeTruthy();
+    expect(singleCsv.includes('SGK Primi - İşçi Payı;14000')).toBeTruthy();
+    expect(escapeCsvCell('a;b')).toBe('"a;b"');
+
+    const periodCsv = buildPeriodPayrollCsv({ period, models: [model] });
+    expect(periodCsv.includes('T.C. Kimlik No;Ad Soyad;Grup;Durum')).toBeTruthy();
+    expect(periodCsv.includes('11111111111;Şule Çığ;1. Grup;CALCULATED')).toBeTruthy();
   });
 
   test('PDF writer emits a real PDF binary and filenames are filesystem safe', async () => {

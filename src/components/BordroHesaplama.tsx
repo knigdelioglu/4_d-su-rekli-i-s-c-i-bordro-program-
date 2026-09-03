@@ -26,10 +26,12 @@ import {
   BordroDonemi,
   BordroKaydi,
   BordroStatus,
+  AnnualPayrollParameters,
   DönemselKurumDegerleri,
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
+  SickLeaveRecord,
   ManualPayrollIncomeInput,
 } from '../types/payroll';
 import {
@@ -37,7 +39,7 @@ import {
 } from '../utils/payrollUtils';
 import { PaySlipModal } from './PaySlipModal';
 import { PayrollFinalizeModal } from './PayrollFinalizeModal';
-import { tauriBridge } from '../services/tauriBridge';
+import { getPayrollEngine, PayrollDatasetSnapshot } from '../services/payrollEngine';
 
 function formatPayrollError(err: unknown): string {
   if (err && typeof err === 'object') {
@@ -63,6 +65,10 @@ interface BordroHesaplamaProps {
   kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
   puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
+  taxOpenings: PersonelTaxOpening[];
+  sickLeaveRecords: SickLeaveRecord[];
+  annualPayrollParameters: AnnualPayrollParameters[];
+  zamAylari: number[];
   onSaveBordro: (bordro: BordroKaydi) => Promise<void> | void;
   onSavePersonel?: (personel: Personel) => Promise<void> | void;
   onSaveTaxOpening?: (opening: PersonelTaxOpening) => Promise<void> | void;
@@ -72,15 +78,21 @@ interface BordroHesaplamaProps {
 
 export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   aktifDonem,
+  donemler,
   personeller,
   kurumDegerleriMap,
   puantajlar,
   bordrolar,
+  taxOpenings,
+  sickLeaveRecords,
+  annualPayrollParameters,
+  zamAylari,
   onSaveBordro,
   onSavePersonel,
   onSaveTaxOpening,
   onGoToPuantaj,
 }) => {
+  const payrollEngine = getPayrollEngine();
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [activePaySlip, setActivePaySlip] = useState<{
     personel: Personel;
@@ -149,8 +161,18 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     return opening > 0 && (!openingYear || openingYear === activeTaxYear) ? opening : 0;
   };
 
-  // Rust is the sole production payroll calculation engine. Browser mode can
-  // inspect/import/export records, but it cannot manufacture a payroll result.
+  const buildDataset = (): PayrollDatasetSnapshot => ({
+    personnel: personeller,
+    periods: donemler,
+    institutionSettings: kurumDegerleriMap,
+    attendances: puantajlar,
+    payrolls: bordrolar,
+    taxOpenings,
+    sickLeaveRecords,
+    annualPayrollParameters,
+    zamAylari,
+  });
+
   const calculateAndSaveForPerson = async (
     person: Personel
   ): Promise<BordroKaydi | null> => {
@@ -171,21 +193,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return null;
     }
 
-    if (!tauriBridge.isTauriAvailable()) {
-      setErrorMessage('Bordro hesaplama yalnızca Tauri masaüstü uygulamasında yapılabilir.');
-      return null;
-    }
-
     try {
-      const rustBordro = await tauriBridge.calculatePayroll(
-        person.id,
-        aktifDonem.id,
-        getManualIncomeInput(person.id)
-      );
-      await onSaveBordro(rustBordro);
-      return rustBordro;
+      const calculated = await payrollEngine.calculatePayroll({
+        personnelId: person.id,
+        periodId: aktifDonem.id,
+        manualIncome: getManualIncomeInput(person.id),
+        dataset: buildDataset(),
+      });
+      await onSaveBordro(calculated);
+      return calculated;
     } catch (err) {
-      console.error('Rust calculate_payroll failed:', err);
+      console.error('Payroll engine calculation failed:', err);
       setErrorMessage(`Hesaplama hatası: ${formatPayrollError(err)}`);
       return null;
     }
@@ -193,11 +211,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
   // Batch calculation handler
   const handleCalculateAll = async () => {
-    if (!tauriBridge.isTauriAvailable()) {
-      setSuccessMessage(null);
-      setErrorMessage('Bordro hesaplama yalnızca Tauri masaüstü uygulamasında yapılabilir.');
-      return;
-    }
     setIsBatchProcessing(true);
     let successCount = 0;
     let failCount = 0;
@@ -776,6 +789,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                   personel={person}
                                   bordro={bordro}
                                   donem={aktifDonem}
+                                  engine={payrollEngine}
+                                  dataset={buildDataset()}
                                   onFinalized={(finalizedBordro) =>
                                     handleFinalizeSuccess(person, finalizedBordro)
                                   }
@@ -819,6 +834,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           bordro={activePaySlip.bordro}
           donem={aktifDonem}
           isPrimiGruplari={activeKurumDegerleri?.isPrimiGruplari}
+          engine={payrollEngine}
+          dataset={buildDataset()}
         />
       )}
 

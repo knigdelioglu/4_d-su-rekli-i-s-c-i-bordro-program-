@@ -4,14 +4,20 @@ import {
   FileArchive,
   FileDown,
   FileSpreadsheet,
+  FileText,
   Printer,
   Shield,
   X,
 } from 'lucide-react';
-import { BordroDonemi, BordroKaydi, IsPrimiGrupItem, Personel } from '../types/payroll';
+import {
+  BordroDonemi,
+  BordroKaydi,
+  IsPrimiGrupItem,
+  Personel,
+} from '../types/payroll';
 import { formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollUtils';
 import { printElement } from '../utils/excelExport';
-import { tauriBridge } from '../services/tauriBridge';
+import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
 import {
   buildPayrollExportModel,
   buildPeriodPayrollExportModels,
@@ -21,6 +27,10 @@ import {
   exportPeriodPayrollExcel,
   exportSinglePayrollExcel,
 } from '../exports/payrollExcelExport';
+import {
+  exportPeriodPayrollCsv,
+  exportSinglePayrollCsv,
+} from '../exports/payrollCsvExport';
 import {
   exportPeriodPayrollPdf,
   exportSinglePayrollPdf,
@@ -33,9 +43,18 @@ interface PaySlipModalProps {
   personel: Personel;
   donem: BordroDonemi;
   isPrimiGruplari?: IsPrimiGrupItem[];
+  engine: PayrollEngine;
+  dataset: PayrollDatasetSnapshot;
 }
 
-type ExportAction = 'single-pdf' | 'single-xlsx' | 'period-pdf' | 'period-xlsx' | null;
+type ExportAction =
+  | 'single-pdf'
+  | 'single-xlsx'
+  | 'single-csv'
+  | 'period-pdf'
+  | 'period-xlsx'
+  | 'period-csv'
+  | null;
 
 export const PaySlipModal: React.FC<PaySlipModalProps> = ({
   isOpen,
@@ -44,6 +63,8 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
   personel,
   donem,
   isPrimiGruplari,
+  engine,
+  dataset,
 }) => {
   const [busyAction, setBusyAction] = useState<ExportAction>(null);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -54,8 +75,11 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
         person: personel,
         payroll: bordro,
         period: donem,
+        attendance: dataset.attendances.find(
+          (item) => item.personelId === personel.id && item.donemId === donem.id
+        ),
       }),
-    [personel, bordro, donem]
+    [dataset.attendances, personel, bordro, donem]
   );
 
   if (!isOpen) return null;
@@ -74,16 +98,12 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
   };
 
   const loadSingleModel = async (): Promise<PayrollExportModel> => {
-    if (!tauriBridge.isTauriAvailable()) return previewModel;
-    const [attendances, notices] = await Promise.all([
-      tauriBridge.getAttendanceList(),
-      tauriBridge.getPayrollNotices(donem.id),
-    ]);
+    const notices = await engine.getPayrollNotices(donem.id, dataset);
     return buildPayrollExportModel({
       person: personel,
       payroll: bordro,
       period: donem,
-      attendance: attendances.find(
+      attendance: dataset.attendances.find(
         (item) => item.personelId === personel.id && item.donemId === donem.id
       ),
       notices,
@@ -91,15 +111,10 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
   };
 
   const loadPeriodContext = async () => {
-    if (!tauriBridge.isTauriAvailable()) {
-      throw new Error('Dönem toplu çıktıları yalnızca Tauri masaüstü uygulamasında hazırlanabilir.');
-    }
-    const [people, payrolls, attendances, notices] = await Promise.all([
-      tauriBridge.getPersonnelList(),
-      tauriBridge.getPayrollList(),
-      tauriBridge.getAttendanceList(),
-      tauriBridge.getPayrollNotices(donem.id),
-    ]);
+    const [notices] = await Promise.all([engine.getPayrollNotices(donem.id, dataset)]);
+    const people = dataset.personnel;
+    const payrolls = dataset.payrolls;
+    const attendances = dataset.attendances;
     const models = buildPeriodPayrollExportModels({
       period: donem,
       people,
@@ -163,6 +178,17 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </button>
             <button
               type="button"
+              disabled={busyAction !== null}
+              onClick={() =>
+                void withBusy('single-csv', () => exportSinglePayrollCsv(previewModel))
+              }
+              className="px-3 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
+            >
+              <FileText className="w-4 h-4" />
+              CSV İndir
+            </button>
+            <button
+              type="button"
               onClick={handlePrint}
               disabled={busyAction !== null}
               className="px-3 py-2 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
@@ -173,7 +199,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             <div className="w-px h-7 bg-slate-700 hidden xl:block" />
             <button
               type="button"
-              disabled={busyAction !== null || !tauriBridge.isTauriAvailable()}
+              disabled={busyAction !== null}
               onClick={() =>
                 void withBusy('period-xlsx', async () => {
                   const context = await loadPeriodContext();
@@ -188,7 +214,22 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </button>
             <button
               type="button"
-              disabled={busyAction !== null || !tauriBridge.isTauriAvailable()}
+              disabled={busyAction !== null}
+              onClick={() =>
+                void withBusy('period-csv', async () => {
+                  const context = await loadPeriodContext();
+                  exportPeriodPayrollCsv({ period: donem, models: context.models });
+                })
+              }
+              className="px-3 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
+              title="Dönemin CALCULATED/FINALIZED bordro özetini CSV olarak oluşturur"
+            >
+              <FileText className="w-4 h-4" />
+              Dönem CSV
+            </button>
+            <button
+              type="button"
+              disabled={busyAction !== null}
               onClick={() =>
                 void withBusy('period-pdf', async () => {
                   const context = await loadPeriodContext();

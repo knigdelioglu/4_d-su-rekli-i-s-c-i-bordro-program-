@@ -1,0 +1,14 @@
+[package]
+name = "payroll-core"
+version = "0.1.0"
+edition = "2021"
+description = "Portable, deterministic 4/D payroll domain and calculation engine"
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+rust_decimal = { version = "1.36", features = ["serde-float"] }
+rust_decimal_macros = "1.36"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+

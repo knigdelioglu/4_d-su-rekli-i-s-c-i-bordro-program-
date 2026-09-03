@@ -18,6 +18,9 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "payroll-wasm-generated": [
+        "./src/wasm/payroll_wasm_generated.d.ts"
       ]
     },
     "allowImportingTsExtensions": true,

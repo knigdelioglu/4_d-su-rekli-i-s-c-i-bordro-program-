@@ -8,7 +8,7 @@ import {
   Info,
   RefreshCw,
 } from 'lucide-react';
-import { tauriBridge } from '../services/tauriBridge';
+import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
 import { PayrollNotice, PayrollNoticeSeverity } from '../types/payrollNotice';
 
 const severityRank: Record<PayrollNoticeSeverity, number> = {
@@ -67,14 +67,26 @@ function actionLabel(action?: string): string | null {
   }
 }
 
-export const PayrollNoticeCenter: React.FC = () => {
+interface PayrollNoticeCenterProps {
+  enabled: boolean;
+  periodId?: string;
+  engine: PayrollEngine;
+  dataset: PayrollDatasetSnapshot;
+}
+
+export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
+  enabled,
+  periodId,
+  engine,
+  dataset,
+}) => {
   const [notices, setNotices] = useState<PayrollNotice[]>([]);
   const [isOpen, setIsOpen] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!tauriBridge.isTauriAvailable()) {
+    if (!enabled || !periodId) {
       setNotices([]);
       setLoadError(null);
       return;
@@ -82,19 +94,7 @@ export const PayrollNoticeCenter: React.FC = () => {
 
     setIsRefreshing(true);
     try {
-      let periodId = await tauriBridge.getAppSetting('active_period_id');
-      if (!periodId) {
-        const periods = await tauriBridge.getPeriods();
-        periodId = periods[0]?.id || null;
-      }
-
-      if (!periodId) {
-        setNotices([]);
-        setLoadError(null);
-        return;
-      }
-
-      const next = await tauriBridge.getPayrollNotices(periodId);
+      const next = await engine.getPayrollNotices(periodId, dataset);
       next.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
       setNotices(next);
       setLoadError(null);
@@ -104,7 +104,7 @@ export const PayrollNoticeCenter: React.FC = () => {
     } finally {
       setIsRefreshing(false);
     }
-  }, []);
+  }, [dataset, enabled, engine, periodId]);
 
   useEffect(() => {
     void refresh();
@@ -129,11 +129,11 @@ export const PayrollNoticeCenter: React.FC = () => {
     [notices]
   );
 
-  if (!tauriBridge.isTauriAvailable()) return null;
+  if (!enabled) return null;
   if (!loadError && notices.length === 0) return null;
 
   return (
-    <aside className="fixed right-4 top-20 z-[70] w-[min(430px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white/95 shadow-2xl backdrop-blur-sm">
+    <aside className="fixed right-4 top-20 z-30 w-[min(430px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white/95 shadow-2xl backdrop-blur-sm">
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
         <button
           type="button"

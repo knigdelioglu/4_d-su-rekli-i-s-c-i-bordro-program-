@@ -9,6 +9,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+payroll-core = { path = "../crates/payroll-core" }
 tauri = { version = "2", features = [] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -22,11 +23,3 @@ chrono = { version = "0.4", features = ["serde"] }
 [lib]
 name = "bordro_programi_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
-
-# Keep application crates quick to rebuild while compiling third-party
-# dependencies with optimizations for faster test execution.
-[profile.dev.package."*"]
-opt-level = 3
-
-[profile.test.package."*"]
-opt-level = 3

@@ -1,7 +1,7 @@
-pub mod calculations;
-pub mod errors;
-pub mod models;
+pub use payroll_core::calculations;
+pub use payroll_core::errors;
+pub use payroll_core::models;
 
-pub use calculations::*;
-pub use errors::*;
-pub use models::*;
+pub use payroll_core::calculations::*;
+pub use payroll_core::errors::*;
+pub use payroll_core::models::*;

@@ -19,6 +19,30 @@ jobs:
       - name: Install JavaScript dependencies
         run: bun install --frozen-lockfile
 
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+          cache: false
+
+      - name: Install WebAssembly toolchain
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack --locked
+
+      - name: Rust workspace check
+        run: cargo check --workspace
+
+      - name: Shared core tests
+        run: cargo test -p payroll-core
+
+      - name: Build browser WASM package
+        run: bun run wasm:build
+
+      - name: WASM adapter tests
+        run: bun run wasm:test
+
       - name: TypeScript lint
         run: bun run lint
 
@@ -43,13 +67,6 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
-          cache: false
-
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -57,13 +74,10 @@ jobs:
           cache-on-failure: true
 
       - name: Rust format check
-        working-directory: src-tauri
-        run: cargo fmt --check
+        run: cargo fmt --all -- --check
 
       - name: Rust clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Rust tests
-        working-directory: src-tauri
-        run: cargo test
+      - name: Rust workspace tests
+        run: cargo test --workspace

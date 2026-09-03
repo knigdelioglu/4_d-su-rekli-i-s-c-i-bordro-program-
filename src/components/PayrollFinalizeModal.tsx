@@ -11,7 +11,7 @@ import {
 import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 import { PayrollNotice, PayrollNoticeSeverity } from '../types/payrollNotice';
 import { formatTL } from '../utils/payrollUtils';
-import { tauriBridge } from '../services/tauriBridge';
+import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
 import {
   canFinalizePayrollReview,
   filterFinalizeNotices,
@@ -22,6 +22,8 @@ interface PayrollFinalizeModalProps {
   personel: Personel;
   bordro: BordroKaydi;
   donem: BordroDonemi;
+  engine: PayrollEngine;
+  dataset: PayrollDatasetSnapshot;
   onFinalized: (bordro: BordroKaydi) => Promise<void> | void;
   onError?: (message: string) => void;
 }
@@ -68,6 +70,8 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
   personel,
   bordro,
   donem,
+  engine,
+  dataset,
   onFinalized,
   onError,
 }) => {
@@ -95,21 +99,17 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
     canFinalizePayrollReview(authoritativeBordro.status, relevantNotices);
 
   const loadReview = async (showLoading: boolean): Promise<ReviewSnapshot> => {
-    if (!tauriBridge.isTauriAvailable()) {
-      throw new Error('Kesinleştirme kontrolleri yalnızca Tauri masaüstü uygulamasında çalışır.');
-    }
-
     if (showLoading) setIsLoading(true);
     try {
       const [allNotices, payrolls] = await Promise.all([
-        tauriBridge.getPayrollNotices(donem.id),
-        tauriBridge.getPayrollList(),
+        engine.getPayrollNotices(donem.id, dataset),
+        engine.getPayrolls(dataset),
       ]);
       const current = payrolls.find(
         (item) => item.personelId === personel.id && item.donemId === donem.id
       );
       if (!current) {
-        throw new Error('Native veritabanında kesinleştirilecek bordro kaydı bulunamadı.');
+        throw new Error('Kesinleştirilecek bordro kaydı bulunamadı.');
       }
 
       const filtered = filterFinalizeNotices(allNotices, personel.id).sort(
@@ -169,12 +169,12 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
         );
       }
 
-      await tauriBridge.setPayrollStatus(personel.id, donem.id, 'FINALIZED');
-      const refreshed = await tauriBridge.getPayrollList();
-      const finalized =
-        refreshed.find(
-          (item) => item.personelId === personel.id && item.donemId === donem.id
-        ) ?? { ...latest.bordro, status: 'FINALIZED' as const };
+      const finalized = await engine.setPayrollStatus(
+        personel.id,
+        donem.id,
+        'FINALIZED',
+        dataset
+      );
       await onFinalized(finalized);
       setIsOpen(false);
       setReview(null);
@@ -256,7 +256,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
               {isLoading ? (
                 <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-8 text-xs font-semibold text-slate-600">
                   <Loader2 className="h-4 w-4 animate-spin" />
-                  Native bordro kontrolleri yeniden okunuyor…
+                  Bordro kontrolleri yeniden okunuyor…
                 </div>
               ) : (
                 <>

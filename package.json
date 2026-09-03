@@ -4,8 +4,13 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "bun run wasm:build",
     "dev": "vite --port=3000 --host=0.0.0.0",
+    "prebuild": "bun run wasm:build",
     "build": "vite build",
+    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-typescript",
+    "wasm:test": "wasm-pack test --node crates/payroll-wasm",
+    "web:build": "bun run wasm:build && vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "test": "bun test",
