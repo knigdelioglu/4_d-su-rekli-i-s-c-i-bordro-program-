@@ -9,7 +9,7 @@ use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -47,6 +47,43 @@ pub struct PayrollNotice {
 pub struct PayrollNoticeService;
 
 impl PayrollNoticeService {
+    fn shared_snapshot(conn: &Connection) -> Result<payroll_core::PayrollDatasetSnapshot> {
+        Ok(payroll_core::PayrollDatasetSnapshot {
+            personnel: PersonnelRepository::get_all(conn)?,
+            periods: PeriodRepository::get_all(conn)?,
+            institutionSettings: SettingsRepository::get_all_institution_settings(conn)?,
+            attendances: AttendanceRepository::get_all(conn)?,
+            payrolls: PayrollRepository::get_all(conn)?,
+            taxOpenings: crate::repositories::tax_opening_repo::TaxOpeningRepository::get_all(
+                conn,
+            )?,
+            sickLeaveRecords: SickLeaveRepository::get_all(conn)?,
+            annualPayrollParameters: AnnualPayrollParametersRepository::get_all(conn)?,
+            zamAylari: Self::get_zam_aylari(conn)?,
+        })
+    }
+
+    fn from_shared_notice(notice: payroll_core::PayrollNotice) -> PayrollNotice {
+        PayrollNotice {
+            code: notice.code,
+            severity: match notice.severity {
+                payroll_core::PayrollNoticeSeverity::Info => PayrollNoticeSeverity::Info,
+                payroll_core::PayrollNoticeSeverity::Warning => PayrollNoticeSeverity::Warning,
+                payroll_core::PayrollNoticeSeverity::Critical => PayrollNoticeSeverity::Critical,
+                payroll_core::PayrollNoticeSeverity::Success => PayrollNoticeSeverity::Success,
+            },
+            scope: match notice.scope {
+                payroll_core::PayrollNoticeScope::Period => PayrollNoticeScope::Period,
+                payroll_core::PayrollNoticeScope::Personnel => PayrollNoticeScope::Personnel,
+            },
+            personnel_id: notice.personnel_id,
+            title: notice.title,
+            message: notice.message,
+            details: notice.details,
+            action: notice.action,
+        }
+    }
+
     pub fn get_period_notices(conn: &Connection, period_id: &str) -> Result<Vec<PayrollNotice>> {
         let period = PeriodRepository::get_by_id(conn, period_id)?.ok_or_else(|| {
             DomainError::ValidationError(format!("Bordro dönemi bulunamadı: {period_id}"))
@@ -55,7 +92,6 @@ impl PayrollNoticeService {
 
         let start = Self::parse_date(&period.baslangicTarihi, "dönem başlangıç")?;
         let end = Self::parse_date(&period.bitisTarihi, "dönem bitiş")?;
-        let period_dates = Self::date_range(start, end);
         let personnel = PersonnelRepository::get_all(conn)?;
         let annual_parameters =
             AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?;
@@ -65,7 +101,11 @@ impl PayrollNoticeService {
             .map(|payroll| (payroll.personelId.clone(), payroll))
             .collect();
 
-        let mut notices = Vec::new();
+        let mut notices =
+            payroll_core::get_period_notices(&Self::shared_snapshot(conn)?, period_id)?
+                .into_iter()
+                .map(Self::from_shared_notice)
+                .collect::<Vec<_>>();
         Self::append_period_parameter_notices(
             conn,
             &period,
@@ -78,21 +118,6 @@ impl PayrollNoticeService {
         for person in personnel {
             let full_name = format!("{} {}", person.ad, person.soyad);
             let payroll = payrolls_by_person.get(&person.id);
-
-            if payroll.is_some_and(|record| record.status == BordroStatus::STALE) {
-                notices.push(PayrollNotice {
-                    code: "STALE_PAYROLL".into(),
-                    severity: PayrollNoticeSeverity::Critical,
-                    scope: PayrollNoticeScope::Personnel,
-                    personnel_id: Some(person.id.clone()),
-                    title: "Bordro yeniden hesaplanmalı".into(),
-                    message: format!(
-                        "{full_name} bordrosunun dayandığı kaynak veriler değişti. Güncel tutarlar kullanılmadan önce bordroyu yeniden hesaplayın."
-                    ),
-                    details: Vec::new(),
-                    action: Some("RECALCULATE_PAYROLL".into()),
-                });
-            }
 
             if let Some(record) = payroll {
                 Self::append_payroll_result_notices(
@@ -113,120 +138,6 @@ impl PayrollNoticeService {
                 end,
                 &mut notices,
             );
-
-            let attendance =
-                AttendanceRepository::get_by_personnel_and_period(conn, &person.id, period_id)?;
-
-            let Some(attendance) = attendance else {
-                notices.push(PayrollNotice {
-                    code: "MISSING_ATTENDANCE".into(),
-                    severity: PayrollNoticeSeverity::Critical,
-                    scope: PayrollNoticeScope::Personnel,
-                    personnel_id: Some(person.id.clone()),
-                    title: "Kayıtlı puantaj yok".into(),
-                    message: format!(
-                        "{full_name} için {} döneminde veritabanına kaydedilmiş puantaj bulunmuyor. Ekrandaki varsayılan Ç/T görünümü gerçek kayıt sayılmaz.",
-                        period.donemAdi
-                    ),
-                    details: Vec::new(),
-                    action: Some("GO_TO_PUANTAJ".into()),
-                });
-                continue;
-            };
-
-            let missing_dates: Vec<String> = period_dates
-                .iter()
-                .filter(|date| {
-                    !attendance
-                        .gunler
-                        .contains_key(&date.format("%Y-%m-%d").to_string())
-                })
-                .map(|date| date.format("%Y-%m-%d").to_string())
-                .collect();
-
-            if !missing_dates.is_empty() {
-                notices.push(PayrollNotice {
-                    code: "INCOMPLETE_ATTENDANCE".into(),
-                    severity: PayrollNoticeSeverity::Critical,
-                    scope: PayrollNoticeScope::Personnel,
-                    personnel_id: Some(person.id.clone()),
-                    title: "Puantaj günleri eksik".into(),
-                    message: format!(
-                        "{full_name} için {} takvim gününde puantaj kodu kayıtlı değil.",
-                        missing_dates.len()
-                    ),
-                    details: Self::preview_dates(&missing_dates),
-                    action: Some("GO_TO_PUANTAJ".into()),
-                });
-            }
-
-            let mut report_ranges = Vec::new();
-            for record in &sick_records {
-                let record_start = Self::parse_date(&record.startDate, "rapor başlangıç")?;
-                let record_end = Self::parse_date(&record.endDate, "rapor bitiş")?;
-                if record_start <= end && record_end >= start {
-                    report_ranges.push((record_start, record_end));
-                }
-            }
-
-            let r_without_report: Vec<String> = attendance
-                .gunler
-                .iter()
-                .filter(|(_, code)| code.as_str() == "R")
-                .filter_map(|(date_text, _)| {
-                    let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").ok()?;
-                    let covered = report_ranges.iter().any(|(report_start, report_end)| {
-                        date >= *report_start && date <= *report_end
-                    });
-                    (!covered).then(|| date_text.clone())
-                })
-                .collect();
-
-            if !r_without_report.is_empty() {
-                notices.push(PayrollNotice {
-                    code: "ATTENDANCE_R_WITHOUT_SICK_LEAVE".into(),
-                    severity: PayrollNoticeSeverity::Warning,
-                    scope: PayrollNoticeScope::Personnel,
-                    personnel_id: Some(person.id.clone()),
-                    title: "Rapor kodu ile rapor kaydı uyuşmuyor".into(),
-                    message: format!(
-                        "{full_name} puantajında R kodu bulunan {} gün için bu tarihi kapsayan rapor kaydı yok.",
-                        r_without_report.len()
-                    ),
-                    details: Self::preview_dates(&r_without_report),
-                    action: Some("GO_TO_PUANTAJ".into()),
-                });
-            }
-
-            let report_without_r: Vec<String> = period_dates
-                .iter()
-                .filter(|date| {
-                    report_ranges.iter().any(|(report_start, report_end)| {
-                        **date >= *report_start && **date <= *report_end
-                    })
-                })
-                .filter_map(|date| {
-                    let date_text = date.format("%Y-%m-%d").to_string();
-                    (attendance.gunler.get(&date_text).map(String::as_str) != Some("R"))
-                        .then_some(date_text)
-                })
-                .collect();
-
-            if !report_without_r.is_empty() {
-                notices.push(PayrollNotice {
-                    code: "SICK_LEAVE_WITHOUT_ATTENDANCE_R".into(),
-                    severity: PayrollNoticeSeverity::Warning,
-                    scope: PayrollNoticeScope::Personnel,
-                    personnel_id: Some(person.id.clone()),
-                    title: "Rapor kaydı puantaja yansımamış".into(),
-                    message: format!(
-                        "{full_name} için rapor kaydıyla örtüşen {} gün puantajda R olarak işaretlenmemiş.",
-                        report_without_r.len()
-                    ),
-                    details: Self::preview_dates(&report_without_r),
-                    action: Some("GO_TO_PUANTAJ".into()),
-                });
-            }
         }
 
         Ok(notices)
@@ -462,21 +373,8 @@ impl PayrollNoticeService {
         annual_parameters: Option<&AnnualPayrollParameters>,
         notices: &mut Vec<PayrollNotice>,
     ) -> Result<()> {
-        match annual_parameters {
-            None => notices.push(PayrollNotice {
-                code: "MISSING_ANNUAL_PAYROLL_PARAMETERS".into(),
-                severity: PayrollNoticeSeverity::Critical,
-                scope: PayrollNoticeScope::Period,
-                personnel_id: None,
-                title: "Yıllık vergi parametreleri eksik".into(),
-                message: format!(
-                    "{} vergi yılı için gelir vergisi dilimleri tanımlı değil. Bordro hesabı bu paket olmadan güvenilir biçimde tamamlanamaz.",
-                    period.taxYear
-                ),
-                details: vec![format!("Vergi dönemi: {}-{:02}", period.taxYear, period.taxMonth)],
-                action: Some("CHECK_ANNUAL_PARAMETERS".into()),
-            }),
-            Some(parameters) if period.taxMonth == 1 => {
+        if let Some(parameters) = annual_parameters {
+            if period.taxMonth == 1 {
                 notices.push(PayrollNotice {
                     code: "NEW_TAX_YEAR_PARAMETERS_ACTIVE".into(),
                     severity: PayrollNoticeSeverity::Info,
@@ -492,25 +390,9 @@ impl PayrollNoticeService {
                     action: Some("CHECK_ANNUAL_PARAMETERS".into()),
                 });
             }
-            Some(_) => {}
         }
 
         let current_settings = SettingsRepository::get_institution_settings(conn, &period.id)?;
-        if current_settings.is_none() {
-            notices.push(PayrollNotice {
-                code: "MISSING_PERIOD_SETTINGS".into(),
-                severity: PayrollNoticeSeverity::Critical,
-                scope: PayrollNoticeScope::Period,
-                personnel_id: None,
-                title: "Dönem kurum parametreleri eksik".into(),
-                message: format!(
-                    "{} dönemi için ücret ve kurum parametreleri bulunmuyor. Bordro hesaplamadan önce dönem parametrelerini kaydedin.",
-                    period.donemAdi
-                ),
-                details: Vec::new(),
-                action: Some("CHECK_PERIOD_PARAMETERS".into()),
-            });
-        }
 
         let zam_aylari = Self::get_zam_aylari(conn)?;
         if zam_aylari.is_empty() {
@@ -666,25 +548,6 @@ impl PayrollNoticeService {
     fn parse_date(value: &str, label: &str) -> Result<NaiveDate> {
         NaiveDate::parse_from_str(value, "%Y-%m-%d")
             .map_err(|_| DomainError::InvalidData(format!("Geçersiz {label} tarihi: {value}")))
-    }
-
-    fn date_range(start: NaiveDate, end: NaiveDate) -> Vec<NaiveDate> {
-        let mut dates = Vec::new();
-        let mut current = start;
-        while current <= end {
-            dates.push(current);
-            current += Duration::days(1);
-        }
-        dates
-    }
-
-    fn preview_dates(dates: &[String]) -> Vec<String> {
-        const PREVIEW_LIMIT: usize = 8;
-        let mut details: Vec<String> = dates.iter().take(PREVIEW_LIMIT).cloned().collect();
-        if dates.len() > PREVIEW_LIMIT {
-            details.push(format!("+{} gün daha", dates.len() - PREVIEW_LIMIT));
-        }
-        details
     }
 
     fn format_money(value: Decimal) -> String {

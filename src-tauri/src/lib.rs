@@ -29,6 +29,8 @@ pub fn run() {
             commands::get_payroll_list,
             commands::get_payroll_notices,
             commands::calculate_payroll,
+            commands::finalize_payroll,
+            commands::evaluate_mutation_policy,
             commands::set_payroll_status,
             commands::get_institution_settings,
             commands::save_institution_settings,

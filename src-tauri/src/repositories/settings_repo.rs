@@ -41,31 +41,6 @@ impl SettingsRepository {
         Ok(value)
     }
 
-    fn ensure_period_settings_mutable(conn: &Connection, period_id: &str) -> Result<()> {
-        let closed: i64 = conn
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1
-                    FROM payroll_records AS pr
-                    JOIN payroll_periods AS finalized_period ON finalized_period.id = pr.period_id
-                    JOIN payroll_periods AS target_period ON target_period.id = ?1
-                    WHERE pr.status = 'FINALIZED'
-                      AND finalized_period.baslangic_tarihi >= target_period.baslangic_tarihi
-                 )",
-                params![period_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-
-        if closed != 0 {
-            return Err(DomainError::PayrollFinalized(
-                "Kesinleştirilmiş bordro tarihçesinde kullanılan bu dönem kurum/TİS ayarları değiştirilemez."
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
-
     pub fn get_all_institution_settings(
         conn: &Connection,
     ) -> Result<HashMap<String, DonemselKurumDegerleri>> {
@@ -239,7 +214,12 @@ impl SettingsRepository {
                 k.donemId
             ))
         })?;
-        Self::ensure_period_settings_mutable(conn, &k.donemId)?;
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+            conn,
+            &payroll_core::PayrollMutation::Period {
+                periodId: k.donemId.clone(),
+            },
+        )?;
 
         let mut normalized = k.clone();
         if normalized.gunlukYemekIstisnasiGV.is_none() {
@@ -258,10 +238,7 @@ impl SettingsRepository {
             )
             .optional()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        if existing_json.as_deref() != Some(json_str.as_str()) {
-            PayrollInvalidationRepository::mark_period_and_dependents_stale(conn, &k.donemId)?;
-        }
-
+        let changed = existing_json.as_deref() != Some(json_str.as_str());
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO institution_settings (period_id, settings_json, updated_at)
@@ -271,6 +248,10 @@ impl SettingsRepository {
             params![k.donemId, json_str, now],
         )
         .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+
+        if changed {
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+        }
 
         Ok(())
     }
@@ -295,9 +276,14 @@ impl SettingsRepository {
 
     pub fn set_app_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
         let previous = Self::get_app_setting(conn, key)?;
-        if key == ZAM_AYLARI_SETTING_KEY && previous.as_deref() != Some(value) {
-            PayrollInvalidationRepository::mark_all_calculated_stale(conn)?;
-        }
+        let impact = if key == ZAM_AYLARI_SETTING_KEY && previous.as_deref() != Some(value) {
+            Some(PayrollInvalidationRepository::assert_mutation_allowed(
+                conn,
+                &payroll_core::PayrollMutation::All,
+            )?)
+        } else {
+            None
+        };
 
         let now = Utc::now().to_rfc3339();
         conn.execute(
@@ -308,6 +294,10 @@ impl SettingsRepository {
             params![key, value, now],
         )
         .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+
+        if let Some(impact) = impact {
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+        }
 
         Ok(())
     }

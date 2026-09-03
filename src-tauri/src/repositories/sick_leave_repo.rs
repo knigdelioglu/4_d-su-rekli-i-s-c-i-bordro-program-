@@ -33,58 +33,6 @@ impl SickLeaveRepository {
         Ok(())
     }
 
-    fn latest_finalized_end_date(
-        conn: &Connection,
-        personnel_id: &str,
-    ) -> Result<Option<NaiveDate>> {
-        let end_date = conn
-            .query_row(
-                "SELECT MAX(pp.bitis_tarihi)
-                 FROM payroll_records AS pr
-                 JOIN payroll_periods AS pp ON pp.id = pr.period_id
-                 WHERE pr.personnel_id = ?1
-                   AND pr.status = 'FINALIZED'",
-                params![personnel_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-
-        end_date
-            .map(|value| {
-                NaiveDate::parse_from_str(&value, "%Y-%m-%d").map_err(|_| {
-                    DomainError::InvalidData(format!(
-                        "Kesinleştirilmiş bordro dönem bitiş tarihi geçersiz: {}",
-                        value
-                    ))
-                })
-            })
-            .transpose()
-    }
-
-    fn ensure_after_finalized_boundary(
-        conn: &Connection,
-        personnel_id: &str,
-        start_date: &str,
-    ) -> Result<()> {
-        let Some(boundary) = Self::latest_finalized_end_date(conn, personnel_id)? else {
-            return Ok(());
-        };
-        let start = NaiveDate::parse_from_str(start_date, "%Y-%m-%d").map_err(|_| {
-            DomainError::ValidationError(format!(
-                "Rapor başlangıç tarihi geçersiz: {}.",
-                start_date
-            ))
-        })?;
-
-        if start <= boundary {
-            return Err(DomainError::PayrollFinalized(format!(
-                "{} tarihine kadar kesinleştirilmiş bordro bulunduğundan kapanmış rapor geçmişi değiştirilemez.",
-                boundary.format("%Y-%m-%d")
-            )));
-        }
-        Ok(())
-    }
-
     fn validate_no_overlap(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         let overlap = conn
             .query_row(
@@ -139,14 +87,27 @@ impl SickLeaveRepository {
         Self::validate_record(record)?;
 
         let existing = Self::get_by_id(conn, &record.id)?;
+        let mut impacts = Vec::new();
         if let Some(existing) = existing.as_ref() {
-            Self::ensure_after_finalized_boundary(
+            impacts.push(PayrollInvalidationRepository::assert_mutation_allowed(
                 conn,
-                &existing.personnelId,
-                &existing.startDate,
-            )?;
+                &payroll_core::PayrollMutation::PersonFromDate {
+                    personnelId: existing.personnelId.clone(),
+                    effectiveFrom: existing.startDate.clone(),
+                },
+            )?);
         }
-        Self::ensure_after_finalized_boundary(conn, &record.personnelId, &record.startDate)?;
+        if existing.as_ref().is_none_or(|old| {
+            old.personnelId != record.personnelId || old.startDate != record.startDate
+        }) {
+            impacts.push(PayrollInvalidationRepository::assert_mutation_allowed(
+                conn,
+                &payroll_core::PayrollMutation::PersonFromDate {
+                    personnelId: record.personnelId.clone(),
+                    effectiveFrom: record.startDate.clone(),
+                },
+            )?);
+        }
         Self::validate_no_overlap(conn, record)?;
 
         let changed = existing
@@ -157,18 +118,6 @@ impl SickLeaveRepository {
                     || old.endDate != record.endDate
             })
             .unwrap_or(true);
-        if changed {
-            if let Some(old) = existing.as_ref() {
-                PayrollInvalidationRepository::mark_personnel_stale(conn, &old.personnelId)?;
-            }
-            if existing
-                .as_ref()
-                .is_none_or(|old| old.personnelId != record.personnelId)
-            {
-                PayrollInvalidationRepository::mark_personnel_stale(conn, &record.personnelId)?;
-            }
-        }
-
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
         let updated_at = &now;
@@ -195,17 +144,29 @@ impl SickLeaveRepository {
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
+        if changed {
+            for impact in impacts {
+                PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+            }
+        }
+
         Ok(())
     }
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
         if let Some(existing) = Self::get_by_id(conn, id)? {
-            Self::ensure_after_finalized_boundary(
+            let impact = PayrollInvalidationRepository::assert_mutation_allowed(
                 conn,
-                &existing.personnelId,
-                &existing.startDate,
+                &payroll_core::PayrollMutation::PersonFromDate {
+                    personnelId: existing.personnelId,
+                    effectiveFrom: existing.startDate,
+                },
             )?;
-            PayrollInvalidationRepository::mark_personnel_stale(conn, &existing.personnelId)?;
+
+            conn.execute("DELETE FROM sick_leave_records WHERE id = ?1", params![id])
+                .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+            return Ok(());
         }
 
         conn.execute("DELETE FROM sick_leave_records WHERE id = ?1", params![id])

@@ -1,7 +1,9 @@
 use super::{dec_to_kurus, kurus_to_dec};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use chrono::Utc;
+use payroll_core::PayrollMutation;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
@@ -65,52 +67,6 @@ impl PayrollRepository {
         .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
 
-    fn has_later_finalized_by_work_period(
-        conn: &Connection,
-        personnel_id: &str,
-        period_id: &str,
-    ) -> Result<bool> {
-        let exists: i64 = conn
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1
-                    FROM payroll_records AS pr
-                    JOIN payroll_periods AS later ON later.id = pr.period_id
-                    JOIN payroll_periods AS current ON current.id = ?2
-                    WHERE pr.personnel_id = ?1
-                      AND pr.status = 'FINALIZED'
-                      AND (later.yil > current.yil OR (later.yil = current.yil AND later.ay > current.ay))
-                 )",
-                params![personnel_id, period_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        Ok(exists != 0)
-    }
-
-    fn mark_later_calculated_stale(
-        conn: &Connection,
-        personnel_id: &str,
-        period_id: &str,
-    ) -> Result<usize> {
-        let now = Utc::now().to_rfc3339();
-        conn.execute(
-            "UPDATE payroll_records
-             SET status = 'STALE', updated_at = ?1
-             WHERE personnel_id = ?2
-               AND status = 'CALCULATED'
-               AND period_id IN (
-                    SELECT later.id
-                    FROM payroll_periods AS later
-                    JOIN payroll_periods AS current ON current.id = ?3
-                    WHERE later.yil > current.yil
-                       OR (later.yil = current.yil AND later.ay > current.ay)
-               )",
-            params![now, personnel_id, period_id],
-        )
-        .map_err(|e| DomainError::DatabaseError(e.to_string()))
-    }
-
     fn has_nonfinalized_prior_tax_chain(
         conn: &Connection,
         personnel_id: &str,
@@ -161,6 +117,48 @@ impl PayrollRepository {
             Ok((Self::parse_status(&id, &status)?, calculated_at))
         })
         .transpose()
+    }
+
+    pub fn get_saved_manual_income(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<ManualPayrollIncomeInput> {
+        let payroll_id = conn
+            .query_row(
+                "SELECT id FROM payroll_records WHERE personnel_id = ?1 AND period_id = ?2",
+                params![personnel_id, period_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?
+            .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+
+        let mut manual_income = ManualPayrollIncomeInput::default();
+        let mut statement = conn
+            .prepare(
+                "SELECT item_type, amount
+                 FROM payroll_income_items
+                 WHERE payroll_id = ?1
+                   AND item_type IN ('tediye', 'tisIkramiyesi')",
+            )
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+        let rows = statement
+            .query_map(params![payroll_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+
+        for row in rows {
+            let (item_type, amount) =
+                row.map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+            match item_type.as_str() {
+                "tediye" => manual_income.tediye = Some(kurus_to_dec(amount)),
+                "tisIkramiyesi" => manual_income.tisIkramiyesi = Some(kurus_to_dec(amount)),
+                _ => {}
+            }
+        }
+        Ok(manual_income)
     }
 
     pub fn update_status(
@@ -688,18 +686,20 @@ impl PayrollRepository {
             }
         }
 
-        if Self::has_later_finalized_by_work_period(&tx, &bordro.personelId, &bordro.donemId)? {
-            return Err(DomainError::PayrollFinalized(
-                "Bu bordro değiştirilemez: daha sonraki bir bordro FINALIZED durumunda ve bu bordronun bağımlılık zincirine dayanıyor.".into(),
-            ));
-        }
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+            &tx,
+            &PayrollMutation::PayrollCalculation {
+                personnelId: bordro.personelId.clone(),
+                periodId: bordro.donemId.clone(),
+            },
+        )?;
 
         let before = Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId)?;
         Self::save_in_transaction(&tx, bordro)?;
         let after = Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId)?;
 
         if before != after {
-            Self::mark_later_calculated_stale(&tx, &bordro.personelId, &bordro.donemId)?;
+            PayrollInvalidationRepository::apply_impact(&tx, &impact)?;
         }
 
         tx.commit()
@@ -711,6 +711,11 @@ impl PayrollRepository {
     /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let calculated_at = if b.olusturulmaTarihi.trim().is_empty() {
+            now.clone()
+        } else {
+            b.olusturulmaTarihi.clone()
+        };
         let status_str = Self::status_to_str(b.status);
 
         let computed_net = (b.gelirToplam - b.kesintiToplam).round_dp(2);
@@ -802,7 +807,7 @@ impl PayrollRepository {
                 gv_snapshot_json,
                 statutory_snapshot_json,
                 b.notlar,
-                now,
+                calculated_at,
                 now,
             ],
         )

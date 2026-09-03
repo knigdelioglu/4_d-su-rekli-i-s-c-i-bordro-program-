@@ -9,6 +9,7 @@ use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
 use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::payroll_preflight_service::PayrollPreflightService;
+use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -111,6 +112,23 @@ fn attendance(personnel_id: &str, p: &BordroDonemi, code: &str) -> PersonelPuant
     }
 }
 
+fn complete_attendance(personnel_id: &str, p: &BordroDonemi, code: &str) -> PersonelPuantaj {
+    let start = NaiveDate::parse_from_str(&p.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(&p.bitisTarihi, "%Y-%m-%d").unwrap();
+    let mut gunler = HashMap::new();
+    let mut date = start;
+    while date <= end {
+        gunler.insert(date.format("%Y-%m-%d").to_string(), code.to_string());
+        date += Duration::days(1);
+    }
+    PersonelPuantaj {
+        id: format!("{}_{}", personnel_id, p.id),
+        personelId: personnel_id.into(),
+        donemId: p.id.clone(),
+        gunler,
+    }
+}
+
 fn calculated_payroll(
     personnel_id: &str,
     period_id: &str,
@@ -176,6 +194,39 @@ fn attendance_mutation_marks_current_and_later_payrolls_stale() {
 
     assert_eq!(status(&conn, &p.id, &january.id), BordroStatus::STALE);
     assert_eq!(status(&conn, &p.id, &february.id), BordroStatus::STALE);
+}
+
+#[test]
+fn native_finalize_recalculates_through_core_and_persists_finalized_result() {
+    let conn = create_in_memory_connection().unwrap();
+    let p = person("p-native-finalize");
+    PersonnelRepository::save(&conn, &p).unwrap();
+
+    let active = period("2026-01", 2026, 1, 2026, 1);
+    PeriodRepository::save(&conn, &active).unwrap();
+    SettingsRepository::save_institution_settings(&conn, &settings(&active.id, dec!(1000)))
+        .unwrap();
+    AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
+        .unwrap();
+    AttendanceRepository::save(&conn, &complete_attendance(&p.id, &active, "Ç")).unwrap();
+
+    let calculated = PayrollService::calculate_payroll_for_personnel(&conn, &p.id, &active.id)
+        .expect("native calculation should persist a calculated payroll");
+    assert_eq!(calculated.status, BordroStatus::CALCULATED);
+
+    let finalized = PayrollService::finalize_payroll_for_personnel(&conn, &p.id, &active.id)
+        .expect("native finalization should use the shared core API");
+    assert_eq!(finalized.status, BordroStatus::FINALIZED);
+    assert_eq!(finalized.netOdeme, calculated.netOdeme);
+
+    let stored = PayrollRepository::get_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|payroll| payroll.personelId == p.id && payroll.donemId == active.id)
+        .expect("finalized payroll should be persisted");
+    assert_eq!(stored.status, BordroStatus::FINALIZED);
+    assert_eq!(stored.olusturulmaTarihi, calculated.olusturulmaTarihi);
+    assert_eq!(stored.netOdeme, finalized.netOdeme);
 }
 
 #[test]

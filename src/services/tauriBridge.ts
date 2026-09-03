@@ -11,15 +11,19 @@ import {
   ManualPayrollIncomeInput,
 } from '../types/payroll';
 import { PayrollNotice } from '../types/payrollNotice';
+import { decodeDecimalValues, encodeDecimalValues } from './payrollEngine/decimalBoundary';
+import type { MutationImpact, PayrollMutation } from './payrollEngine/types';
 
 // Type-safe IPC invoke helper with window fallback detection
 async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
   const win = typeof window !== 'undefined' ? (window as any) : null;
   if (win && win.__TAURI_INTERNALS__ && typeof win.__TAURI_INTERNALS__.invoke === 'function') {
-    return await win.__TAURI_INTERNALS__.invoke(cmd, args);
+    return decodeDecimalValues(
+      await win.__TAURI_INTERNALS__.invoke(cmd, args)
+    ) as T;
   }
   if (win && win.__TAURI__ && win.__TAURI__.core && typeof win.__TAURI__.core.invoke === 'function') {
-    return await win.__TAURI__.core.invoke(cmd, args);
+    return decodeDecimalValues(await win.__TAURI__.core.invoke(cmd, args)) as T;
   }
   throw new Error(`Tauri IPC context not available for command "${cmd}".`);
 }
@@ -55,7 +59,7 @@ export const tauriBridge = {
   },
 
   async savePersonnel(personel: Personel): Promise<void> {
-    return mutateTauri<void>('save_personnel', { personel });
+    return mutateTauri<void>('save_personnel', { personel: encodeDecimalValues(personel) });
   },
 
   async deletePersonnel(id: string): Promise<void> {
@@ -67,7 +71,7 @@ export const tauriBridge = {
   },
 
   async saveTaxOpening(taxOpening: PersonelTaxOpening): Promise<void> {
-    return mutateTauri<void>('save_tax_opening', { taxOpening });
+    return mutateTauri<void>('save_tax_opening', { taxOpening: encodeDecimalValues(taxOpening) });
   },
 
   async getPeriods(): Promise<BordroDonemi[]> {
@@ -82,7 +86,10 @@ export const tauriBridge = {
     period: BordroDonemi,
     settings: DönemselKurumDegerleri
   ): Promise<void> {
-    return mutateTauri<void>('save_period_with_settings', { period, settings });
+    return mutateTauri<void>('save_period_with_settings', {
+      period,
+      settings: encodeDecimalValues(settings),
+    });
   },
 
   async getAttendanceList(): Promise<PersonelPuantaj[]> {
@@ -109,8 +116,23 @@ export const tauriBridge = {
     return mutateTauri<BordroKaydi>('calculate_payroll', {
       personnelId,
       periodId,
-      manualIncome: manualIncome ?? null,
+      manualIncome: manualIncome ? encodeDecimalValues(manualIncome) : null,
     });
+  },
+
+  async finalizePayroll(personnelId: string, periodId: string): Promise<BordroKaydi> {
+    return mutateTauri<BordroKaydi>('finalize_payroll', { personnelId, periodId });
+  },
+
+  async evaluateMutationPolicy(
+    mutation: PayrollMutation,
+    dataset: unknown
+  ): Promise<MutationImpact> {
+    // The native command reads its own SQLite snapshot. The dataset argument
+    // keeps the cross-platform engine interface uniform and is intentionally
+    // not sent across the native persistence boundary.
+    void dataset;
+    return invokeTauri<MutationImpact>('evaluate_mutation_policy', { mutation });
   },
 
   async setPayrollStatus(personnelId: string, periodId: string, status: BordroStatus): Promise<void> {
@@ -122,7 +144,9 @@ export const tauriBridge = {
   },
 
   async saveInstitutionSettings(settings: DönemselKurumDegerleri): Promise<void> {
-    return mutateTauri<void>('save_institution_settings', { settings });
+    return mutateTauri<void>('save_institution_settings', {
+      settings: encodeDecimalValues(settings),
+    });
   },
 
   async getAppSetting(key: string): Promise<string | null> {
@@ -150,7 +174,9 @@ export const tauriBridge = {
   },
 
   async saveAnnualPayrollParameters(parameters: AnnualPayrollParameters): Promise<void> {
-    return mutateTauri<void>('save_annual_payroll_parameters', { parameters });
+    return mutateTauri<void>('save_annual_payroll_parameters', {
+      parameters: encodeDecimalValues(parameters),
+    });
   },
 
   async getSickLeaveRecords(personnelId?: string): Promise<SickLeaveRecord[]> {

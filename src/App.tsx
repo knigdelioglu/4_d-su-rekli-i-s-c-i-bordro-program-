@@ -26,12 +26,12 @@ import {
 import { tauriBridge } from './services/tauriBridge';
 import { browserPayrollStore } from './services/storage/browserPayrollStore';
 import {
-  assertBrowserMutationAllowed,
-  invalidateBrowserPayrolls,
-  invalidateBrowserPayrollsAfterCalculation,
-  invalidateBrowserPayrollsFromPeriodPosition,
+  applyBrowserPayrollImpact,
+  assertBrowserMutationImpactAllowed,
 } from './services/storage/browserPayrollPolicies';
 import { getPayrollEngine } from './services/payrollEngine';
+import type { MutationImpact, PayrollMutation } from './services/payrollEngine';
+import { parsePayrollStorage, serializePayrollStorage } from './services/payrollEngine/decimalBoundary';
 import { PayrollNoticeCenter } from './components/PayrollNoticeCenter';
 import { getInitialDataset } from './utils/sampleData';
 
@@ -67,7 +67,7 @@ function makeBackupPayload(data: DatasetFields): BackupPayload {
 }
 
 function parseBackupPayload(json: string): BackupPayload {
-  const parsed: Partial<BackupPayload> & Record<string, unknown> = JSON.parse(json);
+  const parsed = parsePayrollStorage<Partial<BackupPayload> & Record<string, unknown>>(json);
   const version = typeof parsed.backupVersion === 'number' ? parsed.backupVersion : 1;
   if (version <= 0 || version > BACKUP_FORMAT_VERSION) {
     throw new Error(`Desteklenmeyen yedek sürümü: ${version}`);
@@ -269,7 +269,7 @@ export default function App() {
       annualPayrollParameters,
       zamAylari,
     });
-    void browserPayrollStore.savePayload(JSON.stringify(payload)).catch((err) => {
+    void browserPayrollStore.savePayload(serializePayrollStorage(payload)).catch((err) => {
       const message = `Tarayıcı verisi kaydedilemedi: ${String(err)}`;
       console.error(message, err);
       setLoadError(message);
@@ -328,6 +328,36 @@ export default function App() {
     ]
   );
 
+  /**
+   * Browser mutations are authorized by the same Rust policy as native
+   * mutations. This helper only merges the core response when a mutation has
+   * both an old and a new source position (for example an edited period).
+   */
+  const evaluateBrowserMutations = async (
+    mutation: PayrollMutation | PayrollMutation[]
+  ): Promise<MutationImpact> => {
+    const mutations = Array.isArray(mutation) ? mutation : [mutation];
+    const impacts = await Promise.all(
+      mutations.map((item) => payrollEngine.evaluateMutationPolicy(item, payrollDataset))
+    );
+    const affected = new Map<string, MutationImpact['affectedPayrolls'][number]>();
+    const blocked = new Map<string, MutationImpact['blockedByFinalized'][number]>();
+    for (const impact of impacts) {
+      for (const key of impact.affectedPayrolls) {
+        affected.set(`${key.personnelId}\u0000${key.periodId}`, key);
+      }
+      for (const key of impact.blockedByFinalized) {
+        blocked.set(`${key.personnelId}\u0000${key.periodId}`, key);
+      }
+    }
+    const merged = {
+      affectedPayrolls: [...affected.values()],
+      blockedByFinalized: [...blocked.values()],
+    } satisfies MutationImpact;
+    assertBrowserMutationImpactAllowed(merged);
+    return merged;
+  };
+
   const handleResetSampleData = async () => {
     if (
       !window.confirm(
@@ -348,12 +378,12 @@ export default function App() {
 
     try {
       if (tauriBridge.isTauriAvailable()) {
-        await tauriBridge.replaceBackupPayload(JSON.stringify(payload));
+        await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();
         return;
       }
 
-      assertBrowserMutationAllowed(bordrolar, donemler, { kind: 'ALL' });
+      await evaluateBrowserMutations({ kind: 'ALL' });
       applyDataset(payload);
       setIsDataLoaded(true);
     } catch (err) {
@@ -377,7 +407,7 @@ export default function App() {
       annualPayrollParameters,
       zamAylari,
     });
-    const jsonStr = JSON.stringify(payload, null, 2);
+    const jsonStr = serializePayrollStorage(payload, 2);
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -393,10 +423,10 @@ export default function App() {
     try {
       const payload = parseBackupPayload(jsonStr);
       if (tauriBridge.isTauriAvailable()) {
-        await tauriBridge.replaceBackupPayload(JSON.stringify(payload));
+        await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();
       } else {
-        assertBrowserMutationAllowed(bordrolar, donemler, { kind: 'ALL' });
+        await evaluateBrowserMutations({ kind: 'ALL' });
         applyDataset(payload);
         setIsDataLoaded(true);
       }
@@ -415,7 +445,7 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
+    const impact = await evaluateBrowserMutations({
       kind: 'PERSON',
       personnelId: newPersonel.id,
     });
@@ -425,12 +455,7 @@ export default function App() {
         ? previous.map((p) => (p.id === newPersonel.id ? newPersonel : p))
         : [...previous, newPersonel];
     });
-    setBordrolar((previous) =>
-      invalidateBrowserPayrolls(previous, donemler, {
-        kind: 'PERSON',
-        personnelId: newPersonel.id,
-      })
-    );
+    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleDeletePersonel = async (personelId: string) => {
@@ -443,16 +468,13 @@ export default function App() {
       setSickLeaveRecords(await tauriBridge.getSickLeaveRecords());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
+    const impact = await evaluateBrowserMutations({
       kind: 'PERSON',
       personnelId: personelId,
     });
     setPersoneller((previous) => previous.filter((p) => p.id !== personelId));
     setBordrolar((previous) =>
-      invalidateBrowserPayrolls(previous, donemler, {
-        kind: 'PERSON',
-        personnelId: personelId,
-      }).filter((b) => b.personelId !== personelId)
+      applyBrowserPayrollImpact(previous, impact).filter((b) => b.personelId !== personelId)
     );
     setPuantajlar((previous) => previous.filter((p) => p.personelId !== personelId));
     setTaxOpenings((previous) => previous.filter((o) => o.personnelId !== personelId));
@@ -470,22 +492,44 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    const nextPeriods = donemler.some((period) => period.id === newDonem.id)
-      ? donemler.map((period) => (period.id === newDonem.id ? newDonem : period))
-      : [...donemler, newDonem];
-    assertBrowserMutationAllowed(bordrolar, nextPeriods, {
-      kind: 'PERIOD',
-      periodId: newDonem.id,
-    });
+    const existing = donemler.find((period) => period.id === newDonem.id);
+    const positionMutations: PayrollMutation[] = [
+      {
+        kind: 'PERIOD_FROM_POSITION',
+        startDate: newDonem.baslangicTarihi,
+        taxYear: newDonem.taxYear,
+        taxMonth: newDonem.taxMonth,
+      },
+    ];
+    if (existing) {
+      positionMutations.push({
+        kind: 'PERIOD',
+        periodId: newDonem.id,
+      });
+      const causalFieldsChanged =
+        existing.yil !== newDonem.yil ||
+        existing.ay !== newDonem.ay ||
+        existing.baslangicTarihi !== newDonem.baslangicTarihi ||
+        existing.bitisTarihi !== newDonem.bitisTarihi ||
+        existing.taxYear !== newDonem.taxYear ||
+        existing.taxMonth !== newDonem.taxMonth;
+      if (causalFieldsChanged) {
+        positionMutations.push({
+          kind: 'PERIOD_FROM_POSITION',
+          startDate: existing.baslangicTarihi,
+          taxYear: existing.taxYear,
+          taxMonth: existing.taxMonth,
+        });
+      }
+    }
+    const impact = await evaluateBrowserMutations(positionMutations);
     setDonemler((previous) =>
       previous.some((d) => d.id === newDonem.id)
         ? previous.map((d) => (d.id === newDonem.id ? newDonem : d))
         : [...previous, newDonem]
     );
     setKurumDegerleriMap((previous) => ({ ...previous, [newDonem.id]: kurumDegerleri }));
-    setBordrolar((previous) =>
-      invalidateBrowserPayrollsFromPeriodPosition(previous, nextPeriods, newDonem)
-    );
+    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSaveKurumDegerleri = async (settings: DönemselKurumDegerleri) => {
@@ -495,17 +539,12 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
+    const impact = await evaluateBrowserMutations({
       kind: 'PERIOD',
       periodId: settings.donemId,
     });
     setKurumDegerleriMap((previous) => ({ ...previous, [settings.donemId]: settings }));
-    setBordrolar((previous) =>
-      invalidateBrowserPayrolls(previous, donemler, {
-        kind: 'PERIOD',
-        periodId: settings.donemId,
-      })
-    );
+    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSavePuantaj = async (updatedPuantaj: PersonelPuantaj) => {
@@ -515,7 +554,7 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
+    const impact = await evaluateBrowserMutations({
       kind: 'PERSON_PERIOD',
       personnelId: updatedPuantaj.personelId,
       periodId: updatedPuantaj.donemId,
@@ -527,13 +566,7 @@ export default function App() {
       next[index] = updatedPuantaj;
       return next;
     });
-    setBordrolar((previous) =>
-      invalidateBrowserPayrolls(previous, donemler, {
-        kind: 'PERSON_PERIOD',
-        personnelId: updatedPuantaj.personelId,
-        periodId: updatedPuantaj.donemId,
-      })
-    );
+    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSaveTaxOpening = async (opening: PersonelTaxOpening) => {
@@ -543,7 +576,7 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
+    const impact = await evaluateBrowserMutations({
       kind: 'PERSON_TAX_YEAR',
       personnelId: opening.personnelId,
       taxYear: opening.year,
@@ -555,13 +588,7 @@ export default function App() {
       next[index] = opening;
       return next;
     });
-    setBordrolar((previous) =>
-      invalidateBrowserPayrolls(previous, donemler, {
-        kind: 'PERSON_TAX_YEAR',
-        personnelId: opening.personnelId,
-        taxYear: opening.year,
-      })
-    );
+    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSaveSickLeaveRecord = async (record: SickLeaveRecord) => {
@@ -571,10 +598,18 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
-      kind: 'PERSON',
-      personnelId: record.personnelId,
-    });
+    const existing = sickLeaveRecords.find((item) => item.id === record.id);
+    const mutations: PayrollMutation[] = [
+      { kind: 'PERSON_FROM_DATE', personnelId: record.personnelId, effectiveFrom: record.startDate },
+    ];
+    if (existing) {
+      mutations.push({
+        kind: 'PERSON_FROM_DATE',
+        personnelId: existing.personnelId,
+        effectiveFrom: existing.startDate,
+      });
+    }
+    const impact = await evaluateBrowserMutations(mutations);
     setSickLeaveRecords((previous) => {
       const index = previous.findIndex((item) => item.id === record.id);
       if (index < 0) return [...previous, record];
@@ -582,12 +617,7 @@ export default function App() {
       next[index] = record;
       return next;
     });
-    setBordrolar((previous) =>
-      invalidateBrowserPayrolls(previous, donemler, {
-        kind: 'PERSON',
-        personnelId: record.personnelId,
-      })
-    );
+    setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
   };
 
   const handleSaveAnnualPayrollParameters = async (parameters: AnnualPayrollParameters) => {
@@ -597,7 +627,7 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    assertBrowserMutationAllowed(bordrolar, donemler, {
+    const impact = await evaluateBrowserMutations({
       kind: 'TAX_YEAR',
       taxYear: parameters.year,
     });
@@ -608,12 +638,7 @@ export default function App() {
       next[index] = parameters;
       return next;
     });
-    setBordrolar((current) =>
-      invalidateBrowserPayrolls(current, donemler, {
-        kind: 'TAX_YEAR',
-        taxYear: parameters.year,
-      })
-    );
+    setBordrolar((current) => applyBrowserPayrollImpact(current, impact));
   };
 
   const handleSaveZamAylari = async (months: number[]) => {
@@ -623,10 +648,8 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
     }
     if (!tauriBridge.isTauriAvailable()) {
-      assertBrowserMutationAllowed(bordrolar, donemler, { kind: 'ALL' });
-      setBordrolar((previous) =>
-        invalidateBrowserPayrolls(previous, donemler, { kind: 'ALL' })
-      );
+      const impact = await evaluateBrowserMutations({ kind: 'ALL' });
+      setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact));
     }
     setZamAylari(normalized);
   };
@@ -639,20 +662,16 @@ export default function App() {
       return;
     }
     const record = sickLeaveRecords.find((item) => item.id === id);
-    if (record) {
-      assertBrowserMutationAllowed(bordrolar, donemler, {
-        kind: 'PERSON',
-        personnelId: record.personnelId,
-      });
-    }
+    const impact = record
+      ? await evaluateBrowserMutations({
+          kind: 'PERSON_FROM_DATE',
+          personnelId: record.personnelId,
+          effectiveFrom: record.startDate,
+        })
+      : null;
     setSickLeaveRecords((previous) => previous.filter((record) => record.id !== id));
     if (record) {
-      setBordrolar((previous) =>
-        invalidateBrowserPayrolls(previous, donemler, {
-          kind: 'PERSON',
-          personnelId: record.personnelId,
-        })
-      );
+      setBordrolar((previous) => applyBrowserPayrollImpact(previous, impact!));
     }
   };
 
@@ -663,23 +682,14 @@ export default function App() {
       setBordrolar(await tauriBridge.getPayrollList());
       return;
     }
-    const current = bordrolar.find((item) => item.id === updatedBordro.id);
-    if (current?.status === 'FINALIZED' && updatedBordro.status !== 'FINALIZED') {
-      throw new Error('Kesinleştirilmiş bordronun durumu değiştirilemez.');
-    }
-    if (updatedBordro.status !== 'FINALIZED') {
-      assertBrowserMutationAllowed(bordrolar, donemler, {
-        kind: 'PERSON_PERIOD',
-        personnelId: updatedBordro.personelId,
-        periodId: updatedBordro.donemId,
-      });
-    }
+    const impact = await evaluateBrowserMutations({
+      kind: 'PAYROLL_CALCULATION',
+      personnelId: updatedBordro.personelId,
+      periodId: updatedBordro.donemId,
+    });
     setBordrolar((previous) => {
-      const invalidated =
-        updatedBordro.status === 'FINALIZED'
-          ? previous
-          : invalidateBrowserPayrollsAfterCalculation(previous, donemler, updatedBordro);
-      const index = previous.findIndex((b) => b.id === updatedBordro.id);
+      const invalidated = applyBrowserPayrollImpact(previous, impact);
+      const index = invalidated.findIndex((b) => b.id === updatedBordro.id);
       if (index < 0) return [...invalidated, updatedBordro];
       const next = [...invalidated];
       next[index] = updatedBordro;

@@ -166,9 +166,17 @@ impl AnnualPayrollParametersRepository {
             )
             .optional()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        if previous_json.as_deref() != Some(params_json.as_str()) {
-            PayrollInvalidationRepository::mark_tax_year_stale(conn, parameters.year)?;
-        }
+        let changed = previous_json.as_deref() != Some(params_json.as_str());
+        let impact = changed
+            .then(|| {
+                PayrollInvalidationRepository::assert_mutation_allowed(
+                    conn,
+                    &payroll_core::PayrollMutation::TaxYear {
+                        taxYear: parameters.year,
+                    },
+                )
+            })
+            .transpose()?;
 
         let now = Utc::now().to_rfc3339();
         conn.execute(
@@ -178,6 +186,10 @@ impl AnnualPayrollParametersRepository {
             params![parameters.year, params_json, now],
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        if let Some(impact) = impact {
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+        }
 
         Ok(())
     }

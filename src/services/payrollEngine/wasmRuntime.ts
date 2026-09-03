@@ -1,7 +1,9 @@
 type WasmExports = {
   default: () => Promise<unknown>;
   calculate_payroll_json: (requestJson: string) => string;
+  finalize_payroll_json: (requestJson: string) => string;
   validate_payroll_json: (requestJson: string) => void;
+  evaluate_mutation_policy_json: (requestJson: string) => string;
   get_payroll_notices_json: (requestJson: string) => string;
 };
 
@@ -24,4 +26,3 @@ export function getWasmRuntime(): Promise<WasmExports> {
   });
   return runtimePromise;
 }
-

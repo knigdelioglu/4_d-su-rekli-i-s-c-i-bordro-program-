@@ -8,31 +8,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 pub struct TaxOpeningRepository;
 
 impl TaxOpeningRepository {
-    fn ensure_mutable(conn: &Connection, personnel_id: &str, year: i32) -> Result<()> {
-        let finalized: i64 = conn
-            .query_row(
-                "SELECT EXISTS(
-                    SELECT 1
-                    FROM payroll_records AS pr
-                    JOIN payroll_periods AS pp ON pp.id = pr.period_id
-                    WHERE pr.personnel_id = ?1
-                      AND pp.tax_year = ?2
-                      AND pr.status = 'FINALIZED'
-                 )",
-                params![personnel_id, year],
-                |row| row.get(0),
-            )
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-
-        if finalized != 0 {
-            return Err(DomainError::PayrollFinalized(format!(
-                "{} vergi yılında kesinleştirilmiş bordro bulunduğundan bu personelin GV açılış matrahı değiştirilemez.",
-                year
-            )));
-        }
-        Ok(())
-    }
-
     pub fn get_all(conn: &Connection) -> Result<Vec<PersonelTaxOpening>> {
         let mut stmt = conn.prepare(
             "SELECT id, personnel_id, year, gv_cumulative_opening, effective_from_period_id, created_at, updated_at
@@ -99,7 +74,13 @@ impl TaxOpeningRepository {
             ));
         }
 
-        Self::ensure_mutable(conn, &t.personnelId, t.year)?;
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+            conn,
+            &payroll_core::PayrollMutation::PersonTaxYear {
+                personnelId: t.personnelId.clone(),
+                taxYear: t.year,
+            },
+        )?;
         let existing = Self::get_by_personnel_and_year(conn, &t.personnelId, t.year)?;
         let changed = existing
             .as_ref()
@@ -108,14 +89,6 @@ impl TaxOpeningRepository {
                     || old.effectiveFromPeriodId != t.effectiveFromPeriodId
             })
             .unwrap_or(true);
-        if changed {
-            PayrollInvalidationRepository::mark_personnel_tax_year_stale(
-                conn,
-                &t.personnelId,
-                t.year,
-            )?;
-        }
-
         let now = Utc::now().to_rfc3339();
         let opening_kurus = dec_to_kurus(Some(t.gvCumulativeOpening))?;
 
@@ -126,6 +99,10 @@ impl TaxOpeningRepository {
                 gv_cumulative_opening=?4, effective_from_period_id=?5, updated_at=?7",
             params![t.id, t.personnelId, t.year, opening_kurus, t.effectiveFromPeriodId, now, now],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+
+        if changed {
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+        }
 
         Ok(())
     }
@@ -141,12 +118,20 @@ impl TaxOpeningRepository {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         if let Some((personnel_id, year)) = owner {
-            Self::ensure_mutable(conn, &personnel_id, year)?;
-            PayrollInvalidationRepository::mark_personnel_tax_year_stale(
+            let impact = PayrollInvalidationRepository::assert_mutation_allowed(
                 conn,
-                &personnel_id,
-                year,
+                &payroll_core::PayrollMutation::PersonTaxYear {
+                    personnelId: personnel_id,
+                    taxYear: year,
+                },
             )?;
+            conn.execute(
+                "DELETE FROM personnel_tax_opening WHERE id = ?1",
+                params![id],
+            )
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+            return Ok(());
         }
 
         conn.execute(

@@ -19,13 +19,24 @@ pub fn save_personnel(db: State<'_, DbState>, personel: Personel) -> Result<()> 
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    if PersonnelRepository::get_by_id(&conn, &personel.id)?.is_some() {
+    let impact = if PersonnelRepository::get_by_id(&conn, &personel.id)?.is_some() {
         // Hizmet yılı, iş primi grubu, OKS/BES ve kişi bazlı kesintiler bordro
         // girdisidir. Mevcut personel kartına yapılan kayıt, hesaplanmış bütün
         // açık bordroları yeniden hesaplanması gereken duruma getirir.
-        PayrollInvalidationRepository::mark_personnel_stale(&conn, &personel.id)?;
+        Some(PayrollInvalidationRepository::assert_mutation_allowed(
+            &conn,
+            &payroll_core::PayrollMutation::Person {
+                personnelId: personel.id.clone(),
+            },
+        )?)
+    } else {
+        None
+    };
+    PersonnelRepository::save(&conn, &personel)?;
+    if let Some(impact) = impact {
+        PayrollInvalidationRepository::apply_impact(&conn, &impact)?;
     }
-    PersonnelRepository::save(&conn, &personel)
+    Ok(())
 }
 
 #[tauri::command]
@@ -33,7 +44,21 @@ pub fn delete_personnel(db: State<'_, DbState>, id: String) -> Result<()> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    PersonnelRepository::delete(&conn, &id)
+    let impact = if PersonnelRepository::get_by_id(&conn, &id)?.is_some() {
+        Some(PayrollInvalidationRepository::assert_mutation_allowed(
+            &conn,
+            &payroll_core::PayrollMutation::Person {
+                personnelId: id.clone(),
+            },
+        )?)
+    } else {
+        None
+    };
+    PersonnelRepository::delete(&conn, &id)?;
+    if let Some(impact) = impact {
+        PayrollInvalidationRepository::apply_impact(&conn, &impact)?;
+    }
+    Ok(())
 }
 
 #[tauri::command]

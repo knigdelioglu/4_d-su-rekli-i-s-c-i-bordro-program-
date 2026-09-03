@@ -55,7 +55,10 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
     expect(mock.args()).toEqual({
       personnelId: 'p-1',
       periodId: '2026-05',
-      manualIncome,
+      manualIncome: {
+        tediye: '1000.25',
+        tisIkramiyesi: '2000.75',
+      },
     });
   });
 
@@ -81,7 +84,9 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
     };
     await tauriBridge.saveTaxOpening(opening);
     expect(mock.cmd()).toBe('save_tax_opening');
-    expect(mock.args()).toEqual({ taxOpening: opening });
+    expect(mock.args()).toEqual({
+      taxOpening: { ...opening, gvCumulativeOpening: '120000' },
+    });
   });
 
   test('migrateLegacyPayload: payloadJson anahtarıyla göndermeli (Rust: payload_json)', async () => {

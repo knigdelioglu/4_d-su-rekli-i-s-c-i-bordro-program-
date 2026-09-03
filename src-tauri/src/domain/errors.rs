@@ -1,8 +1,8 @@
 use rust_decimal::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Error, Serialize)]
+#[derive(Debug, Error, Deserialize, Serialize)]
 #[serde(tag = "type", content = "message")]
 pub enum DomainError {
     #[error("{0}")]

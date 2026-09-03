@@ -1,5 +1,4 @@
-import { BordroStatus } from '../types/payroll';
-import { PayrollNotice } from '../types/payrollNotice';
+import type { PayrollNotice } from '../types/payrollNotice';
 
 export function filterFinalizeNotices(
   notices: PayrollNotice[],
@@ -14,11 +13,4 @@ export function filterFinalizeNotices(
 
 export function hasBlockingFinalizeNotice(notices: PayrollNotice[]): boolean {
   return notices.some((notice) => notice.severity === 'CRITICAL');
-}
-
-export function canFinalizePayrollReview(
-  status: BordroStatus,
-  notices: PayrollNotice[]
-): boolean {
-  return status === 'CALCULATED' && !hasBlockingFinalizeNotice(notices);
 }

@@ -13,7 +13,6 @@ import { PayrollNotice, PayrollNoticeSeverity } from '../types/payrollNotice';
 import { formatTL } from '../utils/payrollUtils';
 import { PayrollDatasetSnapshot, PayrollEngine } from '../services/payrollEngine';
 import {
-  canFinalizePayrollReview,
   filterFinalizeNotices,
   hasBlockingFinalizeNotice,
 } from './payrollFinalizeRules';
@@ -92,11 +91,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
   );
   const hasCritical = hasBlockingFinalizeNotice(relevantNotices);
   const authoritativeBordro = review?.bordro ?? bordro;
-  const canFinalize =
-    !isLoading &&
-    !isFinalizing &&
-    !reviewError &&
-    canFinalizePayrollReview(authoritativeBordro.status, relevantNotices);
+  const canFinalize = !isLoading && !isFinalizing && !reviewError;
 
   const loadReview = async (showLoading: boolean): Promise<ReviewSnapshot> => {
     if (showLoading) setIsLoading(true);
@@ -152,29 +147,8 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
     try {
       // Modal açık kaldığı sırada başka bir girdi değişmiş olabilir. Kilitlemeden
       // hemen önce native bordro ve notice listesi ikinci kez authoritative kaynaktan okunur.
-      const latest = await loadReview(false);
-      if (!canFinalizePayrollReview(latest.bordro.status, latest.notices)) {
-        if (latest.bordro.status !== 'CALCULATED') {
-          throw new Error(
-            latest.bordro.status === 'STALE'
-              ? 'Bordro bu sırada güncelliğini yitirdi. Önce yeniden hesaplayın.'
-              : `Bordro CALCULATED durumda değil: ${latest.bordro.status}.`
-          );
-        }
-        const criticalCount = latest.notices.filter(
-          (notice) => notice.severity === 'CRITICAL'
-        ).length;
-        throw new Error(
-          `Kesinleştirme durduruldu: ${criticalCount} kritik bordro kontrolü çözülmeden bordro kilitlenemez.`
-        );
-      }
-
-      const finalized = await engine.setPayrollStatus(
-        personel.id,
-        donem.id,
-        'FINALIZED',
-        dataset
-      );
+      await loadReview(false);
+      const finalized = await engine.finalizePayroll(personel.id, donem.id, dataset);
       await onFinalized(finalized);
       setIsOpen(false);
       setReview(null);

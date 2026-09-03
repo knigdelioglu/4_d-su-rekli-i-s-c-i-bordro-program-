@@ -25,7 +25,6 @@ import {
 import {
   BordroDonemi,
   BordroKaydi,
-  BordroStatus,
   AnnualPayrollParameters,
   DönemselKurumDegerleri,
   Personel,
@@ -197,6 +196,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       const calculated = await payrollEngine.calculatePayroll({
         personnelId: person.id,
         periodId: aktifDonem.id,
+        calculatedAt: new Date().toISOString(),
         manualIncome: getManualIncomeInput(person.id),
         dataset: buildDataset(),
       });
@@ -306,7 +306,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   const handleFinalizeSuccess = async (person: Personel, finalizedBordro: BordroKaydi) => {
-    await onSaveBordro({ ...finalizedBordro, status: 'FINALIZED' as BordroStatus });
+    await onSaveBordro(finalizedBordro);
     setErrorMessage(null);
     setSuccessMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildi.`);
     setTimeout(() => setSuccessMessage(null), 3500);

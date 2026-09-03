@@ -1,5 +1,5 @@
-import { BordroKaydi } from '../../types/payroll';
-import { PayrollCalculationRequest } from './types';
+import type { BordroKaydi } from '../../types/payroll';
+import type { PayrollCalculationRequest } from './types';
 
 // These are the Decimal-backed model fields. Integer day/month/year fields are
 // intentionally absent so the JSON boundary cannot turn tax chronology or
@@ -96,6 +96,9 @@ const DECIMAL_KEYS = new Set([
   'besOraniYuzde',
   'sgkIsverenOraniYuzde',
   'issizlikIsverenOraniYuzde',
+  'sabitTutar',
+  'amount',
+  'gunlukIsPrimi',
   'gelirToplam',
   'kesintiToplam',
   'netOdeme',
@@ -111,37 +114,81 @@ function exactDecimal(value: number): string {
   return Object.is(value, -0) ? '0' : value.toString();
 }
 
-function stringifyDecimals(value: unknown, key?: string): unknown {
+function encodeDecimals(value: unknown, key?: string): unknown {
   if (typeof value === 'number' && key && DECIMAL_KEYS.has(key)) {
     return exactDecimal(value);
   }
-  if (Array.isArray(value)) return value.map((item) => stringifyDecimals(item));
+  if (Array.isArray(value)) return value.map((item) => encodeDecimals(item));
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value).map(([entryKey, entryValue]) => [
         entryKey,
-        stringifyDecimals(entryValue, entryKey),
+        encodeDecimals(entryValue, entryKey),
       ])
     );
   }
   return value;
 }
 
-/** Serializes Decimal-backed fields as strings before serde_json reaches Rust. */
-export function serializePayrollRequestForWasm(request: PayrollCalculationRequest): string {
-  return JSON.stringify(stringifyDecimals(request));
+/**
+ * Converts the UI representation to the explicit string-Decimal boundary.
+ * Rust's shared models serialize every Decimal as a string; this function is
+ * the compatibility adapter for the existing number-based presentation model.
+ */
+export function encodeDecimalValues<T>(value: T): T {
+  return encodeDecimals(value) as T;
 }
 
-/** Parses a Rust result and keeps the existing frontend number-based view model. */
-export function parseWasmPayrollResult(json: string): BordroKaydi {
+function decodeDecimals(value: unknown, key?: string): unknown {
+  if (typeof value === 'string' && key && DECIMAL_KEYS.has(key)) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : value;
+  }
+  if (Array.isArray(value)) return value.map((item) => decodeDecimals(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([entryKey, entryValue]) => [
+        entryKey,
+        decodeDecimals(entryValue, entryKey),
+      ])
+    );
+  }
+  return value;
+}
+
+/** Decodes strings for the existing UI model; it is never used for authority. */
+export function decodeDecimalValues<T>(value: T): T {
+  return decodeDecimals(value) as T;
+}
+
+/** Serializes Decimal-backed values for WASM or browser/native persistence. */
+export function serializePayrollRequestForWasm(request: PayrollCalculationRequest): string {
+  return JSON.stringify(encodeDecimals(request));
+}
+
+/** Parses a raw WASM result while preserving its exact string Decimal values. */
+export function parsePayrollBoundaryJson(json: string): unknown {
   const value: unknown = JSON.parse(json);
   if (!value || typeof value !== 'object') {
     throw new Error('WASM bordro sonucu geçersiz.');
   }
-  return value as BordroKaydi;
+  return value;
+}
+
+/** Parses a Rust result into the existing number-based presentation model. */
+export function parseWasmPayrollResult(json: string): BordroKaydi {
+  return decodeDecimalValues(parsePayrollBoundaryJson(json)) as BordroKaydi;
+}
+
+/** Keeps browser backup/IndexedDB JSON Decimal-safe without changing its schema. */
+export function serializePayrollStorage(value: unknown, space?: number): string {
+  return JSON.stringify(encodeDecimals(value), null, space);
+}
+
+export function parsePayrollStorage<T>(json: string): T {
+  return decodeDecimalValues(JSON.parse(json)) as T;
 }
 
 export function isDecimalBoundaryKey(key: string): boolean {
   return DECIMAL_KEYS.has(key);
 }
-

@@ -25,18 +25,6 @@ impl PeriodRepository {
         i64::from(year) * 12 + i64::from(month)
     }
 
-    fn latest_finalized_period_start(conn: &Connection) -> Result<Option<String>> {
-        conn.query_row(
-            "SELECT MAX(pp.baslangic_tarihi)
-             FROM payroll_records AS pr
-             JOIN payroll_periods AS pp ON pp.id = pr.period_id
-             WHERE pr.status = 'FINALIZED'",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .map_err(|e| DomainError::DatabaseError(e.to_string()))
-    }
-
     pub fn validate_period(period: &BordroDonemi) -> Result<()> {
         if period.yil <= 0 || !(1..=12).contains(&period.ay) {
             return Err(crate::domain::DomainError::ValidationError(
@@ -295,7 +283,6 @@ impl PeriodRepository {
         Self::validate_period(d)?;
         Self::validate_tax_chronology(conn, d)?;
 
-        let latest_finalized_start = Self::latest_finalized_period_start(conn)?;
         let existing = Self::get_by_id(conn, &d.id)?;
         let causal_fields_changed = existing.as_ref().is_some_and(|old| {
             old.yil != d.yil
@@ -305,37 +292,6 @@ impl PeriodRepository {
                 || old.taxYear != d.taxYear
                 || old.taxMonth != d.taxMonth
         });
-
-        match existing.as_ref() {
-            Some(old) => {
-                if causal_fields_changed {
-                    if let Some(latest) = latest_finalized_start.as_deref() {
-                        let earliest_affected = if old.baslangicTarihi <= d.baslangicTarihi {
-                            old.baslangicTarihi.as_str()
-                        } else {
-                            d.baslangicTarihi.as_str()
-                        };
-                        if latest >= earliest_affected {
-                            return Err(DomainError::PayrollFinalized(
-                                "Kesinleştirilmiş bordro tarihçesini etkileyen dönem yıl/ay, tarih veya vergi metadata'sı değiştirilemez."
-                                    .into(),
-                            ));
-                        }
-                    }
-                }
-            }
-            None => {
-                if latest_finalized_start
-                    .as_deref()
-                    .is_some_and(|latest| latest >= d.baslangicTarihi.as_str())
-                {
-                    return Err(DomainError::PayrollFinalized(
-                        "Kesinleştirilmiş bordro tarihçesine geriye dönük yeni çalışma dönemi eklenemez."
-                            .into(),
-                    ));
-                }
-            }
-        }
 
         let work_period_collision: Option<String> = conn
             .query_row(
@@ -371,30 +327,37 @@ impl PeriodRepository {
             )));
         }
 
+        let mut impacts = Vec::new();
         if let Some(old) = existing.as_ref() {
             if causal_fields_changed {
-                PayrollInvalidationRepository::mark_from_period_position_stale(
+                impacts.push(PayrollInvalidationRepository::assert_mutation_allowed(
                     conn,
-                    &old.baslangicTarihi,
-                    old.taxYear,
-                    old.taxMonth,
-                )?;
-                PayrollInvalidationRepository::mark_from_period_position_stale(
+                    &payroll_core::PayrollMutation::PeriodFromPosition {
+                        startDate: old.baslangicTarihi.clone(),
+                        taxYear: old.taxYear,
+                        taxMonth: old.taxMonth,
+                    },
+                )?);
+                impacts.push(PayrollInvalidationRepository::assert_mutation_allowed(
                     conn,
-                    &d.baslangicTarihi,
-                    d.taxYear,
-                    d.taxMonth,
-                )?;
+                    &payroll_core::PayrollMutation::PeriodFromPosition {
+                        startDate: d.baslangicTarihi.clone(),
+                        taxYear: d.taxYear,
+                        taxMonth: d.taxMonth,
+                    },
+                )?);
             }
         } else {
             // Yeni bir geçmiş/ara dönem, önceden hesaplanmış sonraki bordroların
             // vergi veya PEK zincirine yeni bir düğüm ekleyebilir.
-            PayrollInvalidationRepository::mark_from_period_position_stale(
+            impacts.push(PayrollInvalidationRepository::assert_mutation_allowed(
                 conn,
-                &d.baslangicTarihi,
-                d.taxYear,
-                d.taxMonth,
-            )?;
+                &payroll_core::PayrollMutation::PeriodFromPosition {
+                    startDate: d.baslangicTarihi.clone(),
+                    taxYear: d.taxYear,
+                    taxMonth: d.taxMonth,
+                },
+            )?);
         }
 
         let now = Utc::now().to_rfc3339();
@@ -405,6 +368,10 @@ impl PeriodRepository {
                 yil=?2, ay=?3, baslangic_tarihi=?4, bitis_tarihi=?5, donem_adi=?6, tax_year=?7, tax_month=?8",
             params![d.id, d.yil, d.ay, d.baslangicTarihi, d.bitisTarihi, d.donemAdi, d.taxYear, d.taxMonth, now],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+
+        for impact in impacts {
+            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
+        }
 
         Ok(())
     }

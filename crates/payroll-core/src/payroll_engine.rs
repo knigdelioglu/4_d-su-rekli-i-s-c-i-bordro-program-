@@ -9,7 +9,7 @@
 use crate::calculations::*;
 use crate::models::*;
 use crate::{DomainError, Result};
-use chrono::{Datelike, NaiveDate, Utc};
+use chrono::{Datelike, NaiveDate};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,9 @@ pub struct PayrollDatasetSnapshot {
 pub struct PayrollCalculationRequest {
     pub personnelId: String,
     pub periodId: String,
+    /// Timestamp supplied by the persistence/runtime adapter. The core never
+    /// reads the system clock, so identical requests are deterministic.
+    pub calculatedAt: String,
     #[serde(default)]
     pub manualIncome: Option<ManualPayrollIncomeInput>,
     pub dataset: PayrollDatasetSnapshot,
@@ -1018,7 +1021,7 @@ fn validate_tax_month_chain(
             .any(|candidate| candidate.taxYear == period.taxYear && candidate.taxMonth == tax_month)
         {
             return Err(DomainError::ValidationError(format!(
-                "{} vergi yılı asgari ücret GV referans zinciri eksik: {:02} vergi ayı.",
+                "{} vergi yılı asgari ücret GV referans zinciri eksik. Önce şu vergi ayına ait dönemi oluşturun veya uygun devir başlangıcını girin: {:02}.",
                 period.taxYear, tax_month
             )));
         }
@@ -1067,7 +1070,7 @@ fn validate_statutory_tax_month_reference(
     }
     if target_value != final_value {
         return Err(DomainError::ValidationError(format!(
-            "{} döneminde asgari ücret dönem içinde değişiyor ve seçilen vergi ayı son yasal segmentle uyuşmuyor.",
+            "{} döneminde asgari ücret dönem içinde değişiyor ve seçilen vergi ayı son yasal segmentle uyuşmuyor. Yanlış GV/DV istisnası üretmemek için vergi ayını yürürlükteki asgari ücret segmentiyle uyumlu seçin.",
             period.id
         )));
     }
@@ -1079,11 +1082,28 @@ fn validate_devreden_pek_gap(
     personnel_id: &str,
     active_period: &BordroDonemi,
 ) -> Result<()> {
-    let Some(previous_period) = find_previous_work_period(dataset, active_period)? else {
-        return Ok(());
-    };
-    let Some(previous_payroll) = existing_payroll(dataset, personnel_id, &previous_period.id)
-    else {
+    let active_start = parse_period_date(
+        &active_period.baslangicTarihi,
+        &active_period.id,
+        "başlangıç",
+    )?;
+    let mut prior: Vec<(&BordroKaydi, &BordroDonemi)> = dataset
+        .payrolls
+        .iter()
+        .filter_map(|payroll| {
+            if payroll.personelId != personnel_id {
+                return None;
+            }
+            let period = dataset
+                .periods
+                .iter()
+                .find(|period| period.id == payroll.donemId)?;
+            let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").ok()?;
+            (start < active_start).then_some((payroll, period))
+        })
+        .collect();
+    prior.sort_by_key(|(_, period)| (period.baslangicTarihi.clone(), period.id.clone()));
+    let Some((previous_payroll, previous_period)) = prior.pop() else {
         return Ok(());
     };
     let positive: Vec<&DevredenPekKaydi> = previous_payroll
@@ -1119,8 +1139,13 @@ fn validate_devreden_pek_gap(
         BordroStatus::CALCULATED | BordroStatus::FINALIZED
     ) {
         return Err(DomainError::ValidationError(format!(
-            "{} dönemindeki son önceki bordro authoritative değil; önce yeniden hesaplayın.",
-            previous_period.id
+            "{} dönemindeki son önceki bordro {} durumda ve devreden PEK taşıyor. Önce bu bordroyu yeniden hesaplayın.",
+            previous_period.id,
+            match previous_payroll.status {
+                BordroStatus::DRAFT => "DRAFT",
+                BordroStatus::STALE => "STALE",
+                _ => "",
+            }
         )));
     }
 
@@ -1141,7 +1166,7 @@ fn validate_devreden_pek_gap(
     };
     if existing_payroll(dataset, personnel_id, &expected_period.id).is_none() {
         return Err(DomainError::ValidationError(format!(
-            "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok.",
+            "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
             personnel_id, previous_period.id, expected_period.id
         )));
     }
@@ -1171,6 +1196,104 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
     validate_statutory_tax_month_reference(period, settings)?;
     validate_devreden_pek_gap(&request.dataset, &request.personnelId, period)?;
     Ok(())
+}
+
+/// Runs the stricter checks required before a payroll can be made official.
+///
+/// A stale or draft payroll has no current authoritative result to finalize
+/// and must first pass through the normal calculation flow. A CALCULATED
+/// record is still recalculated from the supplied source snapshot immediately
+/// before it becomes official, so the persisted result is never reused as the
+/// source of truth.
+pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest) -> Result<()> {
+    validate_payroll_request(request)?;
+
+    let existing = existing_payroll(&request.dataset, &request.personnelId, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+    match existing.status {
+        BordroStatus::FINALIZED => {
+            return Err(DomainError::PayrollFinalized(
+                "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
+            ));
+        }
+        BordroStatus::DRAFT => {
+            return Err(DomainError::ValidationError(
+                "DRAFT bordro kesinleştirilemez. Önce bordroyu hesaplayın.".into(),
+            ));
+        }
+        BordroStatus::STALE => {
+            return Err(DomainError::ValidationError(
+                "STALE bordro kesinleştirilemez. Önce bordroyu yeniden hesaplayın.".into(),
+            ));
+        }
+        BordroStatus::CALCULATED => {}
+    }
+
+    let period = period_by_id(&request.dataset, &request.periodId)?;
+    let attendance = request
+        .dataset
+        .attendances
+        .iter()
+        .find(|attendance| {
+            attendance.personelId == request.personnelId && attendance.donemId == request.periodId
+        })
+        .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    let mut missing_dates = Vec::new();
+    let mut current = start;
+    while current <= end {
+        let date_text = current.format("%Y-%m-%d").to_string();
+        if !attendance.gunler.contains_key(&date_text) {
+            missing_dates.push(date_text);
+        }
+        current = current
+            .checked_add_signed(chrono::Duration::days(1))
+            .ok_or_else(|| {
+                DomainError::InvalidData("Puantaj tarih aralığı çözümlenemedi.".into())
+            })?;
+    }
+    if !missing_dates.is_empty() {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi puantajı eksik: {} takvim günü için kayıt bulunmuyor.",
+            period.id,
+            missing_dates.len()
+        )));
+    }
+
+    // Finalization recalculates the source payroll. A later FINALIZED payroll
+    // would then be an immutable downstream dependency, so the same pure
+    // mutation policy must reject the operation before any adapter persists it.
+    let impact = crate::policies::evaluate_payroll_invalidation(
+        &request.dataset,
+        &crate::policies::PayrollMutation::PayrollCalculation {
+            personnelId: request.personnelId.clone(),
+            periodId: request.periodId.clone(),
+        },
+    )?;
+    if !impact.blockedByFinalized.is_empty() {
+        let keys = impact
+            .blockedByFinalized
+            .iter()
+            .map(|key| format!("{} / {}", key.personnelId, key.periodId))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(DomainError::PayrollFinalized(format!(
+            "Kesinleştirme, downstream FINALIZED bordroları etkilediği için yapılamaz: {}.",
+            keys
+        )));
+    }
+
+    Ok(())
+}
+
+/// Recalculates the current source snapshot and returns the only supported
+/// official transition. No persistence or invalidation is performed here.
+pub fn finalize_payroll(request: &PayrollCalculationRequest) -> Result<BordroKaydi> {
+    validate_payroll_finalization_request(request)?;
+    let mut payroll = calculate_payroll(request)?;
+    payroll.status = BordroStatus::FINALIZED;
+    Ok(payroll)
 }
 
 /// Calculates one authoritative payroll record from the supplied snapshot.
@@ -1445,7 +1568,6 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         });
     }
 
-    let now = Utc::now().to_rfc3339();
     Ok(BordroKaydi {
         id: format!("{}_{}", request.personnelId, request.periodId),
         personelId: request.personnelId.clone(),
@@ -1459,8 +1581,8 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         status: BordroStatus::CALCULATED,
         olusturulmaTarihi: existing
             .map(|payroll| payroll.olusturulmaTarihi.clone())
-            .unwrap_or_else(|| now.clone()),
-        sonGuncellemeTarihi: now,
+            .unwrap_or_else(|| request.calculatedAt.clone()),
+        sonGuncellemeTarihi: request.calculatedAt.clone(),
         notlar: Some(format!("{} dönemi hesaplandı.", period.donemAdi)),
         oncekiKumulatifGvMatrahi: Some(previous_cumulative_gv),
         oncekiKumulatifAsgariGvMatrahi: Some(previous_cumulative_asgari_gv),

@@ -1,10 +1,17 @@
 import { tauriBridge } from '../tauriBridge';
 import {
+  encodeDecimalValues,
   parseWasmPayrollResult,
   serializePayrollRequestForWasm,
 } from './decimalBoundary';
 import { getWasmRuntime } from './wasmRuntime';
-import { PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollEngine } from './types';
+import {
+  MutationImpact,
+  PayrollCalculationRequest,
+  PayrollDatasetSnapshot,
+  PayrollEngine,
+  PayrollMutation,
+} from './types';
 
 const tauriEngine: PayrollEngine = {
   kind: 'tauri',
@@ -18,15 +25,26 @@ const tauriEngine: PayrollEngine = {
   validatePayroll: async () => undefined,
   getPayrollNotices: (periodId) => tauriBridge.getPayrollNotices(periodId),
   getPayrolls: () => tauriBridge.getPayrollList(),
-  setPayrollStatus: async (personnelId, periodId, status) => {
-    await tauriBridge.setPayrollStatus(personnelId, periodId, status);
-    const payroll = (await tauriBridge.getPayrollList()).find(
-      (item) => item.personelId === personnelId && item.donemId === periodId
-    );
-    if (!payroll) throw new Error('Güncellenen bordro kaydı bulunamadı.');
-    return payroll;
-  },
+  finalizePayroll: (personnelId, periodId) =>
+    tauriBridge.finalizePayroll(personnelId, periodId),
+  evaluateMutationPolicy: (mutation, dataset) =>
+    tauriBridge.evaluateMutationPolicy(mutation, dataset),
 };
+
+function mutationPolicyRequest(
+  mutation: PayrollMutation,
+  dataset: PayrollDatasetSnapshot
+): string {
+  return JSON.stringify(encodeDecimalValues({ dataset, mutation }));
+}
+
+function parseMutationImpact(json: string): MutationImpact {
+  const value: unknown = JSON.parse(json);
+  if (!value || typeof value !== 'object') {
+    throw new Error('WASM mutation policy sonucu geçersiz.');
+  }
+  return value as MutationImpact;
+}
 
 const wasmEngine: PayrollEngine = {
   kind: 'wasm',
@@ -45,6 +63,7 @@ const wasmEngine: PayrollEngine = {
       serializePayrollRequestForWasm({
         personnelId: '',
         periodId,
+        calculatedAt: '1970-01-01T00:00:00.000Z',
         manualIncome: null,
         dataset,
       })
@@ -52,43 +71,31 @@ const wasmEngine: PayrollEngine = {
     return JSON.parse(json) as Awaited<ReturnType<PayrollEngine['getPayrollNotices']>>;
   },
   getPayrolls: async (dataset) => dataset.payrolls,
-  setPayrollStatus: async (personnelId, periodId, status, dataset) => {
+  finalizePayroll: async (personnelId, periodId, dataset) => {
     const current = dataset.payrolls.find(
       (item) => item.personelId === personnelId && item.donemId === periodId
     );
     if (!current) throw new Error('Bordro kaydı bulunamadı.');
-    if (current.status === 'FINALIZED' && status !== 'FINALIZED') {
-      throw new Error('Kesinleştirilmiş bordronun durumu değiştirilemez.');
-    }
-    if (status === 'FINALIZED' && current.status !== 'CALCULATED') {
-      throw new Error(`Bordro CALCULATED durumda değil: ${current.status}.`);
-    }
-    if (status === 'FINALIZED') {
-      const period = dataset.periods.find((item) => item.id === periodId);
-      if (!period) throw new Error(`Bordro dönemi bulunamadı: ${periodId}.`);
-      const hasNonFinalizedPrior = dataset.payrolls.some((item) => {
-        if (item.personelId !== personnelId || item.status === 'FINALIZED') return false;
-        const candidate = dataset.periods.find((candidatePeriod) => candidatePeriod.id === item.donemId);
-        return (
-          candidate?.taxYear === period.taxYear && candidate.taxMonth < period.taxMonth
-        );
-      });
-      if (hasNonFinalizedPrior) {
-        throw new Error(
-          'Bu bordro kesinleştirilemez: aynı vergi yılındaki önceki mevcut bordrolar önce FINALIZED olmalıdır.'
-        );
-      }
-      await wasmEngine.validatePayroll({
+    const runtime = await getWasmRuntime();
+    const json = runtime.finalize_payroll_json(
+      serializePayrollRequestForWasm({
         personnelId,
         periodId,
+        calculatedAt: new Date().toISOString(),
         manualIncome: {
           tediye: current.gelirler.tediye,
           tisIkramiyesi: current.gelirler.tisIkramiyesi,
         },
         dataset,
-      });
-    }
-    return { ...current, status };
+      })
+    );
+    return parseWasmPayrollResult(json);
+  },
+  evaluateMutationPolicy: async (mutation, dataset) => {
+    const runtime = await getWasmRuntime();
+    return parseMutationImpact(
+      runtime.evaluate_mutation_policy_json(mutationPolicyRequest(mutation, dataset))
+    );
   },
 };
 
@@ -97,4 +104,11 @@ export function getPayrollEngine(): PayrollEngine {
   return tauriBridge.isTauriAvailable() ? tauriEngine : wasmEngine;
 }
 
-export type { PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollEngine } from './types';
+export type {
+  MutationImpact,
+  PayrollCalculationRequest,
+  PayrollDatasetSnapshot,
+  PayrollEngine,
+  PayrollKey,
+  PayrollMutation,
+} from './types';

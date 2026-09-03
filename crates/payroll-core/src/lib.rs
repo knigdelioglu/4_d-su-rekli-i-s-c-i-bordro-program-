@@ -18,8 +18,10 @@ pub type Result<T> = std::result::Result<T, DomainError>;
 
 pub mod notices;
 pub mod payroll_engine;
+pub mod policies;
 
 pub use calculations::*;
 pub use models::*;
 pub use notices::*;
 pub use payroll_engine::*;
+pub use policies::*;

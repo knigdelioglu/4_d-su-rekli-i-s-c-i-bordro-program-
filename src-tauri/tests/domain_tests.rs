@@ -362,14 +362,14 @@ mod tests {
         );
         assert!(matches!(res, Err(DomainError::PayrollFinalized(_))));
 
-        // 2. Re-setting FINALIZED is idempotent / allowed
+        // 2. FINALIZED transitions must use the authoritative finalization API.
         let res = PayrollService::set_payroll_status(
             &conn,
             "test-finalize",
             "2026-08",
             BordroStatus::FINALIZED,
         );
-        assert!(res.is_ok());
+        assert!(matches!(res, Err(DomainError::ValidationError(_))));
 
         // 3. Re-calculating a FINALIZED payroll must fail
         let res =
@@ -1210,7 +1210,7 @@ mod tests {
             assert_eq!(bordro.raporluGun, Some(4));
 
             PayrollRepository::save(&conn, &bordro)?;
-            PayrollService::set_payroll_status(
+            PayrollRepository::update_status(
                 &conn,
                 "p-yc-persistence",
                 "2026-12",
@@ -1542,7 +1542,7 @@ mod tests {
             );
 
             // Finalize payroll
-            PayrollService::set_payroll_status(
+            PayrollRepository::update_status(
                 &conn,
                 "p-rapor-test",
                 "2026-05",

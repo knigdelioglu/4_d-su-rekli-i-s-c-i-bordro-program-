@@ -4,6 +4,7 @@ use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::attendance_repo::AttendanceRepository;
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
@@ -206,12 +207,6 @@ impl MigrationService {
             }
         }
 
-        if let Some(payroll_list) = bordrolar {
-            for payroll in payroll_list {
-                PayrollRepository::save_in_transaction(conn, &payroll)?;
-            }
-        }
-
         if let Some(sick_records) = sickLeaveRecords {
             for record in sick_records {
                 SickLeaveRepository::save(conn, &record)?;
@@ -247,6 +242,17 @@ impl MigrationService {
             }
         }
 
+        // Source data is loaded before payroll snapshots so a backup containing
+        // FINALIZED records can be restored without treating the restore itself
+        // as a new business mutation. `save_in_transaction` is the explicit
+        // bulk-persistence path; normal calculation/finalization still goes
+        // through the core policy and transaction adapters.
+        if let Some(payroll_list) = bordrolar {
+            for payroll in payroll_list {
+                PayrollRepository::save_in_transaction(conn, &payroll)?;
+            }
+        }
+
         if let Some(active_id) = aktifDonemId {
             SettingsRepository::set_app_setting(conn, "active_period_id", &active_id)?;
         }
@@ -260,6 +266,13 @@ impl MigrationService {
         }
 
         let payload = Self::parse_payload(payload_json)?;
+        // Legacy import can contain source data and payroll snapshots. Treat
+        // it as a full dataset mutation before opening the transaction so an
+        // existing FINALIZED ledger is never silently replaced.
+        PayrollInvalidationRepository::assert_mutation_allowed(
+            conn,
+            &payroll_core::PayrollMutation::All,
+        )?;
         let tx = conn
             .transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -274,6 +287,13 @@ impl MigrationService {
     /// aynı transaction içinde siler ve yedek içeriğini eksiksiz yükler.
     pub fn replace_backup_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
         let payload = Self::parse_payload(payload_json)?;
+        // Keep the native bulk-replace path aligned with the browser's
+        // core-owned `ALL` mutation policy. A confirmed UI reset/import still
+        // cannot delete or replace an existing FINALIZED ledger.
+        PayrollInvalidationRepository::assert_mutation_allowed(
+            conn,
+            &payroll_core::PayrollMutation::All,
+        )?;
         let tx = conn
             .transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;

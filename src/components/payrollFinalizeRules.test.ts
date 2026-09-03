@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { PayrollNotice } from '../types/payrollNotice';
 import {
-  canFinalizePayrollReview,
   filterFinalizeNotices,
   hasBlockingFinalizeNotice,
 } from './payrollFinalizeRules';
@@ -27,7 +26,6 @@ describe('payroll finalize review rules', () => {
     const relevant = filterFinalizeNotices(notices, 'p1');
 
     expect(hasBlockingFinalizeNotice(relevant)).toBe(true);
-    expect(canFinalizePayrollReview('CALCULATED', relevant)).toBe(false);
   });
 
   test('critical notice for another personnel does not block current personnel', () => {
@@ -35,7 +33,6 @@ describe('payroll finalize review rules', () => {
     const relevant = filterFinalizeNotices(notices, 'p1');
 
     expect(relevant.length).toBe(0);
-    expect(canFinalizePayrollReview('CALCULATED', relevant)).toBe(true);
   });
 
   test('warning and info notices remain visible but do not block calculated payroll', () => {
@@ -47,12 +44,5 @@ describe('payroll finalize review rules', () => {
 
     expect(relevant.length).toBe(2);
     expect(hasBlockingFinalizeNotice(relevant)).toBe(false);
-    expect(canFinalizePayrollReview('CALCULATED', relevant)).toBe(true);
-  });
-
-  test('non-calculated status blocks finalization even without critical notice', () => {
-    expect(canFinalizePayrollReview('STALE', [])).toBe(false);
-    expect(canFinalizePayrollReview('DRAFT', [])).toBe(false);
-    expect(canFinalizePayrollReview('FINALIZED', [])).toBe(false);
   });
 });

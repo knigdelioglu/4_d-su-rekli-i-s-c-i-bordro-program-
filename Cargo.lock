@@ -2333,9 +2333,11 @@ dependencies = [
 name = "payroll-wasm"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "payroll-core",
  "rust_decimal",
  "rust_decimal_macros",
+ "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
