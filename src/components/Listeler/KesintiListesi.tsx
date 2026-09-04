@@ -17,6 +17,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
+import type { KesintiTipi } from '../../types/navigation';
 import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel, printElement } from '../../utils/excelExport';
 import {
@@ -29,23 +30,15 @@ interface KesintiListesiProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   bordrolar: BordroKaydi[];
+  activeType: KesintiTipi;
 }
-
-type KesintiTipi =
-  | 'sendika'
-  | 'bes'
-  | 'icra'
-  | 'kisiBorcu'
-  | 'dogumAskerlik'
-  | 'hayatSaglik'
-  | 'digerKesinti';
 
 export const KesintiListesi: React.FC<KesintiListesiProps> = ({
   aktifDonem,
   personeller,
   bordrolar,
+  activeType,
 }) => {
-  const [activeTab, setActiveTab] = useState<KesintiTipi>('sendika');
   const [search, setSearch] = useState<string>('');
   const [paymentDateFilter, setPaymentDateFilter] = useState<string>('all');
 
@@ -63,8 +56,8 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
   }));
   const paymentDateOptions = getPaymentDateOptions(entries);
 
-  const getActiveTabConfig = () => {
-    switch (activeTab) {
+  const getActiveTypeConfig = () => {
+    switch (activeType) {
       case 'sendika':
         return {
           title: 'Sendika Aidatı Listesi',
@@ -131,7 +124,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
     }
   };
 
-  const config = getActiveTabConfig();
+  const config = getActiveTypeConfig();
 
   // Filter entries that have amount > 0 or match search
   const filteredList = filterAccrualRowsByPaymentDate(entries, paymentDateFilter)
@@ -202,94 +195,11 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
   };
 
   return (
-    <div className="space-y-6">
-      {/* Navigation Sub-Tabs */}
-      <div className="bg-white p-2 rounded-2xl border border-slate-200 shadow-2xs flex flex-wrap gap-2">
-        <button
-          onClick={() => setActiveTab('sendika')}
-          className={`flex-1 min-w-40 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'sendika'
-              ? 'bg-indigo-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <Users2 className="w-4 h-4" />
-          <span>1. Sendika Aidatı Listesi</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('bes')}
-          className={`flex-1 min-w-40 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'bes'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <Wallet className="w-4 h-4" />
-          <span>2. BES Kesintisi Listesi</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('icra')}
-          className={`flex-1 min-w-40 py-2.5 px-4 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-            activeTab === 'icra'
-              ? 'bg-rose-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <Scale className="w-4 h-4" />
-          <span>3. İcra Kesintisi Listesi</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('kisiBorcu')}
-          className={`flex-1 min-w-36 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-            activeTab === 'kisiBorcu'
-              ? 'bg-amber-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <Receipt className="w-4 h-4" />
-          <span>4. Kişi Borcu</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('dogumAskerlik')}
-          className={`flex-1 min-w-36 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-            activeTab === 'dogumAskerlik'
-              ? 'bg-purple-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <Baby className="w-4 h-4" />
-          <span>5. Doğum/Askerlik</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('hayatSaglik')}
-          className={`flex-1 min-w-36 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-            activeTab === 'hayatSaglik'
-              ? 'bg-teal-600 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <HeartPulse className="w-4 h-4" />
-          <span>6. Sağlık Sigortası</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab('digerKesinti')}
-          className={`flex-1 min-w-36 py-2.5 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
-            activeTab === 'digerKesinti'
-              ? 'bg-slate-800 text-white shadow-xs'
-              : 'text-slate-600 hover:bg-slate-100'
-          }`}
-        >
-          <MoreHorizontal className="w-4 h-4" />
-          <span>7. Diğer Kesintiler</span>
-        </button>
-      </div>
-
+    <div
+      className="space-y-6"
+      data-testid="deduction-screen"
+      data-deduction-type={activeType}
+    >
       {/* Top Action Banner */}
       <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

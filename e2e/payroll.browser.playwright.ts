@@ -406,8 +406,46 @@ test('mobile navigation opens as a drawer without reducing the content area', as
   await expect(page.getByTestId('nav-personel')).not.toBeVisible();
   await page.getByTestId('sidebar-toggle').click();
   await expect(page.getByTestId('nav-personel')).toBeVisible();
-  await page.getByTestId('nav-banka').click();
-  await expect(page.getByTestId('nav-banka')).not.toBeVisible();
+  await page.getByTestId('nav-kesintiler').click();
+  await expect(page.getByTestId('nav-kesintiler')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('nav-kesinti-sendika')).toBeVisible();
+  await page.getByTestId('nav-kesinti-icra').click();
+  await expect(page.getByTestId('nav-kesinti-icra')).not.toBeVisible();
+});
+
+test('deduction child navigation switches content and persists the selected type after reload', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+
+  await page.getByTestId('nav-kesintiler').click();
+  await expect(page.getByTestId('nav-kesintiler')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('nav-kesinti-sendika')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('deduction-screen')).toHaveAttribute('data-deduction-type', 'sendika');
+  await expect(page.getByTestId('deduction-screen').locator('h2')).toContainText(
+    'Sendika Aidatı Listesi'
+  );
+  await expect(page.getByRole('button', { name: /1\. Sendika Aidatı Listesi/ })).toHaveCount(0);
+
+  await page.getByTestId('nav-kesinti-icra').click();
+  await expect(page.getByTestId('deduction-screen')).toHaveAttribute('data-deduction-type', 'icra');
+  await expect(page.getByTestId('nav-kesinti-icra')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('deduction-screen').locator('h2')).toContainText(
+    'İcra Kesintisi Listesi'
+  );
+
+  await page.getByTestId('nav-kesinti-bes').click();
+  await expect(page.getByTestId('deduction-screen')).toHaveAttribute('data-deduction-type', 'bes');
+  await expect(page.getByTestId('deduction-screen').locator('h2')).toContainText(
+    'BES Kesintisi Listesi'
+  );
+
+  await page.getByTestId('nav-kesinti-icra').click();
+  await page.reload();
+  await expect(page.getByTestId('deduction-screen')).toHaveAttribute('data-deduction-type', 'icra');
+  await expect(page.getByTestId('nav-kesinti-icra')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('deduction-screen').locator('h2')).toContainText(
+    'İcra Kesintisi Listesi'
+  );
 });
 
 test('top bar keeps the active period and backup export/import actions', async ({ page }) => {

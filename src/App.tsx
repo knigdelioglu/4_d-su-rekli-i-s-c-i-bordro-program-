@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sidebar, type TabType } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
+import { isKesintiTipi, type KesintiTipi } from './types/navigation';
 import { PersonelList } from './components/PersonelList';
 import { PuantajGrid } from './components/PuantajGrid';
 import { BordroHesaplama } from './components/BordroHesaplama';
@@ -54,6 +55,7 @@ import { PayrollNoticeCenter } from './components/PayrollNoticeCenter';
 import { getInitialDataset } from './utils/sampleData';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
+const ACTIVE_KESINTI_STORAGE_KEY = '4d_bordro_active_kesinti';
 
 type DatasetFields = PayrollStorageFields;
 type UiDatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
@@ -101,6 +103,16 @@ function formatBrowserStorageSaveError(error: unknown): string {
   )} IndexedDB snapshotı değiştirilmedi; başka bir storage kullanılmadı.`;
 }
 
+function getInitialActiveKesintiType(): KesintiTipi {
+  try {
+    const saved = localStorage.getItem(ACTIVE_KESINTI_STORAGE_KEY);
+    if (isKesintiTipi(saved)) return saved;
+  } catch {
+    // localStorage may be unavailable in a restricted browser context.
+  }
+  return 'sendika';
+}
+
 const EMPTY_UI_DATASET: UiDatasetFields = {
   donemler: [],
   aktifDonemId: '',
@@ -129,6 +141,9 @@ export default function App() {
     }
     return 'personel';
   });
+  const [activeKesintiType, setActiveKesintiType] = useState<KesintiTipi>(
+    getInitialActiveKesintiType
+  );
 
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
@@ -165,6 +180,14 @@ export default function App() {
       // Ignore navigation preference write errors.
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_KESINTI_STORAGE_KEY, activeKesintiType);
+    } catch {
+      // Ignore deduction navigation preference write errors.
+    }
+  }, [activeKesintiType]);
 
   const applyDataset = useCallback((data: DatasetFields) => {
     setAuthoritativePayload(makeBackupPayload(data));
@@ -755,7 +778,11 @@ export default function App() {
   const handleTabChange = (tab: TabType) => {
     if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
     else setActiveTab(tab);
-    setIsSidebarOpen(false);
+  };
+
+  const handleKesintiTypeChange = (type: KesintiTipi) => {
+    setActiveTab('kesintiler');
+    setActiveKesintiType(type);
   };
 
   return (
@@ -783,7 +810,9 @@ export default function App() {
         {isDataLoaded && (
           <Sidebar
             activeTab={isPeriodManagerOpen ? 'parametrelar' : activeTab}
+            activeKesintiType={activeKesintiType}
             onTabChange={handleTabChange}
+            onKesintiTypeChange={handleKesintiTypeChange}
             isOpen={isSidebarOpen}
             onClose={() => setIsSidebarOpen(false)}
           />
@@ -872,7 +901,14 @@ export default function App() {
                 )}
 
                 {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
-                {aktifDonem && activeTab === 'kesintiler' && <KesintiListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+                {aktifDonem && activeTab === 'kesintiler' && (
+                  <KesintiListesi
+                    aktifDonem={aktifDonem}
+                    personeller={personeller}
+                    bordrolar={bordrolar}
+                    activeType={activeKesintiType}
+                  />
+                )}
               </>
             )}
           </div>
