@@ -10,16 +10,64 @@ import {
 
 type UnknownRecord = Record<string, unknown>;
 
-const CURRENT_V2_ARRAY_FIELDS = [
-  'donemler',
-  'personeller',
-  'puantajlar',
-  'bordrolar',
-  'taxOpenings',
-  'sickLeaveRecords',
-  'annualPayrollParameters',
-  'zamAylari',
+const LEGACY_PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
+
+const LEGACY_GELIR_OPTIONAL_DECIMAL_KEYS = [
+  'tabanBrutAylik',
+  'tediye',
+  'tisIkramiyesi',
+  'ekOdeme',
+  'yemek',
+  'birlestirilmisSosyalYardim',
+  'vasitaYol',
+  'giyimYardimi',
+  'isPrimi',
+  'geceCalismasiUcreti',
+  'geceCalismasiTatiliUcreti',
+  'hizmetZammi',
+  'digerGelir',
 ] as const;
+
+const LEGACY_KESINTI_OPTIONAL_DECIMAL_KEYS = [
+  'isciSgkPrimi',
+  'isciIssizlikPrimi',
+  'gelirVergisi',
+  'damgaVergisi',
+  'sendikaAidati',
+  'bes',
+  'icra',
+  'kisiBorcu',
+  'dogumAskerlikBorclanmasi',
+  'hayatSaglikSigortasi',
+  'digerKesinti',
+] as const;
+
+const LEGACY_PEK_DEFAULT_DECIMAL_KEYS = [
+  'hamPek',
+  'devredenPekKullanilan',
+  'primMatrahi',
+  'altSinirTamamlamaFarki',
+] as const;
+
+const LEGACY_GV_DEFAULT_DECIMAL_KEYS = [
+  'dogumAskerlikGvIndirimi',
+  'sigortaGvIndirimAdayi',
+  'sigortaGvAylikLimiti',
+  'sigortaGvYillikKalanLimiti',
+  'uygulanabilirSigortaGvIndirimi',
+] as const;
+
+// MigrationService::import_payload uses AnnualPayrollParameters::default_for_2026
+// for tax years that are absent from a legacy backup. Keep these as exact
+// strings because this is persistence canonicalization, not calculation code.
+const LEGACY_DEFAULT_ANNUAL_TAX_BRACKETS = [
+  { limit: '190000', oran: '0.15' },
+  { limit: '400000', oran: '0.20' },
+  { limit: '1500000', oran: '0.27' },
+  { limit: '5300000', oran: '0.35' },
+  { limit: '1000000000000000', oran: '0.40' },
+] as const;
+const LEGACY_DEFAULT_ANNUAL_INSURANCE_CAP = '396360';
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -37,7 +85,9 @@ function parseJsonObject(json: string): UnknownRecord {
 
 function getBackupVersion(parsed: UnknownRecord): number {
   const versionValue = parsed.backupVersion;
-  if (versionValue === undefined) return 1;
+  // Native LegacyPayload stores this as Option<u32>; missing and explicit null
+  // therefore both mean an unversioned legacy payload.
+  if (versionValue === undefined || versionValue === null) return 1;
   if (typeof versionValue !== 'number' || !Number.isInteger(versionValue)) {
     throw new Error('Yedek sürümü geçersiz; backupVersion tam sayı olmalıdır.');
   }
@@ -53,23 +103,7 @@ function getBackupVersion(parsed: UnknownRecord): number {
  */
 function isLegacyCandidate(parsed: UnknownRecord): boolean {
   try {
-    const version = getBackupVersion(parsed);
-    if (!Array.isArray(parsed.donemler) || !Array.isArray(parsed.personeller)) return false;
-
-    // A V2-shaped payload is only a legacy candidate when all fields that were
-    // required by the V2 collection contract are present. Missing current V2
-    // fields must not be repaired by this path.
-    if (version === BACKUP_FORMAT_VERSION) {
-      return CURRENT_V2_ARRAY_FIELDS.every((key) => Array.isArray(parsed[key])) &&
-        hasOwn(parsed, 'exportedAt') &&
-        typeof parsed.exportedAt === 'string' &&
-        hasOwn(parsed, 'aktifDonemId') &&
-        typeof parsed.aktifDonemId === 'string' &&
-        hasOwn(parsed, 'kurumDegerleriMap') &&
-        isRecord(parsed.kurumDegerleriMap);
-    }
-
-    return true;
+    return getBackupVersion(parsed) < BACKUP_FORMAT_VERSION;
   } catch {
     return false;
   }
@@ -80,7 +114,139 @@ function legacyValueOrDefault(
   key: string,
   defaultValue: unknown
 ): unknown {
-  return hasOwn(parsed, key) ? parsed[key] : defaultValue;
+  return !hasOwn(parsed, key) || parsed[key] === null ? defaultValue : parsed[key];
+}
+
+function canonicalizeLegacyMissingFields(
+  value: unknown,
+  keys: readonly string[],
+  defaultValue: unknown
+): unknown {
+  if (!isRecord(value)) return value;
+  const record = { ...value };
+  keys.forEach((key) => {
+    if (!hasOwn(record, key)) record[key] = defaultValue;
+  });
+  return record;
+}
+
+function canonicalizeLegacyPuantajOzeti(value: unknown): unknown {
+  return canonicalizeLegacyMissingFields(value, LEGACY_PUANTAJ_OZETI_KEYS, 0);
+}
+
+function canonicalizeLegacyBordro(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+
+  const bordro = { ...value };
+  // BordroKaydi.status has #[serde(default)] with BordroStatus::CALCULATED.
+  if (!hasOwn(bordro, 'status')) bordro.status = 'CALCULATED';
+  if (hasOwn(bordro, 'puantajOzeti')) {
+    bordro.puantajOzeti = canonicalizeLegacyPuantajOzeti(bordro.puantajOzeti);
+  }
+  if (hasOwn(bordro, 'gelirler')) {
+    bordro.gelirler = canonicalizeLegacyMissingFields(
+      bordro.gelirler,
+      LEGACY_GELIR_OPTIONAL_DECIMAL_KEYS,
+      null
+    );
+  }
+  if (hasOwn(bordro, 'kesintiler')) {
+    bordro.kesintiler = canonicalizeLegacyMissingFields(
+      bordro.kesintiler,
+      LEGACY_KESINTI_OPTIONAL_DECIMAL_KEYS,
+      null
+    );
+  }
+  if (isRecord(bordro.pekDetay)) {
+    bordro.pekDetay = canonicalizeLegacyMissingFields(
+      bordro.pekDetay,
+      LEGACY_PEK_DEFAULT_DECIMAL_KEYS,
+      '0'
+    );
+  }
+  if (isRecord(bordro.gvDetay)) {
+    bordro.gvDetay = canonicalizeLegacyMissingFields(
+      bordro.gvDetay,
+      LEGACY_GV_DEFAULT_DECIMAL_KEYS,
+      '0'
+    );
+  }
+  return bordro;
+}
+
+function canonicalizeLegacyIsPrimiGroups(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => {
+    if (!isRecord(item)) return item;
+    return hasOwn(item, 'aktif') ? item : { ...item, aktif: true };
+  });
+}
+
+function canonicalizeLegacyInstitutionSettings(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+
+  return Object.fromEntries(
+    Object.entries(value).map(([periodId, rawSettings]) => {
+      if (!isRecord(rawSettings)) return [periodId, rawSettings];
+      const settings = { ...rawSettings };
+      // Native migration deserializes the value first, then assigns the map
+      // key to donemId. Preserve invalid/missing types for the full validator.
+      if (typeof settings.donemId === 'string') settings.donemId = periodId;
+      if (hasOwn(settings, 'isPrimiGruplari')) {
+        settings.isPrimiGruplari = canonicalizeLegacyIsPrimiGroups(settings.isPrimiGruplari);
+      }
+      return [periodId, settings];
+    })
+  );
+}
+
+function canonicalizeLegacyAnnualParameter(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const parameters = { ...value };
+  // AnnualPayrollParametersRepository fills the 2026 cap when a legacy
+  // Option<Decimal> is missing/None and the row is read back.
+  if (
+    parameters.year === 2026 &&
+    (!hasOwn(parameters, 'sigortaGvYillikBrutAsgariUcretTavani') ||
+      parameters.sigortaGvYillikBrutAsgariUcretTavani === null)
+  ) {
+    parameters.sigortaGvYillikBrutAsgariUcretTavani = LEGACY_DEFAULT_ANNUAL_INSURANCE_CAP;
+  }
+  return parameters;
+}
+
+function defaultLegacyAnnualParameter(year: number): UnknownRecord {
+  return {
+    year,
+    gelirVergisiDilimleri: LEGACY_DEFAULT_ANNUAL_TAX_BRACKETS.map((bracket) => ({ ...bracket })),
+    sigortaGvYillikBrutAsgariUcretTavani: LEGACY_DEFAULT_ANNUAL_INSURANCE_CAP,
+  };
+}
+
+function canonicalizeLegacyAnnualParameters(value: unknown, periods: unknown): unknown {
+  if (!Array.isArray(value) || !Array.isArray(periods)) return value;
+
+  const parameters = value.map(canonicalizeLegacyAnnualParameter);
+  const importedTaxYears = new Set<number>();
+  periods.forEach((period) => {
+    if (!isRecord(period) || typeof period.taxYear !== 'number' || !Number.isInteger(period.taxYear)) {
+      return;
+    }
+    importedTaxYears.add(period.taxYear);
+  });
+
+  const parameterYears = new Set<number>();
+  parameters.forEach((parameter) => {
+    if (!isRecord(parameter) || typeof parameter.year !== 'number' || !Number.isInteger(parameter.year)) {
+      return;
+    }
+    parameterYears.add(parameter.year);
+  });
+
+  importedTaxYears.forEach((year) => {
+    if (!parameterYears.has(year)) parameters.push(defaultLegacyAnnualParameter(year));
+  });
+  return parameters;
 }
 
 function canonicalizeLegacyPersonel(value: unknown): unknown {
@@ -107,20 +273,17 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
   const periods = legacyValueOrDefault(parsed, 'donemler', []);
   const rawPayrolls = legacyValueOrDefault(parsed, 'bordrolar', []);
   const payrolls = Array.isArray(rawPayrolls)
-    ? rawPayrolls.map((payroll) => {
-        if (!isRecord(payroll)) return payroll;
-        // V1 records did not have status. Only an absent field is defaulted;
-        // explicit null/invalid values remain visible to the validator.
-        return hasOwn(payroll, 'status')
-          ? payroll
-          : { ...payroll, status: 'CALCULATED' };
-      })
+    ? rawPayrolls.map(canonicalizeLegacyBordro)
     : rawPayrolls;
 
   const rawPersonnel = legacyValueOrDefault(parsed, 'personeller', []);
   const personnel = Array.isArray(rawPersonnel)
     ? rawPersonnel.map(canonicalizeLegacyPersonel)
     : rawPersonnel;
+  const annualPayrollParameters = canonicalizeLegacyAnnualParameters(
+    legacyValueOrDefault(parsed, 'annualPayrollParameters', []),
+    periods
+  );
 
   return {
     backupVersion: BACKUP_FORMAT_VERSION,
@@ -128,12 +291,14 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
     donemler: periods,
     aktifDonemId: legacyValueOrDefault(parsed, 'aktifDonemId', firstPeriodId(periods)),
     personeller: personnel,
-    kurumDegerleriMap: legacyValueOrDefault(parsed, 'kurumDegerleriMap', {}),
+    kurumDegerleriMap: canonicalizeLegacyInstitutionSettings(
+      legacyValueOrDefault(parsed, 'kurumDegerleriMap', {})
+    ),
     puantajlar: legacyValueOrDefault(parsed, 'puantajlar', []),
     bordrolar: payrolls,
     taxOpenings: legacyValueOrDefault(parsed, 'taxOpenings', []),
     sickLeaveRecords: legacyValueOrDefault(parsed, 'sickLeaveRecords', []),
-    annualPayrollParameters: legacyValueOrDefault(parsed, 'annualPayrollParameters', []),
+    annualPayrollParameters,
     zamAylari: legacyValueOrDefault(parsed, 'zamAylari', []),
   };
 }
@@ -179,21 +344,9 @@ export function parseLegacyBackup(json: string): PayrollStorageDto {
   return parseLegacyBackupRecord(parseJsonObject(json));
 }
 
-type ParseAttempt<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: unknown };
-
-function tryParseCurrentBrowserSnapshot(json: string): ParseAttempt<PayrollStorageDto> {
-  try {
-    return { ok: true, value: parseCurrentBrowserSnapshot(json) };
-  } catch (error) {
-    return { ok: false, error };
-  }
-}
-
 /**
  * User imports may use the strict current format or an explicitly supported
- * legacy format. Legacy parsing is reachable only after raw version/shape
+ * legacy format. Legacy parsing is reachable only after raw version
  * classification, never as a generic strict-parser catch-all.
  */
 export function parseImportedBackup(json: string): PayrollStorageDto {
@@ -201,14 +354,10 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   const version = getBackupVersion(raw);
 
   if (version === BACKUP_FORMAT_VERSION) {
-    const strictResult = tryParseCurrentBrowserSnapshot(json);
-    if (strictResult.ok === false) {
-      if (!isLegacyCandidate(raw)) throw strictResult.error;
-      return parseLegacyBackupRecord(raw);
-    }
-    return strictResult.value;
+    // A versioned V2 backup is current data. It must never reach the legacy
+    // repair path, even when its malformed values resemble an older backup.
+    return parseCurrentBrowserSnapshot(json);
   }
 
-  if (isLegacyCandidate(raw)) return parseLegacyBackupRecord(raw);
-  return parseCurrentBrowserSnapshot(json);
+  return parseLegacyBackupRecord(raw);
 }

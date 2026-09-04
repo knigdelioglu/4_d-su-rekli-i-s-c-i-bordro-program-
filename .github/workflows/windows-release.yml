@@ -28,7 +28,28 @@ jobs:
           bun-version: latest
 
       - name: Install frontend dependencies
-        run: bun install --frozen-lockfile
+        shell: pwsh
+        run: |
+          $installLog = Join-Path $env:RUNNER_TEMP "bun-install.log"
+          $installOutput = & bun install --frozen-lockfile 2>&1
+          $installExitCode = $LASTEXITCODE
+          $installOutput | Tee-Object -FilePath $installLog
+          if ($installExitCode -eq 0) {
+            Remove-Item -Force $installLog -ErrorAction SilentlyContinue
+            exit 0
+          }
+
+          $installText = Get-Content $installLog -Raw
+          if ($installText -notmatch '(?i)tarball|extract|download|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network') {
+            Write-Error "Bun dependency installation failed for a non-transient reason; not retrying."
+            exit $installExitCode
+          }
+
+          Write-Host "Initial Bun install failed during package download/extraction; clearing Bun cache and retrying once..."
+          bun pm cache rm
+          bun install --frozen-lockfile
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -Force $installLog -ErrorAction SilentlyContinue
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

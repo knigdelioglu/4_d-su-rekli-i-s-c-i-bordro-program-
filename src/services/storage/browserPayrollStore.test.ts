@@ -261,6 +261,12 @@ function firstRecord(snapshot: TestRecord, collection: string): TestRecord {
   return (snapshot[collection] as TestRecord[])[0];
 }
 
+function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
+  const legacy = parseTestSnapshot(makeV2Snapshot(netOdeme));
+  legacy.backupVersion = 1;
+  return legacy;
+}
+
 describe('BrowserPayrollStore', () => {
   test('does not fall back to localStorage when IndexedDB is unavailable', async () => {
     const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -313,7 +319,7 @@ describe('BrowserPayrollStore', () => {
     expect(
       isMigratableBackupPayload(JSON.stringify({ backupVersion: 2, donemler: [], personeller: [] }))
     ).toBe(false);
-    expect(isMigratableBackupPayload(makeV2Snapshot(64179.78))).toBe(true);
+    expect(isMigratableBackupPayload(makeV2Snapshot(64179.78))).toBe(false);
   });
 
   test('canonicalizes valid legacy JSON and rejects malformed Decimal before any write', () => {
@@ -337,6 +343,10 @@ describe('BrowserPayrollStore', () => {
     const canonicalPayload = parseTestSnapshot(canonical);
     expect(firstRecord(canonicalPayload, 'bordrolar').netOdeme).toBe('0.15');
     expect(canonicalPayload.backupVersion).toBe(2);
+    expect(firstRecord(canonicalPayload, 'personeller').sgkSicilNo).toBe('');
+    expect(firstRecord(canonicalPayload, 'personeller').iban).toBe('');
+    expect(firstRecord(canonicalPayload, 'personeller').hizmetYili).toBe(1);
+    expect(firstRecord(canonicalPayload, 'bordrolar').status).toBe('CALCULATED');
 
     const malformed = parseTestSnapshot(makeV2Snapshot('not-a-decimal'));
     malformed.backupVersion = 1;
@@ -460,7 +470,7 @@ describe('BrowserPayrollStore', () => {
       ...(duplicatePeriod.donemler as TestRecord[])[0],
     });
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicatePeriod))).toThrow(
-      '$.donemler[1].id tekrarlanan id'
+      '$.donemler[1] duplicate id'
     );
 
     const danglingAttendance = parseTestSnapshot(makeV2Snapshot());
@@ -487,10 +497,17 @@ describe('BrowserPayrollStore', () => {
     expect(parseLegacyBackup(JSON.stringify(legacyV1)).bordrolar[0].netOdeme).toBe('64179.78');
     expect(parseImportedBackup(JSON.stringify(legacyV1)).bordrolar[0].netOdeme).toBe('64179.78');
 
-    const legacyV2 = parseTestSnapshot(makeV2Snapshot(64179.78));
-    (legacyV2.bordrolar as TestRecord[])[0].netOdeme = 64179.78;
-    expect(parseImportedBackup(JSON.stringify(legacyV2)).bordrolar[0].netOdeme).toBe('64179.78');
-    expect(isSupportedLegacyBackupPayload(JSON.stringify(legacyV2))).toBe(true);
+    const currentV2WithNumber = parseTestSnapshot(makeV2Snapshot(64179.78));
+    expect(() => parseImportedBackup(JSON.stringify(currentV2WithNumber))).toThrow(
+      '$.bordrolar[0].netOdeme Decimal değeri string olmalıdır'
+    );
+    expect(isSupportedLegacyBackupPayload(JSON.stringify(currentV2WithNumber))).toBe(false);
+
+    const currentV2WithPartialSummary = parseTestSnapshot(makeV2Snapshot());
+    delete (firstRecord(currentV2WithPartialSummary, 'bordrolar').puantajOzeti as TestRecord).T;
+    expect(() => parseImportedBackup(JSON.stringify(currentV2WithPartialSummary))).toThrow(
+      '$.bordrolar[0].puantajOzeti.T zorunlu alan eksik'
+    );
 
     const malformedCurrentShape = {
       backupVersion: 2,
@@ -547,5 +564,332 @@ describe('BrowserPayrollStore', () => {
       persisted = true;
     });
     expect(persisted).toBe(true);
+  });
+});
+
+describe('SQLite persistence invariant parity', () => {
+  test('accepts the unique realistic snapshot', () => {
+    expect(() => parseCurrentBrowserSnapshot(makeV2Snapshot())).not.toThrow();
+  });
+
+  test('rejects duplicate personel.tcNo, including duplicate empty values', () => {
+    const duplicate = parseTestSnapshot(makeV2Snapshot());
+    (duplicate.personeller as TestRecord[]).push({
+      ...firstRecord(duplicate, 'personeller'),
+      id: 'person-2',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
+      '$.personeller[1].tcNo duplicate tcNo: 10000000000; ilk kayıt $.personeller[0].tcNo'
+    );
+
+    const emptyAllowed = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(emptyAllowed, 'personeller').tcNo = '';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(emptyAllowed))).not.toThrow();
+    const duplicateEmpty = parseTestSnapshot(JSON.stringify(emptyAllowed));
+    (duplicateEmpty.personeller as TestRecord[]).push({
+      ...firstRecord(duplicateEmpty, 'personeller'),
+      id: 'person-2',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicateEmpty))).toThrow(
+      '$.personeller[1].tcNo duplicate tcNo: ; ilk kayıt $.personeller[0].tcNo'
+    );
+  });
+
+  test('rejects duplicate attendance personelId+donemId', () => {
+    const duplicate = parseTestSnapshot(makeV2Snapshot());
+    (duplicate.puantajlar as TestRecord[]).push({
+      ...firstRecord(duplicate, 'puantajlar'),
+      id: 'attendance-b',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
+      '$.puantajlar[1] duplicate (personelId, donemId): person-1 / 2026-01; ilk kayıt $.puantajlar[0]'
+    );
+  });
+
+  test('rejects duplicate payroll personelId+donemId', () => {
+    const duplicate = parseTestSnapshot(makeV2Snapshot());
+    (duplicate.bordrolar as TestRecord[]).push({
+      ...firstRecord(duplicate, 'bordrolar'),
+      id: 'payroll-b',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
+      '$.bordrolar[1] duplicate (personelId, donemId): person-1 / 2026-01; ilk kayıt $.bordrolar[0]'
+    );
+  });
+
+  test('rejects duplicate tax opening personnelId+year', () => {
+    const duplicate = parseTestSnapshot(makeV2Snapshot());
+    (duplicate.taxOpenings as TestRecord[]).push({
+      ...firstRecord(duplicate, 'taxOpenings'),
+      id: 'opening-2',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
+      '$.taxOpenings[1] duplicate (personnelId, year): person-1 / 2026; ilk kayıt $.taxOpenings[0]'
+    );
+  });
+
+  test('rejects duplicate annualPayrollParameters.year', () => {
+    const duplicate = parseTestSnapshot(makeV2Snapshot());
+    (duplicate.annualPayrollParameters as TestRecord[]).push({
+      ...firstRecord(duplicate, 'annualPayrollParameters'),
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
+      '$.annualPayrollParameters[1].year duplicate year: 2026; ilk kayıt $.annualPayrollParameters[0].year'
+    );
+  });
+
+  test('rejects duplicate period taxYear+taxMonth even with different ids', () => {
+    const duplicate = parseTestSnapshot(makeV2Snapshot());
+    (duplicate.donemler as TestRecord[]).push({
+      ...firstRecord(duplicate, 'donemler'),
+      id: '2026-02',
+      yil: 2026,
+      ay: 2,
+      baslangicTarihi: '2026-02-15',
+      bitisTarihi: '2026-03-14',
+      donemAdi: 'Şubat 2026',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
+      '$.donemler[1] duplicate (taxYear, taxMonth): 2026 / 2; ilk kayıt $.donemler[0]'
+    );
+  });
+
+  test('rejects a dangling institution settings period key', () => {
+    const dangling = parseTestSnapshot(makeV2Snapshot());
+    const settings = (dangling.kurumDegerleriMap as TestRecord)['2026-01'] as TestRecord;
+    dangling.kurumDegerleriMap = {
+      ...(dangling.kurumDegerleriMap as TestRecord),
+      'missing-period': { ...settings, donemId: 'missing-period' },
+    };
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(dangling))).toThrow(
+      '$.kurumDegerleriMap["missing-period"] mevcut olmayan dönem kimliği: missing-period'
+    );
+  });
+
+  test('rejects a dangling active period but accepts the supported empty selection', () => {
+    const dangling = parseTestSnapshot(makeV2Snapshot());
+    dangling.aktifDonemId = 'missing-period';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(dangling))).toThrow(
+      '$.aktifDonemId mevcut olmayan dönem kimliği: missing-period'
+    );
+
+    const empty = parseTestSnapshot(makeV2Snapshot());
+    empty.aktifDonemId = '';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(empty))).not.toThrow();
+  });
+});
+
+describe('Legacy native Serde compatibility parity', () => {
+  test('defaults legacy V1 partial PuantajOzeti values to zero only in the legacy path', () => {
+    const legacy = makeLegacyV1Snapshot();
+    const summary = firstRecord(legacy, 'bordrolar').puantajOzeti as TestRecord;
+    delete summary.T;
+    delete summary.G;
+    delete summary.İ;
+    delete summary.GÇ;
+    delete summary.GÇT;
+    delete summary.R;
+
+    const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    expect(parsed.bordrolar[0].puantajOzeti).toEqual({
+      Ç: 1,
+      T: 0,
+      G: 0,
+      İ: 0,
+      GÇ: 0,
+      GÇT: 0,
+      R: 0,
+    });
+
+    const current = parseTestSnapshot(makeV2Snapshot());
+    delete (firstRecord(current, 'bordrolar').puantajOzeti as TestRecord).T;
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(current))).toThrow(
+      '$.bordrolar[0].puantajOzeti.T zorunlu alan eksik'
+    );
+  });
+
+  test('canonicalizes missing legacy optional Gelir/Kesinti fields to null', () => {
+    const legacy = makeLegacyV1Snapshot();
+    const bordro = firstRecord(legacy, 'bordrolar');
+    const gelirler = bordro.gelirler as TestRecord;
+    const kesintiler = bordro.kesintiler as TestRecord;
+    [
+      'tabanBrutAylik',
+      'tediye',
+      'tisIkramiyesi',
+      'ekOdeme',
+      'yemek',
+      'birlestirilmisSosyalYardim',
+      'vasitaYol',
+      'giyimYardimi',
+      'isPrimi',
+      'geceCalismasiUcreti',
+      'geceCalismasiTatiliUcreti',
+      'hizmetZammi',
+      'digerGelir',
+    ].forEach((key) => delete gelirler[key]);
+    [
+      'isciSgkPrimi',
+      'isciIssizlikPrimi',
+      'gelirVergisi',
+      'damgaVergisi',
+      'sendikaAidati',
+      'bes',
+      'icra',
+      'kisiBorcu',
+      'dogumAskerlikBorclanmasi',
+      'hayatSaglikSigortasi',
+      'digerKesinti',
+    ].forEach((key) => delete kesintiler[key]);
+
+    const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    expect({
+      tabanBrutAylik: parsed.bordrolar[0].gelirler.tabanBrutAylik,
+      geceCalismasiUcreti: parsed.bordrolar[0].gelirler.geceCalismasiUcreti,
+      digerGelir: parsed.bordrolar[0].gelirler.digerGelir,
+    }).toEqual({
+      tabanBrutAylik: null,
+      geceCalismasiUcreti: null,
+      digerGelir: null,
+    });
+    expect({
+      isciSgkPrimi: parsed.bordrolar[0].kesintiler.isciSgkPrimi,
+      hayatSaglikSigortasi: parsed.bordrolar[0].kesintiler.hayatSaglikSigortasi,
+      digerKesinti: parsed.bordrolar[0].kesintiler.digerKesinti,
+    }).toEqual({
+      isciSgkPrimi: null,
+      hayatSaglikSigortasi: null,
+      digerKesinti: null,
+    });
+  });
+
+  test('canonicalizes legacy Pek/GV serde(default) fields to Decimal zero', () => {
+    const legacy = makeLegacyV1Snapshot();
+    const bordro = firstRecord(legacy, 'bordrolar');
+    const pek = bordro.pekDetay as TestRecord;
+    const gv = bordro.gvDetay as TestRecord;
+    ['hamPek', 'devredenPekKullanilan', 'primMatrahi', 'altSinirTamamlamaFarki'].forEach(
+      (key) => delete pek[key]
+    );
+    [
+      'dogumAskerlikGvIndirimi',
+      'sigortaGvIndirimAdayi',
+      'sigortaGvAylikLimiti',
+      'sigortaGvYillikKalanLimiti',
+      'uygulanabilirSigortaGvIndirimi',
+    ].forEach((key) => delete gv[key]);
+
+    const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    expect({
+      hamPek: parsed.bordrolar[0].pekDetay?.hamPek,
+      devredenPekKullanilan: parsed.bordrolar[0].pekDetay?.devredenPekKullanilan,
+      primMatrahi: parsed.bordrolar[0].pekDetay?.primMatrahi,
+      altSinirTamamlamaFarki: parsed.bordrolar[0].pekDetay?.altSinirTamamlamaFarki,
+    }).toEqual({
+      hamPek: '0',
+      devredenPekKullanilan: '0',
+      primMatrahi: '0',
+      altSinirTamamlamaFarki: '0',
+    });
+    expect({
+      dogumAskerlikGvIndirimi: parsed.bordrolar[0].gvDetay?.dogumAskerlikGvIndirimi,
+      sigortaGvIndirimAdayi: parsed.bordrolar[0].gvDetay?.sigortaGvIndirimAdayi,
+      sigortaGvAylikLimiti: parsed.bordrolar[0].gvDetay?.sigortaGvAylikLimiti,
+      sigortaGvYillikKalanLimiti: parsed.bordrolar[0].gvDetay?.sigortaGvYillikKalanLimiti,
+      uygulanabilirSigortaGvIndirimi: parsed.bordrolar[0].gvDetay?.uygulanabilirSigortaGvIndirimi,
+    }).toEqual({
+      dogumAskerlikGvIndirimi: '0',
+      sigortaGvIndirimAdayi: '0',
+      sigortaGvAylikLimiti: '0',
+      sigortaGvYillikKalanLimiti: '0',
+      uygulanabilirSigortaGvIndirimi: '0',
+    });
+  });
+
+  test('matches native legacy annual-parameter defaults without making them a current FK rule', () => {
+    const legacyWithoutParameters = makeLegacyV1Snapshot();
+    delete legacyWithoutParameters.annualPayrollParameters;
+    const canonical = parseLegacyBackup(JSON.stringify(legacyWithoutParameters));
+    expect(canonical.annualPayrollParameters).toEqual([
+      {
+        year: 2026,
+        gelirVergisiDilimleri: [
+          { limit: '190000', oran: '0.15' },
+          { limit: '400000', oran: '0.20' },
+          { limit: '1500000', oran: '0.27' },
+          { limit: '5300000', oran: '0.35' },
+          { limit: '1000000000000000', oran: '0.40' },
+        ],
+        sigortaGvYillikBrutAsgariUcretTavani: '396360',
+      },
+    ]);
+
+    const legacyWithMissing2026Cap = makeLegacyV1Snapshot();
+    delete (firstRecord(legacyWithMissing2026Cap, 'annualPayrollParameters') as TestRecord)
+      .sigortaGvYillikBrutAsgariUcretTavani;
+    expect(parseLegacyBackup(JSON.stringify(legacyWithMissing2026Cap)).annualPayrollParameters[0]
+      .sigortaGvYillikBrutAsgariUcretTavani).toBe('396360');
+
+    const currentWithoutParameters = parseTestSnapshot(makeV2Snapshot());
+    delete currentWithoutParameters.annualPayrollParameters;
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(currentWithoutParameters))).toThrow(
+      '$.annualPayrollParameters zorunlu alan eksik'
+    );
+  });
+
+  test('treats explicit null top-level Option fields like native LegacyPayload', () => {
+    const legacy = makeLegacyV1Snapshot();
+    legacy.backupVersion = null;
+    legacy.exportedAt = null;
+    legacy.aktifDonemId = null;
+    legacy.kurumDegerleriMap = null;
+    legacy.puantajlar = null;
+    legacy.taxOpenings = null;
+    legacy.sickLeaveRecords = null;
+    legacy.annualPayrollParameters = null;
+    legacy.zamAylari = null;
+
+    const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    expect(parsed.aktifDonemId).toBe('2026-01');
+    expect(parsed.kurumDegerleriMap).toEqual({});
+    expect(parsed.puantajlar).toEqual([]);
+    expect(parsed.taxOpenings).toEqual([]);
+    expect(parsed.sickLeaveRecords).toEqual([]);
+    expect(parsed.annualPayrollParameters.length).toBe(1);
+    expect(parsed.zamAylari).toEqual([]);
+  });
+
+  test('defaults legacy missing IsPrimiGrupItem.aktif to true and respects native map-key ownership', () => {
+    const legacy = makeLegacyV1Snapshot();
+    const settingsMap = legacy.kurumDegerleriMap as TestRecord;
+    const settings = settingsMap['2026-01'] as TestRecord;
+    (settings.isPrimiGruplari as TestRecord[])[0].aktif = undefined;
+    delete (settings.isPrimiGruplari as TestRecord[])[0].aktif;
+    settings.donemId = 'legacy-period-id';
+
+    const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    expect(parsed.kurumDegerleriMap['2026-01'].donemId).toBe('2026-01');
+    expect(parsed.kurumDegerleriMap['2026-01'].isPrimiGruplari?.[0].aktif).toBe(true);
+  });
+
+  test('rejects explicit invalid legacy types and never repairs duplicate identities', () => {
+    const invalidType = makeLegacyV1Snapshot();
+    (firstRecord(invalidType, 'bordrolar').puantajOzeti as TestRecord).T = '20';
+    expect(() => parseLegacyBackup(JSON.stringify(invalidType))).toThrow(
+      '$.bordrolar[0].puantajOzeti.T tam sayı olmalıdır'
+    );
+
+    const invalidOptionalDecimal = makeLegacyV1Snapshot();
+    (firstRecord(invalidOptionalDecimal, 'bordrolar').gelirler as TestRecord).yemek = {};
+    expect(() => parseLegacyBackup(JSON.stringify(invalidOptionalDecimal))).toThrow();
+
+    const duplicate = makeLegacyV1Snapshot();
+    (duplicate.puantajlar as TestRecord[]).push({
+      ...firstRecord(duplicate, 'puantajlar'),
+      id: 'attendance-b',
+    });
+    expect(() => parseLegacyBackup(JSON.stringify(duplicate))).toThrow(
+      '$.puantajlar[1] duplicate (personelId, donemId): person-1 / 2026-01; ilk kayıt $.puantajlar[0]'
+    );
   });
 });

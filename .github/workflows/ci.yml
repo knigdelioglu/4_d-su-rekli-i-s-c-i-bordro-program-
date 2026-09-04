@@ -22,7 +22,24 @@ jobs:
           node-version: 22.23.2
 
       - name: Install JavaScript dependencies
-        run: bun install --frozen-lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_log="${RUNNER_TEMP}/bun-install.log"
+          if bun install --frozen-lockfile 2>&1 | tee "${install_log}"; then
+            rm -f "${install_log}"
+            exit 0
+          fi
+
+          if ! rg -qi 'tarball|extract|download|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network' "${install_log}"; then
+            echo "Bun dependency installation failed for a non-transient reason; not retrying." >&2
+            exit 1
+          fi
+
+          echo "Initial Bun install failed during package download/extraction; clearing Bun cache and retrying once..." >&2
+          bun pm cache rm
+          bun install --frozen-lockfile
+          rm -f "${install_log}"
 
       - name: Install Playwright Chromium
         run: bunx playwright install --with-deps chromium

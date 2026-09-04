@@ -511,26 +511,60 @@ export function validateBordroKaydi(
   optionalNullableInteger(value, 'raporluGun', path);
 }
 
+function assertUniqueBy<T>(
+  records: ReadonlyArray<T>,
+  keyOf: (record: T) => string,
+  collectionPath: string,
+  duplicateDescription: (record: T) => string,
+  duplicateField?: string
+): void {
+  const seen = new Map<string, number>();
+  records.forEach((record, index) => {
+    const key = keyOf(record);
+    const previousIndex = seen.get(key);
+    if (previousIndex !== undefined) {
+      fail(
+        duplicateField ? `${collectionPath}[${index}].${duplicateField}` : `${collectionPath}[${index}]`,
+        `duplicate ${duplicateDescription(record)}; ilk kayıt ${collectionPath}[${previousIndex}]${
+          duplicateField ? `.${duplicateField}` : ''}.`
+      );
+    }
+    seen.set(key, index);
+  });
+}
+
+function assertUniqueCompositeKey<T>(
+  records: ReadonlyArray<T>,
+  keyOf: (record: T) => ReadonlyArray<unknown>,
+  collectionPath: string,
+  fieldNames: ReadonlyArray<string>,
+  formatKey: (record: T) => string
+): void {
+  assertUniqueBy(
+    records,
+    (record) => JSON.stringify(keyOf(record)),
+    collectionPath,
+    (record) => `(${fieldNames.join(', ')}): ${formatKey(record)}`
+  );
+}
+
 function assertUniqueIds(
   records: ReadonlyArray<{ id: string }>,
   collectionPath: string
 ): void {
-  const seen = new Map<string, number>();
-  records.forEach((record, index) => {
-    const previousIndex = seen.get(record.id);
-    if (previousIndex !== undefined) {
-      fail(
-        `${collectionPath}[${index}].id`,
-        `tekrarlanan id: ${record.id} (ilk kayıt ${collectionPath}[${previousIndex}]).`
-      );
-    }
-    seen.set(record.id, index);
-  });
+  assertUniqueBy(records, (record) => record.id, collectionPath, (record) => `id: ${record.id}`);
 }
 
 function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
   const personnelIds = new Set(payload.personeller.map((person) => person.id));
   const periodIds = new Set(payload.donemler.map((period) => period.id));
+
+  if (payload.aktifDonemId !== '' && !periodIds.has(payload.aktifDonemId)) {
+    fail(
+      '$.aktifDonemId',
+      `mevcut olmayan dönem kimliği: ${payload.aktifDonemId}.`
+    );
+  }
 
   payload.puantajlar.forEach((attendance, index) => {
     if (!personnelIds.has(attendance.personelId)) {
@@ -575,9 +609,13 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
   });
 
   Object.entries(payload.kurumDegerleriMap).forEach(([key, settings]) => {
+    const settingsPath = fieldPath('$.kurumDegerleriMap', key);
+    if (!periodIds.has(key)) {
+      fail(settingsPath, `mevcut olmayan dönem kimliği: ${key}.`);
+    }
     if (settings.donemId !== key) {
       fail(
-        `${fieldPath('$.kurumDegerleriMap', key)}.donemId`,
+        `${settingsPath}.donemId`,
         `map anahtarıyla eşleşmiyor: ${settings.donemId}.`
       );
     }
@@ -655,6 +693,51 @@ export function validateCurrentPayrollPayload(
   assertUniqueIds(typedPayload.bordrolar, '$.bordrolar');
   assertUniqueIds(typedPayload.taxOpenings, '$.taxOpenings');
   assertUniqueIds(typedPayload.sickLeaveRecords, '$.sickLeaveRecords');
+
+  // These integrity checks mirror persistence-level uniqueness/FK invariants
+  // enforced by native SQLite. They are not payroll business rules.
+  assertUniqueBy(
+    typedPayload.personeller,
+    (person) => person.tcNo,
+    '$.personeller',
+    (person) => `tcNo: ${person.tcNo}`,
+    'tcNo'
+  );
+  assertUniqueCompositeKey(
+    typedPayload.puantajlar,
+    (attendance) => [attendance.personelId, attendance.donemId],
+    '$.puantajlar',
+    ['personelId', 'donemId'],
+    (attendance) => `${attendance.personelId} / ${attendance.donemId}`
+  );
+  assertUniqueCompositeKey(
+    typedPayload.bordrolar,
+    (payroll) => [payroll.personelId, payroll.donemId],
+    '$.bordrolar',
+    ['personelId', 'donemId'],
+    (payroll) => `${payroll.personelId} / ${payroll.donemId}`
+  );
+  assertUniqueCompositeKey(
+    typedPayload.taxOpenings,
+    (opening) => [opening.personnelId, opening.year],
+    '$.taxOpenings',
+    ['personnelId', 'year'],
+    (opening) => `${opening.personnelId} / ${opening.year}`
+  );
+  assertUniqueBy(
+    typedPayload.annualPayrollParameters,
+    (parameters) => String(parameters.year),
+    '$.annualPayrollParameters',
+    (parameters) => `year: ${parameters.year}`,
+    'year'
+  );
+  assertUniqueCompositeKey(
+    typedPayload.donemler,
+    (period) => [period.taxYear, period.taxMonth],
+    '$.donemler',
+    ['taxYear', 'taxMonth'],
+    (period) => `${period.taxYear} / ${period.taxMonth}`
+  );
   assertCrossRecordIntegrity(typedPayload);
 }
 

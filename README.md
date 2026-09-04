@@ -129,4 +129,10 @@ ve korunur. Legacy JSON ise yalnız açık canonicalization adımından sonra ay
 tam şema kontrolünü geçerse IndexedDB'ye yazılır. Bu yapısal kontrol Rust'taki
 bordro/mevzuat iş kurallarının yerine geçmez.
 
+Tarayıcı snapshot bütünlüğü ayrıca native SQLite'ın persistence seviyesindeki
+UNIQUE ve foreign-key invariants kurallarını mümkün olduğunca mirror eder
+(personel TC, kişi+dönem kayıtları, vergi yılı/ayı ve kurum ayarı referansları).
+Bunlar bordro business rule'ları değil, bozuk snapshot'ın authoritative state'e
+girmesini önleyen storage kontrolleridir.
+
 Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.
