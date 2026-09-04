@@ -3,15 +3,22 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Sidebar, type TabType } from './components/Sidebar';
+import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
-import { isKesintiTipi, type KesintiTipi } from './types/navigation';
+import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
+import {
+  isKesintiTipi,
+  isParametreSection,
+  isTabType,
+  type KesintiTipi,
+  type ParametreSection,
+  type TabType,
+} from './types/navigation';
 import { PersonelList } from './components/PersonelList';
 import { PuantajGrid } from './components/PuantajGrid';
 import { BordroHesaplama } from './components/BordroHesaplama';
 import { BankaListesi } from './components/Listeler/BankaListesi';
 import { KesintiListesi } from './components/Listeler/KesintiListesi';
-import { PeriodManagerModal } from './components/PeriodManagerModal';
 import {
   AnnualPayrollParameters,
   BACKUP_FORMAT_VERSION,
@@ -55,7 +62,9 @@ import { PayrollNoticeCenter } from './components/PayrollNoticeCenter';
 import { getInitialDataset } from './utils/sampleData';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
+const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
 const ACTIVE_KESINTI_STORAGE_KEY = '4d_bordro_active_kesinti';
+const ACTIVE_PARAMETRE_STORAGE_KEY = '4d_bordro_active_parametre';
 
 type DatasetFields = PayrollStorageFields;
 type UiDatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
@@ -113,6 +122,26 @@ function getInitialActiveKesintiType(): KesintiTipi {
   return 'sendika';
 }
 
+function getInitialActiveTab(): TabType {
+  try {
+    const saved = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    if (isTabType(saved)) return saved;
+  } catch {
+    // localStorage may be unavailable in a restricted browser context.
+  }
+  return 'personel';
+}
+
+function getInitialActiveParametreSection(): ParametreSection {
+  try {
+    const saved = localStorage.getItem(ACTIVE_PARAMETRE_STORAGE_KEY);
+    if (isParametreSection(saved)) return saved;
+  } catch {
+    // localStorage may be unavailable in a restricted browser context.
+  }
+  return 'gelir';
+}
+
 const EMPTY_UI_DATASET: UiDatasetFields = {
   donemler: [],
   aktifDonemId: '',
@@ -127,22 +156,12 @@ const EMPTY_UI_DATASET: UiDatasetFields = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<TabType>(() => {
-    try {
-      const saved = localStorage.getItem('4d_bordro_active_tab');
-      if (
-        saved &&
-        ['personel', 'puantaj', 'bordro', 'banka', 'kesintiler'].includes(saved)
-      ) {
-        return saved as TabType;
-      }
-    } catch {
-      // localStorage may be unavailable in a restricted browser context.
-    }
-    return 'personel';
-  });
+  const [activeTab, setActiveTab] = useState<TabType>(getInitialActiveTab);
   const [activeKesintiType, setActiveKesintiType] = useState<KesintiTipi>(
     getInitialActiveKesintiType
+  );
+  const [activeParametreSection, setActiveParametreSection] = useState<ParametreSection>(
+    getInitialActiveParametreSection
   );
 
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
@@ -152,7 +171,6 @@ export default function App() {
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
     string | undefined
   >(undefined);
-  const [isPeriodManagerOpen, setIsPeriodManagerOpen] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const uiDataset = useMemo<UiDatasetFields>(() => {
@@ -175,7 +193,7 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem('4d_bordro_active_tab', activeTab);
+      localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
     } catch {
       // Ignore navigation preference write errors.
     }
@@ -188,6 +206,14 @@ export default function App() {
       // Ignore deduction navigation preference write errors.
     }
   }, [activeKesintiType]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_PARAMETRE_STORAGE_KEY, activeParametreSection);
+    } catch {
+      // Ignore settings navigation preference write errors.
+    }
+  }, [activeParametreSection]);
 
   const applyDataset = useCallback((data: DatasetFields) => {
     setAuthoritativePayload(makeBackupPayload(data));
@@ -776,13 +802,22 @@ export default function App() {
   };
 
   const handleTabChange = (tab: TabType) => {
-    if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
-    else setActiveTab(tab);
+    setActiveTab(tab);
   };
 
   const handleKesintiTypeChange = (type: KesintiTipi) => {
     setActiveTab('kesintiler');
     setActiveKesintiType(type);
+  };
+
+  const handleParametreSectionChange = (section: ParametreSection) => {
+    setActiveTab('parametrelar');
+    setActiveParametreSection(section);
+  };
+
+  const handleOpenNewPeriodSettings = () => {
+    setActiveTab('parametrelar');
+    setActiveParametreSection('newPeriod');
   };
 
   return (
@@ -809,10 +844,12 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         {isDataLoaded && (
           <Sidebar
-            activeTab={isPeriodManagerOpen ? 'parametrelar' : activeTab}
+            activeTab={activeTab}
             activeKesintiType={activeKesintiType}
+            activeParametreSection={activeParametreSection}
             onTabChange={handleTabChange}
             onKesintiTypeChange={handleKesintiTypeChange}
+            onParametreSectionChange={handleParametreSectionChange}
             isOpen={isSidebarOpen}
             onClose={() => setIsSidebarOpen(false)}
           />
@@ -852,7 +889,7 @@ export default function App() {
                   />
                 )}
 
-                {!aktifDonem && activeTab !== 'personel' && (
+                {!aktifDonem && activeTab !== 'personel' && activeTab !== 'parametrelar' && (
                   <div className="mx-auto my-12 max-w-xl space-y-4 rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-xl font-bold text-indigo-600">!</div>
                     <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
@@ -860,7 +897,7 @@ export default function App() {
                       İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
                     </p>
                     <div className="flex items-center justify-center gap-3 pt-2">
-                      <button type="button" onClick={() => setIsPeriodManagerOpen(true)} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700">Yeni Dönem Aç</button>
+                      <button type="button" onClick={handleOpenNewPeriodSettings} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700">Yeni Dönem Aç</button>
                       <button type="button" onClick={handleResetSampleData} className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">Örnek Verileri Yükle</button>
                     </div>
                   </div>
@@ -909,30 +946,34 @@ export default function App() {
                     activeType={activeKesintiType}
                   />
                 )}
+
+                {activeTab === 'parametrelar' && (
+                  <PeriodSettingsPage
+                    activeSection={activeParametreSection}
+                    onSectionChange={handleParametreSectionChange}
+                    donemler={donemler}
+                    aktifDonem={aktifDonem}
+                    aktifDonemId={aktifDonemId}
+                    onSelectDonem={handleSelectDonem}
+                    onCreateDonem={handleCreateDonem}
+                    kurumDegerleriMap={kurumDegerleriMap}
+                    onSaveKurumDegerleri={handleSaveKurumDegerleri}
+                    personeller={personeller}
+                    annualPayrollParameters={annualPayrollParameters}
+                    onSaveAnnualPayrollParameters={handleSaveAnnualPayrollParameters}
+                    sickLeaveRecords={sickLeaveRecords}
+                    onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
+                    onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
+                    zamAylari={zamAylari}
+                    onSaveZamAylari={handleSaveZamAylari}
+                  />
+                )}
               </>
             )}
           </div>
         </main>
       </div>
 
-      <PeriodManagerModal
-        isOpen={isPeriodManagerOpen}
-        onClose={() => setIsPeriodManagerOpen(false)}
-        donemler={donemler}
-        aktifDonemId={aktifDonemId}
-        onSelectDonem={handleSelectDonem}
-        onCreateDonem={handleCreateDonem}
-        kurumDegerleriMap={kurumDegerleriMap}
-        onSaveKurumDegerleri={handleSaveKurumDegerleri}
-        personeller={personeller}
-        annualPayrollParameters={annualPayrollParameters}
-        onSaveAnnualPayrollParameters={handleSaveAnnualPayrollParameters}
-        zamAylari={zamAylari}
-        onSaveZamAylari={handleSaveZamAylari}
-        sickLeaveRecords={sickLeaveRecords}
-        onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
-        onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
-      />
     </div>
   );
 }

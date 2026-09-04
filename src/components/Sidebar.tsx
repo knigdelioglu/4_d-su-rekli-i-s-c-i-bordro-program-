@@ -5,37 +5,37 @@
 import React, { useEffect } from 'react';
 import {
   Building,
+  Calendar,
   Calculator,
   Clock,
   ChevronDown,
   ChevronRight,
+  FileText,
+  Gift,
   Layers,
   MoreHorizontal,
   Baby,
   HeartPulse,
+  Percent,
+  Plus,
   Receipt,
   Scale,
+  ShieldAlert,
   Settings,
   Users,
   Users2,
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
-import type { KesintiTipi } from '../types/navigation';
-
-export type TabType =
-  | 'personel'
-  | 'puantaj'
-  | 'bordro'
-  | 'banka'
-  | 'kesintiler'
-  | 'parametrelar';
+import type { KesintiTipi, ParametreSection, TabType } from '../types/navigation';
 
 interface SidebarProps {
   activeTab: TabType;
   activeKesintiType: KesintiTipi;
+  activeParametreSection: ParametreSection;
   onTabChange: (tab: TabType) => void;
   onKesintiTypeChange: (type: KesintiTipi) => void;
+  onParametreSectionChange: (section: ParametreSection) => void;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -48,6 +48,13 @@ interface NavigationItem {
 
 interface DeductionNavigationItem {
   id: KesintiTipi;
+  label: string;
+  testId: string;
+  icon: LucideIcon;
+}
+
+interface ParametreNavigationItem {
+  id: ParametreSection;
   label: string;
   testId: string;
   icon: LucideIcon;
@@ -75,16 +82,36 @@ const DEDUCTION_NAVIGATION_ITEMS: readonly DeductionNavigationItem[] = [
   { id: 'digerKesinti', label: 'Diğer Kesintiler', testId: 'nav-kesinti-diger', icon: MoreHorizontal },
 ];
 
+const PARAMETRE_NAVIGATION_ITEMS: readonly ParametreNavigationItem[] = [
+  { id: 'gelir', label: 'Gelir Parametreleri', testId: 'nav-parametre-gelir', icon: Settings },
+  {
+    id: 'kesinti',
+    label: 'Kesinti & Yasal Oranlar',
+    testId: 'nav-parametre-kesinti',
+    icon: ShieldAlert,
+  },
+  { id: 'annualTax', label: 'Yıllık GV Tarifesi', testId: 'nav-parametre-gv', icon: Percent },
+  { id: 'tediyeTis', label: 'Tediye & TİS', testId: 'nav-parametre-tediye-tis', icon: Gift },
+  { id: 'sickLeave', label: 'Rapor / İstirahat', testId: 'nav-parametre-rapor', icon: FileText },
+  { id: 'donemler', label: 'Dönemler', testId: 'nav-parametre-donemler', icon: Calendar },
+  { id: 'newPeriod', label: 'Yeni Dönem Aç', testId: 'nav-parametre-yeni-donem', icon: Plus },
+];
+
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   activeKesintiType,
+  activeParametreSection,
   onTabChange,
   onKesintiTypeChange,
+  onParametreSectionChange,
   isOpen,
   onClose,
 }) => {
   const [isKesintilerExpanded, setIsKesintilerExpanded] = React.useState(
     activeTab === 'kesintiler'
+  );
+  const [isParametrelerExpanded, setIsParametrelerExpanded] = React.useState(
+    activeTab === 'parametrelar'
   );
 
   useEffect(() => {
@@ -100,6 +127,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   useEffect(() => {
     if (activeTab === 'kesintiler') setIsKesintilerExpanded(true);
+    if (activeTab === 'parametrelar') setIsParametrelerExpanded(true);
   }, [activeTab]);
 
   return (
@@ -238,30 +266,78 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                onTabChange('parametrelar');
-                onClose();
-              }}
-              data-testid="nav-parametrelar"
-              aria-current={activeTab === 'parametrelar' ? 'page' : undefined}
-              className={`group flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 ${
-                activeTab === 'parametrelar'
-                  ? 'bg-indigo-600 text-white shadow-md'
-                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-              }`}
-            >
-              <Settings
-                aria-hidden="true"
-                className={`h-4 w-4 shrink-0 ${
+            <div>
+              <button
+                type="button"
+                data-testid="nav-parametrelar"
+                onClick={() => {
+                  if (activeTab !== 'parametrelar') {
+                    onTabChange('parametrelar');
+                    setIsParametrelerExpanded(true);
+                    return;
+                  }
+                  setIsParametrelerExpanded((expanded) => !expanded);
+                }}
+                aria-expanded={isParametrelerExpanded}
+                aria-controls="sidebar-parametre-items"
+                className={`group flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 ${
                   activeTab === 'parametrelar'
-                    ? 'text-white'
-                    : 'text-slate-400 group-hover:text-indigo-600'
+                    ? 'bg-indigo-50 text-indigo-700'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                 }`}
-              />
-              <span>6. Dönem Parametreleri</span>
-            </button>
+              >
+                <Settings
+                  aria-hidden="true"
+                  className={`h-4 w-4 shrink-0 ${
+                    activeTab === 'parametrelar'
+                      ? 'text-indigo-600'
+                      : 'text-slate-400 group-hover:text-indigo-600'
+                  }`}
+                />
+                <span className="flex-1">6. Dönem Parametreleri</span>
+                {isParametrelerExpanded ? (
+                  <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0" />
+                ) : (
+                  <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />
+                )}
+              </button>
+
+              {isParametrelerExpanded && (
+                <div
+                  id="sidebar-parametre-items"
+                  className="ml-2 space-y-0.5 border-l border-slate-200 pl-2"
+                >
+                  {PARAMETRE_NAVIGATION_ITEMS.map(({ id, label, testId, icon: Icon }) => {
+                    const isActive = activeTab === 'parametrelar' && activeParametreSection === id;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        data-testid={testId}
+                        onClick={() => {
+                          onParametreSectionChange(id);
+                          onClose();
+                        }}
+                        aria-current={isActive ? 'page' : undefined}
+                        className={`group flex min-h-10 w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 ${
+                          isActive
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700'
+                        }`}
+                      >
+                        <Icon
+                          aria-hidden="true"
+                          className={`h-3.5 w-3.5 shrink-0 ${
+                            isActive ? 'text-white' : 'text-slate-400 group-hover:text-indigo-600'
+                          }`}
+                        />
+                        <span>{label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </nav>
         </div>
       </aside>

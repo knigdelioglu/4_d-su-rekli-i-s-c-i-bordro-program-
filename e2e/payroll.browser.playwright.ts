@@ -381,7 +381,7 @@ async function selectPeriod(page: Page, periodId: string): Promise<void> {
   await expect(page.getByTestId('payroll-screen')).toHaveAttribute('data-period-id', periodId);
 }
 
-test('desktop primary navigation lives in the sidebar and period parameters open the existing modal', async ({ page }) => {
+test('desktop primary navigation lives in the sidebar and period parameters open as a page', async ({ page }) => {
   await page.goto('/');
 
   for (const tab of ['personel', 'puantaj', 'bordro', 'banka', 'kesintiler', 'parametrelar']) {
@@ -394,8 +394,67 @@ test('desktop primary navigation lives in the sidebar and period parameters open
   await expect(page.getByTestId('nav-personel')).not.toHaveAttribute('aria-current', 'page');
 
   await page.getByTestId('nav-parametrelar').click();
-  await expect(page.getByTestId('nav-parametrelar')).toHaveAttribute('aria-current', 'page');
-  await expect(page.getByRole('heading', { name: 'Bordro Dönemi ve Kurum Değerleri' })).toBeVisible();
+  await expect(page.getByTestId('nav-parametrelar')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('period-settings-page')).toBeVisible();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+});
+
+test('period settings child navigation renders sections and persists after reload', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await expect(page.getByTestId('nav-parametre-gelir')).toHaveAttribute('aria-current', 'page');
+  for (const childTestId of [
+    'nav-parametre-gelir',
+    'nav-parametre-kesinti',
+    'nav-parametre-gv',
+    'nav-parametre-tediye-tis',
+    'nav-parametre-rapor',
+    'nav-parametre-donemler',
+    'nav-parametre-yeni-donem',
+  ]) {
+    await expect(page.getByTestId(childTestId)).toBeVisible();
+  }
+
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('nav-parametre-gelir')).not.toBeVisible();
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('nav-parametre-gelir')).toHaveAttribute('aria-current', 'page');
+
+  await page.getByTestId('nav-parametre-gv').click();
+  await expect(page.getByTestId('period-settings-gv')).toBeVisible();
+  await expect(page.getByTestId('nav-parametre-gv')).toHaveAttribute('aria-current', 'page');
+
+  await page.getByTestId('nav-parametre-tediye-tis').click();
+  await expect(page.getByTestId('period-settings-tediye-tis')).toBeVisible();
+
+  await page.getByTestId('nav-parametre-donemler').click();
+  await expect(page.getByTestId('period-settings-donemler')).toBeVisible();
+
+  await page.getByTestId('nav-parametre-gv').click();
+  await page.reload();
+  await expect(page.getByTestId('nav-parametrelar')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.getByTestId('period-settings-page')).toBeVisible();
+  await expect(page.getByTestId('period-settings-gv')).toBeVisible();
+  await expect(page.getByTestId('nav-parametre-gv')).toHaveAttribute('aria-current', 'page');
+});
+
+test('period settings expose new period creation without an active period', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await page.getByTestId('period-settings-gelir').getByRole('button', { name: 'Yeni Dönem Aç' }).click();
+
+  await expect(page.getByTestId('period-settings-yeni-donem')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Bordro Dönemi ve Kurum Değerleri' })).toHaveCount(0);
+
+  await page.getByTestId('period-settings-yeni-donem').getByRole('button', { name: 'Dönemi Oluştur ve Geç' }).click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await expect(page.getByTestId('active-period-selector')).not.toHaveValue('');
 });
 
 test('mobile navigation opens as a drawer without reducing the content area', async ({ page }) => {
