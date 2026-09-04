@@ -1,6 +1,5 @@
 {
-  "name": "4/D Sürekli İşçi Bordro Programı",
+  "name": "4/D Bordro",
   "description": "4/D sürekli işçi bordro hesaplama, puantaj yönetimi, banka ve kesinti listeleri uygulaması",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "requestFramePermissions": []
 }

@@ -9,9 +9,11 @@ import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
 import {
   isKesintiTipi,
   isParametreSection,
+  isPayrollViewType,
   isTabType,
   type KesintiTipi,
   type ParametreSection,
+  type PayrollViewType,
   type TabType,
 } from './types/navigation';
 import { PersonelList } from './components/PersonelList';
@@ -58,13 +60,16 @@ import {
   parseCurrentBrowserSnapshot,
   parseImportedBackup,
 } from './services/storage/payrollPayload';
-import { PayrollNoticeCenter } from './components/PayrollNoticeCenter';
+import { usePayrollNotices } from './components/PayrollNoticeCenter';
+import { PeriodSummary } from './components/Dashboard/PeriodSummary';
+import { DataBackupPage } from './components/DataBackupPage';
 import { getInitialDataset } from './utils/sampleData';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
 const ACTIVE_KESINTI_STORAGE_KEY = '4d_bordro_active_kesinti';
 const ACTIVE_PARAMETRE_STORAGE_KEY = '4d_bordro_active_parametre';
+const ACTIVE_PAYROLL_VIEW_STORAGE_KEY = '4d_bordro_active_payroll_view';
 
 type DatasetFields = PayrollStorageFields;
 type UiDatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
@@ -142,6 +147,16 @@ function getInitialActiveParametreSection(): ParametreSection {
   return 'gelir';
 }
 
+function getInitialActivePayrollView(): PayrollViewType {
+  try {
+    const saved = localStorage.getItem(ACTIVE_PAYROLL_VIEW_STORAGE_KEY);
+    if (isPayrollViewType(saved)) return saved;
+  } catch {
+    // localStorage may be unavailable in a restricted browser context.
+  }
+  return 'normal';
+}
+
 const EMPTY_UI_DATASET: UiDatasetFields = {
   donemler: [],
   aktifDonemId: '',
@@ -162,6 +177,9 @@ export default function App() {
   );
   const [activeParametreSection, setActiveParametreSection] = useState<ParametreSection>(
     getInitialActiveParametreSection
+  );
+  const [activePayrollView, setActivePayrollView] = useState<PayrollViewType>(
+    getInitialActivePayrollView
   );
 
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
@@ -214,6 +232,14 @@ export default function App() {
       // Ignore settings navigation preference write errors.
     }
   }, [activeParametreSection]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(ACTIVE_PAYROLL_VIEW_STORAGE_KEY, activePayrollView);
+    } catch {
+      // Ignore payroll child navigation preference write errors.
+    }
+  }, [activePayrollView]);
 
   const applyDataset = useCallback((data: DatasetFields) => {
     setAuthoritativePayload(makeBackupPayload(data));
@@ -357,6 +383,15 @@ export default function App() {
     }
     return toPayrollBoundaryDto(EMPTY_UI_DATASET) as unknown as PayrollDatasetSnapshot;
   }, [authoritativePayload]);
+  const {
+    notices: payrollNotices,
+    counts: payrollNoticeCounts,
+    isRefreshing: arePayrollNoticesRefreshing,
+    loadError: payrollNoticeLoadError,
+    refresh: refreshPayrollNotices,
+  } = usePayrollNotices(isDataLoaded, aktifDonem?.id, payrollEngine, payrollDataset);
+  const payrollNoticeCount =
+    payrollNoticeCounts.critical + payrollNoticeCounts.warning + payrollNoticeCounts.info;
 
   /**
    * Browser mutations are authorized by the same Rust policy as native
@@ -799,10 +834,16 @@ export default function App() {
   const handleSelectPersonelForBordro = (personelId: string) => {
     setTargetPersonelIdForBordro(personelId);
     setActiveTab('bordro');
+    setActivePayrollView('normal');
   };
 
   const handleTabChange = (tab: TabType) => {
     setActiveTab(tab);
+  };
+
+  const handlePayrollViewChange = (view: PayrollViewType) => {
+    setActivePayrollView(view);
+    setActiveTab('bordro');
   };
 
   const handleKesintiTypeChange = (type: KesintiTipi) => {
@@ -822,12 +863,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
-      <PayrollNoticeCenter
-        enabled={isDataLoaded}
-        periodId={aktifDonem?.id}
-        engine={payrollEngine}
-        dataset={payrollDataset}
-      />
       {isDataLoaded && (
         <TopBar
           donemler={donemler}
@@ -836,6 +871,8 @@ export default function App() {
           onExportBackup={handleExportBackup}
           onImportBackup={handleImportBackup}
           onResetSampleData={handleResetSampleData}
+          noticeCount={payrollNoticeCount}
+          onOpenNoticeSummary={() => setActiveTab('ozet')}
           isSidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen((current) => !current)}
         />
@@ -847,9 +884,11 @@ export default function App() {
             activeTab={activeTab}
             activeKesintiType={activeKesintiType}
             activeParametreSection={activeParametreSection}
+            activePayrollView={activePayrollView}
             onTabChange={handleTabChange}
             onKesintiTypeChange={handleKesintiTypeChange}
             onParametreSectionChange={handleParametreSectionChange}
+            onPayrollViewChange={handlePayrollViewChange}
             isOpen={isSidebarOpen}
             onClose={() => setIsSidebarOpen(false)}
           />
@@ -889,7 +928,11 @@ export default function App() {
                   />
                 )}
 
-                {!aktifDonem && activeTab !== 'personel' && activeTab !== 'parametrelar' && (
+                {!aktifDonem &&
+                  activeTab !== 'personel' &&
+                  activeTab !== 'parametrelar' &&
+                  activeTab !== 'ozet' &&
+                  activeTab !== 'veri' && (
                   <div className="mx-auto my-12 max-w-xl space-y-4 rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
                     <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-xl font-bold text-indigo-600">!</div>
                     <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
@@ -901,6 +944,26 @@ export default function App() {
                       <button type="button" onClick={handleResetSampleData} className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">Örnek Verileri Yükle</button>
                     </div>
                   </div>
+                )}
+
+                {activeTab === 'ozet' && (
+                  <PeriodSummary
+                    aktifDonem={aktifDonem}
+                    personeller={personeller}
+                    puantajlar={puantajlar}
+                    bordrolar={bordrolar}
+                    activeKurumDegerleri={aktifDonem ? kurumDegerleriMap[aktifDonem.id] : undefined}
+                    annualPayrollParameters={annualPayrollParameters}
+                    payrollNotices={payrollNotices}
+                    isRefreshingNotices={arePayrollNoticesRefreshing}
+                    noticeLoadError={payrollNoticeLoadError}
+                    onRefreshNotices={refreshPayrollNotices}
+                    onNavigate={(tab, payrollView, parametreSection) => {
+                      if (payrollView) setActivePayrollView(payrollView);
+                      if (parametreSection) setActiveParametreSection(parametreSection);
+                      setActiveTab(tab);
+                    }}
+                  />
                 )}
 
                 {aktifDonem && activeTab === 'puantaj' && (
@@ -925,6 +988,7 @@ export default function App() {
                     sickLeaveRecords={sickLeaveRecords}
                     annualPayrollParameters={annualPayrollParameters}
                     zamAylari={zamAylari}
+                    activePayrollView={activePayrollView}
                     authoritativeDataset={payrollDataset}
                     onSaveBordro={handleSaveBordro}
                     onSavePersonel={handleSavePersonel}
@@ -966,6 +1030,20 @@ export default function App() {
                     onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
                     zamAylari={zamAylari}
                     onSaveZamAylari={handleSaveZamAylari}
+                  />
+                )}
+
+                {activeTab === 'veri' && authoritativePayload && (
+                  <DataBackupPage
+                    lastSavedAt={authoritativePayload.exportedAt}
+                    hasData={personeller.length > 0 || donemler.length > 0 || bordrolar.length > 0}
+                    storageLabel={tauriBridge.isTauriAvailable() ? 'Bu cihazda yerel kayıt' : 'Bu tarayıcıda yerel kayıt'}
+                    storageDetail={tauriBridge.isTauriAvailable()
+                      ? 'Veriler bu cihazdaki yerel uygulama veritabanında tutulur; düzenli JSON yedeği almanız önerilir.'
+                      : 'Veriler IndexedDB içinde tutulur; düzenli JSON yedeği almanız önerilir.'}
+                    onExportBackup={handleExportBackup}
+                    onImportBackup={handleImportBackup}
+                    onResetSampleData={handleResetSampleData}
                   />
                 )}
               </>

@@ -5,8 +5,19 @@ export const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
   NORMAL: 'Normal Maaş',
   TEDIYE: 'Tediye',
   TIS_IKRAMIYE: 'TİS İkramiyesi',
-  SUPPLEMENTAL: 'Ek Tahakkuk',
+  SUPPLEMENTAL: 'Ek Ödeme',
 };
+
+export const PAYROLL_STATUS_LABELS: Record<BordroKaydi['status'], string> = {
+  DRAFT: 'Taslak',
+  CALCULATED: 'Hesaplandı',
+  STALE: 'Yeniden Hesaplanmalı',
+  FINALIZED: 'Kesinleştirildi',
+};
+
+export function getPayrollStatusLabel(status: BordroKaydi['status']): string {
+  return PAYROLL_STATUS_LABELS[status];
+}
 
 export interface AuthoritativeAccrualRow {
   personel: Personel;

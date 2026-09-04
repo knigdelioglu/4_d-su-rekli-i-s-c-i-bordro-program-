@@ -21,6 +21,14 @@ import {
   filterFinalizeNotices,
   hasBlockingFinalizeNotice,
 } from './payrollFinalizeRules';
+import { getPayrollStatusLabel } from './Listeler/accrualListData';
+
+const accrualTypeLabels: Record<BordroKaydi['accrualType'], string> = {
+  NORMAL: 'Normal Maaş',
+  TEDIYE: 'Tediye',
+  TIS_IKRAMIYE: 'TİS İkramiyesi',
+  SUPPLEMENTAL: 'Ek Ödeme',
+};
 
 interface PayrollFinalizeModalProps {
   personel: Personel;
@@ -211,8 +219,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
                   <h3 className="text-sm font-bold">Bordroyu Kesinleştir</h3>
                   <p className="mt-0.5 text-[11px] text-slate-400">
                     {personel.ad} {personel.soyad} · {donem.donemAdi} ·{' '}
-                    {authoritativeBordro.accrualType} · {authoritativeBordro.paymentDate} · sıra{' '}
-                    {authoritativeBordro.sequence}
+                    {accrualTypeLabels[authoritativeBordro.accrualType]} · {authoritativeBordro.paymentDate}
                   </p>
                 </div>
               </div>
@@ -230,7 +237,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
               <div className="grid grid-cols-2 gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-4">
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Durum</div>
-                  <div className="mt-1 text-xs font-bold text-slate-900">{authoritativeBordro.status}</div>
+                  <div className="mt-1 text-xs font-bold text-slate-900">{getPayrollStatusLabel(authoritativeBordro.status)}</div>
                 </div>
                 <div>
                   <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Brüt</div>
@@ -261,7 +268,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
 
                   {!reviewError && authoritativeBordro.status !== 'CALCULATED' && (
                     <div className="rounded-xl border border-rose-300 bg-rose-50 p-3 text-xs font-semibold text-rose-900">
-                      Bu bordro CALCULATED durumda değil. Kesinleştirme öncesi yeniden hesaplanması gerekir.
+                      Bu bordro hesaplanmış durumda değil. Kesinleştirme öncesi yeniden hesaplanması gerekir.
                     </div>
                   )}
 

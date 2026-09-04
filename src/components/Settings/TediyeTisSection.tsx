@@ -129,7 +129,7 @@ export const TediyeTisSection: React.FC<TediyeTisSectionProps> = ({
   return (
     <section data-testid="period-settings-tediye-tis" className="space-y-6">
       <header>
-        <h2 className="text-xl font-bold text-slate-900">Tediye &amp; TİS</h2>
+        <h2 className="text-xl font-bold text-slate-900">TİS / Tediye Takvimi</h2>
         <p className="mt-1 text-xs text-slate-500">
           Tediye ve TİS ikramiye referans takvimlerini aktif dönem için yönetin.
         </p>

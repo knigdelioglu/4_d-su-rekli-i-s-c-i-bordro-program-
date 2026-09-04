@@ -15,6 +15,8 @@ interface PersonelFormModalProps {
   isPrimiGruplari?: IsPrimiGrupItem[];
 }
 
+type PersonelFormSection = 'basic' | 'deductions' | 'advanced';
+
 export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   isOpen,
   onClose,
@@ -42,6 +44,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [activeFormSection, setActiveFormSection] = useState<PersonelFormSection>('basic');
 
   useEffect(() => {
     if (personelToEdit) {
@@ -66,6 +69,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       });
     }
     setErrors({});
+    setActiveFormSection('basic');
   }, [personelToEdit, isOpen, isPrimiGruplari]);
 
   if (!isOpen) return null;
@@ -188,6 +192,31 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
               {errors.form}
             </div>
           )}
+          <div role="tablist" aria-label="Personel bilgi bölümleri" className="grid grid-cols-3 gap-1 rounded-xl bg-slate-100 p-1">
+            {([
+              ['basic', 'Temel Bilgiler'],
+              ['deductions', 'Kesintiler'],
+              ['advanced', 'Vergi / İleri'],
+            ] as const).map(([section, label]) => (
+              <button
+                key={section}
+                type="button"
+                role="tab"
+                aria-selected={activeFormSection === section}
+                onClick={() => setActiveFormSection(section)}
+                data-testid={`personel-form-tab-${section}`}
+                className={`rounded-lg px-2 py-2 text-xs font-bold transition-colors ${
+                  activeFormSection === section
+                    ? 'bg-white text-indigo-700 shadow-2xs'
+                    : 'text-slate-500 hover:bg-white/70 hover:text-slate-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {activeFormSection === 'basic' && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* T.C. Kimlik No */}
             <div>
@@ -338,8 +367,11 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
               />
             </div>
+          </div>
+          )}
 
             {/* Sürekli Kesinti Tanımları Section */}
+          {activeFormSection === 'deductions' && (
             <div className="sm:col-span-2 bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3 mt-2">
               <div className="flex items-center justify-between border-b border-slate-200 pb-2">
                 <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -594,6 +626,11 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                 </div>
               </div>
 
+            </div>
+          )}
+
+          {activeFormSection === 'advanced' && (
+            <>
               <div className="sm:col-span-2 bg-violet-50/70 p-4 rounded-xl border border-violet-200 space-y-3 mt-2">
                 <div>
                   <h4 className="text-xs font-bold text-violet-950 uppercase tracking-wider">GV İndirimi Uygunluk Girdileri</h4>
@@ -745,8 +782,8 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
+            </>
+          )}
 
           </div>
 

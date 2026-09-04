@@ -238,7 +238,7 @@ export function calculatePuantajOzeti(gunler: Record<string, PuantajKodu>): Puan
 
 /**
  * Generates default attendance codes for a period
- * Weekdays -> Ç, Sunday -> T, Saturday -> Ç or T (Default: Sunday is T, Mon-Sat is Ç)
+ * 4/D public-worker default: Monday-Friday -> Ç, Saturday-Sunday -> T.
  */
 export function generateDefaultPuantajGunler(
   baslangicTarihi: string,
@@ -248,11 +248,7 @@ export function generateDefaultPuantajGunler(
   const gunler: Record<string, PuantajKodu> = {};
 
   days.forEach((day) => {
-    if (day.isSunday) {
-      gunler[day.dateStr] = 'T'; // Hafta tatili
-    } else {
-      gunler[day.dateStr] = 'Ç'; // Çalışılan gün
-    }
+    gunler[day.dateStr] = day.isWeekend ? 'T' : 'Ç'; // Hafta tatili / çalışılan gün
   });
 
   return gunler;

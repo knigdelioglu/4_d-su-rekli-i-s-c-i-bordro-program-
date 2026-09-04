@@ -365,7 +365,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       ) : (
         <MissingPeriodSection
           testId="period-settings-gelir"
-          title="Gelir Parametreleri"
+          title="Ücretler"
           onOpenNewPeriod={openNewPeriod}
         />
       );
@@ -384,7 +384,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       ) : (
         <MissingPeriodSection
           testId="period-settings-kesinti"
-          title="Kesinti & Yasal Oranlar"
+          title="Vergi & Yasal Oranlar"
           onOpenNewPeriod={openNewPeriod}
         />
       );
@@ -416,7 +416,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       ) : (
         <MissingPeriodSection
           testId="period-settings-tediye-tis"
-          title="Tediye & TİS"
+          title="TİS / Tediye Takvimi"
           onOpenNewPeriod={openNewPeriod}
         />
       );

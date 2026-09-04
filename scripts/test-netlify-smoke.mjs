@@ -124,8 +124,9 @@ function isAllowedBrowserRequest(request, origin) {
   const staticPath =
     url.pathname === '/' ||
     url.pathname === '/index.html' ||
+    url.pathname === '/manifest.webmanifest' ||
     url.pathname.startsWith('/assets/') ||
-    /^\/favicon(?:\.ico)?$/.test(url.pathname);
+    /^\/favicon(?:\.ico|\.svg)?$/.test(url.pathname);
   return url.origin === origin && ['GET', 'HEAD'].includes(request.method()) && staticPath;
 }
 
@@ -196,6 +197,18 @@ try {
   page.on('pageerror', (error) => runtimeIssues.push(`pageerror: ${error.message}`));
 
   await page.goto(`${baseUrl}/`);
+  const runtimeMetadata = await page.evaluate(async () => ({
+    title: document.title,
+    description: document.querySelector('meta[name="description"]')?.getAttribute('content') || '',
+    manifest: document.querySelector('link[rel="manifest"]')?.getAttribute('href') || '',
+    serviceWorkerRegistrations: 'serviceWorker' in navigator
+      ? (await navigator.serviceWorker.getRegistrations()).length
+      : 0,
+  }));
+  assert.equal(runtimeMetadata.title, '4/D Bordro', 'Netlify runtime document.title beklenen değerde değil.');
+  assert.match(runtimeMetadata.description, /4\/D .*bordro/i, 'Netlify runtime meta description beklenen kimliği içermiyor.');
+  assert.equal(runtimeMetadata.manifest, '/manifest.webmanifest', 'Netlify runtime manifest bağlantısı beklenen değerde değil.');
+  assert.equal(runtimeMetadata.serviceWorkerRegistrations, 0, 'Eski metadata taşıyabilecek kayıtlı service worker bulundu.');
   await page.getByText('4/D Personel Kayıtları (0)').waitFor();
   const wasmBrowserResponse = page.waitForResponse(
     (response) => /\.wasm(?:\?|$)/.test(response.url()),
@@ -206,7 +219,8 @@ try {
   assert.equal((await wasmBrowserResponse).status(), 200, 'Chromium WASM isteği başarılı değil.');
   await page.getByText(/4\/D Personel Kayıtları \(5\)/).waitFor();
   await installCalculableFixture(page);
-  await page.getByRole('button', { name: '3. Bordro Hesaplama' }).click();
+  await page.getByTestId('nav-bordro').click();
+  await page.getByTestId('nav-bordro-normal').click();
   await page.getByTestId('calculate-payroll-p-1').click();
   await page.getByText(/Ahmet Yılmaz bordrosu başarıyla hesaplandı\./).waitFor();
 

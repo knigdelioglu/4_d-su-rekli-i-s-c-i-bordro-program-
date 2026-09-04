@@ -1,0 +1,19 @@
+{
+  "name": "4/D Bordro",
+  "short_name": "4/D Bordro",
+  "description": "4/D sürekli işçi bordro, puantaj ve tahakkuk yönetimi",
+  "lang": "tr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#f8fafc",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

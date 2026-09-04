@@ -31,7 +31,7 @@ export const SickLeaveSection: React.FC<SickLeaveSectionProps> = ({
 }) => (
   <section data-testid="period-settings-rapor" className="space-y-6">
     <header>
-      <h2 className="text-xl font-bold text-slate-900">Rapor / İstirahat</h2>
+      <h2 className="text-xl font-bold text-slate-900">Raporlar</h2>
       <p className="mt-1 text-xs text-slate-500">
         Personel rapor olaylarını ve kurum ödeme kuralı kapsamındaki kayıtları yönetin.
       </p>

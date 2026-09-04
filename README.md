@@ -1,4 +1,4 @@
-# 4/D Sürekli İşçi Bordro Programı
+# 4/D Bordro
 
 React + TypeScript arayüzü, Tauri/Rust servisleri ve SQLite yerel veritabanı kullanan 4/D sürekli işçi bordro uygulamasıdır. Üretim bordro hesabı, native Tauri ve bağımsız tarayıcı çalışma zamanları tarafından paylaşılan tek Rust `payroll-core` motorunda yapılır.
 

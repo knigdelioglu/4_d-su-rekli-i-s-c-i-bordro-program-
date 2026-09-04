@@ -58,6 +58,30 @@ for (const asset of wasmAssets) {
 
 const indexPath = join(distDir, 'index.html');
 const index = readFileSync(indexPath, 'utf8');
+if (!/<title>4\/D Bordro<\/title>/i.test(index)) {
+  fail('dist/index.html kullanıcıya görünen başlık olarak "4/D Bordro" içermiyor.');
+}
+if (/(?:AI Studio|Gemini|Google AI)/i.test(index)) {
+  fail('dist/index.html eski yapay zekâ/servis markası kalıntısı içeriyor.');
+}
+if (/navigator\.serviceWorker|serviceWorker\.register|registerSW/i.test(index)) {
+  fail('dist/index.html eski metadata taşıyabilecek bir service worker kaydı içeriyor.');
+}
+
+const manifestPath = join(distDir, 'manifest.webmanifest');
+const faviconPath = join(distDir, 'favicon.svg');
+if (!existsSync(manifestPath)) fail('dist manifest.webmanifest bulunamadı.');
+if (!existsSync(faviconPath)) fail('dist favicon.svg bulunamadı.');
+if (existsSync(manifestPath)) {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    if (manifest.name !== '4/D Bordro' || manifest.short_name !== '4/D Bordro') {
+      fail('web manifest uygulama adını "4/D Bordro" olarak belirtmiyor.');
+    }
+  } catch (error) {
+    fail(`web manifest JSON olarak okunamadı: ${String(error)}`);
+  }
+}
 if (/(["'`])\/src\//.test(index)) fail('index.html /src/ absolute asset URL içeriyor.');
 
 for (const [, reference] of index.matchAll(/\b(?:src|href)=["']([^"']+)["']/g)) {
@@ -75,6 +99,9 @@ const gluePath = javascriptAssets.find((path) => {
   const source = readFileSync(path, 'utf8');
   return /instantiateStreaming/.test(source) && /\.wasm/.test(source);
 });
+if (javascriptAssets.some((path) => /navigator\.serviceWorker|serviceWorker\.register|registerSW/i.test(readFileSync(path, 'utf8')))) {
+  fail('dist JavaScript bundle içinde eski metadata taşıyabilecek bir service worker kaydı bulundu.');
+}
 if (!gluePath) {
   fail('Vite output içinde generated WASM glue bundle bulunamadı.');
 } else {

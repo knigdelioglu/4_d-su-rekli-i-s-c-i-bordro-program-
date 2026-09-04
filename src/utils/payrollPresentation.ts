@@ -198,7 +198,8 @@ export function generateDefaultPuantajGunler(
 ): Record<string, PuantajKodu> {
   const gunler: Record<string, PuantajKodu> = {};
   getPeriodDaysList(baslangicTarihi, bitisTarihi).forEach((day) => {
-    gunler[day.dateStr] = day.isSunday ? 'T' : 'Ç';
+    // 4/D public-worker default: Monday-Friday work, Saturday-Sunday weekly rest.
+    gunler[day.dateStr] = day.isWeekend ? 'T' : 'Ç';
   });
   return gunler;
 }

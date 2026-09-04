@@ -40,6 +40,7 @@ import {
   exportPeriodPayrollPdf,
   exportSinglePayrollPdf,
 } from '../exports/payrollPdfExport';
+import { ACCRUAL_TYPE_LABELS, getPayrollStatusLabel } from './Listeler/accrualListData';
 
 interface PaySlipModalProps {
   isOpen: boolean;
@@ -132,7 +133,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
       notices,
     });
     if (models.length === 0) {
-      throw new Error('Bu dönem için resmi çıktıya uygun CALCULATED veya FINALIZED bordro bulunamadı.');
+      throw new Error('Bu dönem için resmi çıktıya uygun hesaplanmış veya kesinleştirilmiş bordro bulunamadı.');
     }
     return { people, payrolls, notices, models };
   };
@@ -157,7 +158,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             <div>
               <h3 className="font-semibold text-sm">Ücret Pusulası / Bordro Zarfı</h3>
               <p className="text-[10px] text-slate-400 mt-0.5">
-                PDF ve Excel çıktıları aynı authoritative bordro snapshot'ından üretilir.
+                PDF ve Excel çıktıları aynı kaydedilmiş bordro verilerinden üretilir.
               </p>
             </div>
           </div>
@@ -231,7 +232,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                 })
               }
               className="px-3 py-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
-              title="Dönemin CALCULATED/FINALIZED bordro özetini CSV olarak oluşturur"
+              title="Dönemin hesaplanmış veya kesinleştirilmiş bordro özetini CSV olarak oluşturur"
             >
               <FileText className="w-4 h-4" />
               Dönem CSV
@@ -246,7 +247,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                 })
               }
               className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
-              title="CALCULATED/FINALIZED bordroları tek çok sayfalı PDF içinde oluşturur"
+              title="Hesaplanmış veya kesinleştirilmiş bordroları tek çok sayfalı PDF içinde oluşturur"
             >
               <FileDown className="w-4 h-4" />
               Tüm Bordrolar PDF
@@ -304,10 +305,9 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
               <div><strong>Ünvan:</strong> {personel.unvan || '—'}</div>
               <div><strong>Hizmet Yılı:</strong> {personel.hizmetYili}</div>
               <div><strong>IBAN:</strong> <span className="font-mono text-[11px]">{personel.iban || '—'}</span></div>
-              <div><strong>Durum:</strong> {bordro.status}</div>
-              <div><strong>Tahakkuk Türü:</strong> {previewModel.accrualType}</div>
+              <div><strong>Durum:</strong> {getPayrollStatusLabel(bordro.status)}</div>
+              <div><strong>Tahakkuk Türü:</strong> {ACCRUAL_TYPE_LABELS[previewModel.accrualType]}</div>
               <div><strong>Tahakkuk Tarihi:</strong> <span className="font-mono">{previewModel.paymentDate}</span></div>
-              <div><strong>Tahakkuk Sıra No:</strong> {previewModel.sequence}</div>
             </div>
           </div>
 
@@ -434,7 +434,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
           </div>
 
           <div className="mt-4 text-[9px] text-slate-400 border-t border-slate-200 pt-2">
-            Kaynak bordro güncelleme: {bordro.sonGuncellemeTarihi}. Bu belge {bordro.status} bordro snapshot'ından üretilmiştir.
+            Bordro güncelleme zamanı: {bordro.sonGuncellemeTarihi}. Bu belge kaydedilmiş bordro verilerinden üretilmiştir.
           </div>
         </div>
       </div>

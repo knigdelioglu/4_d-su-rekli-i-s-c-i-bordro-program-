@@ -1,6 +1,7 @@
 import React from 'react';
 import { Award, Percent, Plus, Save, ShieldAlert, Trash2, Check } from 'lucide-react';
 import type { BordroDonemi, DönemselKurumDegerleri } from '../../types/payroll';
+import { formatDateTR } from '../../utils/payrollPresentation';
 
 type StatutoryField =
   | 'effectiveFrom'
@@ -71,7 +72,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
   return (
     <section data-testid="period-settings-kesinti" className="space-y-5">
       <header>
-        <h2 className="text-xl font-bold text-slate-900">Kesinti &amp; Yasal Oranlar</h2>
+        <h2 className="text-xl font-bold text-slate-900">Vergi &amp; Yasal Oranlar</h2>
         <p className="mt-1 text-xs text-slate-500">
           Aktif dönemin yasal kesinti oranlarını ve dönem içi mevzuat değişikliklerini yönetin.
         </p>
@@ -335,7 +336,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                   onClick={addStatutorySegment}
                   className="px-3 py-1.5 rounded-lg bg-indigo-100 hover:bg-indigo-200 text-indigo-800 text-xs font-semibold flex items-center gap-1 shrink-0"
                 >
-                  <Plus className="w-3.5 h-3.5" /> Segment Ekle
+                  <Plus className="w-3.5 h-3.5" /> Dönem İçi Yasal Değişiklik Ekle
                 </button>
               </div>
 
@@ -345,12 +346,16 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                   className="border border-indigo-200 bg-indigo-50/50 rounded-xl p-3 space-y-3"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-indigo-900">Segment {index + 1}</span>
+                    <span className="text-xs font-bold text-indigo-900">
+                      {segment.effectiveFrom
+                        ? `${formatDateTR(segment.effectiveFrom)} tarihinden itibaren geçerli değişiklik`
+                        : 'Dönem içi yasal değişiklik'}
+                    </span>
                     <button
                       type="button"
                       onClick={() => removeStatutorySegment(index)}
                       className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-100"
-                      title="Segmenti kaldır"
+                      title="Değişikliği kaldır"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>

@@ -155,7 +155,6 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
       { header: 'İş Primi Grubu', key: 'unvan', width: 22 },
       { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
       { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
-      { header: 'Sıra', key: 'sequence', width: 8 },
       { header: `${config.label} (TL)`, key: 'tutar', width: 20 },
     ];
 
@@ -165,7 +164,6 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
       unvan: (e.personel.grup || e.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, ''),
       paymentDate: e.paymentDate,
       accrualType: e.accrualTypeLabel,
-      sequence: e.sequence,
       tutar: e[config.fieldKey] || 0,
     }));
 
@@ -176,7 +174,6 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
         unvan: '',
         paymentDate: '',
         accrualType: '',
-        sequence: '',
         tutar: toplamTutar,
       },
     ];
@@ -287,7 +284,6 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
                 <th className="p-3">İş Primi Grubu</th>
                 <th className="p-3">Ödeme Tarihi</th>
                 <th className="p-3">Tahakkuk Türü</th>
-                <th className="p-3 text-center">Sıra</th>
                 <th className="p-3 text-right">{config.label} (TL)</th>
               </tr>
             </thead>
@@ -306,7 +302,6 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
                     </td>
                     <td className="p-3 text-slate-800">{e.paymentDate}</td>
                     <td className="p-3 font-sans font-semibold text-indigo-700">{e.accrualTypeLabel}</td>
-                    <td className="p-3 text-center">{e.sequence}</td>
                     <td className="p-3 text-right font-bold text-slate-900 text-sm">
                       {formatTL(amount)}
                     </td>
@@ -316,7 +311,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
 
               {filteredList.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-8 text-center text-slate-500 font-sans italic">
+                  <td colSpan={7} className="p-8 text-center text-slate-500 font-sans italic">
                     Bu dönem için {config.label.toLowerCase()} kaydı bulunan personel bulunmamaktadır.
                   </td>
                 </tr>
@@ -324,7 +319,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
             </tbody>
             <tfoot>
               <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold">
-                <td colSpan={7} className="p-4 text-right font-sans text-sm text-slate-900 uppercase">
+                <td colSpan={6} className="p-4 text-right font-sans text-sm text-slate-900 uppercase">
                   {config.totalLabel}:
                 </td>
                 <td className="p-4 text-right font-mono text-lg text-slate-900">

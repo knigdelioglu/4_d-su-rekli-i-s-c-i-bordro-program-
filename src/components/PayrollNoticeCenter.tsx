@@ -68,20 +68,33 @@ function actionLabel(action?: string): string | null {
 }
 
 interface PayrollNoticeCenterProps {
-  enabled: boolean;
-  periodId?: string;
-  engine: PayrollEngine;
-  dataset: PayrollDatasetSnapshot;
+  notices: PayrollNotice[];
+  isRefreshing: boolean;
+  loadError: string | null;
+  onRefresh: () => void | Promise<void>;
 }
 
-export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
-  enabled,
-  periodId,
-  engine,
-  dataset,
-}) => {
+export interface PayrollNoticeCounts {
+  critical: number;
+  warning: number;
+  info: number;
+}
+
+export function getPayrollNoticeCounts(notices: PayrollNotice[]): PayrollNoticeCounts {
+  return {
+    critical: notices.filter((notice) => notice.severity === 'CRITICAL').length,
+    warning: notices.filter((notice) => notice.severity === 'WARNING').length,
+    info: notices.filter((notice) => notice.severity === 'INFO').length,
+  };
+}
+
+export function usePayrollNotices(
+  enabled: boolean,
+  periodId: string | undefined,
+  engine: PayrollEngine,
+  dataset: PayrollDatasetSnapshot
+) {
   const [notices, setNotices] = useState<PayrollNotice[]>([]);
-  const [isOpen, setIsOpen] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -120,20 +133,24 @@ export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
     };
   }, [refresh]);
 
-  const counts = useMemo(
-    () => ({
-      critical: notices.filter((notice) => notice.severity === 'CRITICAL').length,
-      warning: notices.filter((notice) => notice.severity === 'WARNING').length,
-      info: notices.filter((notice) => notice.severity === 'INFO').length,
-    }),
-    [notices]
-  );
+  const counts = useMemo(() => getPayrollNoticeCounts(notices), [notices]);
 
-  if (!enabled) return null;
+  return { notices, counts, isRefreshing, loadError, refresh };
+}
+
+export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
+  notices,
+  isRefreshing,
+  loadError,
+  onRefresh,
+}) => {
+  const [isOpen, setIsOpen] = useState(true);
+  const counts = useMemo(() => getPayrollNoticeCounts(notices), [notices]);
+
   if (!loadError && notices.length === 0) return null;
 
   return (
-    <aside className="fixed right-4 top-20 z-30 w-[min(430px,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white/95 shadow-2xl backdrop-blur-sm">
+    <section data-testid="payroll-notice-center" className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
         <button
           type="button"
@@ -142,7 +159,7 @@ export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
         >
           <BellRing className="h-4 w-4 shrink-0 text-indigo-600" />
           <div className="min-w-0">
-            <div className="text-xs font-bold text-slate-900">Bordro Kontrolleri</div>
+            <div className="text-xs font-bold text-slate-900">Kontroller</div>
             <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] font-semibold">
               {counts.critical > 0 && <span className="text-rose-700">{counts.critical} kritik</span>}
               {counts.warning > 0 && <span className="text-amber-700">{counts.warning} kontrol</span>}
@@ -161,7 +178,7 @@ export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
 
         <button
           type="button"
-          onClick={() => void refresh()}
+          onClick={() => void onRefresh()}
           disabled={isRefreshing}
           className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-100 hover:text-indigo-700 disabled:opacity-50"
           title="Uyarıları yenile"
@@ -218,6 +235,6 @@ export const PayrollNoticeCenter: React.FC<PayrollNoticeCenterProps> = ({
           })}
         </div>
       )}
-    </aside>
+    </section>
   );
 };

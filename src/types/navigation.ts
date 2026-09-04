@@ -1,22 +1,46 @@
 export type TabType =
+  | 'ozet'
   | 'personel'
   | 'puantaj'
   | 'bordro'
   | 'banka'
   | 'kesintiler'
-  | 'parametrelar';
+  | 'parametrelar'
+  | 'veri';
 
 export const TAB_TYPES: readonly TabType[] = [
+  'ozet',
   'personel',
   'puantaj',
   'bordro',
   'banka',
   'kesintiler',
   'parametrelar',
+  'veri',
 ];
 
 export function isTabType(value: string | null): value is TabType {
   return value !== null && TAB_TYPES.some((type) => type === value);
+}
+
+export type PayrollViewType = 'normal' | 'tediye' | 'tis' | 'supplemental';
+
+export const PAYROLL_VIEW_TYPES: readonly PayrollViewType[] = [
+  'normal',
+  'tediye',
+  'tis',
+  'supplemental',
+];
+
+export const PAYROLL_VIEW_LABELS: Record<PayrollViewType, string> = {
+  normal: 'Normal Maaş',
+  tediye: 'Tediye',
+  tis: 'TİS İkramiyesi',
+  supplemental: 'Ek Ödeme',
+};
+
+export function isPayrollViewType(value: string | null): value is PayrollViewType {
+  return value !== null && PAYROLL_VIEW_TYPES.some((type) => type === value);
 }
 
 export type KesintiTipi =

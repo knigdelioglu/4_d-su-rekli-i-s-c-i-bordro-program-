@@ -2,7 +2,7 @@
  * Section 3: Puantaj (15-14 Period Attendance Grid)
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Calendar,
   CheckCircle2,
@@ -52,21 +52,31 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     personeller[0]?.id || ''
   );
   const [activeBulkCode, setActiveBulkCode] = useState<PuantajKodu>('Ç');
+  const [rangeStart, setRangeStart] = useState<string>(periodDays[0]?.dateStr || '');
+  const [rangeEnd, setRangeEnd] = useState<string>(periodDays.at(-1)?.dateStr || '');
+
+  useEffect(() => {
+    setRangeStart(periodDays[0]?.dateStr || '');
+    setRangeEnd(periodDays.at(-1)?.dateStr || '');
+  }, [aktifDonem.id, aktifDonem.baslangicTarihi, aktifDonem.bitisTarihi]);
 
   const activePersonel = personeller.find((p) => p.id === selectedPersonelId);
 
   // Find or create initial puantaj for selected employee
-  const activePuantaj = puantajlar.find(
+  const savedPuantaj = puantajlar.find(
     (p) => p.personelId === selectedPersonelId && p.donemId === aktifDonem.id
-  ) || {
+  );
+  const defaultGunler = generateDefaultPuantajGunler(
+    aktifDonem.baslangicTarihi,
+    aktifDonem.bitisTarihi
+  );
+  const activePuantaj = savedPuantaj || {
     id: `${selectedPersonelId}_${aktifDonem.id}`,
     personelId: selectedPersonelId,
     donemId: aktifDonem.id,
-    gunler: generateDefaultPuantajGunler(
-      aktifDonem.baslangicTarihi,
-      aktifDonem.bitisTarihi
-    ),
+    gunler: defaultGunler,
   };
+  const isAttendanceCreated = Boolean(savedPuantaj);
 
   const persistPuantaj = async (updated: PersonelPuantaj) => {
     try {
@@ -77,7 +87,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   };
 
   const handleCellClick = async (dateStr: string) => {
-    const currentCode = activePuantaj.gunler[dateStr] || 'Ç';
+    if (!savedPuantaj) return;
+    const currentCode = activePuantaj.gunler[dateStr] || defaultGunler[dateStr] || 'Ç';
     const codes: PuantajKodu[] = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'];
     const nextIndex = (codes.indexOf(currentCode) + 1) % codes.length;
     const nextCode = codes[nextIndex];
@@ -94,6 +105,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   };
 
   const handleSetDayCode = async (dateStr: string, code: PuantajKodu) => {
+    if (!savedPuantaj) return;
     const updatedGunler = {
       ...activePuantaj.gunler,
       [dateStr]: code,
@@ -106,10 +118,12 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   };
 
   const handleResetDefault = async () => {
-    const defaultGunler = generateDefaultPuantajGunler(
-      aktifDonem.baslangicTarihi,
-      aktifDonem.bitisTarihi
-    );
+    if (savedPuantaj) {
+      const confirmed = window.confirm(
+        'Bu personelin mevcut puantajı kamu kurumu varsayılan düzeniyle değiştirilecek. Devam etmek istiyor musunuz?'
+      );
+      if (!confirmed) return;
+    }
     await persistPuantaj({
       ...activePuantaj,
       gunler: defaultGunler,
@@ -117,6 +131,11 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   };
 
   const handleApplyBulkCodeToAll = async () => {
+    if (!savedPuantaj) return;
+    const confirmed = window.confirm(
+      `${periodDays.length} günün tamamı "${activeBulkCode} — ${PUANTAJ_KODLARI[activeBulkCode].tanim}" olarak değiştirilecek. Devam etmek istiyor musunuz?`
+    );
+    if (!confirmed) return;
     const newGunler: Record<string, PuantajKodu> = {};
     periodDays.forEach((d) => {
       newGunler[d.dateStr] = activeBulkCode;
@@ -125,6 +144,29 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       ...activePuantaj,
       gunler: newGunler,
     });
+  };
+
+  const handleApplyRange = async () => {
+    if (!savedPuantaj || !rangeStart || !rangeEnd || rangeStart > rangeEnd) {
+      alert('Geçerli bir başlangıç ve bitiş tarihi seçin.');
+      return;
+    }
+    const selectedDays = periodDays.filter(
+      (day) => day.dateStr >= rangeStart && day.dateStr <= rangeEnd
+    );
+    if (selectedDays.length === 0) {
+      alert('Seçilen aralık bu dönemin içinde değil.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `${selectedDays.length} gün "${activeBulkCode}" olarak değiştirilecek. Devam etmek istiyor musunuz?`
+    );
+    if (!confirmed) return;
+    const newGunler = { ...activePuantaj.gunler };
+    selectedDays.forEach((day) => {
+      newGunler[day.dateStr] = activeBulkCode;
+    });
+    await persistPuantaj({ ...activePuantaj, gunler: newGunler });
   };
 
   const currentSummary = calculatePuantajOzeti(activePuantaj.gunler);
@@ -152,29 +194,24 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     const rows = personeller.map((p) => {
       const pPuantaj = puantajlar.find(
         (pj) => pj.personelId === p.id && pj.donemId === aktifDonem.id
-      ) || {
-        gunler: generateDefaultPuantajGunler(
-          aktifDonem.baslangicTarihi,
-          aktifDonem.bitisTarihi
-        ),
-      };
+      );
 
-      const sum = calculatePuantajOzeti(pPuantaj.gunler);
+      const sum = pPuantaj ? calculatePuantajOzeti(pPuantaj.gunler) : null;
       const rowObj: Record<string, any> = {
         tcNo: p.tcNo,
         adSoyad: `${p.ad} ${p.soyad}`,
         unvan: p.unvan,
-        s_Ç: sum.Ç,
-        s_T: sum.T,
-        s_G: sum.G,
-        s_İ: sum.İ,
-        s_GÇ: sum.GÇ,
-        s_GÇT: sum.GÇT,
-        s_R: sum.R,
+        s_Ç: sum?.Ç ?? '',
+        s_T: sum?.T ?? '',
+        s_G: sum?.G ?? '',
+        s_İ: sum?.İ ?? '',
+        s_GÇ: sum?.GÇ ?? '',
+        s_GÇT: sum?.GÇT ?? '',
+        s_R: sum?.R ?? '',
       };
 
       periodDays.forEach((d) => {
-        rowObj[`d_${d.dateStr}`] = pPuantaj.gunler[d.dateStr] || 'Ç';
+        rowObj[`d_${d.dateStr}`] = pPuantaj?.gunler[d.dateStr] || '';
       });
 
       return rowObj;
@@ -194,7 +231,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-2">
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs font-semibold text-slate-700 uppercase tracking-wider text-[10px]">
-            Puantaj Kod Kılavuzu (Tıklayarak değiştirebilirsiniz)
+            İşaretlenecek Kod
           </div>
           <button
             type="button"
@@ -210,10 +247,13 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           {(Object.keys(PUANTAJ_KODLARI) as PuantajKodu[]).map((kod) => {
             const info = PUANTAJ_KODLARI[kod];
             return (
-              <div
+              <button
+                type="button"
                 key={kod}
+                aria-pressed={activeBulkCode === kod}
+                onClick={() => setActiveBulkCode(kod)}
                 title={`${kod} — ${info.tanim}`}
-                className={`px-2 py-1.5 rounded-xl border flex items-center gap-1.5 min-w-0 ${info.bgRenk}`}
+                className={`px-2 py-1.5 rounded-xl border flex items-center gap-1.5 min-w-0 text-left transition-all cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-400 ${info.bgRenk} ${activeBulkCode === kod ? 'ring-2 ring-indigo-500 ring-offset-1' : 'hover:brightness-95'}`}
               >
                 <span className="font-bold text-xs font-mono px-1.5 py-0.5 rounded-md bg-white/90 text-slate-900 flex items-center justify-center shrink-0 shadow-2xs">
                   {kod}
@@ -223,7 +263,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                     {info.tanim}
                   </div>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -305,45 +345,104 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           </div>
 
           {/* Quick Tools */}
-          <div className="flex items-center gap-2 flex-wrap text-xs">
+          <div className="flex flex-col items-stretch gap-2 text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
               onClick={handleResetDefault}
               className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-xl font-medium transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
               <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-              <span>Varsayılan Doldur (Pazar=T)</span>
+              <span>{isAttendanceCreated ? 'Varsayılan Düzeni Uygula' : 'Varsayılan Puantajı Oluştur'}</span>
             </button>
 
             <div className="flex items-center bg-white border border-slate-200 rounded-xl p-1 gap-1 shadow-2xs">
-              <select
-                value={activeBulkCode}
-                onChange={(e) => setActiveBulkCode(e.target.value as PuantajKodu)}
-                className="text-xs font-bold font-mono border-none bg-transparent focus:ring-0 cursor-pointer"
-              >
-                {(Object.keys(PUANTAJ_KODLARI) as PuantajKodu[]).map((k) => (
-                  <option key={k} value={k}>
-                    {k} - {PUANTAJ_KODLARI[k].tanim}
-                  </option>
-                ))}
-              </select>
+              <span className="px-2 text-xs text-slate-500">
+                Seçili: <strong className="font-mono text-slate-800">{activeBulkCode}</strong>
+              </span>
               <button
                 type="button"
                 onClick={handleApplyBulkCodeToAll}
-                className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                disabled={!isAttendanceCreated}
+                className="px-2.5 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Sparkles className="w-3 h-3" />
                 <span>Tüm Günlere Uygula</span>
               </button>
             </div>
+            </div>
+
+            <div className="flex flex-wrap items-end gap-2 rounded-xl border border-dashed border-slate-300 bg-white/70 p-2">
+              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-600">
+                Başlangıç
+                <input
+                  type="date"
+                  value={rangeStart}
+                  onChange={(e) => setRangeStart(e.target.value)}
+                  min={periodDays[0]?.dateStr}
+                  max={periodDays.at(-1)?.dateStr}
+                  disabled={!isAttendanceCreated}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </label>
+              <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-600">
+                Bitiş
+                <input
+                  type="date"
+                  value={rangeEnd}
+                  onChange={(e) => setRangeEnd(e.target.value)}
+                  min={periodDays[0]?.dateStr}
+                  max={periodDays.at(-1)?.dateStr}
+                  disabled={!isAttendanceCreated}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs font-normal text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </label>
+              <span className="pb-1 text-[11px] text-slate-500">
+                Kod: <strong className="font-mono text-slate-800">{activeBulkCode}</strong>
+              </span>
+              <button
+                type="button"
+                onClick={handleApplyRange}
+                disabled={!isAttendanceCreated}
+                className="mb-0.5 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Tarih Aralığına Uygula
+              </button>
+            </div>
           </div>
         </div>
+
+        {!isAttendanceCreated && (
+          <div
+            data-testid={`attendance-empty-${selectedPersonelId}`}
+            role="note"
+            className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="font-bold">Bu dönem için puantaj henüz oluşturulmadı.</p>
+                <p className="mt-1 text-xs text-amber-900">
+                  Önerilen kamu kurumu çalışma düzeni: Pzt–Cum <strong>Ç</strong>, Cmt–Paz <strong>T</strong>.
+                </p>
+              </div>
+              <button
+                type="button"
+                data-testid={`create-default-attendance-${selectedPersonelId}`}
+                onClick={handleResetDefault}
+                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700"
+              >
+                Varsayılan Puantajı Oluştur
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Puantaj Summary Widget for selected employee */}
         <div className="p-4 bg-gradient-to-r from-indigo-50 via-slate-50 to-blue-50 border-b border-slate-200">
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs font-bold text-slate-800 uppercase tracking-wider">
               {activePersonel?.ad} {activePersonel?.soyad} — Puantaj Özeti ({aktifDonem.donemAdi})
+              {!isAttendanceCreated && ' — Önerilen düzen önizlemesi'}
             </div>
             {onSelectPersonelForBordro && activePersonel && (
               <button
@@ -380,20 +479,24 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
         <div className="p-4 overflow-x-auto">
           <div className="min-w-max space-y-3">
             <div className="text-xs text-slate-500 font-medium mb-1">
-              Güne tıklayarak puantaj kodunu döngüsel değiştirebilirsiniz:
+              {isAttendanceCreated
+                ? 'Güne tıklayarak puantaj kodunu döngüsel değiştirebilirsiniz:'
+                : 'Bu günler yalnızca önerilen düzenin önizlemesidir; düzenlemek için puantajı oluşturun.'}
             </div>
 
             <div className="grid grid-flow-col auto-cols-[68px] gap-1.5 pb-2">
               {periodDays.map((day) => {
-                const code = activePuantaj.gunler[day.dateStr] || 'Ç';
+                const code = activePuantaj.gunler[day.dateStr] || defaultGunler[day.dateStr] || 'Ç';
                 const info = PUANTAJ_KODLARI[code];
 
                 return (
                   <div
                     key={day.dateStr}
                     data-testid={`attendance-day-${day.dateStr}`}
-                    onClick={() => handleCellClick(day.dateStr)}
-                    className={`cursor-pointer border rounded-2xl p-2 text-center transition-all hover:scale-105 hover:shadow-md select-none ${
+                    onClick={isAttendanceCreated ? () => handleCellClick(day.dateStr) : undefined}
+                    aria-disabled={!isAttendanceCreated}
+                    tabIndex={isAttendanceCreated ? 0 : -1}
+                    className={`${isAttendanceCreated ? 'cursor-pointer hover:scale-105 hover:shadow-md' : 'cursor-default opacity-75'} border rounded-2xl p-2 text-center transition-all select-none ${
                       day.isSunday
                         ? 'ring-2 ring-blue-300/60'
                         : ''
@@ -441,13 +544,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
               {personeller.map((p) => {
                 const pPuantaj = puantajlar.find(
                   (pj) => pj.personelId === p.id && pj.donemId === aktifDonem.id
-                ) || {
-                  gunler: generateDefaultPuantajGunler(
-                    aktifDonem.baslangicTarihi,
-                    aktifDonem.bitisTarihi
-                  ),
-                };
-                const sum = calculatePuantajOzeti(pPuantaj.gunler);
+                );
+                const sum = pPuantaj ? calculatePuantajOzeti(pPuantaj.gunler) : null;
                 const isSelected = p.id === selectedPersonelId;
 
                 return (
@@ -461,14 +559,17 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                     <td className="p-3 font-semibold text-slate-900">
                       <div>{p.ad} {p.soyad}</div>
                       <div className="text-[10px] text-slate-500 font-normal">{p.unvan}</div>
+                      {!pPuantaj && (
+                        <div className="mt-1 text-[10px] font-semibold text-amber-700">Puantaj oluşturulmadı</div>
+                      )}
                     </td>
-                    <td className="p-3 text-center font-bold text-emerald-700 font-mono">{sum.Ç}</td>
-                    <td className="p-3 text-center font-bold text-blue-700 font-mono">{sum.T}</td>
-                    <td className="p-3 text-center font-bold text-purple-700 font-mono">{sum.G}</td>
-                    <td className="p-3 text-center font-bold text-amber-700 font-mono">{sum.İ}</td>
-                    <td className="p-3 text-center font-bold text-indigo-700 font-mono">{sum.GÇ}</td>
-                    <td className="p-3 text-center font-bold text-teal-700 font-mono">{sum.GÇT}</td>
-                    <td className="p-3 text-center font-bold text-rose-700 font-mono">{sum.R}</td>
+                    <td className="p-3 text-center font-bold text-emerald-700 font-mono">{sum?.Ç ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-blue-700 font-mono">{sum?.T ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-purple-700 font-mono">{sum?.G ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-amber-700 font-mono">{sum?.İ ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-indigo-700 font-mono">{sum?.GÇ ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-teal-700 font-mono">{sum?.GÇT ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-rose-700 font-mono">{sum?.R ?? '—'}</td>
                     <td className="p-3 text-right">
                       <button
                         onClick={(e) => {

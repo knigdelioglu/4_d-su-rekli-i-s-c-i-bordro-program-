@@ -59,7 +59,6 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
       { header: 'IBAN', key: 'iban', width: 32 },
       { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
       { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
-      { header: 'Sıra', key: 'sequence', width: 8 },
       { header: 'Net Ödeme (TL)', key: 'netOdeme', width: 18 },
     ];
 
@@ -70,7 +69,6 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
       iban: e.personel.iban,
       paymentDate: e.paymentDate,
       accrualType: e.accrualTypeLabel,
-      sequence: e.sequence,
       netOdeme: e.bordro.netOdeme,
     }));
 
@@ -82,7 +80,6 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
         iban: '',
         paymentDate: '',
         accrualType: '',
-        sequence: '',
         netOdeme: toplamBankaOdemesi,
       },
     ];
@@ -101,9 +98,9 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   const handleCopyText = () => {
     const lines = filteredEntries.map(
       (e) =>
-        `${e.personel.tcNo}\t${e.personel.ad} ${e.personel.soyad}\t${e.personel.iban}\t${e.paymentDate}\t${e.accrualTypeLabel}\t${e.sequence}\t${e.bordro.netOdeme.toFixed(2)}`
+        `${e.personel.tcNo}\t${e.personel.ad} ${e.personel.soyad}\t${e.personel.iban}\t${e.paymentDate}\t${e.accrualTypeLabel}\t${e.bordro.netOdeme.toFixed(2)}`
     );
-    const text = `T.C. Kimlik\tAd Soyad\tIBAN\tÖdeme Tarihi\tTahakkuk Türü\tSıra\tNet Ödeme\n` + lines.join('\n');
+    const text = `T.C. Kimlik\tAd Soyad\tIBAN\tÖdeme Tarihi\tTahakkuk Türü\tNet Ödeme\n` + lines.join('\n');
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -221,7 +218,6 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
                 <th className="p-3">Maaş IBAN Numarası</th>
                 <th className="p-3">Ödeme Tarihi</th>
                 <th className="p-3">Tahakkuk Türü</th>
-                <th className="p-3 text-center">Sıra</th>
                 <th className="p-3 text-right">Net Ödeme Tutar (TL)</th>
               </tr>
             </thead>
@@ -239,7 +235,6 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
                   <td className="p-3 text-slate-800 font-bold">{e.personel.iban}</td>
                   <td className="p-3 text-slate-800">{e.paymentDate}</td>
                   <td className="p-3 font-sans font-semibold text-indigo-700">{e.accrualTypeLabel}</td>
-                  <td className="p-3 text-center">{e.sequence}</td>
                   <td className="p-3 text-right font-bold text-indigo-900 text-sm">
                     {formatTL(e.bordro.netOdeme)}
                   </td>
@@ -248,7 +243,7 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
             </tbody>
             <tfoot>
               <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-bold">
-                <td colSpan={8} className="p-4 text-right font-sans text-sm text-indigo-950 uppercase">
+                <td colSpan={7} className="p-4 text-right font-sans text-sm text-indigo-950 uppercase">
                   TOPLAM BANKA ÖDEMESİ:
                 </td>
                 <td className="p-4 text-right font-mono text-xl text-indigo-950">

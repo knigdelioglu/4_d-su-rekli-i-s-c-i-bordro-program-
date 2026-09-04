@@ -33,7 +33,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
   return (
     <section data-testid="period-settings-gelir" className="space-y-5">
       <header>
-        <h2 className="text-xl font-bold text-slate-900">Gelir Parametreleri</h2>
+        <h2 className="text-xl font-bold text-slate-900">Ücretler</h2>
         <p className="mt-1 text-xs text-slate-500">
           Aktif dönemin gelir, zam takvimi ve iş primi değerlerini yönetin.
         </p>
@@ -356,7 +356,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
             className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
           >
             <Save className="w-4 h-4" />
-            <span>Gelir Parametrelerini Kaydet</span>
+            <span>Ücret Ayarlarını Kaydet</span>
           </button>
         </div>
       </form>

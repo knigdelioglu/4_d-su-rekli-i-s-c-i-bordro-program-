@@ -4,6 +4,7 @@
 
 import React, { useRef } from 'react';
 import {
+  AlertTriangle,
   Building2,
   Calendar,
   Download,
@@ -21,6 +22,8 @@ interface TopBarProps {
   onExportBackup: () => void;
   onImportBackup: (jsonStr: string) => void;
   onResetSampleData: () => void;
+  noticeCount?: number;
+  onOpenNoticeSummary: () => void;
   isSidebarOpen: boolean;
   onToggleSidebar: () => void;
 }
@@ -32,6 +35,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   onExportBackup,
   onImportBackup,
   onResetSampleData,
+  noticeCount = 0,
+  onOpenNoticeSummary,
   isSidebarOpen,
   onToggleSidebar,
 }) => {
@@ -81,11 +86,11 @@ export const TopBar: React.FC<TopBarProps> = ({
               <Building2 className="h-6 w-6" />
             </div>
             <h1 className="truncate text-sm font-extrabold tracking-tight text-white sm:text-lg">
-              4/D Sürekli İşçi Bordro Programı
+              4/D Bordro
             </h1>
           </div>
 
-          {/* Active period selector and backup tools */}
+          {/* Active period selector and compact storage tools */}
           <div className="flex w-full items-center justify-end gap-2 md:w-auto">
             <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/90 px-2.5 py-1">
               <Calendar className="h-4 w-4 shrink-0 text-indigo-400" />
@@ -112,6 +117,28 @@ export const TopBar: React.FC<TopBarProps> = ({
             </div>
 
             <div className="flex items-center gap-1 border-l border-slate-800 pl-2">
+              <button
+                type="button"
+                data-testid="notice-summary-trigger"
+                onClick={onOpenNoticeSummary}
+                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-[10px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 ${
+                  noticeCount > 0
+                    ? 'text-amber-300 hover:bg-slate-800 hover:text-amber-200'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                }`}
+                title="Dönem kontrollerini aç"
+              >
+                <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{noticeCount > 0 ? `⚠ ${noticeCount} Kontrol` : 'Kontroller'}</span>
+              </button>
+              <span
+                data-testid="local-storage-status"
+                className="hidden items-center gap-1 px-1.5 text-[10px] font-semibold text-emerald-300 sm:inline-flex"
+                title="Veriler bu cihazda yerel olarak saklanır"
+              >
+                <span aria-hidden="true">✓</span>
+                <span>Yerel kayıt</span>
+              </span>
               <button
                 type="button"
                 onClick={onExportBackup}
