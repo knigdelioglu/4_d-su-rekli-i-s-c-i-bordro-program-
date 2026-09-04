@@ -80,15 +80,17 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
     const annualParametersReady = annualPayrollParameters.some(
       (parameters) => parameters.year === aktifDonem.taxYear
     );
-    const monthName = AY_ISIMLERI[aktifDonem.ay - 1];
+    // 15–14 çalışma aralığının kullanıcıya görünen bordro ayı, tahakkukun
+    // ait olduğu taxMonth/taxYear'dır. Örn. 15 Ağustos–14 Eylül => Eylül 2026.
+    const payrollMonthName = AY_ISIMLERI[aktifDonem.taxMonth - 1];
     const activeTediyeReference = Boolean(
       activeKurumDegerleri?.tediyeListesi?.some(
-        (item) => item.aktifDonemdeOdensin || item.odemeAyi === monthName
+        (item) => item.aktifDonemdeOdensin || item.odemeAyi === payrollMonthName
       )
     );
     const activeTisReference = Boolean(
       activeKurumDegerleri?.tisIkramiyeListesi?.some(
-        (item) => item.aktifDonemdeOdensin || item.odemeAyi === monthName
+        (item) => item.aktifDonemdeOdensin || item.odemeAyi === payrollMonthName
       )
     );
     const tediyePeople = new Set(
@@ -181,8 +183,11 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
       <header className="flex flex-col gap-3 border-b border-slate-200 pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-indigo-600">Dönem</p>
-          <h2 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">
-            {AY_ISIMLERI[aktifDonem.ay - 1]} {aktifDonem.yil}
+          <h2
+            data-testid="period-summary-title"
+            className="mt-1 text-2xl font-bold tracking-tight text-slate-900"
+          >
+            {AY_ISIMLERI[aktifDonem.taxMonth - 1]} {aktifDonem.taxYear}
           </h2>
           <p className="mt-1 text-sm text-slate-600">
             {formatDateTR(aktifDonem.baslangicTarihi)} – {formatDateTR(aktifDonem.bitisTarihi)}
