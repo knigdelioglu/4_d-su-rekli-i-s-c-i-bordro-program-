@@ -3,7 +3,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Navbar, TabType } from './components/Navbar';
+import { Sidebar, type TabType } from './components/Sidebar';
+import { TopBar } from './components/TopBar';
 import { PersonelList } from './components/PersonelList';
 import { PuantajGrid } from './components/PuantajGrid';
 import { BordroHesaplama } from './components/BordroHesaplama';
@@ -137,6 +138,7 @@ export default function App() {
     string | undefined
   >(undefined);
   const [isPeriodManagerOpen, setIsPeriodManagerOpen] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   const uiDataset = useMemo<UiDatasetFields>(() => {
     if (!authoritativePayload) return EMPTY_UI_DATASET;
@@ -750,6 +752,12 @@ export default function App() {
     setActiveTab('bordro');
   };
 
+  const handleTabChange = (tab: TabType) => {
+    if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
+    else setActiveTab(tab);
+    setIsSidebarOpen(false);
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
       <PayrollNoticeCenter
@@ -759,108 +767,117 @@ export default function App() {
         dataset={payrollDataset}
       />
       {isDataLoaded && (
-        <Navbar
-          activeTab={activeTab}
-          onTabChange={(tab) => {
-            if (tab === 'parametrelar') setIsPeriodManagerOpen(true);
-            else setActiveTab(tab);
-          }}
+        <TopBar
           donemler={donemler}
           aktifDonemId={aktifDonemId}
           onSelectDonem={handleSelectDonem}
-          onOpenPeriodManager={() => setIsPeriodManagerOpen(true)}
           onExportBackup={handleExportBackup}
           onImportBackup={handleImportBackup}
           onResetSampleData={handleResetSampleData}
+          isSidebarOpen={isSidebarOpen}
+          onToggleSidebar={() => setIsSidebarOpen((current) => !current)}
         />
       )}
 
-      <main className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1">
-        {loadError && (
-          <div
-            role="alert"
-            data-testid="storage-error"
-            className="mb-5 p-4 bg-rose-50 border border-rose-300 text-rose-900 rounded-xl text-xs font-semibold"
-          >
-            {loadError}
-          </div>
-        )}
-
-        {!isDataLoaded && !loadError && (
-          <div
-            role="status"
-            data-testid="data-loading-state"
-            className="mx-auto my-16 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-600 shadow-sm"
-          >
-            Veriler yükleniyor…
-          </div>
-        )}
-
+      <div className="flex min-h-0 flex-1">
         {isDataLoaded && (
-          <>
-            {activeTab === 'personel' && (
-              <PersonelList
-                personeller={personeller}
-                onSavePersonel={handleSavePersonel}
-                onDeletePersonel={handleDeletePersonel}
-                onSelectPersonelForBordro={handleSelectPersonelForBordro}
-                isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
-              />
-            )}
+          <Sidebar
+            activeTab={isPeriodManagerOpen ? 'parametrelar' : activeTab}
+            onTabChange={handleTabChange}
+            isOpen={isSidebarOpen}
+            onClose={() => setIsSidebarOpen(false)}
+          />
+        )}
 
-            {!aktifDonem && activeTab !== 'personel' && (
-              <div className="bg-white rounded-2xl p-8 border border-slate-200 shadow-sm text-center max-w-xl mx-auto my-12 space-y-4">
-                <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">!</div>
-                <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
-                </p>
-                <div className="flex items-center justify-center gap-3 pt-2">
-                  <button type="button" onClick={() => setIsPeriodManagerOpen(true)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors">Yeni Dönem Aç</button>
-                  <button type="button" onClick={handleResetSampleData} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors">Örnek Verileri Yükle</button>
-                </div>
+        <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <div className="mx-auto w-full max-w-[1600px]">
+            {loadError && (
+              <div
+                role="alert"
+                data-testid="storage-error"
+                className="mb-5 rounded-xl border border-rose-300 bg-rose-50 p-4 text-xs font-semibold text-rose-900"
+              >
+                {loadError}
               </div>
             )}
 
-            {aktifDonem && activeTab === 'puantaj' && (
-              <PuantajGrid
-                aktifDonem={aktifDonem}
-                personeller={personeller}
-                puantajlar={puantajlar}
-                onSavePuantaj={handleSavePuantaj}
-                onSelectPersonelForBordro={handleSelectPersonelForBordro}
-              />
+            {!isDataLoaded && !loadError && (
+              <div
+                role="status"
+                data-testid="data-loading-state"
+                className="mx-auto my-16 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-600 shadow-sm"
+              >
+                Veriler yükleniyor…
+              </div>
             )}
 
-            {aktifDonem && activeTab === 'bordro' && (
-              <BordroHesaplama
-                aktifDonem={aktifDonem}
-                donemler={donemler}
-                personeller={personeller}
-                kurumDegerleriMap={kurumDegerleriMap}
-                puantajlar={puantajlar}
-                bordrolar={bordrolar}
-                taxOpenings={taxOpenings}
-                sickLeaveRecords={sickLeaveRecords}
-                annualPayrollParameters={annualPayrollParameters}
-                zamAylari={zamAylari}
-                authoritativeDataset={payrollDataset}
-                onSaveBordro={handleSaveBordro}
-                onSavePersonel={handleSavePersonel}
-                onSaveTaxOpening={handleSaveTaxOpening}
-                initialPersonelId={targetPersonelIdForBordro}
-                onGoToPuantaj={(personelId) => {
-                  if (personelId) setTargetPersonelIdForBordro(personelId);
-                  setActiveTab('puantaj');
-                }}
-              />
-            )}
+            {isDataLoaded && (
+              <>
+                {activeTab === 'personel' && (
+                  <PersonelList
+                    personeller={personeller}
+                    onSavePersonel={handleSavePersonel}
+                    onDeletePersonel={handleDeletePersonel}
+                    onSelectPersonelForBordro={handleSelectPersonelForBordro}
+                    isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
+                  />
+                )}
 
-            {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
-            {aktifDonem && activeTab === 'kesintiler' && <KesintiListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
-          </>
-        )}
-      </main>
+                {!aktifDonem && activeTab !== 'personel' && (
+                  <div className="mx-auto my-12 max-w-xl space-y-4 rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-xl font-bold text-indigo-600">!</div>
+                    <h3 className="text-lg font-bold text-slate-800">Henüz Dönem Bulunmamaktadır</h3>
+                    <p className="text-xs leading-relaxed text-slate-600">
+                      İşlemlere başlamak için yeni bir dönem tanımlayabilir veya örnek verileri yükleyebilirsiniz.
+                    </p>
+                    <div className="flex items-center justify-center gap-3 pt-2">
+                      <button type="button" onClick={() => setIsPeriodManagerOpen(true)} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700">Yeni Dönem Aç</button>
+                      <button type="button" onClick={handleResetSampleData} className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">Örnek Verileri Yükle</button>
+                    </div>
+                  </div>
+                )}
+
+                {aktifDonem && activeTab === 'puantaj' && (
+                  <PuantajGrid
+                    aktifDonem={aktifDonem}
+                    personeller={personeller}
+                    puantajlar={puantajlar}
+                    onSavePuantaj={handleSavePuantaj}
+                    onSelectPersonelForBordro={handleSelectPersonelForBordro}
+                  />
+                )}
+
+                {aktifDonem && activeTab === 'bordro' && (
+                  <BordroHesaplama
+                    aktifDonem={aktifDonem}
+                    donemler={donemler}
+                    personeller={personeller}
+                    kurumDegerleriMap={kurumDegerleriMap}
+                    puantajlar={puantajlar}
+                    bordrolar={bordrolar}
+                    taxOpenings={taxOpenings}
+                    sickLeaveRecords={sickLeaveRecords}
+                    annualPayrollParameters={annualPayrollParameters}
+                    zamAylari={zamAylari}
+                    authoritativeDataset={payrollDataset}
+                    onSaveBordro={handleSaveBordro}
+                    onSavePersonel={handleSavePersonel}
+                    onSaveTaxOpening={handleSaveTaxOpening}
+                    initialPersonelId={targetPersonelIdForBordro}
+                    onGoToPuantaj={(personelId) => {
+                      if (personelId) setTargetPersonelIdForBordro(personelId);
+                      setActiveTab('puantaj');
+                    }}
+                  />
+                )}
+
+                {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+                {aktifDonem && activeTab === 'kesintiler' && <KesintiListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+              </>
+            )}
+          </div>
+        </main>
+      </div>
 
       <PeriodManagerModal
         isOpen={isPeriodManagerOpen}

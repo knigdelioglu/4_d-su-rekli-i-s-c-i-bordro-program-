@@ -352,7 +352,7 @@ async function loadSampleDataset(page: Page): Promise<void> {
 }
 
 async function openPayrollScreen(page: Page): Promise<string> {
-  await page.getByRole('button', { name: '3. Bordro Hesaplama' }).click();
+  await page.getByTestId('nav-bordro').click();
   const screen = page.getByTestId('payroll-screen');
   await expect(screen).toBeVisible();
   await expect(screen).toHaveAttribute('data-payroll-engine-kind', 'wasm');
@@ -380,6 +380,61 @@ async function selectPeriod(page: Page, periodId: string): Promise<void> {
   await page.getByTestId('active-period-selector').selectOption(periodId);
   await expect(page.getByTestId('payroll-screen')).toHaveAttribute('data-period-id', periodId);
 }
+
+test('desktop primary navigation lives in the sidebar and period parameters open the existing modal', async ({ page }) => {
+  await page.goto('/');
+
+  for (const tab of ['personel', 'puantaj', 'bordro', 'banka', 'kesintiler', 'parametrelar']) {
+    await expect(page.getByTestId(`nav-${tab}`)).toBeVisible();
+  }
+  await expect(page.locator('header').getByRole('button', { name: '3. Bordro Hesaplama' })).toHaveCount(0);
+
+  await page.getByTestId('nav-puantaj').click();
+  await expect(page.getByTestId('nav-puantaj')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('nav-personel')).not.toHaveAttribute('aria-current', 'page');
+
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('nav-parametrelar')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('heading', { name: 'Bordro Dönemi ve Kurum Değerleri' })).toBeVisible();
+});
+
+test('mobile navigation opens as a drawer without reducing the content area', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await page.goto('/');
+
+  await expect(page.getByTestId('sidebar-toggle')).toBeVisible();
+  await expect(page.getByTestId('nav-personel')).not.toBeVisible();
+  await page.getByTestId('sidebar-toggle').click();
+  await expect(page.getByTestId('nav-personel')).toBeVisible();
+  await page.getByTestId('nav-banka').click();
+  await expect(page.getByTestId('nav-banka')).not.toBeVisible();
+});
+
+test('top bar keeps the active period and backup export/import actions', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('active-period-selector')).toBeVisible();
+
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByTitle('Yedek İndir (JSON)').click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toMatch(/^4D_Bordro_Yedek_bos_\d{4}-\d{2}-\d{2}\.json$/);
+
+  const backupPath = await download.path();
+  if (!backupPath) throw new Error('Yedek indirme yolu alınamadı.');
+
+  const dialogTypes: string[] = [];
+  const dialogMessages: string[] = [];
+  page.on('dialog', async (dialog) => {
+    dialogTypes.push(dialog.type());
+    dialogMessages.push(dialog.message());
+    await dialog.accept();
+  });
+
+  await page.locator('input[type="file"]').setInputFiles(backupPath);
+  await expect.poll(() => dialogTypes.length).toBe(2);
+  expect(dialogTypes).toEqual(['confirm', 'alert']);
+  expect(dialogMessages[1]).toBe('Yedek başarıyla yüklendi!');
+});
 
 test('browser WASM calculation persists in IndexedDB and survives reload', async ({ page }) => {
   await page.goto('/');
@@ -541,7 +596,7 @@ test('browser finalization uses WASM, persists FINALIZED, and rejects a finalize
   await expect(page.getByTestId('payroll-screen')).toBeVisible();
   await waitForPayrollStatus(page, periodId, 'FINALIZED');
 
-  await page.getByRole('button', { name: '2. Puantaj Cetveli' }).click();
+  await page.getByTestId('nav-puantaj').click();
   await expect(page.getByText(/Puantaj Özeti/)).toBeVisible();
   let dialogMessage: string | undefined;
   page.on('dialog', async (dialog) => {
@@ -572,7 +627,7 @@ test('browser source mutation marks downstream calculated payrolls STALE and per
   await calculateP1(page, currentPeriodId);
 
   await selectPeriod(page, previousPeriodId);
-  await page.getByRole('button', { name: '2. Puantaj Cetveli' }).click();
+  await page.getByTestId('nav-puantaj').click();
   await expect(page.getByText(/Puantaj Özeti/)).toBeVisible();
   await page.locator('[data-testid^="attendance-day-"]').first().click();
 
