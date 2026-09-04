@@ -88,27 +88,9 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
 
   const handleCellClick = async (dateStr: string) => {
     if (!savedPuantaj) return;
-    const currentCode = activePuantaj.gunler[dateStr] || defaultGunler[dateStr] || 'Ç';
-    const codes: PuantajKodu[] = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'];
-    const nextIndex = (codes.indexOf(currentCode) + 1) % codes.length;
-    const nextCode = codes[nextIndex];
-
     const updatedGunler = {
       ...activePuantaj.gunler,
-      [dateStr]: nextCode,
-    };
-
-    await persistPuantaj({
-      ...activePuantaj,
-      gunler: updatedGunler,
-    });
-  };
-
-  const handleSetDayCode = async (dateStr: string, code: PuantajKodu) => {
-    if (!savedPuantaj) return;
-    const updatedGunler = {
-      ...activePuantaj.gunler,
-      [dateStr]: code,
+      [dateStr]: activeBulkCode,
     };
 
     await persistPuantaj({
@@ -250,6 +232,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
               <button
                 type="button"
                 key={kod}
+                data-testid={`attendance-code-${kod}`}
                 aria-pressed={activeBulkCode === kod}
                 onClick={() => setActiveBulkCode(kod)}
                 title={`${kod} — ${info.tanim}`}
@@ -480,7 +463,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           <div className="min-w-max space-y-3">
             <div className="text-xs text-slate-500 font-medium mb-1">
               {isAttendanceCreated
-                ? 'Güne tıklayarak puantaj kodunu döngüsel değiştirebilirsiniz:'
+                ? `Güne tıklayarak seçili ${activeBulkCode} kodunu uygulayabilirsiniz:`
                 : 'Bu günler yalnızca önerilen düzenin önizlemesidir; düzenlemek için puantajı oluşturun.'}
             </div>
 
