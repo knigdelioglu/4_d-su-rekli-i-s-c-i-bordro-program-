@@ -195,8 +195,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const getNormalPayroll = (personId: string): BordroKaydi | undefined =>
     getPersonAccruals(personId).find((item) => item.accrualType === 'NORMAL');
 
+  const getActiveViewAccruals = (personId: string): BordroKaydi[] =>
+    getPersonAccruals(personId).filter((item) => item.accrualType === activeAccrualType);
+
   const getActiveViewPayroll = (personId: string): BordroKaydi | undefined =>
-    getPersonAccruals(personId).find((item) => item.accrualType === activeAccrualType);
+    getActiveViewAccruals(personId)[0];
 
   const getNormalAccrualInput = (personId: string): PayrollBoundaryAccrualInput => {
     const exactPayroll = authoritativeDataset.payrolls.find(
@@ -499,12 +502,15 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   // Single calculation handler
-  const handleCalculateSingle = async (person: Personel, e: React.MouseEvent) => {
+  const handleCalculateSingle = async (
+    person: Personel,
+    e: React.MouseEvent,
+    requestedAccrual?: BordroKaydi
+  ) => {
     e.stopPropagation();
     if (isSupplementaryView) {
-      const existingAccrual = getActiveViewPayroll(person.id);
-      if (existingAccrual) {
-        await handleRecalculateAccrual(person, existingAccrual, e);
+      if (requestedAccrual) {
+        await handleRecalculateAccrual(person, requestedAccrual, e);
       } else {
         openSupplementaryAccrualForm(person);
       }
@@ -546,6 +552,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     { id: 'finalized', label: 'Kesinleştirildi' },
   ];
 
+  const matchesSupplementaryAccrualStatus = (payroll: BordroKaydi): boolean => {
+    if (rowFilter === 'all' || rowFilter === 'attendanceMissing') return true;
+    if (rowFilter === 'notCalculated') return payroll.status === 'DRAFT';
+    if (rowFilter === 'stale') return payroll.status === 'STALE';
+    if (rowFilter === 'calculated') return payroll.status === 'CALCULATED';
+    return payroll.status === 'FINALIZED';
+  };
+
   const matchesRowFilter = (person: Personel): boolean => {
     if (rowFilter === 'all') return true;
     const attendance = puantajlar.find(
@@ -553,6 +567,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     );
     const hasAttendance = Boolean(attendance?.gunler && Object.keys(attendance.gunler).length > 0);
     if (rowFilter === 'attendanceMissing') return !hasAttendance;
+
+    if (isSupplementaryView) {
+      const payrolls = getActiveViewAccruals(person.id);
+      if (rowFilter === 'notCalculated') {
+        return hasAttendance && (payrolls.length === 0 || payrolls.some(matchesSupplementaryAccrualStatus));
+      }
+      return payrolls.some(matchesSupplementaryAccrualStatus);
+    }
 
     const payroll = getActiveViewPayroll(person.id);
     if (rowFilter === 'notCalculated') {
@@ -619,7 +641,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           </h2>
           <p className="text-xs text-slate-300 mt-1 max-w-2xl">
             {isSupplementaryView
-              ? `${activeViewTitle} kayıtları mevcut tahakkuklardan gösterilir. Yeni kayıt eklemek için ilgili personelin satırındaki işlemi kullanın.`
+              ? `${activeViewTitle} kayıtları mevcut tahakkuklardan gösterilir. Aynı türden birden fazla tahakkuk ayrı satır olarak listelenir.`
               : 'Kesintiler ve özlük hakları personelin kayıtlı kartından otomatik çekilir. Kişi adına tıklayarak detaylı bordro zarfını görüntüleyebilirsiniz.'}
           </p>
         </div>
@@ -697,7 +719,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             </p>
           </div>
           <p className="max-w-md text-[11px] font-medium text-slate-600">
-            Bu ekran mevcut tahakkukları gösterir; brüt tutarı belirleyip kişi satırından ekleyin.
+            Bu ekran mevcut tahakkukları gösterir; aynı kişiye aynı türden yeni bir tahakkuk ayrıca eklenebilir.
           </p>
         </div>
       )}
@@ -817,7 +839,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
           <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-            <span>{isSupplementaryView ? 'Seçili tahakkuku filtreleyin ve satırdan işlem yapın' : 'Güncel bordrolarda isme tıklayarak bordro zarfını açabilirsiniz'}</span>
+            <span>{isSupplementaryView ? 'Her satır tek bir tahakkuku temsil eder' : 'Güncel bordrolarda isme tıklayarak bordro zarfını açabilirsiniz'}</span>
           </div>
           </div>
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Bordro durum filtresi">
@@ -875,11 +897,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
               ) : (
                 filteredPersoneller.map((person, idx) => {
                   const personAccruals = getPersonAccruals(person.id);
-                  const viewAccruals = isSupplementaryView
-                    ? personAccruals.filter((item) => item.accrualType === activeAccrualType)
-                    : personAccruals;
-                  const bordro = viewAccruals.find((item) => item.accrualType === activeAccrualType);
-                  const normalBordro = personAccruals.find((item) => item.accrualType === 'NORMAL');
                   const pPuantaj = puantajlar.find(
                     (p) => p.personelId === person.id && p.donemId === aktifDonem.id
                   );
@@ -888,6 +905,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     pPuantaj.gunler &&
                     Object.keys(pPuantaj.gunler).length > 0
                   );
+                  const allViewAccruals = isSupplementaryView
+                    ? personAccruals.filter((item) => item.accrualType === activeAccrualType)
+                    : personAccruals;
+                  const viewAccruals = isSupplementaryView
+                    ? allViewAccruals.filter(matchesSupplementaryAccrualStatus)
+                    : allViewAccruals;
+                  const bordro = isSupplementaryView
+                    ? viewAccruals[0]
+                    : viewAccruals.find((item) => item.accrualType === activeAccrualType);
+                  const additionalViewAccruals = isSupplementaryView ? viewAccruals.slice(1) : [];
+                  const normalBordro = personAccruals.find((item) => item.accrualType === 'NORMAL');
 
                   const hasPayrollSnapshot = !!bordro;
                   const isFinalized = bordro?.status === 'FINALIZED';
@@ -903,11 +931,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   return (
                     <React.Fragment key={person.id}>
                     <tr
-                      onClick={() => handleOpenPaySlip(person)}
+                      data-testid={isSupplementaryView && bordro ? `accrual-row-${getAccrualId(bordro)}` : `payroll-row-${person.id}`}
+                      onClick={() => void handleOpenPaySlip(person, bordro)}
                       className={`transition-colors group ${isStale || isDraft ? 'bg-amber-50/40 cursor-default' : 'hover:bg-indigo-50/50 cursor-pointer'}`}
                     >
                       <td className="py-3 px-4 font-mono text-slate-400 font-medium">
-                        {idx + 1}
+                        {idx + 1}{isSupplementaryView && viewAccruals.length > 1 ? '.1' : ''}
                       </td>
 
                       {/* Person Name & TC */}
@@ -925,6 +954,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <span className="font-mono text-[11px] text-slate-500">
                               TC: {person.tcNo}
                             </span>
+                            {isSupplementaryView && bordro?.accrualDescription && (
+                              <div className="max-w-64 truncate text-[10px] font-medium text-slate-500" title={bordro.accrualDescription}>
+                                {bordro.accrualDescription}
+                              </div>
+                            )}
                             <button
                               type="button"
                               data-testid={`timeline-toggle-${person.id}`}
@@ -1048,7 +1082,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               : normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)}
                         </div>
                         <div className="text-[10px] text-slate-500">
-                          {bordro ? 'Değiştirilemez' : isSupplementaryView ? `${activeViewTitle} için` : 'Yeni NORMAL için'}
+                          {bordro
+                            ? (isSupplementaryView ? `Sıra ${bordro.sequence}` : 'Değiştirilemez')
+                            : isSupplementaryView ? `${activeViewTitle} için` : 'Yeni NORMAL için'}
                         </div>
                       </td>
 
@@ -1101,7 +1137,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <span>Hesaplandı</span>
                           </span>
                         ) : hasPuantaj ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             <Clock className="w-3 h-3 text-amber-600" />
                             <span>{isSupplementaryView ? 'Tahakkuk Eklenmedi' : 'Hesaplanmadı'}</span>
                           </span>
@@ -1115,13 +1151,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
                       {/* Actions */}
                       <td className="py-3 px-4 text-center">
-                        <div className="flex items-center justify-center gap-1.5">
+                        <div className="flex flex-wrap items-center justify-center gap-1.5">
                           {hasPuantaj ? (
                             <>
                               {!isFinalized && (
                                 <button
-                                  data-testid={`calculate-payroll-${person.id}`}
-                                  onClick={(e) => handleCalculateSingle(person, e)}
+                                  data-testid={isSupplementaryView && bordro ? `recalculate-accrual-${getAccrualId(bordro)}` : `calculate-payroll-${person.id}`}
+                                  onClick={(e) => handleCalculateSingle(person, e, bordro)}
                                   title={isSupplementaryView
                                     ? (bordro ? 'Bu tahakkuku yeniden hesapla' : `${activeViewTitle} tahakkuku ekle`)
                                     : isStale ? 'Güncelliğini yitiren bordroyu yeniden hesapla' : 'Bordroyu Hesapla/Yeniden Hesapla'}
@@ -1132,11 +1168,27 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                 </button>
                               )}
 
-                              {!isStale && !isDraft && (
+                              {isSupplementaryView && bordro && canAddSupplementary && (
+                                <button
+                                  type="button"
+                                  data-testid={`add-same-type-accrual-${person.id}`}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    openSupplementaryAccrualForm(person);
+                                  }}
+                                  title={`Aynı kişiye yeni ${activeViewTitle} tahakkuku ekle`}
+                                  className="p-1.5 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                  <span>Yeni</span>
+                                </button>
+                              )}
+
+                              {!isStale && !isDraft && (bordro || !isSupplementaryView) && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    handleOpenPaySlip(person);
+                                    void handleOpenPaySlip(person, bordro);
                                   }}
                                   title="Bordro Zarfını Görüntüle & Yazdır"
                                   className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
@@ -1179,6 +1231,139 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         </div>
                       </td>
                     </tr>
+
+                    {isSupplementaryView && additionalViewAccruals.map((accrual, additionalIndex) => {
+                      const accrualIsFinalized = accrual.status === 'FINALIZED';
+                      const accrualIsStale = accrual.status === 'STALE';
+                      const accrualIsDraft = accrual.status === 'DRAFT';
+                      const accrualIsCalculated = accrual.status === 'CALCULATED' || accrualIsFinalized;
+                      return (
+                        <tr
+                          key={`${person.id}-${getAccrualId(accrual)}`}
+                          data-testid={`accrual-row-${getAccrualId(accrual)}`}
+                          onClick={() => void handleOpenPaySlip(person, accrual)}
+                          className={`transition-colors group ${accrualIsStale || accrualIsDraft ? 'bg-amber-50/40 cursor-default' : 'hover:bg-indigo-50/50 cursor-pointer'}`}
+                        >
+                          <td className="py-3 px-4 font-mono text-slate-400 font-medium">
+                            {idx + 1}.{additionalIndex + 2}
+                          </td>
+                          <td className="py-3 px-4 font-medium">
+                            <div className="font-bold text-slate-900">{person.ad} {person.soyad}</div>
+                            <div className="font-mono text-[11px] text-slate-500">TC: {person.tcNo}</div>
+                            <div className="mt-0.5 text-[10px] font-semibold text-indigo-600">
+                              {ACCRUAL_TYPE_LABELS[accrual.accrualType]} · kayıt {additionalIndex + 2}
+                            </div>
+                            {accrual.accrualDescription && (
+                              <div className="max-w-64 truncate text-[10px] text-slate-500" title={accrual.accrualDescription}>
+                                {accrual.accrualDescription}
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center font-mono text-[11px]">
+                            <div className="font-bold text-slate-800">
+                              {accrual.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)}
+                            </div>
+                            <div className="text-[10px] text-slate-500">Sıra {accrual.sequence}</div>
+                          </td>
+                          <td className={`py-3 px-4 text-right font-mono font-medium ${accrualIsStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
+                            {formatTL(accrual.gelirToplam || 0)}
+                          </td>
+                          <td className={`py-3 px-4 text-right font-mono font-medium ${accrualIsStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
+                            {formatTL(accrual.kesintiler.isciSgkPrimi ?? 0)}
+                          </td>
+                          <td className={`py-3 px-4 text-right font-mono font-medium ${accrualIsStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
+                            {formatTL(accrual.kesintiler.gelirVergisi ?? 0)}
+                          </td>
+                          <td className={`py-3 px-4 text-right font-mono font-bold text-sm ${accrualIsStale ? 'text-amber-700 line-through' : 'text-emerald-700'}`}>
+                            {formatTL(accrual.netOdeme || 0)}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {accrualIsFinalized ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-200 text-slate-800 border border-slate-300">
+                                <CheckCircle2 className="w-3 h-3 text-slate-700" />
+                                <span>Kesinleştirildi</span>
+                              </span>
+                            ) : accrualIsStale ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-900 border border-amber-300">
+                                <AlertTriangle className="w-3 h-3 text-amber-700" />
+                                <span>Yeniden Hesaplanmalı</span>
+                              </span>
+                            ) : accrualIsDraft ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300">
+                                <Clock className="w-3 h-3 text-slate-600" />
+                                <span>Taslak</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>Hesaplandı</span>
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <div className="flex flex-wrap items-center justify-center gap-1.5">
+                              {hasPuantaj ? (
+                                <>
+                                  {!accrualIsFinalized && (
+                                    <button
+                                      type="button"
+                                      data-testid={`recalculate-accrual-${getAccrualId(accrual)}`}
+                                      onClick={(event) => void handleRecalculateAccrual(person, accrual, event)}
+                                      className="p-1.5 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                    >
+                                      <RefreshCw className="w-3.5 h-3.5" />
+                                      <span>Yeniden Hesapla</span>
+                                    </button>
+                                  )}
+                                  {!accrualIsStale && !accrualIsDraft && (
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleOpenPaySlip(person, accrual);
+                                      }}
+                                      className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                    >
+                                      <FileText className="w-3.5 h-3.5" />
+                                      <span>Bordro Gör</span>
+                                    </button>
+                                  )}
+                                  {accrualIsCalculated && !accrualIsFinalized && (
+                                    <PayrollFinalizeModal
+                                      personel={person}
+                                      bordro={accrual}
+                                      donem={aktifDonem}
+                                      engine={payrollEngine}
+                                      dataset={buildDataset()}
+                                      onFinalized={(finalizedBordro) =>
+                                        handleFinalizeSuccess(person, finalizedBordro)
+                                      }
+                                      onError={(message) => {
+                                        setSuccessMessage(null);
+                                        setErrorMessage(message);
+                                      }}
+                                    />
+                                  )}
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (onGoToPuantaj) onGoToPuantaj(person.id);
+                                  }}
+                                  className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 border border-rose-200 rounded-lg transition-colors text-[11px] font-bold flex items-center gap-1"
+                                >
+                                  <CalendarCheck className="w-3.5 h-3.5" />
+                                  <span>Puantaj Gir</span>
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
                     {expandedTimelinePersonId === person.id && <tr key={`${person.id}-accrual-timeline`}>
                       <td colSpan={isSupplementaryView ? 9 : 11} className="px-4 py-3 bg-slate-50/80">
                         <div className="flex flex-col gap-2">
