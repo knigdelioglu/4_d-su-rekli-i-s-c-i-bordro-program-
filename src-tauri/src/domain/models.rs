@@ -197,6 +197,33 @@ pub struct ManualPayrollIncomeInput {
     pub tisIkramiyesi: Option<Decimal>,
 }
 
+/// A payroll period is a work-period container. An accrual is the immutable
+/// payment/calculation node inside that period.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[allow(clippy::upper_case_acronyms)]
+pub enum AccrualType {
+    #[default]
+    NORMAL,
+    TEDIYE,
+    TIS_IKRAMIYE,
+    SUPPLEMENTAL,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollAccrualInput {
+    pub accrualId: String,
+    pub accrualType: AccrualType,
+    pub paymentDate: String,
+    pub sequence: i32,
+    /// Required for supplementary accruals; NORMAL uses the legacy income
+    /// source and may leave this empty.
+    #[serde(default)]
+    pub grossAmount: Option<Decimal>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct KesintiKalemleri {
@@ -300,6 +327,16 @@ pub struct BordroKaydi {
     pub id: String,
     pub personelId: String,
     pub donemId: String,
+    #[serde(default)]
+    pub accrualId: String,
+    #[serde(default)]
+    pub accrualType: AccrualType,
+    #[serde(default)]
+    pub paymentDate: String,
+    #[serde(default)]
+    pub sequence: i32,
+    #[serde(default)]
+    pub accrualDescription: Option<String>,
     pub puantajOzeti: PuantajOzeti,
     pub gelirler: GelirKalemleri,
     pub gelirToplam: Decimal,
@@ -319,6 +356,8 @@ pub struct BordroKaydi {
     pub pekDetay: Option<PekDetayi>,
     pub isPrimiDetay: Option<IsPrimiHesapDetayi>,
     pub gvDetay: Option<GvHesapDetayi>,
+    #[serde(default)]
+    pub damgaDetay: Option<DamgaVergisiHesapDetayi>,
     /// Bordro hesaplanırken çözümlenen period-local yasal parametrelerin snapshot'ı.
     pub statutorySnapshot: Option<ResolvedStatutorySnapshot>,
     pub odenenRaporluGun: Option<i32>,
@@ -387,6 +426,8 @@ pub struct IsPrimiHesapDetayi {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GvHesapDetayi {
+    #[serde(default)]
+    pub oncekiKumulatifGvMatrahi: Decimal,
     /// Cari dönem GV matrahı (brüt gelir - işçi SGK - işçi işsizlik).
     pub cariGvMatrahi: Decimal,
     /// Cari sonrası gerçek kümülatif matrah (önceki + cari).
@@ -399,8 +440,14 @@ pub struct GvHesapDetayi {
     pub asgariUcretReferansKumulatifMatrahi: Decimal,
     /// Asgari ücretin ilgili ay için hesaplanan vergi istisnası hakkı.
     pub asgariUcretGvIstisnasi: Decimal,
+    #[serde(default)]
+    pub ayniAyOncekiKullanilanGvIstisnasi: Decimal,
+    #[serde(default)]
+    pub tahakkukOncesiKalanGvIstisnasi: Decimal,
     /// Gerçekte uygulanan istisna: min(brüt GV, aylık istisna hakkı).
     pub uygulananGvIstisnasi: Decimal,
+    #[serde(default)]
+    pub tahakkukSonrasiKalanGvIstisnasi: Decimal,
     /// Kesilecek gelir vergisi (negatif olamaz).
     pub kesilenGelirVergisi: Decimal,
     /// Cari ayda gerçekten uygulanan doğum/askerlik borçlanması GV indirimi.
@@ -418,6 +465,17 @@ pub struct GvHesapDetayi {
     /// Aday, aylık limit ve yıllık kalan limitin en küçüğü.
     #[serde(default)]
     pub uygulanabilirSigortaGvIndirimi: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DamgaVergisiHesapDetayi {
+    pub brutDamgaVergisi: Decimal,
+    pub aylikDamgaIstisnaHakki: Decimal,
+    pub ayniAyOncekiKullanilanDamgaIstisnasi: Decimal,
+    pub uygulananDamgaIstisnasi: Decimal,
+    pub kalanDamgaIstisnasi: Decimal,
+    pub kesilenDamgaVergisi: Decimal,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

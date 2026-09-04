@@ -49,6 +49,192 @@ fn ensure_unique_tax_year_month(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+fn ensure_multi_accrual_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let columns = table_columns(conn, "payroll_records")?;
+    let required = [
+        "accrual_id",
+        "accrual_type",
+        "payment_date",
+        "sequence",
+        "accrual_description",
+        "damga_snapshot_json",
+    ];
+    let table_sql: String = conn.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'payroll_records'",
+        [],
+        |row| row.get(0),
+    )?;
+    let normalized_sql = table_sql
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let default_payment_date_expr = "CASE
+                WHEN strftime('%Y-%m', pp.bitis_tarihi) = printf('%04d-%02d', pp.tax_year, pp.tax_month)
+                THEN pp.bitis_tarihi
+                ELSE date(pp.tax_year || '-' || printf('%02d', pp.tax_month) || '-01', '+1 month', '-1 day')
+             END";
+    let has_legacy_unique = normalized_sql.contains("unique(personnel_id, period_id)")
+        || normalized_sql.contains("unique (personnel_id, period_id)");
+
+    if required.iter().all(|column| columns.contains(*column)) && !has_legacy_unique {
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_accrual_id
+                 ON payroll_records(accrual_id);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_one_normal
+                 ON payroll_records(personnel_id, period_id)
+                 WHERE accrual_type = 'NORMAL';
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_payment_sequence
+                 ON payroll_records(personnel_id, payment_date, sequence);
+             CREATE INDEX IF NOT EXISTS idx_payroll_records_accrual_order
+                 ON payroll_records(personnel_id, payment_date, sequence, accrual_id);",
+        )?;
+        return Ok(());
+    }
+
+    // Rebuild the parent and child tables atomically. SQLite cannot remove a
+    // table-level UNIQUE constraint with ALTER TABLE; keeping the copy in the
+    // same migration transaction means an error rolls back the whole repair.
+    let accrual_id_expr = if columns.contains("accrual_id") {
+        "COALESCE(NULLIF(pr.accrual_id, ''), pr.id)"
+    } else {
+        "pr.id"
+    };
+    let accrual_type_expr = if columns.contains("accrual_type") {
+        "COALESCE(NULLIF(pr.accrual_type, ''), 'NORMAL')"
+    } else {
+        "'NORMAL'"
+    };
+    let payment_date_expr = if columns.contains("payment_date") {
+        format!("COALESCE(NULLIF(pr.payment_date, ''), {default_payment_date_expr})")
+    } else {
+        default_payment_date_expr.to_owned()
+    };
+    let sequence_expr = if columns.contains("sequence") {
+        "COALESCE(pr.sequence, 0)"
+    } else {
+        "0"
+    };
+    let description_expr = if columns.contains("accrual_description") {
+        "pr.accrual_description"
+    } else {
+        "pr.notlar"
+    };
+    let damga_snapshot_expr = if columns.contains("damga_snapshot_json") {
+        "pr.damga_snapshot_json"
+    } else {
+        "NULL"
+    };
+
+    conn.execute_batch(
+        "CREATE TABLE payroll_income_items__multi_backup AS
+             SELECT id, payroll_id, item_type, description, amount, source
+             FROM payroll_income_items;
+         CREATE TABLE payroll_deduction_items__multi_backup AS
+             SELECT id, payroll_id, item_type, description, amount, source
+             FROM payroll_deduction_items;
+         DROP TABLE payroll_income_items;
+         DROP TABLE payroll_deduction_items;
+         CREATE TABLE payroll_records__multi (
+             id TEXT PRIMARY KEY,
+             personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+             period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+             accrual_id TEXT NOT NULL,
+             accrual_type TEXT NOT NULL DEFAULT 'NORMAL',
+             payment_date TEXT NOT NULL,
+             sequence INTEGER NOT NULL DEFAULT 0,
+             accrual_description TEXT,
+             gross_total INTEGER NOT NULL,
+             sgk_base INTEGER NOT NULL,
+             gv_base INTEGER NOT NULL,
+             previous_cumulative_gv INTEGER NOT NULL,
+             new_cumulative_gv INTEGER NOT NULL,
+             income_tax INTEGER NOT NULL,
+             stamp_tax INTEGER NOT NULL,
+             total_deductions INTEGER NOT NULL,
+             net_payment INTEGER NOT NULL,
+             status TEXT NOT NULL DEFAULT 'CALCULATED',
+             puantaj_summary_json TEXT NOT NULL,
+             pek_detail_json TEXT,
+             devreden_pek_gelen_json TEXT,
+             sonraki_devreden_pek_json TEXT,
+             calculated_at TEXT NOT NULL,
+             updated_at TEXT NOT NULL,
+             raporlu_gun INTEGER,
+             odenen_raporlu_gun INTEGER,
+             is_primi_snapshot_json TEXT,
+             gv_snapshot_json TEXT,
+             statutory_snapshot_json TEXT,
+             damga_snapshot_json TEXT,
+             notlar TEXT
+         );",
+    )?;
+    let insert_sql = format!(
+        "INSERT INTO payroll_records__multi (
+             id, personnel_id, period_id, accrual_id, accrual_type, payment_date, sequence,
+             accrual_description, gross_total, sgk_base, gv_base, previous_cumulative_gv,
+             new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
+             puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json,
+             sonraki_devreden_pek_json, calculated_at, updated_at, raporlu_gun,
+             odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json,
+             statutory_snapshot_json, damga_snapshot_json, notlar
+         )
+         SELECT pr.id, pr.personnel_id, pr.period_id, {accrual_id_expr}, {accrual_type_expr},
+                {payment_date_expr}, {sequence_expr}, {description_expr}, pr.gross_total,
+                pr.sgk_base, pr.gv_base, pr.previous_cumulative_gv, pr.new_cumulative_gv,
+                pr.income_tax, pr.stamp_tax, pr.total_deductions, pr.net_payment, pr.status,
+                pr.puantaj_summary_json, pr.pek_detail_json, pr.devreden_pek_gelen_json,
+                pr.sonraki_devreden_pek_json, pr.calculated_at, pr.updated_at, pr.raporlu_gun,
+                pr.odenen_raporlu_gun, pr.is_primi_snapshot_json, pr.gv_snapshot_json,
+                pr.statutory_snapshot_json, {damga_snapshot_expr}, pr.notlar
+           FROM payroll_records pr
+           JOIN payroll_periods pp ON pp.id = pr.period_id;"
+    );
+    conn.execute_batch(&insert_sql)?;
+    conn.execute_batch(
+        "DROP TABLE payroll_records;
+         ALTER TABLE payroll_records__multi RENAME TO payroll_records;
+         CREATE TABLE payroll_income_items (
+             id TEXT PRIMARY KEY,
+             payroll_id TEXT NOT NULL REFERENCES payroll_records(id) ON DELETE CASCADE,
+             item_type TEXT NOT NULL,
+             description TEXT NOT NULL,
+             amount INTEGER NOT NULL,
+             source TEXT NOT NULL
+         );
+         INSERT INTO payroll_income_items
+             SELECT id, payroll_id, item_type, description, amount, source
+             FROM payroll_income_items__multi_backup;
+         DROP TABLE payroll_income_items__multi_backup;
+         CREATE TABLE payroll_deduction_items (
+             id TEXT PRIMARY KEY,
+             payroll_id TEXT NOT NULL REFERENCES payroll_records(id) ON DELETE CASCADE,
+             item_type TEXT NOT NULL,
+             description TEXT NOT NULL,
+             amount INTEGER NOT NULL,
+             source TEXT NOT NULL
+         );
+         INSERT INTO payroll_deduction_items
+             SELECT id, payroll_id, item_type, description, amount, source
+             FROM payroll_deduction_items__multi_backup;
+         DROP TABLE payroll_deduction_items__multi_backup;
+         CREATE INDEX IF NOT EXISTS idx_payroll_records_personnel
+             ON payroll_records(personnel_id);
+         CREATE INDEX IF NOT EXISTS idx_payroll_records_period
+             ON payroll_records(period_id);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_accrual_id
+             ON payroll_records(accrual_id);
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_one_normal
+             ON payroll_records(personnel_id, period_id)
+             WHERE accrual_type = 'NORMAL';
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_payroll_records_payment_sequence
+             ON payroll_records(personnel_id, payment_date, sequence);
+         CREATE INDEX IF NOT EXISTS idx_payroll_records_accrual_order
+             ON payroll_records(personnel_id, payment_date, sequence, accrual_id);",
+    )?;
+    Ok(())
+}
+
 pub fn get_migrations() -> Migrations<'static> {
     Migrations::new(vec![
         M::up(
@@ -112,6 +298,11 @@ pub fn get_migrations() -> Migrations<'static> {
                 id TEXT PRIMARY KEY,
                 personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
                 period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                accrual_id TEXT NOT NULL,
+                accrual_type TEXT NOT NULL DEFAULT 'NORMAL',
+                payment_date TEXT NOT NULL,
+                sequence INTEGER NOT NULL DEFAULT 0,
+                accrual_description TEXT,
                 gross_total INTEGER NOT NULL,
                 sgk_base INTEGER NOT NULL,
                 gv_base INTEGER NOT NULL,
@@ -128,7 +319,7 @@ pub fn get_migrations() -> Migrations<'static> {
                 sonraki_devreden_pek_json TEXT,
                 calculated_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                CONSTRAINT unique_personnel_period_payroll UNIQUE(personnel_id, period_id)
+                damga_snapshot_json TEXT
             );
 
             CREATE TABLE IF NOT EXISTS payroll_income_items (
@@ -303,6 +494,15 @@ pub fn get_migrations() -> Migrations<'static> {
             ensure_unique_tax_year_month(tx)?;
             Ok(())
         }),
+        M::up_with_hook("SELECT 1;", |tx| {
+            ensure_multi_accrual_schema(tx).map_err(|error| {
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    error.to_string(),
+                )))
+            })?;
+            Ok(())
+        }),
     ])
 }
 
@@ -413,6 +613,7 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
         ("is_primi_snapshot_json", "TEXT"),
         ("gv_snapshot_json", "TEXT"),
         ("statutory_snapshot_json", "TEXT"),
+        ("damga_snapshot_json", "TEXT"),
         ("notlar", "TEXT"),
     ] {
         add_column_if_missing(
@@ -449,6 +650,7 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
     )?;
 
     ensure_unique_tax_year_month(&tx)?;
+    ensure_multi_accrual_schema(&tx)?;
 
     tx.commit()?;
     Ok(())

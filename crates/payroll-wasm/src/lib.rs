@@ -130,6 +130,7 @@ mod tests {
                 tediye: Some(dec!(123.45)),
                 tisIkramiyesi: Some(dec!(0.15)),
             }),
+            accrual: None,
             dataset: PayrollDatasetSnapshot {
                 personnel: vec![Personel {
                     id: "person-1".into(),

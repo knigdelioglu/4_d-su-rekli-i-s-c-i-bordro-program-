@@ -1,5 +1,6 @@
 use crate::domain::models::{
-    BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, ManualPayrollIncomeInput,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi,
+    ManualPayrollIncomeInput, PayrollAccrualInput,
 };
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
@@ -49,7 +50,17 @@ impl PayrollService {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<()> {
-        let request = Self::build_calculation_request(conn, personnel_id, period_id, None)?;
+        Self::validate_payroll_request_for_accrual(conn, personnel_id, period_id, None)
+    }
+
+    pub fn validate_payroll_request_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+    ) -> Result<()> {
+        let request =
+            Self::build_calculation_request(conn, personnel_id, period_id, accrual, None)?;
         payroll_core::validate_payroll_request(&request)
     }
 
@@ -61,8 +72,18 @@ impl PayrollService {
         period_id: &str,
         manual_income: Option<&ManualPayrollIncomeInput>,
     ) -> Result<BordroKaydi> {
+        Self::calculate_payroll_for_accrual(conn, personnel_id, period_id, None, manual_income)
+    }
+
+    pub fn calculate_payroll_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+    ) -> Result<BordroKaydi> {
         let request =
-            Self::build_calculation_request(conn, personnel_id, period_id, manual_income)?;
+            Self::build_calculation_request(conn, personnel_id, period_id, accrual, manual_income)?;
         let calculated = payroll_core::calculate_payroll(&request)?;
         PayrollRepository::save(conn, &calculated)?;
         Ok(calculated)
@@ -76,20 +97,77 @@ impl PayrollService {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<BordroKaydi> {
+        Self::finalize_payroll_for_accrual(conn, personnel_id, period_id, None)
+    }
+
+    pub fn finalize_payroll_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        requested_accrual_id: Option<&str>,
+    ) -> Result<BordroKaydi> {
         let tx = conn
             .unchecked_transaction()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
-        let manual_income =
-            PayrollRepository::get_saved_manual_income(&tx, personnel_id, period_id)?;
-        let request =
-            Self::build_calculation_request(&tx, personnel_id, period_id, Some(&manual_income))?;
+        let records = PayrollRepository::get_all(&tx)?;
+        let saved = records
+            .iter()
+            .find(|record| {
+                if record.personelId != personnel_id || record.donemId != period_id {
+                    return false;
+                }
+                match requested_accrual_id {
+                    Some(target_id) => record.accrualId == target_id || record.id == target_id,
+                    None => record.accrualType == AccrualType::NORMAL,
+                }
+            })
+            .ok_or_else(|| DomainError::NotFound("Bordro tahakkuku bulunamadı.".into()))?;
+        let accrual = PayrollAccrualInput {
+            accrualId: if saved.accrualId.trim().is_empty() {
+                saved.id.clone()
+            } else {
+                saved.accrualId.clone()
+            },
+            accrualType: saved.accrualType,
+            paymentDate: if saved.paymentDate.trim().is_empty() {
+                let period = PeriodRepository::get_by_id(&tx, period_id)?
+                    .ok_or_else(|| DomainError::NotFound("Dönem bulunamadı.".into()))?;
+                payroll_core::payroll_engine::default_payment_date(&period)
+            } else {
+                saved.paymentDate.clone()
+            },
+            sequence: saved.sequence,
+            grossAmount: match saved.accrualType {
+                AccrualType::TEDIYE => saved.gelirler.tediye,
+                AccrualType::TIS_IKRAMIYE => saved.gelirler.tisIkramiyesi,
+                AccrualType::SUPPLEMENTAL => saved.gelirler.ekOdeme,
+                AccrualType::NORMAL => None,
+            },
+            description: saved.accrualDescription.clone(),
+        };
+        let manual_income = if saved.accrualType == AccrualType::NORMAL {
+            Some(ManualPayrollIncomeInput {
+                tediye: saved.gelirler.tediye,
+                tisIkramiyesi: saved.gelirler.tisIkramiyesi,
+            })
+        } else {
+            None
+        };
+        let request = Self::build_calculation_request(
+            &tx,
+            personnel_id,
+            period_id,
+            Some(&accrual),
+            manual_income.as_ref(),
+        )?;
         let finalized = payroll_core::finalize_payroll(&request)?;
         let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
             assert_mutation_allowed(
                 &tx,
-                &payroll_core::PayrollMutation::PayrollCalculation {
+                &payroll_core::PayrollMutation::AccrualCalculation {
                     personnelId: personnel_id.to_string(),
                     periodId: period_id.to_string(),
+                    accrualId: accrual.accrualId.clone(),
                 },
             )?;
         PayrollRepository::save_in_transaction(&tx, &finalized)?;
@@ -113,6 +191,7 @@ impl PayrollService {
         conn: &Connection,
         personnel_id: &str,
         period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
         manual_income: Option<&ManualPayrollIncomeInput>,
     ) -> Result<payroll_core::PayrollCalculationRequest> {
         Ok(payroll_core::PayrollCalculationRequest {
@@ -120,6 +199,7 @@ impl PayrollService {
             periodId: period_id.to_string(),
             calculatedAt: Utc::now().to_rfc3339(),
             manualIncome: manual_income.cloned(),
+            accrual: accrual.cloned(),
             dataset: Self::build_dataset_snapshot(conn)?,
         })
     }
@@ -144,12 +224,32 @@ impl PayrollService {
         period_id: &str,
         status: BordroStatus,
     ) -> Result<()> {
+        Self::set_payroll_status_for_accrual(conn, personnel_id, period_id, None, status)
+    }
+
+    pub fn set_payroll_status_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual_id: Option<&str>,
+        status: BordroStatus,
+    ) -> Result<()> {
         if status == BordroStatus::FINALIZED {
             return Err(DomainError::ValidationError(
                 "FINALIZED geçişi için finalize_payroll API'si kullanılmalıdır.".into(),
             ));
         }
-        let current = PayrollRepository::get_status_and_created_at(conn, personnel_id, period_id)?;
+        let resolved_accrual_id = match accrual_id {
+            Some(value) => value.to_owned(),
+            None => PayrollRepository::get_normal_accrual_id(conn, personnel_id, period_id)?
+                .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?,
+        };
+        let current = PayrollRepository::get_status_and_created_at_for_accrual(
+            conn,
+            personnel_id,
+            period_id,
+            &resolved_accrual_id,
+        )?;
         let Some((current_status, _)) = current else {
             return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
         };
@@ -159,7 +259,13 @@ impl PayrollService {
                 "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into(),
             ));
         }
-        PayrollRepository::update_status(conn, personnel_id, period_id, status)
+        PayrollRepository::update_status_for_accrual(
+            conn,
+            personnel_id,
+            period_id,
+            &resolved_accrual_id,
+            status,
+        )
     }
 
     pub fn calculate_incoming_devreden_pek(

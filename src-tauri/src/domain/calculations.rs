@@ -159,6 +159,27 @@ pub fn calculate_gv_hesap_detayi_with_brackets(
     kumulatif_asgari_gv_onceki: Decimal,
     brackets: &[TaxBracket],
 ) -> GvHesapDetayi {
+    calculate_gv_hesap_detayi_with_monthly_exemption_state(
+        cari_gv_matrahi,
+        kumulatif_gv_matrahi_onceki,
+        asgari_ucret_aylik_gv_matrahi,
+        kumulatif_asgari_gv_onceki,
+        Decimal::ZERO,
+        brackets,
+    )
+}
+
+/// Same progressive GV calculation with the already-used same-month
+/// exemption supplied explicitly. Keeping this in the shared formula module
+/// ensures native and WASM use identical MidpointAwayFromZero rounding.
+pub fn calculate_gv_hesap_detayi_with_monthly_exemption_state(
+    cari_gv_matrahi: Decimal,
+    kumulatif_gv_matrahi_onceki: Decimal,
+    asgari_ucret_aylik_gv_matrahi: Decimal,
+    kumulatif_asgari_gv_onceki: Decimal,
+    ayni_ay_onceki_kullanilan_gv_istisnasi: Decimal,
+    brackets: &[TaxBracket],
+) -> GvHesapDetayi {
     let brut_gelir_vergisi = calculate_gelir_vergisi_with_brackets(
         cari_gv_matrahi,
         kumulatif_gv_matrahi_onceki,
@@ -169,10 +190,13 @@ pub fn calculate_gv_hesap_detayi_with_brackets(
         kumulatif_asgari_gv_onceki,
         brackets,
     );
-    let uygulanan_gv_istisnasi = min(brut_gelir_vergisi, asgari_ucret_gv_istisnasi);
+    let tahakkuk_oncesi_kalan =
+        (asgari_ucret_gv_istisnasi - ayni_ay_onceki_kullanilan_gv_istisnasi).max(dec!(0));
+    let uygulanan_gv_istisnasi = min(brut_gelir_vergisi, tahakkuk_oncesi_kalan);
     let kesilen_gelir_vergisi = (brut_gelir_vergisi - uygulanan_gv_istisnasi).max(dec!(0));
 
     GvHesapDetayi {
+        oncekiKumulatifGvMatrahi: kumulatif_gv_matrahi_onceki,
         cariGvMatrahi: cari_gv_matrahi,
         yeniKumulatifGvMatrahi: kumulatif_gv_matrahi_onceki + cari_gv_matrahi,
         brutGelirVergisi: brut_gelir_vergisi,
@@ -180,7 +204,11 @@ pub fn calculate_gv_hesap_detayi_with_brackets(
         asgariUcretReferansKumulatifMatrahi: kumulatif_asgari_gv_onceki
             + asgari_ucret_aylik_gv_matrahi,
         asgariUcretGvIstisnasi: asgari_ucret_gv_istisnasi,
+        ayniAyOncekiKullanilanGvIstisnasi: ayni_ay_onceki_kullanilan_gv_istisnasi,
+        tahakkukOncesiKalanGvIstisnasi: tahakkuk_oncesi_kalan,
         uygulananGvIstisnasi: uygulanan_gv_istisnasi,
+        tahakkukSonrasiKalanGvIstisnasi: (tahakkuk_oncesi_kalan - uygulanan_gv_istisnasi)
+            .max(dec!(0)),
         kesilenGelirVergisi: kesilen_gelir_vergisi,
         dogumAskerlikGvIndirimi: dec!(0),
         sigortaGvIndirimAdayi: dec!(0),
@@ -204,6 +232,26 @@ pub fn calculate_gv_hesap_detayi(
         kumulatif_asgari_gv_onceki,
         &default_gelir_vergisi_dilimleri_2026(),
     )
+}
+
+pub fn calculate_monthly_stamp_tax_state(
+    brut_gelir: Decimal,
+    aylik_brut_asgari_ucret: Decimal,
+    damga_orani: Decimal,
+    ayni_ay_onceki_kullanilan: Decimal,
+) -> DamgaVergisiHesapDetayi {
+    let brut_damga = round2(brut_gelir.max(Decimal::ZERO) * damga_orani);
+    let aylik_hak = round2(aylik_brut_asgari_ucret.max(Decimal::ZERO) * damga_orani);
+    let tahakkuk_oncesi_kalan = (aylik_hak - ayni_ay_onceki_kullanilan).max(Decimal::ZERO);
+    let uygulanan = brut_damga.min(tahakkuk_oncesi_kalan);
+    DamgaVergisiHesapDetayi {
+        brutDamgaVergisi: brut_damga,
+        aylikDamgaIstisnaHakki: aylik_hak,
+        ayniAyOncekiKullanilanDamgaIstisnasi: ayni_ay_onceki_kullanilan,
+        uygulananDamgaIstisnasi: uygulanan,
+        kalanDamgaIstisnasi: (tahakkuk_oncesi_kalan - uygulanan).max(Decimal::ZERO),
+        kesilenDamgaVergisi: (brut_damga - uygulanan).max(Decimal::ZERO),
+    }
 }
 
 pub struct NightWorkPolicy;
@@ -755,6 +803,49 @@ fn calculate_prime_esas_kazanc_with_statutory_snapshot(
     devreden_pek_gelen: &[DevredenPekKaydi],
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    calculate_prime_esas_kazanc_with_month_to_date(
+        gelirler,
+        puantaj_ozeti,
+        kurum_degerleri,
+        devreden_pek_gelen,
+        statutory_snapshot,
+        Decimal::ZERO,
+        true,
+    )
+}
+
+/// Calculates only the incremental PEK for an accrual after prior accruals in
+/// the same tax month. The existing PEK formula remains the source of truth;
+/// this wrapper supplies the month-to-date capacity and deliberately skips a
+/// second monthly lower-bound completion.
+pub fn calculate_incremental_prime_esas_kazanc(
+    gelirler: &GelirKalemleri,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    devreden_pek_gelen: &[DevredenPekKaydi],
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
+    month_to_date_pek: Decimal,
+) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    calculate_prime_esas_kazanc_with_month_to_date(
+        gelirler,
+        puantaj_ozeti,
+        kurum_degerleri,
+        devreden_pek_gelen,
+        statutory_snapshot,
+        month_to_date_pek,
+        false,
+    )
+}
+
+fn calculate_prime_esas_kazanc_with_month_to_date(
+    gelirler: &GelirKalemleri,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    devreden_pek_gelen: &[DevredenPekKaydi],
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
+    month_to_date_pek: Decimal,
+    apply_lower_bound: bool,
+) -> (PekDetayi, Vec<DevredenPekKaydi>) {
     let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
     let prim_gun_sayisi = statutory_snapshot
         .map_or(raw_prim_gun, |snapshot| snapshot.sgkPrimGunSayisi)
@@ -823,7 +914,7 @@ fn calculate_prime_esas_kazanc_with_statutory_snapshot(
         if item.tutar <= dec!(0) || item.kalanAySayisi <= 0 {
             continue;
         }
-        let tavan_boslugu = (pek_ust_sinir - pek_matrah_adayi).max(dec!(0));
+        let tavan_boslugu = (pek_ust_sinir - month_to_date_pek - pek_matrah_adayi).max(dec!(0));
         let eklenecek = item.tutar.min(tavan_boslugu);
 
         if eklenecek > dec!(0) {
@@ -842,13 +933,14 @@ fn calculate_prime_esas_kazanc_with_statutory_snapshot(
     }
 
     let mut devreden_pek_asan_tutar = dec!(0);
-    if pek_matrah_adayi > pek_ust_sinir {
+    let current_month_pek_capacity = (pek_ust_sinir - month_to_date_pek).max(dec!(0));
+    if pek_matrah_adayi > current_month_pek_capacity {
         let ucret_tavan_kapasitesi =
-            (pek_ust_sinir - ucretler - eklenecek_devreden_toplam).max(dec!(0));
+            (current_month_pek_capacity - ucretler - eklenecek_devreden_toplam).max(dec!(0));
         let ucret_disi_kullanilan = ucret_disi_odemeler.min(ucret_tavan_kapasitesi);
         devreden_pek_asan_tutar =
             round2((ucret_disi_odemeler - ucret_disi_kullanilan).max(dec!(0)));
-        pek_matrah_adayi = pek_ust_sinir;
+        pek_matrah_adayi = current_month_pek_capacity;
     }
 
     if devreden_pek_asan_tutar > dec!(0) {
@@ -863,13 +955,14 @@ fn calculate_prime_esas_kazanc_with_statutory_snapshot(
     // bu ay tavana sığan devreden PEK. Alt sınır tamamlama işçi matrahına dahil edilmez.
     let prim_matrahi = round2(pek_matrah_adayi.max(dec!(0)));
     let mut final_pek = prim_matrahi;
-    let alt_sinir_tamamlama_farki = if prim_matrahi > dec!(0) && prim_matrahi < pek_alt_sinir {
-        round2(pek_alt_sinir - prim_matrahi)
-    } else {
-        dec!(0)
-    };
+    let alt_sinir_tamamlama_farki =
+        if apply_lower_bound && prim_matrahi > dec!(0) && prim_matrahi < pek_alt_sinir {
+            round2(pek_alt_sinir - prim_matrahi)
+        } else {
+            dec!(0)
+        };
 
-    if final_pek < pek_alt_sinir && prim_matrahi > dec!(0) {
+    if apply_lower_bound && final_pek < pek_alt_sinir && prim_matrahi > dec!(0) {
         final_pek = pek_alt_sinir;
     }
 
@@ -928,18 +1021,47 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
+    calculate_statutory_deductions_with_month_to_date(
+        gelirler,
+        kurum_degerleri,
+        personel,
+        puantaj_ozeti,
+        tax_inputs,
+        statutory_snapshot,
+        Decimal::ZERO,
+        true,
+    )
+}
+
+/// Calculates statutory deductions for one accrual with an already consumed
+/// same-month PEK amount. The historical wrapper above remains byte-for-byte
+/// equivalent for a first NORMAL accrual; this variant lets a NORMAL accrual
+/// that is chronologically after a supplementary node consume only the
+/// remaining monthly PEK capacity.
+pub fn calculate_statutory_deductions_with_month_to_date(
+    gelirler: &GelirKalemleri,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    personel: Option<&Personel>,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    tax_inputs: &StatutoryDeductionTaxInputs<'_>,
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
+    month_to_date_pek: Decimal,
+    apply_lower_bound: bool,
+) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
     let brut_gelir = calculate_gelir_toplam(gelirler);
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     // PEK önce çözülür. Cari brüt sıfır olsa bile tavan içine alınan devreden PEK
     // varsa işçi SGK/işsizlik ve OKS bu authoritative matrah üzerinden tahakkuk eder.
-    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_statutory_snapshot(
+    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_month_to_date(
         gelirler,
         puantaj_ozeti,
         kurum_degerleri,
         tax_inputs.incoming_devreden_pek,
         statutory_snapshot,
+        month_to_date_pek.max(Decimal::ZERO),
+        apply_lower_bound,
     );
 
     // Sıfır brüt + sıfır PEK için önceki davranışı koru; ancak PEK varken kesintileri

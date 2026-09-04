@@ -44,6 +44,10 @@ function buildPayslipSheet(model: PayrollExportModel): XLSX.WorkSheet {
     ['Bordro Dönemi', model.periodName],
     ['Çalışma Aralığı', `${model.periodStart} - ${model.periodEnd}`],
     ['Vergi Dönemi', `${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}`],
+    ['Tahakkuk Türü', model.accrualType],
+    ['Tahakkuk Tarihi', model.paymentDate],
+    ['Tahakkuk Sıra No', model.sequence],
+    ['Tahakkuk Açıklaması', model.accrualDescription],
     ['Bordro Durumu', model.status],
     ['', ''],
     ['PERSONEL BİLGİLERİ', ''],
@@ -77,8 +81,8 @@ function buildPayslipSheet(model: PayrollExportModel): XLSX.WorkSheet {
   setColumnWidths(sheet, [42, 28]);
   sheet['!merges'] = [
     XLSX.utils.decode_range('A1:B1'),
-    XLSX.utils.decode_range('A7:B7'),
-    XLSX.utils.decode_range('A16:B16'),
+    XLSX.utils.decode_range('A12:B12'),
+    XLSX.utils.decode_range('A21:B21'),
   ];
 
   for (let row = 1; row <= rows.length; row += 1) {
@@ -99,6 +103,26 @@ function buildDetailSheet(model: PayrollExportModel): XLSX.WorkSheet {
   rows.push({ Grup: 'Toplam', Kalem: 'Brüt Gelir Toplamı', Tutar: model.totals.gross });
   pushGroup('SGK/Vergi', model.sgkTax);
   pushGroup('Kesinti', model.deductions);
+  pushGroup('GV Zinciri', [
+    { key: 'gvPrevious', label: 'Önceki Kümülatif GV Matrahı', amount: model.gvAudit.previousCumulativeGv },
+    { key: 'gvCurrent', label: 'Cari GV Matrahı', amount: model.gvAudit.currentGvBase },
+    { key: 'gvNew', label: 'Yeni Kümülatif GV Matrahı', amount: model.gvAudit.newCumulativeGv },
+    { key: 'gvGross', label: 'Brüt Gelir Vergisi', amount: model.gvAudit.grossIncomeTax },
+    { key: 'gvEntitlement', label: 'Aylık GV İstisna Hakkı', amount: model.gvAudit.monthlyExemptionEntitlement },
+    { key: 'gvPriorUsed', label: 'Aynı Ay Önceki Kullanılan GV İstisnası', amount: model.gvAudit.sameMonthPriorUsed },
+    { key: 'gvBeforeRemaining', label: 'Tahakkuk Öncesi Kalan GV İstisnası', amount: model.gvAudit.beforeRemainingExemption },
+    { key: 'gvApplied', label: 'Uygulanan GV İstisnası', amount: model.gvAudit.appliedExemption },
+    { key: 'gvAfterRemaining', label: 'Tahakkuk Sonrası Kalan GV İstisnası', amount: model.gvAudit.afterRemainingExemption },
+    { key: 'gvWithheld', label: 'Kesilen Gelir Vergisi', amount: model.gvAudit.withheldIncomeTax },
+  ]);
+  pushGroup('Damga Vergisi Zinciri', [
+    { key: 'stampGross', label: 'Brüt Damga Vergisi', amount: model.stampAudit.grossStampTax },
+    { key: 'stampEntitlement', label: 'Aylık Damga İstisna Hakkı', amount: model.stampAudit.monthlyExemptionEntitlement },
+    { key: 'stampPriorUsed', label: 'Aynı Ay Önceki Kullanılan Damga İstisnası', amount: model.stampAudit.sameMonthPriorUsed },
+    { key: 'stampApplied', label: 'Uygulanan Damga İstisnası', amount: model.stampAudit.appliedExemption },
+    { key: 'stampRemaining', label: 'Kalan Damga İstisnası', amount: model.stampAudit.remainingExemption },
+    { key: 'stampWithheld', label: 'Kesilen Damga Vergisi', amount: model.stampAudit.withheldStampTax },
+  ]);
   rows.push({ Grup: 'Toplam', Kalem: 'Kesinti Toplamı', Tutar: model.totals.deductions });
   rows.push({ Grup: 'Sonuç', Kalem: 'Net Ödeme', Tutar: model.totals.net });
   pushGroup('Kurum', model.employer);
@@ -150,6 +174,10 @@ function modelRow(model: PayrollExportModel): Record<string, string | number> {
     'T.C. Kimlik No': model.employee.tcNo,
     'Ad Soyad': model.employee.fullName,
     Grup: model.employee.group,
+    'Tahakkuk Türü': model.accrualType,
+    'Tahakkuk Tarihi': model.paymentDate,
+    'Tahakkuk Sıra No': model.sequence,
+    'Tahakkuk Açıklaması': model.accrualDescription,
     Durum: model.status,
     'Brüt Gelir': model.totals.gross,
     'Nihai PEK': model.totals.finalPek,
@@ -225,6 +253,9 @@ export function buildPeriodPayrollWorkbook(args: {
     const row: Record<string, string | number> = {
       'T.C. Kimlik No': model.employee.tcNo,
       'Ad Soyad': model.employee.fullName,
+      'Tahakkuk Türü': model.accrualType,
+      'Tahakkuk Tarihi': model.paymentDate,
+      'Tahakkuk Sıra No': model.sequence,
     };
     for (const line of model.incomes) row[line.label] = line.amount;
     row['Brüt Gelir Toplamı'] = model.totals.gross;
@@ -243,6 +274,9 @@ export function buildPeriodPayrollWorkbook(args: {
     const row: Record<string, string | number> = {
       'T.C. Kimlik No': model.employee.tcNo,
       'Ad Soyad': model.employee.fullName,
+      'Tahakkuk Türü': model.accrualType,
+      'Tahakkuk Tarihi': model.paymentDate,
+      'Tahakkuk Sıra No': model.sequence,
     };
     for (const line of model.deductions) row[line.label] = line.amount;
     row['Kesinti Toplamı'] = model.totals.deductions;
@@ -263,6 +297,9 @@ export function buildPeriodPayrollWorkbook(args: {
     const row: Record<string, string | number> = {
       'T.C. Kimlik No': model.employee.tcNo,
       'Ad Soyad': model.employee.fullName,
+      'Tahakkuk Türü': model.accrualType,
+      'Tahakkuk Tarihi': model.paymentDate,
+      'Tahakkuk Sıra No': model.sequence,
     };
     for (const line of model.sgkTax) row[line.label] = line.amount;
     for (const line of model.employer) row[line.label] = line.amount;
@@ -283,6 +320,9 @@ export function buildPeriodPayrollWorkbook(args: {
       attendanceRows.push({
         'T.C. Kimlik No': model.employee.tcNo,
         'Ad Soyad': model.employee.fullName,
+        'Tahakkuk Türü': model.accrualType,
+        'Tahakkuk Tarihi': model.paymentDate,
+        'Tahakkuk Sıra No': model.sequence,
         Tarih: 'Detay kayıt yok',
         Kod: '',
       });
@@ -292,6 +332,9 @@ export function buildPeriodPayrollWorkbook(args: {
       attendanceRows.push({
         'T.C. Kimlik No': model.employee.tcNo,
         'Ad Soyad': model.employee.fullName,
+        'Tahakkuk Türü': model.accrualType,
+        'Tahakkuk Tarihi': model.paymentDate,
+        'Tahakkuk Sıra No': model.sequence,
         Tarih: day.date,
         Kod: day.code,
       });
@@ -306,6 +349,9 @@ export function buildPeriodPayrollWorkbook(args: {
   const bank = models.map((model) => ({
     'T.C. Kimlik No': model.employee.tcNo,
     'Ad Soyad': model.employee.fullName,
+    'Tahakkuk Türü': model.accrualType,
+    'Tahakkuk Tarihi': model.paymentDate,
+    'Tahakkuk Sıra No': model.sequence,
     IBAN: model.employee.iban,
     'Net Ödeme': model.totals.net,
   }));
@@ -315,19 +361,22 @@ export function buildPeriodPayrollWorkbook(args: {
     'Banka'
   );
 
-  const payrollByPerson = new Map(
-    payrolls.filter((payroll) => payroll.donemId === period.id).map((payroll) => [payroll.personelId, payroll])
-  );
-  const control = people.map((person) => {
-    const payroll = payrollByPerson.get(person.id);
+  const control = people.flatMap((person) => {
+    const personPayrolls = payrolls.filter(
+      (payroll) => payroll.personelId === person.id && payroll.donemId === period.id
+    );
     const personNotices = notices.filter(
       (notice) => notice.scope === 'PERIOD' || notice.personnelId === person.id
     );
     const critical = personNotices.filter((notice) => notice.severity === 'CRITICAL');
     const warnings = personNotices.filter((notice) => notice.severity === 'WARNING');
-    return {
+    const rowsForPerson = personPayrolls.length > 0 ? personPayrolls : [undefined];
+    return rowsForPerson.map((payroll) => ({
       'T.C. Kimlik No': person.tcNo,
       'Ad Soyad': `${person.ad} ${person.soyad}`,
+      'Tahakkuk Türü': payroll?.accrualType ?? '—',
+      'Tahakkuk Tarihi': payroll?.paymentDate ?? '—',
+      'Tahakkuk Sıra No': payroll?.sequence ?? '—',
       'Bordro Durumu': payroll?.status ?? 'YOK',
       'Resmi Çıktıya Dahil': isAuthoritativePayroll(payroll) ? 'EVET' : 'HAYIR',
       'Kritik Uyarı': critical.map((item) => item.title).join(' | ') || '—',
@@ -336,7 +385,7 @@ export function buildPeriodPayrollWorkbook(args: {
       'GV Dilim Geçişi': personNotices.some((item) => item.code === 'INCOME_TAX_BRACKET_TRANSITION') ? 'VAR' : '—',
       'PEK Devri': personNotices.some((item) => item.code.includes('PEK_CARRY')) ? 'VAR' : '—',
       'Rapor Kotası': personNotices.some((item) => item.code.includes('SICK_LEAVE')) ? 'KONTROL' : '—',
-    };
+    }));
   });
   XLSX.utils.book_append_sheet(
     workbook,

@@ -50,6 +50,10 @@ const LEGACY_PEK_DEFAULT_DECIMAL_KEYS = [
 ] as const;
 
 const LEGACY_GV_DEFAULT_DECIMAL_KEYS = [
+  'oncekiKumulatifGvMatrahi',
+  'ayniAyOncekiKullanilanGvIstisnasi',
+  'tahakkukOncesiKalanGvIstisnasi',
+  'tahakkukSonrasiKalanGvIstisnasi',
   'dogumAskerlikGvIndirimi',
   'sigortaGvIndirimAdayi',
   'sigortaGvAylikLimiti',
@@ -99,7 +103,7 @@ function getBackupVersion(parsed: UnknownRecord): number {
 
 /**
  * Legacy classification only selects the explicit compatibility adapter. The
- * resulting canonical object is still required to pass the full V2 validator.
+ * resulting canonical object is still required to pass the full current validator.
  */
 function isLegacyCandidate(parsed: UnknownRecord): boolean {
   try {
@@ -134,12 +138,52 @@ function canonicalizeLegacyPuantajOzeti(value: unknown): unknown {
   return canonicalizeLegacyMissingFields(value, LEGACY_PUANTAJ_OZETI_KEYS, 0);
 }
 
-function canonicalizeLegacyBordro(value: unknown): unknown {
+function legacyPaymentDate(periods: unknown, periodId: unknown): string {
+  if (!Array.isArray(periods) || typeof periodId !== 'string') return '';
+  const period = periods.find(
+    (candidate) => isRecord(candidate) && candidate.id === periodId
+  );
+  if (!isRecord(period) || typeof period.bitisTarihi !== 'string') return '';
+  if (
+    typeof period.taxYear !== 'number' ||
+    !Number.isInteger(period.taxYear) ||
+    typeof period.taxMonth !== 'number' ||
+    !Number.isInteger(period.taxMonth) ||
+    period.taxMonth < 1 ||
+    period.taxMonth > 12
+  ) {
+    return period.bitisTarihi;
+  }
+  const taxPrefix = `${String(period.taxYear).padStart(4, '0')}-${String(period.taxMonth).padStart(2, '0')}-`;
+  if (period.bitisTarihi.startsWith(taxPrefix)) return period.bitisTarihi;
+  const monthEnd = new Date(Date.UTC(period.taxYear, period.taxMonth, 0));
+  return Number.isNaN(monthEnd.getTime())
+    ? period.bitisTarihi
+    : monthEnd.toISOString().slice(0, 10);
+}
+
+function canonicalizeLegacyBordro(value: unknown, periods: unknown): unknown {
   if (!isRecord(value)) return value;
 
   const bordro = { ...value };
   // BordroKaydi.status has #[serde(default)] with BordroStatus::CALCULATED.
   if (!hasOwn(bordro, 'status')) bordro.status = 'CALCULATED';
+  // V1/V2 had one record per person+period. It maps losslessly to the only
+  // legal legacy accrual: one NORMAL node carrying the old record id/items.
+  if (!hasOwn(bordro, 'accrualId') || bordro.accrualId === null || bordro.accrualId === '') {
+    bordro.accrualId = typeof bordro.id === 'string' ? bordro.id : '';
+  }
+  // Every pre-V3 backup had one person+period payroll. Even if a producer
+  // accidentally emitted partial accrual metadata, its only lossless meaning
+  // is the legacy NORMAL node.
+  bordro.accrualType = 'NORMAL';
+  if (!hasOwn(bordro, 'paymentDate') || bordro.paymentDate === null || bordro.paymentDate === '') {
+    bordro.paymentDate = legacyPaymentDate(periods, bordro.donemId);
+  }
+  bordro.sequence = 0;
+  if (!hasOwn(bordro, 'accrualDescription')) {
+    bordro.accrualDescription = hasOwn(bordro, 'notlar') ? bordro.notlar : null;
+  }
   if (hasOwn(bordro, 'puantajOzeti')) {
     bordro.puantajOzeti = canonicalizeLegacyPuantajOzeti(bordro.puantajOzeti);
   }
@@ -273,7 +317,7 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
   const periods = legacyValueOrDefault(parsed, 'donemler', []);
   const rawPayrolls = legacyValueOrDefault(parsed, 'bordrolar', []);
   const payrolls = Array.isArray(rawPayrolls)
-    ? rawPayrolls.map(canonicalizeLegacyBordro)
+    ? rawPayrolls.map((payroll) => canonicalizeLegacyBordro(payroll, periods))
     : rawPayrolls;
 
   const rawPersonnel = legacyValueOrDefault(parsed, 'personeller', []);
@@ -308,9 +352,19 @@ function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
     throw new Error('Desteklenen legacy yedek yapısı bulunamadı.');
   }
 
+  // V2 was the previous exact-Decimal snapshot format. It is legacy with
+  // respect to V3's accrual metadata, but it must not pass through the V1
+  // numeric-repair adapter: a numeric V2 value is still an invalid Decimal.
+  const version = getBackupVersion(raw);
+  if (version >= 2 && (!hasOwn(raw, 'bordrolar') || !hasOwn(raw, 'personeller'))) {
+    throw new Error('Legacy yedek bordro ve personel koleksiyonlarını içermelidir.');
+  }
+
   // This conversion is deliberately confined to the legacy adapter. No value
   // becomes authoritative until the canonical object passes the full schema.
-  const encodedLegacy = parseLegacyPayrollStorage<unknown>(JSON.stringify(raw));
+  const encodedLegacy = version === 2
+    ? raw
+    : parseLegacyPayrollStorage<unknown>(JSON.stringify(raw));
   if (!isRecord(encodedLegacy)) {
     throw new Error('Legacy yedek canonical nesne içermiyor.');
   }
@@ -354,7 +408,7 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   const version = getBackupVersion(raw);
 
   if (version === BACKUP_FORMAT_VERSION) {
-    // A versioned V2 backup is current data. It must never reach the legacy
+    // A versioned V3 backup is current data. It must never reach the legacy
     // repair path, even when its malformed values resemble an older backup.
     return parseCurrentBrowserSnapshot(json);
   }

@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
-pub const CURRENT_BACKUP_VERSION: u32 = 2;
+pub const CURRENT_BACKUP_VERSION: u32 = 3;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +104,7 @@ impl MigrationService {
                     || payload.annualPayrollParameters.is_none())
             {
                 return Err(DomainError::InvalidData(
-                    "V2 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
+                    "V2/V3 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
                         .into(),
                 ));
             }
@@ -114,7 +114,7 @@ impl MigrationService {
 
     fn import_payload(conn: &Connection, payload: LegacyPayload) -> Result<()> {
         let LegacyPayload {
-            backupVersion: _,
+            backupVersion,
             exportedAt: _,
             donemler,
             aktifDonemId,
@@ -127,6 +127,7 @@ impl MigrationService {
             annualPayrollParameters,
             zamAylari,
         } = payload;
+        let is_pre_accrual_backup = backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION;
 
         if let Some(periods) = donemler {
             for period in periods {
@@ -248,7 +249,31 @@ impl MigrationService {
         // bulk-persistence path; normal calculation/finalization still goes
         // through the core policy and transaction adapters.
         if let Some(payroll_list) = bordrolar {
-            for payroll in payroll_list {
+            for mut payroll in payroll_list {
+                // V1/V2 snapshots had one person+period row and no accrual
+                // metadata. Preserve the old id and make it the sole NORMAL
+                // node without rewriting any financial snapshot.
+                if payroll.accrualId.trim().is_empty() {
+                    payroll.accrualId = payroll.id.clone();
+                }
+                if is_pre_accrual_backup {
+                    payroll.accrualType = AccrualType::NORMAL;
+                    payroll.sequence = 0;
+                }
+                if payroll.paymentDate.trim().is_empty() {
+                    let period =
+                        PeriodRepository::get_by_id(conn, &payroll.donemId)?.ok_or_else(|| {
+                            DomainError::InvalidData(format!(
+                                "{} bordrosunun dönemi bulunamadı.",
+                                payroll.id
+                            ))
+                        })?;
+                    payroll.paymentDate =
+                        payroll_core::payroll_engine::default_payment_date(&period);
+                }
+                if payroll.accrualDescription.is_none() {
+                    payroll.accrualDescription = payroll.notlar.clone();
+                }
                 PayrollRepository::save_in_transaction(conn, &payroll)?;
             }
         }

@@ -110,6 +110,7 @@ export interface IsPrimiHesapDetayi {
  * `brutGelirVergisi - uygulananGvIstisnasi = kesilenGelirVergisi` sağlanır.
  */
 export interface GvHesapDetayi {
+  oncekiKumulatifGvMatrahi?: number;
   /** Cari dönem GV matrahı (brüt gelir - işçi SGK - işçi işsizlik). */
   cariGvMatrahi: number;
   /** Cari sonrası gerçek kümülatif matrah (önceki + cari). */
@@ -122,8 +123,11 @@ export interface GvHesapDetayi {
   asgariUcretReferansKumulatifMatrahi: number;
   /** Asgari ücretin ilgili ay için hesaplanan vergi istisnası hakkı. */
   asgariUcretGvIstisnasi: number;
+  ayniAyOncekiKullanilanGvIstisnasi?: number;
+  tahakkukOncesiKalanGvIstisnasi?: number;
   /** Gerçekte uygulanan istisna: min(brüt GV, aylık istisna hakkı). */
   uygulananGvIstisnasi: number;
+  tahakkukSonrasiKalanGvIstisnasi?: number;
   /** Kesilecek gelir vergisi (negatif olamaz). */
   kesilenGelirVergisi: number;
   dogumAskerlikGvIndirimi?: number;
@@ -285,11 +289,11 @@ export interface SickLeaveRecord {
   updatedAt?: string;
 }
 
-export const BACKUP_FORMAT_VERSION = 2;
+export const BACKUP_FORMAT_VERSION = 3;
 /** Native app_settings anahtarı: kurum genelinde zam yürürlük ayları (1-12). */
 export const ZAM_AYLARI_SETTING_KEY = 'zam_aylari';
 
-/** JSON yedek sözleşmesi. V2, SQLite'daki tüm kullanıcı verisini kapsar. */
+/** JSON yedek sözleşmesi. V3, SQLite'daki tüm kullanıcı verisini kapsar. */
 export interface BackupPayload {
   backupVersion: number;
   exportedAt: string;
@@ -320,6 +324,17 @@ export interface ManualPayrollIncomeInput {
   tediye?: number | null;
   /** Kişi+dönem bazında kullanıcı tarafından girilen brüt TİS ikramiyesi tutarı. */
   tisIkramiyesi?: number | null;
+}
+
+export type AccrualType = 'NORMAL' | 'TEDIYE' | 'TIS_IKRAMIYE' | 'SUPPLEMENTAL';
+
+export interface PayrollAccrualInput {
+  accrualId: string;
+  accrualType: AccrualType;
+  paymentDate: string;
+  sequence: number;
+  grossAmount?: number | null;
+  description?: string | null;
 }
 
 export interface GelirKalemleri {
@@ -385,9 +400,14 @@ export const BORDRO_STATUS_VALUES = ['DRAFT', 'CALCULATED', 'STALE', 'FINALIZED'
 export type BordroStatus = (typeof BORDRO_STATUS_VALUES)[number];
 
 export interface BordroKaydi {
-  id: string; // `${personelId}_${donemId}`
+  id: string;
   personelId: string;
   donemId: string;
+  accrualId: string;
+  accrualType: AccrualType;
+  paymentDate: string;
+  sequence: number;
+  accrualDescription?: string | null;
   puantajOzeti: PuantajOzeti;
   gelirler: GelirKalemleri;
   gelirToplam: number;
@@ -406,9 +426,19 @@ export interface BordroKaydi {
   pekDetay?: PekDetayi;
   isPrimiDetay?: IsPrimiHesapDetayi;
   gvDetay?: GvHesapDetayi;
+  damgaDetay?: DamgaVergisiHesapDetayi;
   statutorySnapshot?: ResolvedStatutorySnapshot;
   odenenRaporluGun?: number;
   raporluGun?: number;
+}
+
+export interface DamgaVergisiHesapDetayi {
+  brutDamgaVergisi: number;
+  aylikDamgaIstisnaHakki: number;
+  ayniAyOncekiKullanilanDamgaIstisnasi: number;
+  uygulananDamgaIstisnasi: number;
+  kalanDamgaIstisnasi: number;
+  kesilenDamgaVergisi: number;
 }
 
 export interface ZamHesaplama {

@@ -160,6 +160,11 @@ mod tests {
             id: "test-p1_2026-05".into(),
             personelId: "test-p1".into(),
             donemId: "2026-05".into(),
+            accrualId: "test-p1_2026-05".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: String::new(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri {
                 tabanBrutAylik: Some(dec!(70000)),
@@ -185,6 +190,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
@@ -201,6 +207,11 @@ mod tests {
             id: "test-p1_2026-06".into(),
             personelId: "test-p1".into(),
             donemId: "2026-06".into(),
+            accrualId: "test-p1_2026-06".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: String::new(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri {
                 tabanBrutAylik: Some(dec!(75000)),
@@ -226,6 +237,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
@@ -259,6 +271,11 @@ mod tests {
             id: "test-p1_2026-01".into(),
             personelId: "test-p1".into(),
             donemId: "2026-01".into(),
+            accrualId: "test-p1_2026-01".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: String::new(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri {
                 tabanBrutAylik: Some(dec!(40000)),
@@ -284,6 +301,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
@@ -326,6 +344,11 @@ mod tests {
             id: "test-finalize_2026-08".into(),
             personelId: "test-finalize".into(),
             donemId: "2026-08".into(),
+            accrualId: "test-finalize_2026-08".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: String::new(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri {
                 tabanBrutAylik: Some(dec!(100000)),
@@ -347,6 +370,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
@@ -1770,6 +1794,32 @@ mod tests {
                 "2026-01-15T00:00:00Z"
             ],
         )?;
+        conn.execute(
+            "INSERT INTO payroll_income_items
+             (id, payroll_id, item_type, description, amount, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "legacy-income-item",
+                "p-old_2026-01",
+                "tabanBrutAylik",
+                "Eski taban ücret",
+                5000000,
+                "CALCULATED"
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO payroll_deduction_items
+             (id, payroll_id, item_type, description, amount, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "legacy-deduction-item",
+                "p-old_2026-01",
+                "gelirVergisi",
+                "Eski gelir vergisi",
+                637500,
+                "CALCULATED"
+            ],
+        )?;
 
         // Now run full migrations (applying migration 2 ALTER TABLE)
         let all_migrations = bordro_programi_lib::db::migrations::get_migrations();
@@ -1778,6 +1828,14 @@ mod tests {
         // Read all payroll records
         let records = PayrollRepository::get_all(&conn)?;
         assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, "p-old_2026-01");
+        assert_eq!(records[0].accrualId, "p-old_2026-01");
+        assert_eq!(records[0].accrualType, AccrualType::NORMAL);
+        assert_eq!(records[0].sequence, 0);
+        assert_eq!(records[0].paymentDate, "2026-02-14");
+        assert_eq!(records[0].status, BordroStatus::CALCULATED);
+        assert_eq!(records[0].gelirler.tabanBrutAylik, Some(dec!(50000)));
+        assert_eq!(records[0].kesintiler.gelirVergisi, Some(dec!(6375)));
         assert_eq!(records[0].raporluGun, None);
         assert_eq!(records[0].odenenRaporluGun, None);
 
@@ -2161,13 +2219,17 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
 
         let gv_detay = GvHesapDetayi {
+            oncekiKumulatifGvMatrahi: dec!(0),
             cariGvMatrahi: dec!(28075.50),
             yeniKumulatifGvMatrahi: dec!(28075.50),
             brutGelirVergisi: dec!(4211.33),
             asgariUcretGvMatrahi: dec!(28075.50),
             asgariUcretReferansKumulatifMatrahi: dec!(28075.50),
             asgariUcretGvIstisnasi: dec!(4211.33),
+            ayniAyOncekiKullanilanGvIstisnasi: dec!(0),
+            tahakkukOncesiKalanGvIstisnasi: dec!(4211.33),
             uygulananGvIstisnasi: dec!(4211.33),
+            tahakkukSonrasiKalanGvIstisnasi: dec!(0),
             kesilenGelirVergisi: dec!(0),
             dogumAskerlikGvIndirimi: dec!(0),
             sigortaGvIndirimAdayi: dec!(0),
@@ -2180,6 +2242,11 @@ mod tests {
             id: "test-gv_2026-01".into(),
             personelId: "test-gv".into(),
             donemId: "2026-01".into(),
+            accrualId: "test-gv_2026-01".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: String::new(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri {
                 tabanBrutAylik: Some(dec!(28075.50)),
@@ -2201,6 +2268,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: Some(gv_detay),
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
@@ -2636,13 +2704,17 @@ mod tests {
             PeriodRepository::save(&conn, &donem)?;
 
             let gv_detay = GvHesapDetayi {
+                oncekiKumulatifGvMatrahi: dec!(0),
                 cariGvMatrahi: dec!(28075.50),
                 yeniKumulatifGvMatrahi: dec!(336906.00),
                 brutGelirVergisi: dec!(4211.33),
                 asgariUcretGvMatrahi: dec!(28075.50),
                 asgariUcretReferansKumulatifMatrahi: dec!(168453.00),
                 asgariUcretGvIstisnasi: dec!(4211.33),
+                ayniAyOncekiKullanilanGvIstisnasi: dec!(0),
+                tahakkukOncesiKalanGvIstisnasi: dec!(4211.33),
                 uygulananGvIstisnasi: dec!(4211.33),
+                tahakkukSonrasiKalanGvIstisnasi: dec!(0),
                 kesilenGelirVergisi: dec!(0),
                 dogumAskerlikGvIndirimi: dec!(0),
                 sigortaGvIndirimAdayi: dec!(0),
@@ -2655,6 +2727,11 @@ mod tests {
                 id: "p-gv-reload_2026-05".into(),
                 personelId: "p-gv-reload".into(),
                 donemId: "2026-05".into(),
+                accrualId: "p-gv-reload_2026-05".into(),
+                accrualType: AccrualType::NORMAL,
+                paymentDate: String::new(),
+                sequence: 0,
+                accrualDescription: None,
                 puantajOzeti: PuantajOzeti::default(),
                 gelirler: GelirKalemleri {
                     tabanBrutAylik: Some(dec!(28075.50)),
@@ -2676,6 +2753,7 @@ mod tests {
                 pekDetay: None,
                 isPrimiDetay: None,
                 gvDetay: Some(gv_detay),
+                damgaDetay: None,
                 statutorySnapshot: None,
                 odenenRaporluGun: None,
                 raporluGun: None,
@@ -2720,6 +2798,11 @@ mod tests {
             id: format!("{}_{}", personel_id, donem_id),
             personelId: personel_id.to_string(),
             donemId: donem_id.to_string(),
+            accrualId: format!("{}_{}", personel_id, donem_id),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: String::new(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri {
                 tabanBrutAylik: Some(gelir_toplam),
@@ -2741,6 +2824,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,

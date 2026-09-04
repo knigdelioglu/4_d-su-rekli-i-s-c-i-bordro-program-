@@ -41,6 +41,7 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
       personnelId: 'p-1',
       periodId: '2026-05',
       manualIncome: null,
+      accrual: null,
     });
   });
 
@@ -59,6 +60,7 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
         tediye: '1000.25',
         tisIkramiyesi: '2000.75',
       },
+      accrual: null,
     });
   });
 
@@ -70,6 +72,7 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
       personnelId: 'p-1',
       periodId: '2026-05',
       status: 'FINALIZED',
+      accrualId: null,
     });
   });
 

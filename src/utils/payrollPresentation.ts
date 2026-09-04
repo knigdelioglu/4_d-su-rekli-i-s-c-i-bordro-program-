@@ -136,6 +136,16 @@ export function createBordroDonemi(
   };
 }
 
+/** Default accrual date that remains inside the period's authoritative tax month. */
+export function getDefaultAccrualPaymentDate(period: BordroDonemi): string {
+  const taxPrefix = `${String(period.taxYear).padStart(4, '0')}-${String(period.taxMonth).padStart(2, '0')}-`;
+  if (period.bitisTarihi.startsWith(taxPrefix)) return period.bitisTarihi;
+  const monthEnd = new Date(Date.UTC(period.taxYear, period.taxMonth, 0));
+  return Number.isNaN(monthEnd.getTime())
+    ? period.bitisTarihi
+    : monthEnd.toISOString().slice(0, 10);
+}
+
 export interface GunDetay {
   dateStr: string;
   dayNumber: number;

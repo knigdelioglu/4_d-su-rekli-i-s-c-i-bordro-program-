@@ -97,6 +97,11 @@ function makeRealisticSnapshot(): PayrollStorageDto {
     id: 'person-1_2026-01',
     personelId: personnel.id,
     donemId: period.id,
+    accrualId: 'person-1_2026-01',
+    accrualType: 'NORMAL',
+    paymentDate: '2026-02-14',
+    sequence: 0,
+    accrualDescription: null,
     puantajOzeti: { Ç: 1, T: 0, G: 0, İ: 0, GÇ: 0, GÇT: 0, R: 0 },
     gelirler: {
       tabanBrutAylik: '3000.00',
@@ -165,19 +170,31 @@ function makeRealisticSnapshot(): PayrollStorageDto {
       tutar: '0.00',
     },
     gvDetay: {
+      oncekiKumulatifGvMatrahi: '0.00',
       cariGvMatrahi: '3000.00',
       yeniKumulatifGvMatrahi: '3000.00',
       brutGelirVergisi: '450.00',
       asgariUcretGvMatrahi: '0.00',
       asgariUcretReferansKumulatifMatrahi: '0.00',
       asgariUcretGvIstisnasi: '0.00',
+      ayniAyOncekiKullanilanGvIstisnasi: '0.00',
+      tahakkukOncesiKalanGvIstisnasi: '0.00',
       uygulananGvIstisnasi: '0.00',
+      tahakkukSonrasiKalanGvIstisnasi: '0.00',
       kesilenGelirVergisi: '0.00',
       dogumAskerlikGvIndirimi: '0.00',
       sigortaGvIndirimAdayi: '0.00',
       sigortaGvAylikLimiti: '0.00',
       sigortaGvYillikKalanLimiti: '0.00',
       uygulanabilirSigortaGvIndirimi: '0.00',
+    },
+    damgaDetay: {
+      brutDamgaVergisi: '0.00',
+      aylikDamgaIstisnaHakki: '0.00',
+      ayniAyOncekiKullanilanDamgaIstisnasi: '0.00',
+      uygulananDamgaIstisnasi: '0.00',
+      kalanDamgaIstisnasi: '0.00',
+      kesilenDamgaVergisi: '0.00',
     },
     statutorySnapshot: {
       segments: [
@@ -204,7 +221,7 @@ function makeRealisticSnapshot(): PayrollStorageDto {
   };
 
   return {
-    backupVersion: 2,
+    backupVersion: 3,
     exportedAt: '2026-02-14T10:00:00.000Z',
     donemler: [period],
     aktifDonemId: period.id,
@@ -250,6 +267,24 @@ function makeRealisticSnapshot(): PayrollStorageDto {
 function makeV2Snapshot(netOdeme: unknown = '64179.78'): string {
   const snapshot = makeRealisticSnapshot() as unknown as TestRecord;
   firstRecord(snapshot, 'bordrolar').netOdeme = netOdeme;
+  return JSON.stringify(snapshot);
+}
+
+function makeLegacyV2Snapshot(netOdeme: unknown = '64179.78'): string {
+  const snapshot = parseTestSnapshot(makeV2Snapshot(netOdeme));
+  snapshot.backupVersion = 2;
+  const payroll = firstRecord(snapshot, 'bordrolar');
+  delete payroll.accrualId;
+  delete payroll.accrualType;
+  delete payroll.paymentDate;
+  delete payroll.sequence;
+  delete payroll.accrualDescription;
+  delete payroll.damgaDetay;
+  const gv = payroll.gvDetay as TestRecord;
+  delete gv.oncekiKumulatifGvMatrahi;
+  delete gv.ayniAyOncekiKullanilanGvIstisnasi;
+  delete gv.tahakkukOncesiKalanGvIstisnasi;
+  delete gv.tahakkukSonrasiKalanGvIstisnasi;
   return JSON.stringify(snapshot);
 }
 
@@ -342,7 +377,7 @@ describe('BrowserPayrollStore', () => {
     const canonical = canonicalizeLegacyBackupPayload(JSON.stringify(legacy));
     const canonicalPayload = parseTestSnapshot(canonical);
     expect(firstRecord(canonicalPayload, 'bordrolar').netOdeme).toBe('0.15');
-    expect(canonicalPayload.backupVersion).toBe(2);
+    expect(canonicalPayload.backupVersion).toBe(3);
     expect(firstRecord(canonicalPayload, 'personeller').sgkSicilNo).toBe('');
     expect(firstRecord(canonicalPayload, 'personeller').iban).toBe('');
     expect(firstRecord(canonicalPayload, 'personeller').hizmetYili).toBe(1);
@@ -355,10 +390,10 @@ describe('BrowserPayrollStore', () => {
     );
   });
 
-  test('accepts an exact, realistic current V2 snapshot', () => {
+  test('accepts an exact, realistic current V3 snapshot', () => {
     const parsed = parseCurrentBrowserSnapshot(makeV2Snapshot());
 
-    expect(parsed.backupVersion).toBe(2);
+    expect(parsed.backupVersion).toBe(3);
     expect(parsed.donemler.length).toBe(1);
     expect(parsed.personeller.length).toBe(1);
     expect(parsed.puantajlar.length).toBe(1);
@@ -368,7 +403,18 @@ describe('BrowserPayrollStore', () => {
     expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
   });
 
-  test('requires every current V2 top-level field and preserves unknown fields', () => {
+  test('normalizes a pre-accrual V2 backup to one NORMAL accrual', () => {
+    const parsed = parseImportedBackup(makeLegacyV2Snapshot());
+    const payroll = parsed.bordrolar[0];
+    expect(parsed.backupVersion).toBe(3);
+    expect(payroll.accrualId).toBe(payroll.id);
+    expect(payroll.accrualType).toBe('NORMAL');
+    expect(payroll.paymentDate).toBe('2026-02-14');
+    expect(payroll.sequence).toBe(0);
+    expect(payroll.netOdeme).toBe('64179.78');
+  });
+
+  test('requires every current V3 top-level field and preserves unknown fields', () => {
     const missingCollection = parseTestSnapshot(makeV2Snapshot());
     delete missingCollection.taxOpenings;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(missingCollection))).toThrow(
@@ -518,7 +564,7 @@ describe('BrowserPayrollStore', () => {
     };
     expect(isSupportedLegacyBackupPayload(JSON.stringify(malformedCurrentShape))).toBe(false);
     expect(() => parseImportedBackup(JSON.stringify(malformedCurrentShape))).toThrow(
-      '$.aktifDonemId zorunlu alan eksik'
+      '$.bordrolar[0].id zorunlu alan eksik'
     );
   });
 
@@ -611,9 +657,45 @@ describe('SQLite persistence invariant parity', () => {
     (duplicate.bordrolar as TestRecord[]).push({
       ...firstRecord(duplicate, 'bordrolar'),
       id: 'payroll-b',
+      accrualId: 'payroll-b',
     });
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicate))).toThrow(
       '$.bordrolar[1] duplicate (personelId, donemId): person-1 / 2026-01; ilk kayıt $.bordrolar[0]'
+    );
+  });
+
+  test('allows multiple supplementary accruals but keeps normal and tie-breaker invariants', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const normal = firstRecord(payload, 'bordrolar');
+    (payload.bordrolar as TestRecord[]).push({
+      ...normal,
+      id: 'payroll-tediye',
+      accrualId: 'payroll-tediye',
+      accrualType: 'TEDIYE',
+      paymentDate: '2026-02-14',
+      sequence: 1,
+      gelirler: { ...(normal.gelirler as TestRecord), tabanBrutAylik: '0.00', tediye: '100.00' },
+    });
+    (payload.bordrolar as TestRecord[]).push({
+      ...normal,
+      id: 'payroll-tis',
+      accrualId: 'payroll-tis',
+      accrualType: 'TIS_IKRAMIYE',
+      paymentDate: '2026-02-14',
+      sequence: 2,
+      gelirler: { ...(normal.gelirler as TestRecord), tabanBrutAylik: '0.00', tisIkramiyesi: '100.00' },
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
+
+    const duplicateTie = parseTestSnapshot(JSON.stringify(payload));
+    const duplicate = firstRecord(duplicateTie, 'bordrolar');
+    duplicate.id = 'payroll-duplicate-tie';
+    duplicate.accrualId = 'payroll-duplicate-tie';
+    duplicate.accrualType = 'TEDIYE';
+    duplicate.paymentDate = '2026-02-14';
+    duplicate.sequence = 1;
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(duplicateTie))).toThrow(
+      'duplicate (personelId, paymentDate, sequence)'
     );
   });
 

@@ -165,7 +165,25 @@ export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasEle
     keyValue(ctx, leftMeta[i][0], leftMeta[i][1], margin + 8, y + i * 26, columnWidth - 8);
     keyValue(ctx, rightMeta[i][0], rightMeta[i][1], margin + columnWidth + gap + 8, y + i * 26, columnWidth - 8);
   }
-  y += 116;
+  keyValue(ctx, 'Tahakkuk Türü', model.accrualType, margin + 8, y + 4 * 26, columnWidth - 8);
+  keyValue(
+    ctx,
+    'Tahakkuk Tarihi',
+    model.paymentDate,
+    margin + columnWidth + gap + 8,
+    y + 4 * 26,
+    columnWidth - 8
+  );
+  keyValue(ctx, 'Tahakkuk Sıra No', String(model.sequence), margin + 8, y + 5 * 26, columnWidth - 8);
+  keyValue(
+    ctx,
+    'Tahakkuk Açıklaması',
+    model.accrualDescription || '—',
+    margin + columnWidth + gap + 8,
+    y + 5 * 26,
+    columnWidth - 8
+  );
+  y += 168;
 
   y = sectionTitle(ctx, 'PUANTAJ ÖZETİ (15-14)', margin, y, contentWidth);
   const attendance = model.attendanceSummary;

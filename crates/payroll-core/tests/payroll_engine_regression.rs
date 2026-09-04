@@ -1,8 +1,9 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
-    calculate_payroll, finalize_payroll, validate_payroll_request, AnnualPayrollParameters,
-    BordroDonemi, BordroStatus, DonemselKurumDegerleri, ManualPayrollIncomeInput,
-    PayrollCalculationRequest, PayrollDatasetSnapshot, Personel, PersonelPuantaj,
+    calculate_payroll, finalize_payroll, validate_payroll_request, AccrualType,
+    AnnualPayrollParameters, BordroDonemi, BordroStatus, DonemselKurumDegerleri,
+    ManualPayrollIncomeInput, PayrollAccrualInput, PayrollCalculationRequest,
+    PayrollDatasetSnapshot, Personel, PersonelPuantaj,
 };
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -40,6 +41,7 @@ fn fixture_request() -> PayrollCalculationRequest {
             tediye: Some(dec!(75000.10)),
             tisIkramiyesi: Some(dec!(0.15)),
         }),
+        accrual: None,
         dataset: PayrollDatasetSnapshot {
             personnel: vec![Personel {
                 id: "person-1".into(),
@@ -91,6 +93,150 @@ fn calculation_uses_shared_engine_and_preserves_manual_decimal_values() {
 }
 
 #[test]
+fn same_tax_month_supplementary_accrual_continues_the_normal_state_without_duplication() {
+    let mut normal_request = fixture_request();
+    normal_request.manualIncome = Some(ManualPayrollIncomeInput {
+        tediye: Some(dec!(5500)),
+        tisIkramiyesi: Some(dec!(0)),
+    });
+    let normal = calculate_payroll(&normal_request).expect("normal payroll should calculate");
+    let normal_snapshot = normal.clone();
+    let mut finalized_normal = normal;
+    finalized_normal.status = BordroStatus::FINALIZED;
+
+    let mut tediye_request = fixture_request();
+    tediye_request.manualIncome = None;
+    tediye_request.accrual = Some(PayrollAccrualInput {
+        accrualId: "person-1_2026-01_tediye_1".into(),
+        accrualType: AccrualType::TEDIYE,
+        paymentDate: "2026-02-14".into(),
+        sequence: 1,
+        grossAmount: Some(dec!(2000)),
+        description: Some("Şubat tediye".into()),
+    });
+    tediye_request
+        .dataset
+        .payrolls
+        .push(finalized_normal.clone());
+    let tediye = calculate_payroll(&tediye_request).expect("same-month tediye should calculate");
+
+    assert_eq!(tediye.accrualType, AccrualType::TEDIYE);
+    assert_eq!(tediye.gelirler.tediye, Some(dec!(2000)));
+    assert_eq!(tediye.gelirler.tabanBrutAylik, None);
+    assert_eq!(tediye.gelirler.yemek, None);
+    assert_eq!(tediye.gelirler.tisIkramiyesi, None);
+    assert_eq!(
+        tediye.gvDetay.as_ref().unwrap().oncekiKumulatifGvMatrahi,
+        normal_snapshot
+            .gvDetay
+            .as_ref()
+            .unwrap()
+            .yeniKumulatifGvMatrahi
+    );
+    assert_eq!(
+        tediye
+            .gvDetay
+            .as_ref()
+            .unwrap()
+            .ayniAyOncekiKullanilanGvIstisnasi,
+        normal_snapshot
+            .gvDetay
+            .as_ref()
+            .unwrap()
+            .uygulananGvIstisnasi
+    );
+    assert!(
+        tediye.gvDetay.as_ref().unwrap().uygulananGvIstisnasi
+            + normal_snapshot
+                .gvDetay
+                .as_ref()
+                .unwrap()
+                .uygulananGvIstisnasi
+            <= normal_snapshot
+                .gvDetay
+                .as_ref()
+                .unwrap()
+                .asgariUcretGvIstisnasi
+    );
+    assert!(
+        tediye.damgaDetay.as_ref().unwrap().uygulananDamgaIstisnasi
+            + normal_snapshot
+                .damgaDetay
+                .as_ref()
+                .unwrap()
+                .uygulananDamgaIstisnasi
+            <= normal_snapshot
+                .damgaDetay
+                .as_ref()
+                .unwrap()
+                .aylikDamgaIstisnaHakki
+    );
+    assert!(
+        tediye.pekDetay.as_ref().unwrap().primMatrahi
+            + normal_snapshot.pekDetay.as_ref().unwrap().primMatrahi
+            <= normal_snapshot.pekDetay.as_ref().unwrap().pekUstSinir
+    );
+    // The first immutable node is only copied into the input snapshot; the
+    // supplementary calculation cannot mutate its result or status.
+    assert_eq!(finalized_normal.id, normal_snapshot.id);
+    assert_eq!(finalized_normal.status, BordroStatus::FINALIZED);
+    assert_eq!(finalized_normal.netOdeme, normal_snapshot.netOdeme);
+}
+
+#[test]
+fn two_same_month_supplementary_accruals_form_a_monotonic_gv_chain() {
+    let mut normal_request = fixture_request();
+    normal_request.manualIncome = None;
+    let mut normal = calculate_payroll(&normal_request).expect("normal payroll should calculate");
+    normal.status = BordroStatus::FINALIZED;
+
+    let tediye_input = PayrollAccrualInput {
+        accrualId: "person-1_2026-01_tediye_1".into(),
+        accrualType: AccrualType::TEDIYE,
+        paymentDate: "2026-02-14".into(),
+        sequence: 1,
+        grossAmount: Some(dec!(1000)),
+        description: None,
+    };
+    let mut tediye_request = fixture_request();
+    tediye_request.manualIncome = None;
+    tediye_request.accrual = Some(tediye_input);
+    tediye_request.dataset.payrolls.push(normal.clone());
+    let mut tediye = calculate_payroll(&tediye_request).expect("tediye should calculate");
+    tediye.status = BordroStatus::FINALIZED;
+
+    let mut tis_request = fixture_request();
+    tis_request.manualIncome = None;
+    tis_request.accrual = Some(PayrollAccrualInput {
+        accrualId: "person-1_2026-01_tis_2".into(),
+        accrualType: AccrualType::TIS_IKRAMIYE,
+        paymentDate: "2026-02-14".into(),
+        sequence: 2,
+        grossAmount: Some(dec!(1200)),
+        description: None,
+    });
+    tis_request
+        .dataset
+        .payrolls
+        .extend([normal.clone(), tediye.clone()]);
+    let tis = calculate_payroll(&tis_request).expect("TİS accrual should calculate");
+
+    assert_eq!(tis.gelirler.tisIkramiyesi, Some(dec!(1200)));
+    assert_eq!(tis.gelirler.tediye, None);
+    assert_eq!(
+        tis.gvDetay.as_ref().unwrap().oncekiKumulatifGvMatrahi,
+        tediye.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
+    );
+    assert!(
+        normal.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
+            <= tediye.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
+            && tediye.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
+                <= tis.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
+    );
+    assert_eq!(tis.sequence, 2);
+}
+
+#[test]
 fn decimal_json_boundary_accepts_exact_strings() {
     let input: ManualPayrollIncomeInput =
         serde_json::from_str(r#"{"tediye":"75000.10","tisIkramiyesi":"0.15"}"#)
@@ -109,6 +255,25 @@ fn finalized_existing_payroll_is_immutable() {
 
     let error = calculate_payroll(&request).expect_err("FINALIZED payroll must be immutable");
     assert!(error.to_string().contains("FINALIZED"));
+}
+
+#[test]
+fn existing_accrual_ordering_metadata_is_immutable() {
+    let mut request = fixture_request();
+    let existing = calculate_payroll(&request).expect("fixture should calculate");
+    request.dataset.payrolls.push(existing.clone());
+    request.accrual = Some(PayrollAccrualInput {
+        accrualId: existing.accrualId.clone(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-02-13".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: existing.accrualDescription.clone(),
+    });
+
+    let error = calculate_payroll(&request)
+        .expect_err("an existing accrual must not be moved in the dependency order");
+    assert!(error.to_string().contains("değiştirilemez"));
 }
 
 fn finalization_request(status: BordroStatus) -> PayrollCalculationRequest {
@@ -168,6 +333,8 @@ fn finalize_rejects_a_finalized_downstream_dependency() {
     let mut later_payroll = request.dataset.payrolls[0].clone();
     later_payroll.id = "person-1_2026-02".into();
     later_payroll.donemId = "2026-02".into();
+    later_payroll.accrualId = "person-1_2026-02".into();
+    later_payroll.paymentDate = "2026-02-28".into();
     later_payroll.status = BordroStatus::FINALIZED;
     request.dataset.payrolls.push(later_payroll);
 

@@ -4,6 +4,7 @@ use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
+use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -106,6 +107,104 @@ impl CumulativeTaxService {
             active_period.taxMonth,
         )?;
         Ok(prior_gv.round_dp(2))
+    }
+
+    /// Resolves the cumulative GV immediately before one explicit accrual.
+    /// The period-level API above remains the opening value for a NORMAL
+    /// payroll; this API adds earlier same-tax-month accrual snapshots in the
+    /// same deterministic paymentDate/sequence/accrualId order as payroll-core.
+    pub fn get_previous_cumulative_gv_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        active_period: &BordroDonemi,
+        accrual: &PayrollAccrualInput,
+    ) -> Result<Decimal> {
+        let mut cumulative = Self::get_previous_cumulative_gv(conn, personnel_id, active_period)?;
+        let current_date =
+            NaiveDate::parse_from_str(&accrual.paymentDate, "%Y-%m-%d").map_err(|error| {
+                DomainError::ValidationError(format!(
+                    "Tahakkuk ödeme tarihi geçersiz: {} ({})",
+                    accrual.paymentDate, error
+                ))
+            })?;
+        if current_date.year() != active_period.taxYear
+            || current_date.month() as i32 != active_period.taxMonth
+        {
+            return Err(DomainError::ValidationError(
+                "Tahakkuk ödeme tarihi aktif vergi yılı/ayı ile uyumlu değil.".into(),
+            ));
+        }
+
+        let current_id = if accrual.accrualId.trim().is_empty() {
+            return Err(DomainError::ValidationError(
+                "Tahakkuk kimliği boş olamaz.".into(),
+            ));
+        } else {
+            accrual.accrualId.as_str()
+        };
+        let records = PayrollRepository::get_all(conn)?;
+        for record in records
+            .iter()
+            .filter(|record| record.personelId == personnel_id)
+        {
+            let Some(period) = PeriodRepository::get_by_id(conn, &record.donemId)? else {
+                return Err(DomainError::NotFound(format!(
+                    "{} bordrosunun dönemi bulunamadı.",
+                    record.id
+                )));
+            };
+            if period.taxYear != active_period.taxYear || period.taxMonth != active_period.taxMonth
+            {
+                continue;
+            }
+            let payment_date = if record.paymentDate.trim().is_empty() {
+                payroll_core::payroll_engine::default_payment_date(&period)
+            } else {
+                record.paymentDate.clone()
+            };
+            let payment_date =
+                NaiveDate::parse_from_str(&payment_date, "%Y-%m-%d").map_err(|error| {
+                    DomainError::InvalidData(format!(
+                        "{} tahakkuk ödeme tarihi geçersiz: {}",
+                        record.id, error
+                    ))
+                })?;
+            let record_id = if record.accrualId.trim().is_empty() {
+                record.id.as_str()
+            } else {
+                record.accrualId.as_str()
+            };
+            let is_before = (payment_date, record.sequence, record_id)
+                < (current_date, accrual.sequence, current_id);
+            if !is_before {
+                continue;
+            }
+            if matches!(record.status, BordroStatus::DRAFT | BordroStatus::STALE) {
+                return Err(DomainError::ValidationError(format!(
+                    "{} tahakkuku {} durumda; kümülatif GV zinciri authoritative değildir.",
+                    record_id,
+                    match record.status {
+                        BordroStatus::DRAFT => "DRAFT",
+                        BordroStatus::STALE => "STALE",
+                        _ => "",
+                    }
+                )));
+            }
+            let gv_base = record
+                .gvDetay
+                .as_ref()
+                .map(|detail| detail.cariGvMatrahi)
+                .unwrap_or_else(|| {
+                    (record.gelirToplam
+                        - record.kesintiler.isciSgkPrimi.unwrap_or_default()
+                        - record.kesintiler.isciIssizlikPrimi.unwrap_or_default())
+                    .max(Decimal::ZERO)
+                });
+            cumulative = cumulative.checked_add(gv_base).ok_or_else(|| {
+                DomainError::InvalidData("Kümülatif GV Decimal taşması oluştu.".into())
+            })?;
+        }
+        Ok(cumulative.round_dp(2))
     }
 
     pub fn get_previous_cumulative_asgari_gv(

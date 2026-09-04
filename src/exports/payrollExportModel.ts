@@ -1,5 +1,12 @@
-import { BordroDonemi, BordroKaydi, Personel, PersonelPuantaj } from '../types/payroll';
+import {
+  AccrualType,
+  BordroDonemi,
+  BordroKaydi,
+  Personel,
+  PersonelPuantaj,
+} from '../types/payroll';
 import { PayrollNotice } from '../types/payrollNotice';
+import { getDefaultAccrualPaymentDate } from '../utils/payrollPresentation';
 
 export interface PayrollExportLine {
   key: string;
@@ -15,6 +22,11 @@ export interface PayrollAttendanceDay {
 export interface PayrollExportModel {
   personId: string;
   payrollId: string;
+  accrualId: string;
+  accrualType: AccrualType;
+  paymentDate: string;
+  sequence: number;
+  accrualDescription: string;
   status: 'CALCULATED' | 'FINALIZED';
   periodId: string;
   periodName: string;
@@ -39,6 +51,26 @@ export interface PayrollExportModel {
   deductions: PayrollExportLine[];
   sgkTax: PayrollExportLine[];
   employer: PayrollExportLine[];
+  gvAudit: {
+    previousCumulativeGv: number;
+    currentGvBase: number;
+    newCumulativeGv: number;
+    grossIncomeTax: number;
+    monthlyExemptionEntitlement: number;
+    sameMonthPriorUsed: number;
+    beforeRemainingExemption: number;
+    appliedExemption: number;
+    afterRemainingExemption: number;
+    withheldIncomeTax: number;
+  };
+  stampAudit: {
+    grossStampTax: number;
+    monthlyExemptionEntitlement: number;
+    sameMonthPriorUsed: number;
+    appliedExemption: number;
+    remainingExemption: number;
+    withheldStampTax: number;
+  };
   totals: {
     gross: number;
     deductions: number;
@@ -146,7 +178,7 @@ export function sanitizeExportFilePart(value: string): string {
 
 export function payrollExportFileStem(model: PayrollExportModel): string {
   return sanitizeExportFilePart(
-    `Bordro_${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}_${model.employee.fullName}`
+    `Bordro_${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}_${model.employee.fullName}_${model.accrualType}_${model.paymentDate}_${model.sequence}`
   );
 }
 
@@ -175,6 +207,32 @@ export function buildPayrollExportModel(args: {
       (payroll.gvDetay ? payroll.gvDetay.yeniKumulatifGvMatrahi - payroll.gvDetay.cariGvMatrahi : 0)
   );
   const newCumulativeGv = numberOrZero(payroll.gvDetay?.yeniKumulatifGvMatrahi);
+  const gvAudit = {
+    previousCumulativeGv: numberOrZero(
+      payroll.gvDetay?.oncekiKumulatifGvMatrahi ?? previousCumulativeGv
+    ),
+    currentGvBase: numberOrZero(payroll.gvDetay?.cariGvMatrahi),
+    newCumulativeGv,
+    grossIncomeTax: numberOrZero(payroll.gvDetay?.brutGelirVergisi),
+    monthlyExemptionEntitlement: numberOrZero(payroll.gvDetay?.asgariUcretGvIstisnasi),
+    sameMonthPriorUsed: numberOrZero(payroll.gvDetay?.ayniAyOncekiKullanilanGvIstisnasi),
+    beforeRemainingExemption: numberOrZero(payroll.gvDetay?.tahakkukOncesiKalanGvIstisnasi),
+    appliedExemption: numberOrZero(payroll.gvDetay?.uygulananGvIstisnasi),
+    afterRemainingExemption: numberOrZero(payroll.gvDetay?.tahakkukSonrasiKalanGvIstisnasi),
+    withheldIncomeTax: numberOrZero(
+      payroll.gvDetay?.kesilenGelirVergisi ?? payroll.kesintiler.gelirVergisi
+    ),
+  };
+  const stampAudit = {
+    grossStampTax: numberOrZero(payroll.damgaDetay?.brutDamgaVergisi),
+    monthlyExemptionEntitlement: numberOrZero(payroll.damgaDetay?.aylikDamgaIstisnaHakki),
+    sameMonthPriorUsed: numberOrZero(payroll.damgaDetay?.ayniAyOncekiKullanilanDamgaIstisnasi),
+    appliedExemption: numberOrZero(payroll.damgaDetay?.uygulananDamgaIstisnasi),
+    remainingExemption: numberOrZero(payroll.damgaDetay?.kalanDamgaIstisnasi),
+    withheldStampTax: numberOrZero(
+      payroll.damgaDetay?.kesilenDamgaVergisi ?? payroll.kesintiler.damgaVergisi
+    ),
+  };
 
   const sgkTax: PayrollExportLine[] = [
     { key: 'calculatedPek', label: 'Ham PEK', amount: calculatedPek },
@@ -188,12 +246,22 @@ export function buildPayrollExportModel(args: {
     { key: 'newCumulativeGv', label: 'Yeni Kümülatif GV Matrahı', amount: newCumulativeGv },
     { key: 'brutGelirVergisi', label: 'Hesaplanan Gelir Vergisi', amount: numberOrZero(payroll.gvDetay?.brutGelirVergisi) },
     { key: 'gvIstisnasi', label: 'Gelir Vergisi İstisnası', amount: numberOrZero(payroll.gvDetay?.uygulananGvIstisnasi) },
+    { key: 'gvMonthlyEntitlement', label: 'Aylık GV İstisna Hakkı', amount: gvAudit.monthlyExemptionEntitlement },
+    { key: 'gvSameMonthPriorUsed', label: 'Aynı Ay Önceki Kullanılan GV İstisnası', amount: gvAudit.sameMonthPriorUsed },
+    { key: 'gvBeforeRemaining', label: 'Tahakkuk Öncesi Kalan GV İstisnası', amount: gvAudit.beforeRemainingExemption },
+    { key: 'gvAfterRemaining', label: 'Tahakkuk Sonrası Kalan GV İstisnası', amount: gvAudit.afterRemainingExemption },
     {
       key: 'kesilenGelirVergisi',
       label: 'Kesilen Gelir Vergisi',
       amount: numberOrZero(payroll.gvDetay?.kesilenGelirVergisi ?? payroll.kesintiler.gelirVergisi),
     },
     { key: 'damgaVergisi', label: 'Damga Vergisi', amount: numberOrZero(payroll.kesintiler.damgaVergisi) },
+    { key: 'brutDamgaVergisi', label: 'Brüt Damga Vergisi', amount: stampAudit.grossStampTax },
+    { key: 'damgaMonthlyEntitlement', label: 'Aylık Damga İstisna Hakkı', amount: stampAudit.monthlyExemptionEntitlement },
+    { key: 'damgaSameMonthPriorUsed', label: 'Aynı Ay Önceki Kullanılan Damga İstisnası', amount: stampAudit.sameMonthPriorUsed },
+    { key: 'damgaAppliedExemption', label: 'Uygulanan Damga İstisnası', amount: stampAudit.appliedExemption },
+    { key: 'damgaRemainingExemption', label: 'Kalan Damga İstisnası', amount: stampAudit.remainingExemption },
+    { key: 'damgaWithheld', label: 'Kesilen Damga Vergisi', amount: stampAudit.withheldStampTax },
   ];
 
   const employer: PayrollExportLine[] = [
@@ -214,6 +282,11 @@ export function buildPayrollExportModel(args: {
   return {
     personId: person.id,
     payrollId: payroll.id,
+    accrualId: payroll.accrualId || payroll.id,
+    accrualType: payroll.accrualType,
+    paymentDate: payroll.paymentDate || getDefaultAccrualPaymentDate(period),
+    sequence: payroll.sequence,
+    accrualDescription: payroll.accrualDescription || payroll.notlar || '',
     status: payroll.status,
     periodId: period.id,
     periodName: period.donemAdi,
@@ -242,6 +315,8 @@ export function buildPayrollExportModel(args: {
     deductions: mapMoneyLines(payroll.kesintiler, DEDUCTION_LABELS),
     sgkTax,
     employer,
+    gvAudit,
+    stampAudit,
     totals: {
       gross: numberOrZero(payroll.gelirToplam),
       deductions: numberOrZero(payroll.kesintiToplam),
@@ -286,5 +361,12 @@ export function buildPeriodPayrollExportModels(args: {
         }),
       ];
     })
-    .sort((a, b) => a.employee.fullName.localeCompare(b.employee.fullName, 'tr'));
+    .sort((a, b) => {
+      const personOrder = a.employee.fullName.localeCompare(b.employee.fullName, 'tr');
+      if (personOrder !== 0) return personOrder;
+      const dateOrder = a.paymentDate.localeCompare(b.paymentDate);
+      if (dateOrder !== 0) return dateOrder;
+      if (a.sequence !== b.sequence) return a.sequence - b.sequence;
+      return a.accrualId.localeCompare(b.accrualId);
+    });
 }

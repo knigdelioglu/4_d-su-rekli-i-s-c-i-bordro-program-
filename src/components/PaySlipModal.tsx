@@ -305,8 +305,54 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
               <div><strong>Hizmet Yılı:</strong> {personel.hizmetYili}</div>
               <div><strong>IBAN:</strong> <span className="font-mono text-[11px]">{personel.iban || '—'}</span></div>
               <div><strong>Durum:</strong> {bordro.status}</div>
+              <div><strong>Tahakkuk Türü:</strong> {previewModel.accrualType}</div>
+              <div><strong>Tahakkuk Tarihi:</strong> <span className="font-mono">{previewModel.paymentDate}</span></div>
+              <div><strong>Tahakkuk Sıra No:</strong> {previewModel.sequence}</div>
             </div>
           </div>
+
+          <section className="mt-5 grid md:grid-cols-2 gap-3 text-[11px]">
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-1">
+              <h2 className="mb-2 text-[10px] font-black uppercase tracking-wider text-indigo-900">
+                Gelir Vergisi Zinciri
+              </h2>
+              {([
+                ['Önceki Kümülatif GV', previewModel.gvAudit.previousCumulativeGv],
+                ['Cari GV Matrahı', previewModel.gvAudit.currentGvBase],
+                ['Yeni Kümülatif GV', previewModel.gvAudit.newCumulativeGv],
+                ['Brüt GV', previewModel.gvAudit.grossIncomeTax],
+                ['Aylık GV İstisna Hakkı', previewModel.gvAudit.monthlyExemptionEntitlement],
+                ['Bu Ay Önceden Kullanılan', previewModel.gvAudit.sameMonthPriorUsed],
+                ['Tahakkuk Öncesi Kalan', previewModel.gvAudit.beforeRemainingExemption],
+                ['Bu Tahakkukta Kullanılan', previewModel.gvAudit.appliedExemption],
+                ['Ay İçinde Kalan', previewModel.gvAudit.afterRemainingExemption],
+                ['Kesilen GV', previewModel.gvAudit.withheldIncomeTax],
+              ] as Array<[string, number]>).map(([label, amount]) => (
+                <div key={label} className="flex justify-between gap-3">
+                  <span className="text-slate-600">{label}</span>
+                  <span className="font-mono font-bold text-slate-900">{formatTL(amount)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 space-y-1">
+              <h2 className="mb-2 text-[10px] font-black uppercase tracking-wider text-amber-900">
+                Damga Vergisi Zinciri
+              </h2>
+              {([
+                ['Brüt Damga Vergisi', previewModel.stampAudit.grossStampTax],
+                ['Aylık Damga İstisna Hakkı', previewModel.stampAudit.monthlyExemptionEntitlement],
+                ['Bu Ay Önceden Kullanılan', previewModel.stampAudit.sameMonthPriorUsed],
+                ['Uygulanan Damga İstisnası', previewModel.stampAudit.appliedExemption],
+                ['Kalan Damga İstisnası', previewModel.stampAudit.remainingExemption],
+                ['Kesilen Damga Vergisi', previewModel.stampAudit.withheldStampTax],
+              ] as Array<[string, number]>).map(([label, amount]) => (
+                <div key={label} className="flex justify-between gap-3">
+                  <span className="text-slate-600">{label}</span>
+                  <span className="font-mono font-bold text-slate-900">{formatTL(amount)}</span>
+                </div>
+              ))}
+            </div>
+          </section>
 
           <section className="mt-5">
             <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Puantaj Özeti</h2>

@@ -140,7 +140,7 @@ export class BrowserPayrollStore {
     }
 
     // Do not let a caller turn an unvalidated string into authoritative state.
-    // The same current V2 schema used on load protects every normal browser
+    // The same current V3 schema used on load protects every normal browser
     // write; legacy conversion writes only its already-validated canonical form.
     parseCurrentBrowserSnapshot(payload);
 

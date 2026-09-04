@@ -9,6 +9,7 @@ import {
   PersonelTaxOpening,
   SickLeaveRecord,
   ManualPayrollIncomeInput,
+  PayrollAccrualInput,
 } from '../types/payroll';
 import { PayrollNotice } from '../types/payrollNotice';
 import { decodeDecimalValues, encodeDecimalValues } from './payrollEngine/decimalBoundary';
@@ -111,17 +112,23 @@ export const tauriBridge = {
   async calculatePayroll(
     personnelId: string,
     periodId: string,
-    manualIncome?: ManualPayrollIncomeInput
+    manualIncome?: ManualPayrollIncomeInput,
+    accrual?: PayrollAccrualInput
   ): Promise<BordroKaydi> {
     return mutateTauri<BordroKaydi>('calculate_payroll', {
       personnelId,
       periodId,
       manualIncome: manualIncome ? encodeDecimalValues(manualIncome) : null,
+      accrual: accrual ? encodeDecimalValues(accrual) : null,
     });
   },
 
-  async finalizePayroll(personnelId: string, periodId: string): Promise<BordroKaydi> {
-    return mutateTauri<BordroKaydi>('finalize_payroll', { personnelId, periodId });
+  async finalizePayroll(
+    personnelId: string,
+    periodId: string,
+    accrualId?: string
+  ): Promise<BordroKaydi> {
+    return mutateTauri<BordroKaydi>('finalize_payroll', { personnelId, periodId, accrualId: accrualId ?? null });
   },
 
   async evaluateMutationPolicy(
@@ -135,8 +142,18 @@ export const tauriBridge = {
     return invokeTauri<MutationImpact>('evaluate_mutation_policy', { mutation });
   },
 
-  async setPayrollStatus(personnelId: string, periodId: string, status: BordroStatus): Promise<void> {
-    return mutateTauri<void>('set_payroll_status', { personnelId, periodId, status });
+  async setPayrollStatus(
+    personnelId: string,
+    periodId: string,
+    status: BordroStatus,
+    accrualId?: string
+  ): Promise<void> {
+    return mutateTauri<void>('set_payroll_status', {
+      personnelId,
+      periodId,
+      status,
+      accrualId: accrualId ?? null,
+    });
   },
 
   async getInstitutionSettings(): Promise<Record<string, DönemselKurumDegerleri>> {

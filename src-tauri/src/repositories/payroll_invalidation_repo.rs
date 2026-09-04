@@ -38,7 +38,7 @@ impl PayrollInvalidationRepository {
             let keys = impact
                 .blockedByFinalized
                 .iter()
-                .map(|key| format!("{} / {}", key.personnelId, key.periodId))
+                .map(|key| format!("{} / {} / {}", key.personnelId, key.periodId, key.accrualId))
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(DomainError::PayrollFinalized(format!(
@@ -65,8 +65,9 @@ impl PayrollInvalidationRepository {
                      SET status = 'STALE', updated_at = ?1
                      WHERE personnel_id = ?2
                        AND period_id = ?3
+                       AND accrual_id = ?4
                        AND status = 'CALCULATED'",
-                    params![now, key.personnelId, key.periodId],
+                    params![now, key.personnelId, key.periodId, key.accrualId],
                 )
                 .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         }

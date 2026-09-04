@@ -21,6 +21,55 @@ struct PayrollDependencyFingerprint {
 pub struct PayrollRepository;
 
 impl PayrollRepository {
+    fn accrual_type_to_str(accrual_type: AccrualType) -> &'static str {
+        match accrual_type {
+            AccrualType::NORMAL => "NORMAL",
+            AccrualType::TEDIYE => "TEDIYE",
+            AccrualType::TIS_IKRAMIYE => "TIS_IKRAMIYE",
+            AccrualType::SUPPLEMENTAL => "SUPPLEMENTAL",
+        }
+    }
+
+    fn parse_accrual_type(id: &str, value: &str) -> Result<AccrualType> {
+        match value {
+            "NORMAL" => Ok(AccrualType::NORMAL),
+            "TEDIYE" => Ok(AccrualType::TEDIYE),
+            "TIS_IKRAMIYE" => Ok(AccrualType::TIS_IKRAMIYE),
+            "SUPPLEMENTAL" => Ok(AccrualType::SUPPLEMENTAL),
+            _ => Err(DomainError::InvalidData(format!(
+                "{} tahakkuk türü geçersiz: {}",
+                id, value
+            ))),
+        }
+    }
+
+    fn effective_accrual_id(b: &BordroKaydi) -> String {
+        if b.accrualId.trim().is_empty() {
+            b.id.clone()
+        } else {
+            b.accrualId.clone()
+        }
+    }
+
+    fn effective_payment_date(conn: &Connection, b: &BordroKaydi) -> Result<String> {
+        if !b.paymentDate.trim().is_empty() {
+            return Ok(b.paymentDate.clone());
+        }
+        conn.query_row(
+            "SELECT CASE
+                        WHEN strftime('%Y-%m', bitis_tarihi) = printf('%04d-%02d', tax_year, tax_month)
+                        THEN bitis_tarihi
+                        ELSE date(tax_year || '-' || printf('%02d', tax_month) || '-01', '+1 month', '-1 day')
+                    END
+             FROM payroll_periods WHERE id = ?1",
+            params![b.donemId],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", b.donemId)))
+    }
+
     fn status_to_str(status: BordroStatus) -> &'static str {
         match status {
             BordroStatus::DRAFT => "DRAFT",
@@ -47,12 +96,13 @@ impl PayrollRepository {
         conn: &Connection,
         personnel_id: &str,
         period_id: &str,
+        accrual_id: &str,
     ) -> Result<Option<PayrollDependencyFingerprint>> {
         conn.query_row(
             "SELECT gv_base, sgk_base, new_cumulative_gv, net_payment, sonraki_devreden_pek_json
              FROM payroll_records
-             WHERE personnel_id = ?1 AND period_id = ?2",
-            params![personnel_id, period_id],
+             WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
+            params![personnel_id, period_id, accrual_id],
             |row| {
                 Ok(PayrollDependencyFingerprint {
                     gv_base: row.get(0)?,
@@ -96,12 +146,44 @@ impl PayrollRepository {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<Option<(BordroStatus, String)>> {
+        let Some(accrual_id) = Self::get_normal_accrual_id(conn, personnel_id, period_id)? else {
+            return Ok(None);
+        };
+        Self::get_status_and_created_at_for_accrual(conn, personnel_id, period_id, &accrual_id)
+    }
+
+    pub fn get_normal_accrual_id(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<Option<String>> {
+        conn.query_row(
+            "SELECT accrual_id
+             FROM payroll_records
+             WHERE personnel_id = ?1
+               AND period_id = ?2
+               AND accrual_type = 'NORMAL'
+             ORDER BY payment_date ASC, sequence ASC, accrual_id ASC, id ASC
+             LIMIT 1",
+            params![personnel_id, period_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|error| DomainError::DatabaseError(error.to_string()))
+    }
+
+    pub fn get_status_and_created_at_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual_id: &str,
+    ) -> Result<Option<(BordroStatus, String)>> {
         let row = conn
             .query_row(
                 "SELECT id, status, calculated_at
                  FROM payroll_records
-                 WHERE personnel_id = ?1 AND period_id = ?2",
-                params![personnel_id, period_id],
+                 WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
+                params![personnel_id, period_id, accrual_id],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -124,10 +206,22 @@ impl PayrollRepository {
         personnel_id: &str,
         period_id: &str,
     ) -> Result<ManualPayrollIncomeInput> {
+        let accrual_id = Self::get_normal_accrual_id(conn, personnel_id, period_id)?
+            .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+        Self::get_saved_manual_income_for_accrual(conn, personnel_id, period_id, &accrual_id)
+    }
+
+    pub fn get_saved_manual_income_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual_id: &str,
+    ) -> Result<ManualPayrollIncomeInput> {
         let payroll_id = conn
             .query_row(
-                "SELECT id FROM payroll_records WHERE personnel_id = ?1 AND period_id = ?2",
-                params![personnel_id, period_id],
+                "SELECT id FROM payroll_records
+                 WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
+                params![personnel_id, period_id, accrual_id],
                 |row| row.get::<_, String>(0),
             )
             .optional()
@@ -167,8 +261,21 @@ impl PayrollRepository {
         period_id: &str,
         status: BordroStatus,
     ) -> Result<()> {
-        let current = Self::get_status_and_created_at(conn, personnel_id, period_id)?
+        let accrual_id = Self::get_normal_accrual_id(conn, personnel_id, period_id)?
             .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+        Self::update_status_for_accrual(conn, personnel_id, period_id, &accrual_id, status)
+    }
+
+    pub fn update_status_for_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual_id: &str,
+        status: BordroStatus,
+    ) -> Result<()> {
+        let current =
+            Self::get_status_and_created_at_for_accrual(conn, personnel_id, period_id, accrual_id)?
+                .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
         let current_status = current.0;
 
         if current_status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
@@ -202,12 +309,13 @@ impl PayrollRepository {
             .execute(
                 "UPDATE payroll_records
                  SET status = ?1, updated_at = ?2
-                 WHERE personnel_id = ?3 AND period_id = ?4",
+                 WHERE personnel_id = ?3 AND period_id = ?4 AND accrual_id = ?5",
                 params![
                     Self::status_to_str(status),
                     updated_at,
                     personnel_id,
-                    period_id
+                    period_id,
+                    accrual_id,
                 ],
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -379,7 +487,9 @@ impl PayrollRepository {
             .query_row(
                 "SELECT id, status, sonraki_devreden_pek_json
                  FROM payroll_records
-                 WHERE personnel_id = ?1 AND period_id = ?2",
+                 WHERE personnel_id = ?1 AND period_id = ?2
+                 ORDER BY payment_date DESC, sequence DESC, accrual_id DESC, id DESC
+                 LIMIT 1",
                 params![personnel_id, period_id],
                 |row| {
                     Ok((
@@ -496,13 +606,14 @@ impl PayrollRepository {
     pub fn get_all(conn: &Connection) -> Result<Vec<BordroKaydi>> {
         let mut stmt = conn
             .prepare(
-                "SELECT id, personnel_id, period_id, gross_total, sgk_base, gv_base,
-                        previous_cumulative_gv, new_cumulative_gv, income_tax, stamp_tax,
+                "SELECT id, personnel_id, period_id, accrual_id, accrual_type, payment_date,
+                        sequence, accrual_description, gross_total, previous_cumulative_gv,
                         total_deductions, net_payment, status, puantaj_summary_json,
                         pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                         calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
-                        is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json, notlar
-                 FROM payroll_records ORDER BY calculated_at ASC, id ASC",
+                        is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json,
+                        damga_snapshot_json, notlar
+                 FROM payroll_records ORDER BY calculated_at ASC, payment_date ASC, sequence ASC, id ASC",
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
@@ -512,8 +623,13 @@ impl PayrollRepository {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i32>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
                     row.get::<_, i64>(10)?,
                     row.get::<_, i64>(11)?,
                     row.get::<_, String>(12)?,
@@ -529,6 +645,7 @@ impl PayrollRepository {
                     row.get::<_, Option<String>>(22)?,
                     row.get::<_, Option<String>>(23)?,
                     row.get::<_, Option<String>>(24)?,
+                    row.get::<_, Option<String>>(25)?,
                 ))
             })
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -587,6 +704,11 @@ impl PayrollRepository {
             id,
             personnel_id,
             period_id,
+            accrual_id,
+            accrual_type_str,
+            payment_date,
+            sequence,
+            accrual_description,
             gross_total,
             previous_cumulative_gv,
             total_deductions,
@@ -603,10 +725,12 @@ impl PayrollRepository {
             is_primi_snapshot_json,
             gv_snapshot_json,
             statutory_snapshot_json,
+            damga_snapshot_json,
             notlar,
         ) in raw_records
         {
             let status = Self::parse_status(&id, &status_str)?;
+            let accrual_type = Self::parse_accrual_type(&id, &accrual_type_str)?;
 
             let puantaj_summary: PuantajOzeti =
                 Self::parse_json(&puantaj_summary_json, &format!("{} puantaj özeti", id))?;
@@ -634,6 +758,10 @@ impl PayrollRepository {
                 statutory_snapshot_json.as_deref(),
                 &format!("{} yasal parametre snapshot'ı", id),
             )?;
+            let damga_detay = Self::parse_optional_json(
+                damga_snapshot_json.as_deref(),
+                &format!("{} damga vergisi snapshot'ı", id),
+            )?;
             let gelirler = income_by_payroll.remove(&id).unwrap_or_default();
             let kesintiler = deductions_by_payroll.remove(&id).unwrap_or_default();
 
@@ -641,6 +769,11 @@ impl PayrollRepository {
                 id,
                 personelId: personnel_id,
                 donemId: period_id,
+                accrualId: accrual_id,
+                accrualType: accrual_type,
+                paymentDate: payment_date,
+                sequence,
+                accrualDescription: accrual_description,
                 puantajOzeti: puantaj_summary,
                 gelirler,
                 gelirToplam: kurus_to_dec(gross_total),
@@ -662,6 +795,7 @@ impl PayrollRepository {
                 pekDetay: pek_detay,
                 isPrimiDetay: is_primi_detay,
                 gvDetay: gv_detay,
+                damgaDetay: damga_detay,
                 statutorySnapshot: statutory_snapshot,
                 odenenRaporluGun: odenen_raporlu_gun,
                 raporluGun: raporlu_gun,
@@ -676,27 +810,43 @@ impl PayrollRepository {
             .unchecked_transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        if let Some((current_status, _)) =
-            Self::get_status_and_created_at(&tx, &bordro.personelId, &bordro.donemId)?
-        {
-            if current_status == BordroStatus::FINALIZED {
+        let accrual_id = Self::effective_accrual_id(bordro);
+        let existing_status = Self::get_status_and_created_at_for_accrual(
+            &tx,
+            &bordro.personelId,
+            &bordro.donemId,
+            &accrual_id,
+        )?;
+        if let Some((current_status, _)) = existing_status.as_ref() {
+            if *current_status == BordroStatus::FINALIZED {
                 return Err(DomainError::PayrollFinalized(
                     "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
                 ));
             }
         }
 
-        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
-            &tx,
-            &PayrollMutation::PayrollCalculation {
+        let mutation = if existing_status.is_some() {
+            PayrollMutation::AccrualCalculation {
                 personnelId: bordro.personelId.clone(),
                 periodId: bordro.donemId.clone(),
-            },
-        )?;
+                accrualId: accrual_id.clone(),
+            }
+        } else {
+            PayrollMutation::AccrualInsert {
+                personnelId: bordro.personelId.clone(),
+                periodId: bordro.donemId.clone(),
+                accrualId: accrual_id.clone(),
+                paymentDate: Self::effective_payment_date(&tx, bordro)?,
+                sequence: bordro.sequence,
+            }
+        };
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(&tx, &mutation)?;
 
-        let before = Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId)?;
+        let before =
+            Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
         Self::save_in_transaction(&tx, bordro)?;
-        let after = Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId)?;
+        let after =
+            Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
 
         if before != after {
             PayrollInvalidationRepository::apply_impact(&tx, &impact)?;
@@ -717,6 +867,10 @@ impl PayrollRepository {
             b.olusturulmaTarihi.clone()
         };
         let status_str = Self::status_to_str(b.status);
+        let accrual_id = Self::effective_accrual_id(b);
+        let accrual_type = Self::accrual_type_to_str(b.accrualType);
+        let payment_date = Self::effective_payment_date(conn, b)?;
+        let accrual_description = b.accrualDescription.clone().or_else(|| b.notlar.clone());
 
         let computed_net = (b.gelirToplam - b.kesintiToplam).round_dp(2);
         if b.netOdeme < Decimal::ZERO || computed_net < Decimal::ZERO {
@@ -731,7 +885,12 @@ impl PayrollRepository {
         }
 
         let gross_total = dec_to_kurus(Some(b.gelirToplam))?;
-        let sgk_base = dec_to_kurus(b.pekDetay.as_ref().map(|p| p.finalPek))?;
+        let sgk_base = dec_to_kurus(
+            b.pekDetay
+                .as_ref()
+                .map(|p| p.primMatrahi)
+                .or_else(|| b.pekDetay.as_ref().map(|p| p.finalPek)),
+        )?;
         let isci_sgk = b.kesintiler.isciSgkPrimi.unwrap_or_default();
         let isci_issizlik = b.kesintiler.isciIssizlikPrimi.unwrap_or_default();
         // Production bordrosunda authoritative GV matrahı, hesap sırasında oluşturulan
@@ -767,26 +926,37 @@ impl PayrollRepository {
             b.statutorySnapshot.as_ref(),
             "Yasal parametre snapshot'ı",
         )?;
+        let damga_snapshot_json =
+            Self::serialize_optional_json(b.damgaDetay.as_ref(), "Damga vergisi snapshot'ı")?;
 
         conn.execute(
             "INSERT INTO payroll_records (
-                id, personnel_id, period_id, gross_total, sgk_base, gv_base, previous_cumulative_gv,
+                id, personnel_id, period_id, accrual_id, accrual_type, payment_date, sequence,
+                accrual_description, gross_total, sgk_base, gv_base, previous_cumulative_gv,
                 new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                 raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json,
-                statutory_snapshot_json, notlar, calculated_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
-             ON CONFLICT(personnel_id, period_id) DO UPDATE SET
-                gross_total=?4, sgk_base=?5, gv_base=?6, previous_cumulative_gv=?7, new_cumulative_gv=?8,
-                income_tax=?9, stamp_tax=?10, total_deductions=?11, net_payment=?12, status=?13,
-                puantaj_summary_json=?14, pek_detail_json=?15, devreden_pek_gelen_json=?16,
-                sonraki_devreden_pek_json=?17, raporlu_gun=?18, odenen_raporlu_gun=?19,
-                is_primi_snapshot_json=?20, gv_snapshot_json=?21, statutory_snapshot_json=?22,
-                notlar=?23, updated_at=?25",
+                statutory_snapshot_json, damga_snapshot_json, notlar, calculated_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
+             ON CONFLICT(id) DO UPDATE SET
+                personnel_id=?2, period_id=?3, accrual_id=?4, accrual_type=?5,
+                payment_date=?6, sequence=?7, accrual_description=?8, gross_total=?9,
+                sgk_base=?10, gv_base=?11, previous_cumulative_gv=?12, new_cumulative_gv=?13,
+                income_tax=?14, stamp_tax=?15, total_deductions=?16, net_payment=?17, status=?18,
+                puantaj_summary_json=?19, pek_detail_json=?20, devreden_pek_gelen_json=?21,
+                sonraki_devreden_pek_json=?22, raporlu_gun=?23, odenen_raporlu_gun=?24,
+                is_primi_snapshot_json=?25, gv_snapshot_json=?26, statutory_snapshot_json=?27,
+                damga_snapshot_json=?28, notlar=?29, calculated_at=?30, updated_at=?31",
             params![
                 b.id,
                 b.personelId,
                 b.donemId,
+                accrual_id,
+                accrual_type,
+                payment_date,
+                b.sequence,
+                accrual_description,
                 gross_total,
                 sgk_base,
                 gv_base,
@@ -806,6 +976,7 @@ impl PayrollRepository {
                 is_primi_snapshot_json,
                 gv_snapshot_json,
                 statutory_snapshot_json,
+                damga_snapshot_json,
                 b.notlar,
                 calculated_at,
                 now,

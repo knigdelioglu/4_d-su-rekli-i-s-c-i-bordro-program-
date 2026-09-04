@@ -7,6 +7,7 @@ import {
 type UnknownRecord = Record<string, unknown>;
 
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
+const ACCRUAL_TYPE_VALUES = ['NORMAL', 'TEDIYE', 'TIS_IKRAMIYE', 'SUPPLEMENTAL'] as const;
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -71,6 +72,23 @@ function optionalNullableString(record: UnknownRecord, key: string, path: string
 
 function requiredInteger(record: UnknownRecord, key: string, path: string): void {
   assertInteger(required(record, key, path), fieldPath(path, key));
+}
+
+function requiredNonNegativeInteger(record: UnknownRecord, key: string, path: string): void {
+  requiredInteger(record, key, path);
+  if ((record[key] as number) < 0) fail(fieldPath(path, key), 'negatif olamaz.');
+}
+
+function requiredIsoDate(record: UnknownRecord, key: string, path: string): void {
+  const value = required(record, key, path);
+  assertString(value, fieldPath(path, key));
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    fail(fieldPath(path, key), 'YYYY-AA-GG biçiminde tarih olmalıdır.');
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    fail(fieldPath(path, key), 'geçerli bir takvim tarihi olmalıdır.');
+  }
 }
 
 /** Checks presence/nullability; the exact Decimal grammar is checked once at the payload root. */
@@ -306,12 +324,28 @@ function validateGvHesapDetayi(value: unknown, path: string): void {
     'kesilenGelirVergisi',
   ].forEach((key) => requiredDecimal(value, key, path));
   [
+    'oncekiKumulatifGvMatrahi',
+    'ayniAyOncekiKullanilanGvIstisnasi',
+    'tahakkukOncesiKalanGvIstisnasi',
+    'tahakkukSonrasiKalanGvIstisnasi',
     'dogumAskerlikGvIndirimi',
     'sigortaGvIndirimAdayi',
     'sigortaGvAylikLimiti',
     'sigortaGvYillikKalanLimiti',
     'uygulanabilirSigortaGvIndirimi',
   ].forEach((key) => optionalNonNullableDecimal(value, key, path));
+}
+
+function validateDamgaVergisiHesapDetayi(value: unknown, path: string): void {
+  assertRecord(value, path);
+  [
+    'brutDamgaVergisi',
+    'aylikDamgaIstisnaHakki',
+    'ayniAyOncekiKullanilanDamgaIstisnasi',
+    'uygulananDamgaIstisnasi',
+    'kalanDamgaIstisnasi',
+    'kesilenDamgaVergisi',
+  ].forEach((key) => requiredDecimal(value, key, path));
 }
 
 function validateStatutoryParameterSegment(value: unknown, path: string): void {
@@ -475,9 +509,19 @@ export function validateBordroKaydi(
   path = '$'
 ): asserts value is PayrollStorageDto['bordrolar'][number] {
   assertRecord(value, path);
-  ['id', 'personelId', 'donemId', 'olusturulmaTarihi', 'sonGuncellemeTarihi'].forEach((key) =>
+  ['id', 'personelId', 'donemId', 'accrualId', 'olusturulmaTarihi', 'sonGuncellemeTarihi'].forEach((key) =>
     requiredString(value, key, path)
   );
+  if ((value.accrualId as string).trim() === '') fail(fieldPath(path, 'accrualId'), 'boş olamaz.');
+  const accrualType = required(value, 'accrualType', path);
+  const accrualTypePath = fieldPath(path, 'accrualType');
+  assertString(accrualType, accrualTypePath);
+  if (!(ACCRUAL_TYPE_VALUES as readonly string[]).includes(accrualType)) {
+    fail(accrualTypePath, `geçersiz enum değeri: ${accrualType}.`);
+  }
+  requiredIsoDate(value, 'paymentDate', path);
+  requiredNonNegativeInteger(value, 'sequence', path);
+  optionalNullableString(value, 'accrualDescription', path);
 
   const status = required(value, 'status', path);
   const statusPath = fieldPath(path, 'status');
@@ -506,6 +550,7 @@ export function validateBordroKaydi(
   optionalNullableRecord(value, 'pekDetay', path, validatePekDetayi);
   optionalNullableRecord(value, 'isPrimiDetay', path, validateIsPrimiHesapDetayi);
   optionalNullableRecord(value, 'gvDetay', path, validateGvHesapDetayi);
+  optionalNullableRecord(value, 'damgaDetay', path, validateDamgaVergisiHesapDetayi);
   optionalNullableRecord(value, 'statutorySnapshot', path, validateResolvedStatutorySnapshot);
   optionalNullableInteger(value, 'odenenRaporluGun', path);
   optionalNullableInteger(value, 'raporluGun', path);
@@ -582,6 +627,16 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
     if (!periodIds.has(payroll.donemId)) {
       fail(`$.bordrolar[${index}].donemId`, `mevcut olmayan dönem kimliği: ${payroll.donemId}.`);
     }
+    const period = payload.donemler.find((candidate) => candidate.id === payroll.donemId);
+    if (period) {
+      const expectedTaxPrefix = `${String(period.taxYear).padStart(4, '0')}-${String(period.taxMonth).padStart(2, '0')}-`;
+      if (!payroll.paymentDate.startsWith(expectedTaxPrefix)) {
+        fail(
+          `$.bordrolar[${index}].paymentDate`,
+          `tahakkuk vergi yılı/ayı ile eşleşmiyor; beklenen ${period.taxYear}-${String(period.taxMonth).padStart(2, '0')}.`
+        );
+      }
+    }
   });
 
   payload.taxOpenings.forEach((opening, index) => {
@@ -639,7 +694,7 @@ function validateTopLevelArrays(value: UnknownRecord): void {
   });
 }
 
-/** Full current V2 runtime schema. Unknown fields are intentionally ignored. */
+/** Full current V3 runtime schema. Unknown fields are intentionally ignored. */
 export function validateCurrentPayrollPayload(
   value: unknown
 ): asserts value is PayrollStorageDto {
@@ -691,6 +746,13 @@ export function validateCurrentPayrollPayload(
   assertUniqueIds(typedPayload.personeller, '$.personeller');
   assertUniqueIds(typedPayload.puantajlar, '$.puantajlar');
   assertUniqueIds(typedPayload.bordrolar, '$.bordrolar');
+  assertUniqueBy(
+    typedPayload.bordrolar,
+    (payroll) => payroll.accrualId,
+    '$.bordrolar',
+    (payroll) => `accrualId: ${payroll.accrualId}`,
+    'accrualId'
+  );
   assertUniqueIds(typedPayload.taxOpenings, '$.taxOpenings');
   assertUniqueIds(typedPayload.sickLeaveRecords, '$.sickLeaveRecords');
 
@@ -710,12 +772,20 @@ export function validateCurrentPayrollPayload(
     ['personelId', 'donemId'],
     (attendance) => `${attendance.personelId} / ${attendance.donemId}`
   );
+  const normalPayrolls = typedPayload.bordrolar.filter((payroll) => payroll.accrualType === 'NORMAL');
   assertUniqueCompositeKey(
-    typedPayload.bordrolar,
+    normalPayrolls,
     (payroll) => [payroll.personelId, payroll.donemId],
     '$.bordrolar',
     ['personelId', 'donemId'],
     (payroll) => `${payroll.personelId} / ${payroll.donemId}`
+  );
+  assertUniqueCompositeKey(
+    typedPayload.bordrolar,
+    (payroll) => [payroll.personelId, payroll.paymentDate, payroll.sequence],
+    '$.bordrolar',
+    ['personelId', 'paymentDate', 'sequence'],
+    (payroll) => `${payroll.personelId} / ${payroll.paymentDate} / ${payroll.sequence}`
   );
   assertUniqueCompositeKey(
     typedPayload.taxOpenings,

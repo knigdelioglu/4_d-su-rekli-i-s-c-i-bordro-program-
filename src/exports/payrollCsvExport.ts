@@ -36,6 +36,10 @@ export function buildSinglePayrollCsv(model: PayrollExportModel): string {
     ['Bordro Dönemi', model.periodName],
     ['Çalışma Aralığı', `${model.periodStart} - ${model.periodEnd}`],
     ['Vergi Dönemi', `${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}`],
+    ['Tahakkuk Türü', model.accrualType],
+    ['Tahakkuk Tarihi', model.paymentDate],
+    ['Tahakkuk Sıra No', model.sequence],
+    ['Tahakkuk Açıklaması', model.accrualDescription],
     ['Bordro Durumu', model.status],
     ['', ''],
     ['PERSONEL BİLGİLERİ', ''],
@@ -63,6 +67,24 @@ export function buildSinglePayrollCsv(model: PayrollExportModel): string {
   rows.push(['', '']);
   appendLines(rows, 'SGK / VERGİ', model.sgkTax);
   appendLines(rows, 'KURUM MALİYET BİLGİSİ', model.employer);
+  rows.push(['GV DENETİM ZİNCİRİ', 'Tutar']);
+  rows.push(['Önceki Kümülatif GV Matrahı', model.gvAudit.previousCumulativeGv]);
+  rows.push(['Cari GV Matrahı', model.gvAudit.currentGvBase]);
+  rows.push(['Yeni Kümülatif GV Matrahı', model.gvAudit.newCumulativeGv]);
+  rows.push(['Brüt Gelir Vergisi', model.gvAudit.grossIncomeTax]);
+  rows.push(['Aylık GV İstisna Hakkı', model.gvAudit.monthlyExemptionEntitlement]);
+  rows.push(['Aynı Ay Önceki Kullanılan GV İstisnası', model.gvAudit.sameMonthPriorUsed]);
+  rows.push(['Tahakkuk Öncesi Kalan GV İstisnası', model.gvAudit.beforeRemainingExemption]);
+  rows.push(['Uygulanan GV İstisnası', model.gvAudit.appliedExemption]);
+  rows.push(['Tahakkuk Sonrası Kalan GV İstisnası', model.gvAudit.afterRemainingExemption]);
+  rows.push(['Kesilen Gelir Vergisi', model.gvAudit.withheldIncomeTax]);
+  rows.push(['DAMGA VERGİSİ DENETİMİ', 'Tutar']);
+  rows.push(['Brüt Damga Vergisi', model.stampAudit.grossStampTax]);
+  rows.push(['Aylık Damga İstisna Hakkı', model.stampAudit.monthlyExemptionEntitlement]);
+  rows.push(['Aynı Ay Önceki Kullanılan Damga İstisnası', model.stampAudit.sameMonthPriorUsed]);
+  rows.push(['Uygulanan Damga İstisnası', model.stampAudit.appliedExemption]);
+  rows.push(['Kalan Damga İstisnası', model.stampAudit.remainingExemption]);
+  rows.push(['Kesilen Damga Vergisi', model.stampAudit.withheldStampTax]);
 
   if (model.attendanceDays.length > 0) {
     rows.push(['PUANTAJ GÜNLERİ', 'Kod']);
@@ -92,6 +114,10 @@ export function buildPeriodPayrollCsv(args: {
     'T.C. Kimlik No',
     'Ad Soyad',
     'Grup',
+    'Tahakkuk Türü',
+    'Tahakkuk Tarihi',
+    'Tahakkuk Sıra No',
+    'Tahakkuk Açıklaması',
     'Durum',
     'Brüt Gelir',
     'Nihai PEK',
@@ -115,6 +141,10 @@ export function buildPeriodPayrollCsv(args: {
       model.employee.tcNo,
       model.employee.fullName,
       model.employee.group,
+      model.accrualType,
+      model.paymentDate,
+      model.sequence,
+      model.accrualDescription,
       model.status,
       model.totals.gross,
       model.totals.finalPek,

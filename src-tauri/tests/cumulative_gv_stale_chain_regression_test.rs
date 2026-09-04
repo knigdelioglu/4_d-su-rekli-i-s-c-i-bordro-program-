@@ -1,7 +1,7 @@
 use bordro_programi_lib::db::create_in_memory_connection;
 use bordro_programi_lib::domain::models::{
-    BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, GelirKalemleri, GvHesapDetayi,
-    KesintiKalemleri, PekDetayi, Personel, PuantajOzeti,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, GelirKalemleri,
+    GvHesapDetayi, KesintiKalemleri, PekDetayi, Personel, PuantajOzeti,
 };
 use bordro_programi_lib::domain::DomainError;
 use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
@@ -52,13 +52,17 @@ fn period(id: &str, yil: i32, ay: i32, tax_year: i32, tax_month: i32) -> BordroD
 
 fn gv_detay(gv_base: Decimal, previous: Decimal) -> GvHesapDetayi {
     GvHesapDetayi {
+        oncekiKumulatifGvMatrahi: previous,
         cariGvMatrahi: gv_base,
         yeniKumulatifGvMatrahi: previous + gv_base,
         brutGelirVergisi: dec!(0),
         asgariUcretGvMatrahi: dec!(0),
         asgariUcretReferansKumulatifMatrahi: dec!(0),
         asgariUcretGvIstisnasi: dec!(0),
+        ayniAyOncekiKullanilanGvIstisnasi: dec!(0),
+        tahakkukOncesiKalanGvIstisnasi: dec!(0),
         uygulananGvIstisnasi: dec!(0),
+        tahakkukSonrasiKalanGvIstisnasi: dec!(0),
         kesilenGelirVergisi: dec!(0),
         dogumAskerlikGvIndirimi: dec!(0),
         sigortaGvIndirimAdayi: dec!(0),
@@ -103,6 +107,11 @@ fn payroll(
         id: format!("{personnel_id}_{period_id}"),
         personelId: personnel_id.into(),
         donemId: period_id.into(),
+        accrualId: format!("{personnel_id}_{period_id}"),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: String::new(),
+        sequence: 0,
+        accrualDescription: None,
         puantajOzeti: PuantajOzeti::default(),
         gelirler: GelirKalemleri {
             tabanBrutAylik: Some(dec!(100000)),
@@ -124,6 +133,7 @@ fn payroll(
         pekDetay: Some(pek_detay(final_pek)),
         isPrimiDetay: None,
         gvDetay: Some(gv_detay(gv_base, previous_gv)),
+        damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: None,
         raporluGun: None,

@@ -105,8 +105,12 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
         engine.getPayrollNotices(donem.id, dataset),
         engine.getPayrolls(dataset),
       ]);
+      const requestedAccrualId = bordro.accrualId || bordro.id;
       const current = payrolls.find(
-        (item) => item.personelId === personel.id && item.donemId === donem.id
+        (item) =>
+          item.personelId === personel.id &&
+          item.donemId === donem.id &&
+          (item.accrualId === requestedAccrualId || item.id === bordro.id)
       );
       if (!current) {
         throw new Error('Kesinleştirilecek bordro kaydı bulunamadı.');
@@ -156,7 +160,12 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
       // Modal açık kaldığı sırada başka bir girdi değişmiş olabilir. Kilitlemeden
       // hemen önce native bordro ve notice listesi ikinci kez authoritative kaynaktan okunur.
       await loadReview(false);
-      const finalized = await engine.finalizePayroll(personel.id, donem.id, dataset);
+      const finalized = await engine.finalizePayroll(
+        personel.id,
+        donem.id,
+        dataset,
+        authoritativeBordro.accrualId || authoritativeBordro.id
+      );
       await onFinalized(finalized);
       setIsOpen(false);
       setReview(null);
@@ -201,7 +210,9 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
                 <div>
                   <h3 className="text-sm font-bold">Bordroyu Kesinleştir</h3>
                   <p className="mt-0.5 text-[11px] text-slate-400">
-                    {personel.ad} {personel.soyad} · {donem.donemAdi}
+                    {personel.ad} {personel.soyad} · {donem.donemAdi} ·{' '}
+                    {authoritativeBordro.accrualType} · {authoritativeBordro.paymentDate} · sıra{' '}
+                    {authoritativeBordro.sequence}
                   </p>
                 </div>
               </div>

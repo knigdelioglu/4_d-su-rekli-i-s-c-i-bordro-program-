@@ -52,6 +52,11 @@ function payroll(status: BordroKaydi['status'], personId = 'p1'): BordroKaydi {
     id: `${personId}_${period.id}`,
     personelId: personId,
     donemId: period.id,
+    accrualId: `${personId}_${period.id}`,
+    accrualType: 'NORMAL',
+    paymentDate: '2026-08-14',
+    sequence: 0,
+    accrualDescription: null,
     status,
     puantajOzeti: { 'Ç': 20, T: 4, G: 1, 'İ': 2, 'GÇ': 0, 'GÇT': 0, R: 3 },
     gelirler: {
@@ -103,14 +108,26 @@ function payroll(status: BordroKaydi['status'], personId = 'p1'): BordroKaydi {
       isverenPrimToplami: 23750,
     },
     gvDetay: {
+      oncekiKumulatifGvMatrahi: 300000,
       cariGvMatrahi: 90000,
       yeniKumulatifGvMatrahi: 390000,
       brutGelirVergisi: 18000,
       asgariUcretGvMatrahi: 26000,
       asgariUcretReferansKumulatifMatrahi: 200000,
       asgariUcretGvIstisnasi: 6000,
+      ayniAyOncekiKullanilanGvIstisnasi: 0,
+      tahakkukOncesiKalanGvIstisnasi: 6000,
       uygulananGvIstisnasi: 6000,
+      tahakkukSonrasiKalanGvIstisnasi: 0,
       kesilenGelirVergisi: 12000,
+    },
+    damgaDetay: {
+      brutDamgaVergisi: 1000,
+      aylikDamgaIstisnaHakki: 500,
+      ayniAyOncekiKullanilanDamgaIstisnasi: 0,
+      uygulananDamgaIstisnasi: 300,
+      kalanDamgaIstisnasi: 200,
+      kesilenDamgaVergisi: 700,
     },
   };
 }
@@ -195,8 +212,8 @@ describe('payroll export contracts', () => {
     expect(escapeCsvCell('a;b')).toBe('"a;b"');
 
     const periodCsv = buildPeriodPayrollCsv({ period, models: [model] });
-    expect(periodCsv.includes('T.C. Kimlik No;Ad Soyad;Grup;Durum')).toBeTruthy();
-    expect(periodCsv.includes('11111111111;Şule Çığ;1. Grup;CALCULATED')).toBeTruthy();
+    expect(periodCsv.includes('T.C. Kimlik No;Ad Soyad;Grup;Tahakkuk Türü;Tahakkuk Tarihi;Tahakkuk Sıra No')).toBeTruthy();
+    expect(periodCsv.includes('11111111111;Şule Çığ;1. Grup;NORMAL;2026-08-14;0;')).toBeTruthy();
   });
 
   test('PDF writer emits a real PDF binary and filenames are filesystem safe', async () => {

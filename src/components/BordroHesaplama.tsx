@@ -21,8 +21,10 @@ import {
   CalendarCheck,
   Building2,
   X,
+  Plus,
 } from 'lucide-react';
 import {
+  AccrualType,
   BordroDonemi,
   BordroKaydi,
   AnnualPayrollParameters,
@@ -32,11 +34,12 @@ import {
   PersonelTaxOpening,
   SickLeaveRecord,
 } from '../types/payroll';
-import { formatTL } from '../utils/payrollPresentation';
+import { formatTL, getDefaultAccrualPaymentDate } from '../utils/payrollPresentation';
 import { PaySlipModal } from './PaySlipModal';
 import { PayrollFinalizeModal } from './PayrollFinalizeModal';
 import {
   getPayrollEngine,
+  PayrollBoundaryAccrualInput,
   PayrollBoundaryPayroll,
   PayrollBoundaryPersonel,
   PayrollBoundaryTaxOpening,
@@ -64,6 +67,22 @@ function formatPayrollError(err: unknown): string {
     }
   }
   return String(err);
+}
+
+const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
+  NORMAL: 'Normal Maaş',
+  TEDIYE: 'Tediye',
+  TIS_IKRAMIYE: 'TİS İkramiyesi',
+  SUPPLEMENTAL: 'Ek Tahakkuk',
+};
+
+type SupplementaryAccrualType = Exclude<AccrualType, 'NORMAL'>;
+
+interface SupplementaryAccrualDraft {
+  accrualType: SupplementaryAccrualType;
+  paymentDate: string;
+  grossAmount: string;
+  description: string;
 }
 
 interface BordroHesaplamaProps {
@@ -116,6 +135,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const [manualIncomeMap, setManualIncomeMap] = useState<
     Record<string, { tediye?: string; tisIkramiyesi?: string }>
   >({});
+  const [newAccrualPersonId, setNewAccrualPersonId] = useState<string | null>(null);
+  const [supplementaryAccrualDraft, setSupplementaryAccrualDraft] = useState<SupplementaryAccrualDraft>({
+    accrualType: 'TEDIYE',
+    paymentDate: getDefaultAccrualPaymentDate(aktifDonem),
+    grossAmount: '',
+    description: '',
+  });
 
   // Manual cumulative GV override state per person for the current period
   const [manualKumulatifGvMap, setManualKumulatifGvMap] = useState<
@@ -128,12 +154,30 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const getManualIncomeStateKey = (personId: string): string =>
     `${aktifDonem.id}:${personId}`;
 
+  const getAccrualId = (payroll: BordroKaydi): string => payroll.accrualId || payroll.id;
+
+  const getPersonAccruals = (personId: string): BordroKaydi[] =>
+    bordrolar
+      .filter((item) => item.personelId === personId && item.donemId === aktifDonem.id)
+      .sort((a, b) => {
+        const dateOrder = (a.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)).localeCompare(
+          b.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)
+        );
+        if (dateOrder !== 0) return dateOrder;
+        if (a.sequence !== b.sequence) return a.sequence - b.sequence;
+        return getAccrualId(a).localeCompare(getAccrualId(b));
+      });
+
+  const getNormalPayroll = (personId: string): BordroKaydi | undefined =>
+    getPersonAccruals(personId).find((item) => item.accrualType === 'NORMAL');
+
   const getManualIncomeInput = (personId: string): PayrollCalculationRequest['manualIncome'] => {
-    const existingPayroll = bordrolar.find(
-      (item) => item.personelId === personId && item.donemId === aktifDonem.id
-    );
+    const existingPayroll = getNormalPayroll(personId);
     const exactPayroll = authoritativeDataset.payrolls.find(
-      (item) => item.personelId === personId && item.donemId === aktifDonem.id
+      (item) =>
+        item.personelId === personId &&
+        item.donemId === aktifDonem.id &&
+        item.accrualType === 'NORMAL'
     );
     const draft = manualIncomeMap[getManualIncomeStateKey(personId)];
     const resolveAmount = (
@@ -193,9 +237,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return null;
     }
 
-    const existingBordro = bordrolar.find(
-      (b) => b.personelId === person.id && b.donemId === aktifDonem.id
-    );
+    const existingBordro = getNormalPayroll(person.id);
     if (existingBordro?.status === 'FINALIZED') {
       setErrorMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildiği için yeniden hesaplanamaz.`);
       return null;
@@ -255,10 +297,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   // Open Pay Slip modal for a person
-  const handleOpenPaySlip = async (person: Personel) => {
-    let bordro = bordrolar.find(
-      (b) => b.personelId === person.id && b.donemId === aktifDonem.id
-    );
+  const handleOpenPaySlip = async (person: Personel, requestedBordro?: BordroKaydi) => {
+    let bordro = requestedBordro || getNormalPayroll(person.id);
 
     if (bordro?.status === 'STALE') {
       setErrorMessage(
@@ -288,6 +328,83 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
     if (bordro) {
       setActivePaySlip({ personel: person, bordro });
+    }
+  };
+
+  const openSupplementaryAccrualForm = (person: Personel) => {
+    setNewAccrualPersonId(person.id);
+    setSupplementaryAccrualDraft({
+      accrualType: 'TEDIYE',
+      paymentDate: getDefaultAccrualPaymentDate(aktifDonem),
+      grossAmount: '',
+      description: '',
+    });
+    setErrorMessage(null);
+  };
+
+  const handleCalculateSupplementary = async (
+    person: Personel,
+    event: React.FormEvent<HTMLFormElement>
+  ) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const grossAmount = supplementaryAccrualDraft.grossAmount.trim();
+    const paymentDate = supplementaryAccrualDraft.paymentDate.trim();
+    if (!isExactDecimalString(grossAmount) || grossAmount.startsWith('-')) {
+      setErrorMessage('Ek tahakkuk brüt tutarı geçerli ve negatif olmayan bir Decimal olmalıdır.');
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+      setErrorMessage('Ödeme/tahakkuk tarihi YYYY-AA-GG biçiminde olmalıdır.');
+      return;
+    }
+
+    const sameDateAccruals = getPersonAccruals(person.id).filter(
+      (item) => (item.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)) === paymentDate
+    );
+    const sequence = sameDateAccruals.reduce(
+      (max, item) => Math.max(max, item.sequence),
+      -1
+    ) + 1;
+    const accrual: PayrollBoundaryAccrualInput = {
+      accrualId: `${person.id}_${aktifDonem.id}_${supplementaryAccrualDraft.accrualType.toLowerCase()}_${paymentDate}_${sequence}`,
+      accrualType: supplementaryAccrualDraft.accrualType,
+      paymentDate,
+      sequence,
+      grossAmount,
+      description: supplementaryAccrualDraft.description.trim() || null,
+    };
+
+    const pPuantaj = puantajlar.find(
+      (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+    );
+    if (!pPuantaj || !Object.keys(pPuantaj.gunler || {}).length) {
+      setErrorMessage(
+        `${person.ad} ${person.soyad} için kayıtlı puantaj bulunmadığından ek tahakkuk hesaplanamaz.`
+      );
+      return;
+    }
+
+    try {
+      const calculated = await payrollEngine.calculatePayroll({
+        personnelId: person.id,
+        periodId: aktifDonem.id,
+        calculatedAt: new Date().toISOString(),
+        manualIncome: null,
+        accrual,
+        dataset: buildDataset(),
+      });
+      await onSaveBordro(calculated);
+      setNewAccrualPersonId(null);
+      setSuccessMessage(
+        `${person.ad} ${person.soyad} için ${ACCRUAL_TYPE_LABELS[accrual.accrualType]} tahakkuku hesaplandı.`
+      );
+      setErrorMessage(null);
+      setTimeout(() => setSuccessMessage(null), 3500);
+    } catch (err) {
+      console.error('Supplementary payroll calculation failed:', err);
+      setErrorMessage(`Ek tahakkuk hesaplama hatası: ${formatPayrollError(err)}`);
     }
   };
 
@@ -533,11 +650,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 </tr>
               ) : (
                 filteredPersoneller.map((person, idx) => {
-                  const bordro = bordrolar.find(
-                    (b) => b.personelId === person.id && b.donemId === aktifDonem.id
-                  );
+                  const personAccruals = getPersonAccruals(person.id);
+                  const bordro = personAccruals.find((item) => item.accrualType === 'NORMAL');
                   const exactBordro = authoritativeDataset.payrolls.find(
-                    (b) => b.personelId === person.id && b.donemId === aktifDonem.id
+                    (b) =>
+                      b.personelId === person.id &&
+                      b.donemId === aktifDonem.id &&
+                      b.accrualType === 'NORMAL'
                   );
                   const pPuantaj = puantajlar.find(
                     (p) => p.personelId === person.id && p.donemId === aktifDonem.id
@@ -569,8 +688,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         : ''));
 
                   return (
+                    <React.Fragment key={person.id}>
                     <tr
-                      key={person.id}
                       onClick={() => handleOpenPaySlip(person)}
                       className={`transition-colors group ${isStale || isDraft ? 'bg-amber-50/40 cursor-default' : 'hover:bg-indigo-50/50 cursor-pointer'}`}
                     >
@@ -834,6 +953,207 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         </div>
                       </td>
                     </tr>
+                    <tr key={`${person.id}-accrual-timeline`}>
+                      <td colSpan={12} className="px-4 py-3 bg-slate-50/80">
+                        <div className="flex flex-col gap-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                              <span>Tahakkuk Zaman Çizelgesi</span>
+                              <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] text-slate-700">
+                                {personAccruals.length} kayıt
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              data-testid={`add-accrual-${person.id}`}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                if (!hasPuantaj) {
+                                  setErrorMessage(
+                                    `${person.ad} ${person.soyad} için önce bu dönemin puantajını tamamlayın.`
+                                  );
+                                  return;
+                                }
+                                openSupplementaryAccrualForm(person);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 transition-colors hover:bg-indigo-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Plus className="h-3.5 w-3.5" />
+                              <span>Ek Tahakkuk</span>
+                            </button>
+                          </div>
+
+                          <div className="flex flex-col gap-1.5">
+                            {personAccruals.length === 0 ? (
+                              <div className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-2 text-[11px] text-slate-500">
+                                Henüz tahakkuk yok. Normal maaş için üst satırdaki Hesapla işlemini kullanın.
+                              </div>
+                            ) : (
+                              personAccruals.map((accrual) => {
+                                const accrualIsFinalized = accrual.status === 'FINALIZED';
+                                const accrualIsCalculated =
+                                  accrual.status === 'CALCULATED' || accrualIsFinalized;
+                                return (
+                                  <div
+                                    key={getAccrualId(accrual)}
+                                    className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                                  >
+                                    <span className="font-mono text-[11px] font-bold text-slate-700">
+                                      {accrual.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)}
+                                    </span>
+                                    <span className="text-[11px] font-bold text-indigo-700">
+                                      {ACCRUAL_TYPE_LABELS[accrual.accrualType]}
+                                    </span>
+                                    <span className="text-[10px] text-slate-500">
+                                      Sıra {accrual.sequence}
+                                    </span>
+                                    <span
+                                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                                        accrualIsFinalized
+                                          ? 'bg-slate-200 text-slate-800'
+                                          : accrual.status === 'STALE'
+                                            ? 'bg-amber-100 text-amber-900'
+                                            : accrualIsCalculated
+                                              ? 'bg-emerald-100 text-emerald-800'
+                                              : 'bg-slate-100 text-slate-600'
+                                      }`}
+                                    >
+                                      {accrual.status}
+                                    </span>
+                                    <span className="ml-auto font-mono text-[11px] font-bold text-slate-800">
+                                      Brüt {formatTL(accrual.gelirToplam || 0)} · Net {formatTL(accrual.netOdeme || 0)}
+                                    </span>
+                                    {accrualIsCalculated && (
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleOpenPaySlip(person, accrual);
+                                        }}
+                                        className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-700 hover:bg-indigo-600 hover:text-white"
+                                      >
+                                        <FileText className="h-3 w-3" />
+                                        Bordro Gör
+                                      </button>
+                                    )}
+                                    {accrual.accrualType !== 'NORMAL' &&
+                                      accrual.status === 'CALCULATED' && (
+                                        <PayrollFinalizeModal
+                                          personel={person}
+                                          bordro={accrual}
+                                          donem={aktifDonem}
+                                          engine={payrollEngine}
+                                          dataset={buildDataset()}
+                                          onFinalized={(finalizedBordro) =>
+                                            handleFinalizeSuccess(person, finalizedBordro)
+                                          }
+                                          onError={(message) => {
+                                            setSuccessMessage(null);
+                                            setErrorMessage(message);
+                                          }}
+                                        />
+                                      )}
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+
+                          {newAccrualPersonId === person.id && (
+                            <form
+                              onSubmit={(event) => void handleCalculateSupplementary(person, event)}
+                              onClick={(event) => event.stopPropagation()}
+                              className="grid grid-cols-1 gap-2 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 sm:grid-cols-2 lg:grid-cols-5"
+                            >
+                              <label className="flex flex-col gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                                Tür
+                                <select
+                                  value={supplementaryAccrualDraft.accrualType}
+                                  onChange={(event) =>
+                                    setSupplementaryAccrualDraft((current) => ({
+                                      ...current,
+                                      accrualType: event.target.value as SupplementaryAccrualType,
+                                    }))
+                                  }
+                                  className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold normal-case tracking-normal text-slate-900"
+                                >
+                                  <option value="TEDIYE">Tediye</option>
+                                  <option value="TIS_IKRAMIYE">TİS İkramiyesi</option>
+                                  <option value="SUPPLEMENTAL">Ek Tahakkuk</option>
+                                </select>
+                              </label>
+                              <label className="flex flex-col gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                                Ödeme/Tahakkuk tarihi
+                                <input
+                                  type="date"
+                                  required
+                                  value={supplementaryAccrualDraft.paymentDate}
+                                  onChange={(event) =>
+                                    setSupplementaryAccrualDraft((current) => ({
+                                      ...current,
+                                      paymentDate: event.target.value,
+                                    }))
+                                  }
+                                  className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold normal-case tracking-normal text-slate-900"
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-600">
+                                Brüt tutar
+                                <input
+                                  type="text"
+                                  inputMode="decimal"
+                                  required
+                                  value={supplementaryAccrualDraft.grossAmount}
+                                  onChange={(event) =>
+                                    setSupplementaryAccrualDraft((current) => ({
+                                      ...current,
+                                      grossAmount: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="0.00"
+                                  className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-right text-xs font-mono font-semibold normal-case tracking-normal text-slate-900"
+                                />
+                              </label>
+                              <label className="flex flex-col gap-1 text-[10px] font-bold uppercase tracking-wide text-slate-600 lg:col-span-2">
+                                Açıklama
+                                <input
+                                  type="text"
+                                  value={supplementaryAccrualDraft.description}
+                                  onChange={(event) =>
+                                    setSupplementaryAccrualDraft((current) => ({
+                                      ...current,
+                                      description: event.target.value,
+                                    }))
+                                  }
+                                  placeholder="İsteğe bağlı açıklama"
+                                  className="rounded-lg border border-slate-300 bg-white px-2 py-2 text-xs font-semibold normal-case tracking-normal text-slate-900"
+                                />
+                              </label>
+                              <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
+                                <button
+                                  type="submit"
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-indigo-700"
+                                >
+                                  <Calculator className="h-3.5 w-3.5" />
+                                  Hesapla ve Kaydet
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setNewAccrualPersonId(null)}
+                                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11px] font-bold text-slate-700 hover:bg-slate-100"
+                                >
+                                  Vazgeç
+                                </button>
+                                <span className="text-[10px] text-slate-500">
+                                  Normal maaş gelirleri bu tahakkuka otomatik eklenmez.
+                                </span>
+                              </div>
+                            </form>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    </React.Fragment>
                   );
                 })
               )}

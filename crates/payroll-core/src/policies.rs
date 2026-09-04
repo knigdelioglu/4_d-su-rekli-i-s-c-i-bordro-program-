@@ -6,7 +6,7 @@
 #![allow(non_snake_case)]
 
 use crate::models::{BordroDonemi, BordroStatus};
-use crate::payroll_engine::PayrollDatasetSnapshot;
+use crate::payroll_engine::{default_payment_date, PayrollDatasetSnapshot};
 use crate::{DomainError, Result};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,8 @@ use std::collections::BTreeSet;
 pub struct PayrollKey {
     pub personnelId: String,
     pub periodId: String,
+    #[serde(default)]
+    pub accrualId: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +54,20 @@ pub enum PayrollMutation {
     PayrollCalculation {
         personnelId: String,
         periodId: String,
+    },
+    #[serde(rename = "ACCRUAL_CALCULATION")]
+    AccrualCalculation {
+        personnelId: String,
+        periodId: String,
+        accrualId: String,
+    },
+    #[serde(rename = "ACCRUAL_INSERT")]
+    AccrualInsert {
+        personnelId: String,
+        periodId: String,
+        accrualId: String,
+        paymentDate: String,
+        sequence: i32,
     },
     #[serde(rename = "ALL")]
     All,
@@ -112,10 +128,63 @@ fn is_person_from_date(candidate: &BordroDonemi, effective_from: &str) -> Result
     Ok(end >= effective)
 }
 
+fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
+    if payroll.accrualId.trim().is_empty() {
+        payroll.id.clone()
+    } else {
+        payroll.accrualId.clone()
+    }
+}
+
+fn payroll_order(
+    dataset: &PayrollDatasetSnapshot,
+    payroll: &crate::models::BordroKaydi,
+) -> Result<(i64, NaiveDate, i32, String)> {
+    let period = require_period(dataset, &payroll.donemId)?;
+    let date_text = if payroll.paymentDate.trim().is_empty() {
+        default_payment_date(period)
+    } else {
+        payroll.paymentDate.clone()
+    };
+    let payment_date = NaiveDate::parse_from_str(&date_text, "%Y-%m-%d").map_err(|error| {
+        DomainError::InvalidData(format!(
+            "{} tahakkuk ödeme tarihi geçersiz: {}",
+            effective_accrual_id(payroll),
+            error
+        ))
+    })?;
+    Ok((
+        i64::from(period.taxYear) * 12 + i64::from(period.taxMonth),
+        payment_date,
+        payroll.sequence,
+        effective_accrual_id(payroll),
+    ))
+}
+
+fn input_order(
+    dataset: &PayrollDatasetSnapshot,
+    period_id: &str,
+    payment_date: &str,
+    sequence: i32,
+    accrual_id: &str,
+) -> Result<(i64, NaiveDate, i32, String)> {
+    let period = require_period(dataset, period_id)?;
+    let date = NaiveDate::parse_from_str(payment_date, "%Y-%m-%d").map_err(|error| {
+        DomainError::ValidationError(format!("Tahakkuk ödeme tarihi geçersiz: {}", error))
+    })?;
+    Ok((
+        i64::from(period.taxYear) * 12 + i64::from(period.taxMonth),
+        date,
+        sequence,
+        accrual_id.to_string(),
+    ))
+}
+
 fn affected_by_mutation(
     dataset: &PayrollDatasetSnapshot,
     payroll_personnel_id: &str,
     payroll_period_id: &str,
+    payroll: &crate::models::BordroKaydi,
     mutation: &PayrollMutation,
 ) -> Result<bool> {
     let candidate = period_for(dataset, payroll_period_id);
@@ -169,6 +238,37 @@ fn affected_by_mutation(
                     candidate.id != source.id && is_period_dependent(candidate, source)
                 }))
         }
+        PayrollMutation::AccrualCalculation {
+            personnelId,
+            periodId,
+            accrualId,
+        } => {
+            let source = dataset
+                .payrolls
+                .iter()
+                .find(|candidate| {
+                    candidate.personelId == *personnelId
+                        && candidate.donemId == *periodId
+                        && effective_accrual_id(candidate) == *accrualId
+                })
+                .ok_or_else(|| {
+                    DomainError::ValidationError(format!(
+                        "Invalidation kaynağı tahakkuk bulunamadı: {}.",
+                        accrualId
+                    ))
+                })?;
+            Ok(payroll_personnel_id == personnelId
+                && payroll_order(dataset, payroll)? > payroll_order(dataset, source)?)
+        }
+        PayrollMutation::AccrualInsert {
+            personnelId,
+            periodId,
+            accrualId,
+            paymentDate,
+            sequence,
+        } => Ok(payroll_personnel_id == personnelId
+            && payroll_order(dataset, payroll)?
+                > input_order(dataset, periodId, paymentDate, *sequence, accrualId)?),
         PayrollMutation::All => Ok(true),
     }
 }
@@ -183,12 +283,19 @@ pub fn evaluate_payroll_invalidation(
     let mut blocked = BTreeSet::new();
 
     for payroll in &dataset.payrolls {
-        if !affected_by_mutation(dataset, &payroll.personelId, &payroll.donemId, mutation)? {
+        if !affected_by_mutation(
+            dataset,
+            &payroll.personelId,
+            &payroll.donemId,
+            payroll,
+            mutation,
+        )? {
             continue;
         }
         let key = PayrollKey {
             personnelId: payroll.personelId.clone(),
             periodId: payroll.donemId.clone(),
+            accrualId: effective_accrual_id(payroll),
         };
         if payroll.status == BordroStatus::FINALIZED {
             blocked.insert(key.clone());
@@ -226,6 +333,11 @@ mod tests {
             id: format!("person-1_{period_id}"),
             personelId: "person-1".into(),
             donemId: period_id.into(),
+            accrualId: format!("person-1_{period_id}"),
+            accrualType: crate::models::AccrualType::NORMAL,
+            paymentDate: "2026-02-14".into(),
+            sequence: 0,
+            accrualDescription: None,
             puantajOzeti: PuantajOzeti::default(),
             gelirler: GelirKalemleri::default(),
             gelirToplam: Default::default(),
@@ -244,6 +356,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
@@ -282,10 +395,12 @@ mod tests {
                 PayrollKey {
                     personnelId: "person-1".into(),
                     periodId: "2026-01".into(),
+                    accrualId: "person-1_2026-01".into(),
                 },
                 PayrollKey {
                     personnelId: "person-1".into(),
                     periodId: "2026-03".into(),
+                    accrualId: "person-1_2026-03".into(),
                 },
             ]
         );

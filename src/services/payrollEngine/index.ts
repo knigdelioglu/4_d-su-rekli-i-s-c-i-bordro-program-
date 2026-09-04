@@ -24,7 +24,10 @@ const tauriEngine: PayrollEngine = {
         request.periodId,
         toPayrollBoundaryDto(request.manualIncome ?? null) as unknown as Parameters<
           typeof tauriBridge.calculatePayroll
-        >[2]
+        >[2],
+        toPayrollBoundaryDto(request.accrual ?? null) as unknown as Parameters<
+          typeof tauriBridge.calculatePayroll
+        >[3]
       )
     ) as PayrollBoundaryPayroll,
   // Tauri's command performs the authoritative database-backed preflight.
@@ -34,8 +37,8 @@ const tauriEngine: PayrollEngine = {
     (await tauriBridge.getPayrollList()).map((payroll) =>
       toPayrollBoundaryDto(payroll)
     ) as PayrollBoundaryPayroll[],
-  finalizePayroll: async (personnelId, periodId) =>
-    toPayrollBoundaryDto(await tauriBridge.finalizePayroll(personnelId, periodId)) as PayrollBoundaryPayroll,
+  finalizePayroll: async (personnelId, periodId, _dataset, accrualId) =>
+    toPayrollBoundaryDto(await tauriBridge.finalizePayroll(personnelId, periodId, accrualId)) as PayrollBoundaryPayroll,
   evaluateMutationPolicy: (mutation, dataset) =>
     tauriBridge.evaluateMutationPolicy(mutation, dataset),
 };
@@ -76,15 +79,19 @@ const wasmEngine: PayrollEngine = {
         periodId,
         calculatedAt: '1970-01-01T00:00:00.000Z',
         manualIncome: null,
+        accrual: null,
         dataset,
       })
     );
     return JSON.parse(json) as Awaited<ReturnType<PayrollEngine['getPayrollNotices']>>;
   },
   getPayrolls: async (dataset) => dataset.payrolls,
-  finalizePayroll: async (personnelId, periodId, dataset) => {
+  finalizePayroll: async (personnelId, periodId, dataset, accrualId) => {
     const current = dataset.payrolls.find(
-      (item) => item.personelId === personnelId && item.donemId === periodId
+      (item) =>
+        item.personelId === personnelId &&
+        item.donemId === periodId &&
+        (accrualId ? item.accrualId === accrualId : item.accrualType === 'NORMAL')
     );
     if (!current) throw new Error('Bordro kaydı bulunamadı.');
     const runtime = await getWasmRuntime();
@@ -94,8 +101,23 @@ const wasmEngine: PayrollEngine = {
         periodId,
         calculatedAt: new Date().toISOString(),
         manualIncome: {
-          tediye: current.gelirler.tediye,
-          tisIkramiyesi: current.gelirler.tisIkramiyesi,
+          tediye: current.accrualType === 'NORMAL' ? current.gelirler.tediye : null,
+          tisIkramiyesi: current.accrualType === 'NORMAL' ? current.gelirler.tisIkramiyesi : null,
+        },
+        accrual: {
+          accrualId: current.accrualId,
+          accrualType: current.accrualType,
+          paymentDate: current.paymentDate,
+          sequence: current.sequence,
+          grossAmount:
+            current.accrualType === 'TEDIYE'
+              ? current.gelirler.tediye
+              : current.accrualType === 'TIS_IKRAMIYE'
+                ? current.gelirler.tisIkramiyesi
+                : current.accrualType === 'SUPPLEMENTAL'
+                  ? current.gelirler.ekOdeme
+                  : null,
+          description: current.accrualDescription ?? null,
         },
         dataset,
       })
@@ -118,6 +140,7 @@ export function getPayrollEngine(): PayrollEngine {
 export type {
   MutationImpact,
   PayrollBoundaryManualIncomeInput,
+  PayrollBoundaryAccrualInput,
   PayrollBoundaryPayroll,
   PayrollBoundaryPersonel,
   PayrollBoundaryTaxOpening,

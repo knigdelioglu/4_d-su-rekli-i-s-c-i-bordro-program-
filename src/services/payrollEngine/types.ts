@@ -4,6 +4,7 @@ import {
   BordroKaydi,
   DönemselKurumDegerleri,
   ManualPayrollIncomeInput,
+  PayrollAccrualInput,
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
@@ -32,6 +33,7 @@ export type PayrollUiModel = PayrollDatasetSnapshotModel;
 export type PayrollDatasetSnapshot = Exactify<PayrollDatasetSnapshotModel>;
 export type PayrollBoundaryPayroll = Exactify<BordroKaydi>;
 export type PayrollBoundaryManualIncomeInput = Exactify<ManualPayrollIncomeInput>;
+export type PayrollBoundaryAccrualInput = Exactify<PayrollAccrualInput>;
 export type PayrollBoundaryPersonel = Exactify<Personel>;
 export type PayrollBoundaryTaxOpening = Exactify<PersonelTaxOpening>;
 
@@ -40,6 +42,7 @@ export interface PayrollCalculationRequest {
   periodId: string;
   calculatedAt: string;
   manualIncome?: PayrollBoundaryManualIncomeInput | null;
+  accrual?: PayrollBoundaryAccrualInput | null;
   dataset: PayrollDatasetSnapshot;
 }
 
@@ -52,11 +55,21 @@ export type PayrollMutation =
   | { kind: 'PERIOD_FROM_POSITION'; startDate: string; taxYear: number; taxMonth: number }
   | { kind: 'PERSON_FROM_DATE'; personnelId: string; effectiveFrom: string }
   | { kind: 'PAYROLL_CALCULATION'; personnelId: string; periodId: string }
+  | { kind: 'ACCRUAL_CALCULATION'; personnelId: string; periodId: string; accrualId: string }
+  | {
+      kind: 'ACCRUAL_INSERT';
+      personnelId: string;
+      periodId: string;
+      accrualId: string;
+      paymentDate: string;
+      sequence: number;
+    }
   | { kind: 'ALL' };
 
 export interface PayrollKey {
   personnelId: string;
   periodId: string;
+  accrualId?: string;
 }
 
 export interface MutationImpact {
@@ -76,7 +89,8 @@ export interface PayrollEngine {
   finalizePayroll(
     personnelId: string,
     periodId: string,
-    dataset: PayrollDatasetSnapshot
+    dataset: PayrollDatasetSnapshot,
+    accrualId?: string
   ): Promise<PayrollBoundaryPayroll>;
   evaluateMutationPolicy(
     mutation: PayrollMutation,

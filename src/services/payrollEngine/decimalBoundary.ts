@@ -20,6 +20,7 @@ const DECIMAL_KEY_LIST = [
   'dogumAskerlikBorclanmasiTutar',
   'hayatSaglikSigortasiTutar',
   'digerKesintiTutar',
+  'grossAmount',
   'devirKumulatifGvMatrahi',
   'devirKumulatifAsgariGvMatrahi',
   'gvCumulativeOpening',
@@ -73,7 +74,10 @@ const DECIMAL_KEY_LIST = [
   'asgariUcretGvMatrahi',
   'asgariUcretReferansKumulatifMatrahi',
   'asgariUcretGvIstisnasi',
+  'ayniAyOncekiKullanilanGvIstisnasi',
+  'tahakkukOncesiKalanGvIstisnasi',
   'uygulananGvIstisnasi',
+  'tahakkukSonrasiKalanGvIstisnasi',
   'kesilenGelirVergisi',
   'dogumAskerlikGvIndirimi',
   'sigortaGvIndirimAdayi',
@@ -112,6 +116,12 @@ const DECIMAL_KEY_LIST = [
   'sgkYemekIstisnasiToplam',
   'gvYemekIstisnasiToplam',
   'gvReferansGunlukAsgariUcret',
+  'brutDamgaVergisi',
+  'aylikDamgaIstisnaHakki',
+  'ayniAyOncekiKullanilanDamgaIstisnasi',
+  'uygulananDamgaIstisnasi',
+  'kalanDamgaIstisnasi',
+  'kesilenDamgaVergisi',
 ] as const;
 
 export type DecimalKey = (typeof DECIMAL_KEY_LIST)[number];

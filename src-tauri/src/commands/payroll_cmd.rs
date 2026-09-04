@@ -20,15 +20,22 @@ pub fn calculate_payroll(
     personnel_id: String,
     period_id: String,
     manual_income: Option<ManualPayrollIncomeInput>,
+    accrual: Option<PayrollAccrualInput>,
 ) -> Result<BordroKaydi> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    PayrollService::validate_payroll_request(&conn, &personnel_id, &period_id)?;
-    PayrollService::calculate_payroll_for_personnel_with_manual_income(
+    PayrollService::validate_payroll_request_for_accrual(
         &conn,
         &personnel_id,
         &period_id,
+        accrual.as_ref(),
+    )?;
+    PayrollService::calculate_payroll_for_accrual(
+        &conn,
+        &personnel_id,
+        &period_id,
+        accrual.as_ref(),
         manual_income.as_ref(),
     )
 }
@@ -38,11 +45,17 @@ pub fn finalize_payroll(
     db: State<'_, DbState>,
     personnel_id: String,
     period_id: String,
+    accrual_id: Option<String>,
 ) -> Result<BordroKaydi> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    PayrollService::finalize_payroll_for_personnel(&conn, &personnel_id, &period_id)
+    PayrollService::finalize_payroll_for_accrual(
+        &conn,
+        &personnel_id,
+        &period_id,
+        accrual_id.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -62,6 +75,7 @@ pub fn set_payroll_status(
     personnel_id: String,
     period_id: String,
     status: BordroStatus,
+    accrual_id: Option<String>,
 ) -> Result<()> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
@@ -73,5 +87,11 @@ pub fn set_payroll_status(
         ));
     }
 
-    PayrollService::set_payroll_status(&conn, &personnel_id, &period_id, status)
+    PayrollService::set_payroll_status_for_accrual(
+        &conn,
+        &personnel_id,
+        &period_id,
+        accrual_id.as_deref(),
+        status,
+    )
 }

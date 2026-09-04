@@ -227,7 +227,10 @@ export default function App() {
 
       const saved = await browserPayrollStore.loadPayload();
       if (saved) {
-        const payload = parseCurrentBrowserSnapshot(saved);
+        // IndexedDB may contain a pre-v3 backup. Route every persisted
+        // snapshot through the import normalizer so legacy single-payroll
+        // records become one NORMAL accrual without losing their snapshot.
+        const payload = parseImportedBackup(saved);
         applyDataset(payload);
       } else {
         applyDataset(toPayrollBoundaryDto({
@@ -320,10 +323,10 @@ export default function App() {
     const blocked = new Map<string, MutationImpact['blockedByFinalized'][number]>();
     for (const impact of impacts) {
       for (const key of impact.affectedPayrolls) {
-        affected.set(`${key.personnelId}\u0000${key.periodId}`, key);
+        affected.set(`${key.personnelId}\u0000${key.periodId}\u0000${key.accrualId ?? ''}`, key);
       }
       for (const key of impact.blockedByFinalized) {
-        blocked.set(`${key.personnelId}\u0000${key.periodId}`, key);
+        blocked.set(`${key.personnelId}\u0000${key.periodId}\u0000${key.accrualId ?? ''}`, key);
       }
     }
     const merged = {
@@ -710,14 +713,31 @@ export default function App() {
       await loadData();
       return;
     }
-    const impact = await evaluateBrowserMutations({
-      kind: 'PAYROLL_CALCULATION',
-      personnelId: updatedBordro.personelId,
-      periodId: updatedBordro.donemId,
-    });
+    const existing = bordrolar.find(
+      (payroll) =>
+        payroll.id === updatedBordro.id || payroll.accrualId === updatedBordro.accrualId
+    );
+    const mutation: PayrollMutation = existing
+      ? {
+          kind: 'ACCRUAL_CALCULATION',
+          personnelId: updatedBordro.personelId,
+          periodId: updatedBordro.donemId,
+          accrualId: updatedBordro.accrualId,
+        }
+      : {
+          kind: 'ACCRUAL_INSERT',
+          personnelId: updatedBordro.personelId,
+          periodId: updatedBordro.donemId,
+          accrualId: updatedBordro.accrualId,
+          paymentDate: updatedBordro.paymentDate,
+          sequence: updatedBordro.sequence,
+        };
+    const impact = await evaluateBrowserMutations(mutation);
     updateAuthoritativePayload((current) => {
       const invalidated = applyBrowserPayrollImpact(current.bordrolar, impact);
-      const index = invalidated.findIndex((b) => b.id === updatedBordro.id);
+      const index = invalidated.findIndex(
+        (b) => b.id === updatedBordro.id || b.accrualId === updatedBordro.accrualId
+      );
       if (index < 0) return { ...current, bordrolar: [...invalidated, updatedBordro] };
       const next = [...invalidated];
       next[index] = updatedBordro;
