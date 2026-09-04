@@ -1082,7 +1082,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               : normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)}
                         </div>
                         <div className="text-[10px] text-slate-500">
-                          {bordro ? `Sıra ${bordro.sequence}` : isSupplementaryView ? `${activeViewTitle} için` : 'Yeni NORMAL için'}
+                          {bordro
+                            ? (isSupplementaryView ? `Sıra ${bordro.sequence}` : 'Değiştirilemez')
+                            : isSupplementaryView ? `${activeViewTitle} için` : 'Yeni NORMAL için'}
                         </div>
                       </td>
 
@@ -1135,7 +1137,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <span>Hesaplandı</span>
                           </span>
                         ) : hasPuantaj ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-800 border border-amber-200">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             <Clock className="w-3 h-3 text-amber-600" />
                             <span>{isSupplementaryView ? 'Tahakkuk Eklenmedi' : 'Hesaplanmadı'}</span>
                           </span>
@@ -1182,7 +1184,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                 </button>
                               )}
 
-                              {!isStale && !isDraft && bordro && (
+                              {!isStale && !isDraft && (bordro || !isSupplementaryView) && (
                                 <button
                                   onClick={(e) => {
                                     e.stopPropagation();
