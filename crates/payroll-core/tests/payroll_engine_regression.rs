@@ -1,10 +1,12 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
-    calculate_payroll, finalize_payroll, validate_payroll_request, AccrualType,
-    AnnualPayrollParameters, BordroDonemi, BordroStatus, DonemselKurumDegerleri,
+    calculate_incremental_prime_esas_kazanc, calculate_payroll, calculate_prime_esas_kazanc,
+    finalize_payroll, validate_payroll_request, AccrualType, AnnualPayrollParameters, BordroDonemi,
+    BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri, GelirKalemleri,
     ManualPayrollIncomeInput, PayrollAccrualInput, PayrollCalculationRequest,
-    PayrollDatasetSnapshot, Personel, PersonelPuantaj,
+    PayrollDatasetSnapshot, Personel, PersonelPuantaj, PuantajOzeti,
 };
+use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
@@ -78,6 +80,34 @@ fn fixture_request() -> PayrollCalculationRequest {
     }
 }
 
+fn explicit_normal_request(payment_date: &str) -> PayrollCalculationRequest {
+    let mut request = fixture_request();
+    request.manualIncome = None;
+    request.accrual = Some(PayrollAccrualInput {
+        accrualId: "person-1_2026-01".into(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: payment_date.into(),
+        sequence: 0,
+        grossAmount: None,
+        description: Some("Normal maaş".into()),
+    });
+    request
+}
+
+fn supplementary_request(payment_date: &str) -> PayrollCalculationRequest {
+    let mut request = fixture_request();
+    request.manualIncome = None;
+    request.accrual = Some(PayrollAccrualInput {
+        accrualId: format!("person-1_2026-01_tediye_{payment_date}"),
+        accrualType: AccrualType::TEDIYE,
+        paymentDate: payment_date.into(),
+        sequence: 1,
+        grossAmount: Some(dec!(2000)),
+        description: Some("Tediye".into()),
+    });
+    request
+}
+
 #[test]
 fn calculation_uses_shared_engine_and_preserves_manual_decimal_values() {
     let request = fixture_request();
@@ -89,6 +119,286 @@ fn calculation_uses_shared_engine_and_preserves_manual_decimal_values() {
     assert_eq!(
         result.netOdeme,
         (result.gelirToplam - result.kesintiToplam).round_dp(2)
+    );
+}
+
+#[test]
+fn supplementary_requires_an_authoritative_normal_and_follows_its_date() {
+    let missing_normal = supplementary_request("2026-02-14");
+    let error = calculate_payroll(&missing_normal).expect_err("supplementary needs normal");
+    assert!(error
+        .to_string()
+        .contains("normal maaş bordrosu hesaplanmalıdır"));
+
+    for status in [BordroStatus::DRAFT, BordroStatus::STALE] {
+        let mut request = supplementary_request("2026-02-14");
+        let mut normal = calculate_payroll(&explicit_normal_request("2026-02-13"))
+            .expect("normal should calculate");
+        normal.status = status;
+        request.dataset.payrolls.push(normal);
+        let error = calculate_payroll(&request).expect_err("non-authoritative normal rejected");
+        assert!(error
+            .to_string()
+            .contains("normal maaş bordrosu hesaplanmalıdır"));
+    }
+
+    for status in [BordroStatus::CALCULATED, BordroStatus::FINALIZED] {
+        let mut request = supplementary_request("2026-02-14");
+        let mut normal = calculate_payroll(&explicit_normal_request("2026-02-13"))
+            .expect("normal should calculate");
+        normal.status = status;
+        request.dataset.payrolls.push(normal);
+        calculate_payroll(&request).expect("authoritative normal should allow supplementary");
+    }
+
+    let mut earlier = supplementary_request("2026-02-12");
+    earlier.dataset.payrolls.push(
+        calculate_payroll(&explicit_normal_request("2026-02-13")).expect("normal should calculate"),
+    );
+    let error = calculate_payroll(&earlier).expect_err("supplementary cannot precede normal");
+    assert!(error
+        .to_string()
+        .contains("normal maaş tahakkukundan önce olamaz"));
+
+    let mut same_day = supplementary_request("2026-02-13");
+    same_day.dataset.payrolls.push(
+        calculate_payroll(&explicit_normal_request("2026-02-13")).expect("normal should calculate"),
+    );
+    let result = calculate_payroll(&same_day).expect("same-day sequence should be accepted");
+    assert_eq!(result.sequence, 1);
+}
+
+#[test]
+fn normal_explicit_payment_date_is_persisted_and_immutable() {
+    let request = explicit_normal_request("2026-02-13");
+    let normal = calculate_payroll(&request).expect("explicit normal should calculate");
+    assert_eq!(normal.paymentDate, "2026-02-13");
+    assert_eq!(normal.sequence, 0);
+
+    let mut changed = request;
+    changed.dataset.payrolls.push(normal.clone());
+    changed.accrual = Some(PayrollAccrualInput {
+        accrualId: normal.accrualId,
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-02-14".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: None,
+    });
+    let error = calculate_payroll(&changed).expect_err("normal date is immutable");
+    assert!(error.to_string().contains("değiştirilemez"));
+}
+
+#[test]
+fn devreden_pek_ages_once_per_tax_month_not_once_per_accrual() {
+    let settings = DonemselKurumDegerleri {
+        gunlukAsgariUcret: Some(dec!(1000)),
+        pekTavanKatsayisi: Some(dec!(1)),
+        gunlukYemekIstisnasiSGK: Some(dec!(0)),
+        ..DonemselKurumDegerleri::default()
+    };
+    let puantaj = PuantajOzeti {
+        c: 30,
+        ..PuantajOzeti::default()
+    };
+    let incoming = vec![DevredenPekKaydi {
+        tutar: dec!(30000),
+        kalanAySayisi: 3,
+        kaynakDonemId: Some("previous-tax-month".into()),
+    }];
+    let normal_income = GelirKalemleri {
+        tabanBrutAylik: Some(dec!(10000)),
+        ..GelirKalemleri::default()
+    };
+
+    let (normal_pek, mut carried) = calculate_incremental_prime_esas_kazanc(
+        &normal_income,
+        Some(&puantaj),
+        Some(&settings),
+        &incoming,
+        None,
+        Decimal::ZERO,
+    );
+    assert_eq!(normal_pek.devredenPekKullanilan, dec!(20000));
+    assert_eq!(carried[0].tutar, dec!(10000));
+    assert_eq!(carried[0].kalanAySayisi, 3);
+
+    let mut month_to_date = normal_pek.primMatrahi;
+    for amount in [dec!(1000), dec!(1200), dec!(1500), dec!(1700), dec!(1900)] {
+        let income = GelirKalemleri {
+            tediye: Some(amount),
+            ..GelirKalemleri::default()
+        };
+        let (pek, next) = calculate_incremental_prime_esas_kazanc(
+            &income,
+            Some(&puantaj),
+            Some(&settings),
+            &carried,
+            None,
+            month_to_date,
+        );
+        assert_eq!(next[0].kalanAySayisi, 3);
+        month_to_date += pek.primMatrahi;
+        carried = next;
+    }
+
+    let next_tax_month_income = GelirKalemleri {
+        tabanBrutAylik: Some(dec!(25000)),
+        ..GelirKalemleri::default()
+    };
+    let (_, next_tax_month_carried) = calculate_prime_esas_kazanc(
+        &next_tax_month_income,
+        Some(&puantaj),
+        Some(&settings),
+        &carried,
+    );
+    assert_eq!(next_tax_month_carried[0].tutar, dec!(5000));
+    assert_eq!(next_tax_month_carried[0].kalanAySayisi, 2);
+}
+
+#[test]
+fn payroll_chain_keeps_devreden_lifetime_across_normal_tediye_tis_and_ages_on_next_tax_month() {
+    fn low_pek_settings(period_id: &str) -> DonemselKurumDegerleri {
+        let mut settings = DonemselKurumDegerleri {
+            donemId: period_id.into(),
+            gunlukTabanUcret: dec!(200),
+            gunlukYemek: dec!(0),
+            birlestirilmisSosyalYardim: dec!(0),
+            gunlukVasitaYol: dec!(0),
+            giyimYardimi: dec!(0),
+            hizmetZammiBirimi: dec!(0),
+            ekOdeme: Some(dec!(0)),
+            gunlukYemekIstisnasiSGK: Some(dec!(0)),
+            gunlukYemekIstisnasiGV: Some(dec!(0)),
+            gunlukAsgariUcret: Some(dec!(1000)),
+            pekTavanKatsayisi: Some(dec!(1)),
+            ..DonemselKurumDegerleri::default()
+        };
+        if let Some(groups) = settings.isPrimiGruplari.as_mut() {
+            for group in groups {
+                group.oran = Decimal::ZERO;
+            }
+        }
+        settings
+    }
+
+    fn period(id: &str, start: &str, end: &str, work_month: i32, tax_month: i32) -> BordroDonemi {
+        BordroDonemi {
+            id: id.into(),
+            yil: start[0..4].parse().unwrap(),
+            ay: work_month,
+            baslangicTarihi: start.into(),
+            bitisTarihi: end.into(),
+            donemAdi: id.into(),
+            taxYear: 2026,
+            taxMonth: tax_month,
+        }
+    }
+
+    let mut seed = explicit_normal_request("2026-02-13");
+    seed.dataset
+        .institutionSettings
+        .insert(seed.periodId.clone(), low_pek_settings(&seed.periodId));
+    let mut previous = calculate_payroll(&seed).expect("seed payroll should calculate");
+    previous.id = "person-1_2025-12".into();
+    previous.donemId = "2025-12".into();
+    previous.accrualId = "person-1_2025-12".into();
+    previous.paymentDate = "2026-01-13".into();
+    previous.status = BordroStatus::FINALIZED;
+    previous.sonrakiDevredenPek = Some(vec![DevredenPekKaydi {
+        tutar: dec!(30000),
+        kalanAySayisi: 3,
+        kaynakDonemId: Some("previous-tax-month".into()),
+    }]);
+
+    let previous_period = period("2025-12", "2025-12-15", "2026-01-14", 12, 1);
+    seed.dataset.periods.push(previous_period);
+    seed.dataset
+        .institutionSettings
+        .insert("2025-12".into(), low_pek_settings("2025-12"));
+    seed.dataset.payrolls.push(previous);
+
+    let mut normal = calculate_payroll(&seed).expect("normal payroll should calculate");
+    assert_eq!(
+        normal.devredenPekGelen.as_ref().unwrap()[0].kalanAySayisi,
+        3
+    );
+    assert_eq!(
+        normal.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
+        2
+    );
+    normal.status = BordroStatus::FINALIZED;
+    seed.dataset.payrolls.push(normal.clone());
+
+    let mut tediye_request = seed.clone();
+    tediye_request.accrual = Some(PayrollAccrualInput {
+        accrualId: "person-1_2026-01_tediye_1".into(),
+        accrualType: AccrualType::TEDIYE,
+        paymentDate: "2026-02-13".into(),
+        sequence: 1,
+        grossAmount: Some(dec!(1000)),
+        description: None,
+    });
+    let tediye = calculate_payroll(&tediye_request).expect("tediye should calculate");
+    assert_eq!(
+        tediye.devredenPekGelen.as_ref().unwrap()[0].kalanAySayisi,
+        2
+    );
+    assert_eq!(
+        tediye.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
+        2
+    );
+    seed.dataset.payrolls.push(tediye.clone());
+
+    let mut tis_request = seed.clone();
+    tis_request.accrual = Some(PayrollAccrualInput {
+        accrualId: "person-1_2026-01_tis_2".into(),
+        accrualType: AccrualType::TIS_IKRAMIYE,
+        paymentDate: "2026-02-13".into(),
+        sequence: 2,
+        grossAmount: Some(dec!(1200)),
+        description: None,
+    });
+    let tis = calculate_payroll(&tis_request).expect("TİS should calculate");
+    assert_eq!(tis.devredenPekGelen.as_ref().unwrap()[0].kalanAySayisi, 2);
+    assert_eq!(tis.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 2);
+    seed.dataset.payrolls.push(tis);
+
+    let next_period = period("2026-02", "2026-02-15", "2026-03-14", 2, 3);
+    seed.dataset.periods.push(next_period.clone());
+    let mut next_settings = low_pek_settings(&next_period.id);
+    next_settings.gunlukTabanUcret = dec!(900);
+    seed.dataset
+        .institutionSettings
+        .insert(next_period.id.clone(), next_settings);
+    let mut next_attendance = seed.dataset.attendances[0].clone();
+    next_attendance.id = "person-1_2026-02".into();
+    next_attendance.donemId = next_period.id.clone();
+    let mut next_date =
+        NaiveDate::parse_from_str(&next_period.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let next_end = NaiveDate::parse_from_str(&next_period.bitisTarihi, "%Y-%m-%d").unwrap();
+    next_attendance.gunler.clear();
+    while next_date <= next_end {
+        next_attendance
+            .gunler
+            .insert(next_date.format("%Y-%m-%d").to_string(), "Ç".into());
+        next_date += Duration::days(1);
+    }
+    seed.dataset.attendances.push(next_attendance);
+    seed.periodId = next_period.id.clone();
+    seed.accrual = Some(PayrollAccrualInput {
+        accrualId: "person-1_2026-02".into(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-03-13".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: None,
+    });
+    let next = calculate_payroll(&seed).expect("next tax month should calculate");
+    assert_eq!(next.devredenPekGelen.as_ref().unwrap()[0].kalanAySayisi, 2);
+    assert_eq!(
+        next.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
+        1
     );
 }
 

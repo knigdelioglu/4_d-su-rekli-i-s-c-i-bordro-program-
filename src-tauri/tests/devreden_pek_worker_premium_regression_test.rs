@@ -1,5 +1,6 @@
 use bordro_programi_lib::domain::calculations::{
-    calculate_prime_esas_kazanc, calculate_statutory_deductions,
+    calculate_incremental_prime_esas_kazanc, calculate_prime_esas_kazanc,
+    calculate_statutory_deductions,
 };
 use bordro_programi_lib::domain::models::{
     DevredenPekKaydi, DonemselKurumDegerleri, GelirKalemleri, PuantajOzeti,
@@ -155,6 +156,60 @@ fn devreden_iki_aylik_omru_korunur() {
     assert_eq!(ikinci_pek.devredenPekKullanilan, dec!(10000));
     assert_eq!(ikinci_pek.primMatrahi, dec!(90000));
     assert!(ikinci_sonraki.is_empty());
+}
+
+#[test]
+fn devreden_pek_same_tax_month_does_not_age_across_five_accruals() {
+    let k = DonemselKurumDegerleri {
+        gunlukAsgariUcret: Some(dec!(1000)),
+        pekTavanKatsayisi: Some(dec!(1)),
+        ..Default::default()
+    };
+    let p = puantaj_30();
+    let incoming = vec![devreden(dec!(30000), 3, "onceki-vergi-ayi")];
+    let normal = gelir(dec!(10000));
+
+    let (normal_pek, mut carried) = calculate_incremental_prime_esas_kazanc(
+        &normal,
+        Some(&p),
+        Some(&k),
+        &incoming,
+        None,
+        dec!(0),
+    );
+    assert_eq!(normal_pek.devredenPekKullanilan, dec!(20000));
+    assert_eq!(carried[0].tutar, dec!(10000));
+    assert_eq!(carried[0].kalanAySayisi, 3);
+
+    for amount in [dec!(1000), dec!(1200), dec!(1500), dec!(1700), dec!(1900)] {
+        let income = GelirKalemleri {
+            tediye: Some(amount),
+            ..Default::default()
+        };
+        let (_, next) = calculate_incremental_prime_esas_kazanc(
+            &income,
+            Some(&p),
+            Some(&k),
+            &carried,
+            None,
+            normal_pek.primMatrahi,
+        );
+        assert_eq!(next[0].kalanAySayisi, 3);
+        carried = next;
+    }
+
+    let (next_month_pek, next_month_carried) = calculate_prime_esas_kazanc(
+        &GelirKalemleri {
+            tabanBrutAylik: Some(dec!(25000)),
+            ..Default::default()
+        },
+        Some(&p),
+        Some(&k),
+        &carried,
+    );
+    assert_eq!(next_month_pek.devredenPekKullanilan, dec!(5000));
+    assert_eq!(next_month_carried[0].tutar, dec!(5000));
+    assert_eq!(next_month_carried[0].kalanAySayisi, 2);
 }
 
 #[test]

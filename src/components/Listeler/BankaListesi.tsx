@@ -7,6 +7,12 @@ import { Building2, Download, Printer, Copy, Check, Search } from 'lucide-react'
 import { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
 import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel, printElement } from '../../utils/excelExport';
+import {
+  AuthoritativeAccrualRow,
+  filterAccrualRowsByPaymentDate,
+  getAuthoritativeAccrualRows,
+  getPaymentDateOptions,
+} from './accrualListData';
 
 interface BankaListesiProps {
   aktifDonem: BordroDonemi;
@@ -20,38 +26,28 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   bordrolar,
 }) => {
   const [search, setSearch] = useState<string>('');
+  const [paymentDateFilter, setPaymentDateFilter] = useState<string>('all');
   const [copied, setCopied] = useState<boolean>(false);
 
   // Resmî ödeme listesine yalnız authoritative bordrolar girer. STALE/DRAFT
   // snapshot'lar yeniden hesaplanmadan banka çıktısına taşınamaz.
-  const bankEntries = personeller.flatMap((p) => {
-    const b = bordrolar.find(
-      (record) =>
-        record.personelId === p.id &&
-        record.donemId === aktifDonem.id &&
-        (record.status === 'CALCULATED' || record.status === 'FINALIZED')
-    );
-    if (!b) return [];
-    return [{
-      personel: p,
-      bordro: b,
-      netOdeme: b.netOdeme,
-      hasBordro: true,
-    }];
-  });
+  const bankEntries = getAuthoritativeAccrualRows(aktifDonem, personeller, bordrolar);
+  const paymentDateOptions = getPaymentDateOptions(bankEntries);
 
-  const filteredEntries = bankEntries.filter((e) => {
+  const filteredEntries = filterAccrualRowsByPaymentDate(bankEntries, paymentDateFilter).filter((e: AuthoritativeAccrualRow) => {
     const term = search.toLowerCase();
     return (
-      e.personel.ad.toLowerCase().includes(term) ||
-      e.personel.soyad.toLowerCase().includes(term) ||
-      e.personel.tcNo.includes(term) ||
-      e.personel.iban.toLowerCase().includes(term)
+      (
+        e.personel.ad.toLowerCase().includes(term) ||
+        e.personel.soyad.toLowerCase().includes(term) ||
+        e.personel.tcNo.includes(term) ||
+        e.personel.iban.toLowerCase().includes(term)
+      )
     );
   });
 
   const toplamBankaOdemesi = filteredEntries.reduce(
-    (acc, item) => acc + item.netOdeme,
+    (acc, item) => acc + item.bordro.netOdeme,
     0
   );
 
@@ -61,6 +57,9 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
       { header: 'Ad Soyad', key: 'adSoyad', width: 26 },
       { header: 'İş Primi Grubu', key: 'unvan', width: 22 },
       { header: 'IBAN', key: 'iban', width: 32 },
+      { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
+      { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
+      { header: 'Sıra', key: 'sequence', width: 8 },
       { header: 'Net Ödeme (TL)', key: 'netOdeme', width: 18 },
     ];
 
@@ -69,7 +68,10 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
       adSoyad: `${e.personel.ad} ${e.personel.soyad}`,
       unvan: (e.personel.grup || e.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, ''),
       iban: e.personel.iban,
-      netOdeme: e.netOdeme,
+      paymentDate: e.paymentDate,
+      accrualType: e.accrualTypeLabel,
+      sequence: e.sequence,
+      netOdeme: e.bordro.netOdeme,
     }));
 
     const summaryRows = [
@@ -78,12 +80,17 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
         adSoyad: '',
         unvan: '',
         iban: '',
+        paymentDate: '',
+        accrualType: '',
+        sequence: '',
         netOdeme: toplamBankaOdemesi,
       },
     ];
 
+    const dateSuffix = paymentDateFilter === 'all' ? 'Tumu' : paymentDateFilter;
+
     exportToExcel(
-      `Banka_Odeme_Listesi_${aktifDonem.id}`,
+      `Banka_Odeme_Listesi_${aktifDonem.id}_${dateSuffix}`,
       'Banka Listesi',
       cols,
       data,
@@ -94,11 +101,9 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   const handleCopyText = () => {
     const lines = filteredEntries.map(
       (e) =>
-        `${e.personel.tcNo}\t${e.personel.ad} ${e.personel.soyad}\t${e.personel.iban}\t${e.netOdeme.toFixed(
-          2
-        )}`
+        `${e.personel.tcNo}\t${e.personel.ad} ${e.personel.soyad}\t${e.personel.iban}\t${e.paymentDate}\t${e.accrualTypeLabel}\t${e.sequence}\t${e.bordro.netOdeme.toFixed(2)}`
     );
-    const text = `T.C. Kimlik\tAd Soyad\tIBAN\tNet Ödeme\n` + lines.join('\n');
+    const text = `T.C. Kimlik\tAd Soyad\tIBAN\tÖdeme Tarihi\tTahakkuk Türü\tSıra\tNet Ödeme\n` + lines.join('\n');
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -135,6 +140,21 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
               className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
             />
           </div>
+
+          <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+            <span className="whitespace-nowrap">Ödeme Tarihi</span>
+            <select
+              data-testid="bank-payment-date-filter"
+              value={paymentDateFilter}
+              onChange={(e) => setPaymentDateFilter(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">Tümü</option>
+              {paymentDateOptions.map((date) => (
+                <option key={date} value={date}>{date}</option>
+              ))}
+            </select>
+          </label>
 
           <button
             onClick={handleCopyText}
@@ -184,7 +204,8 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
             </div>
           </div>
           <div className="text-right text-xs text-slate-500 font-mono">
-            Personel Sayısı: {filteredEntries.length}
+            Ödeme Satırı: {filteredEntries.length}
+            {paymentDateFilter !== 'all' && <div>Filtre: {paymentDateFilter}</div>}
           </div>
         </div>
 
@@ -198,12 +219,15 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
                 <th className="p-3">Adı Soyadı</th>
                 <th className="p-3">İş Primi Grubu</th>
                 <th className="p-3">Maaş IBAN Numarası</th>
+                <th className="p-3">Ödeme Tarihi</th>
+                <th className="p-3">Tahakkuk Türü</th>
+                <th className="p-3 text-center">Sıra</th>
                 <th className="p-3 text-right">Net Ödeme Tutar (TL)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-mono">
               {filteredEntries.map((e, index) => (
-                <tr key={e.personel.id} className="hover:bg-slate-50/80">
+                <tr key={`${e.personel.id}-${e.accrualId}`} className="hover:bg-slate-50/80">
                   <td className="p-3 text-slate-400 font-sans">{index + 1}</td>
                   <td className="p-3 font-bold text-slate-900">{e.personel.tcNo}</td>
                   <td className="p-3 font-sans font-bold text-slate-900">
@@ -213,15 +237,18 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
                     {(e.personel.grup || e.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, '')}
                   </td>
                   <td className="p-3 text-slate-800 font-bold">{e.personel.iban}</td>
+                  <td className="p-3 text-slate-800">{e.paymentDate}</td>
+                  <td className="p-3 font-sans font-semibold text-indigo-700">{e.accrualTypeLabel}</td>
+                  <td className="p-3 text-center">{e.sequence}</td>
                   <td className="p-3 text-right font-bold text-indigo-900 text-sm">
-                    {formatTL(e.netOdeme)}
+                    {formatTL(e.bordro.netOdeme)}
                   </td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="bg-indigo-50 border-t-2 border-indigo-200 font-bold">
-                <td colSpan={5} className="p-4 text-right font-sans text-sm text-indigo-950 uppercase">
+                <td colSpan={8} className="p-4 text-right font-sans text-sm text-indigo-950 uppercase">
                   TOPLAM BANKA ÖDEMESİ:
                 </td>
                 <td className="p-4 text-right font-mono text-xl text-indigo-950">

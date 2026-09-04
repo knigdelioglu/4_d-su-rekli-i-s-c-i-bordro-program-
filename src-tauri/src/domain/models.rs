@@ -191,9 +191,11 @@ pub struct GelirKalemleri {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ManualPayrollIncomeInput {
-    /// Tediye tutarı kullanıcı tarafından kişi+dönem bazında girilir.
+    /// Legacy NORMAL records may still carry a manually stored Tediye amount.
+    /// New Tediye entries are represented by a separate accrual node.
     pub tediye: Option<Decimal>,
-    /// TİS ikramiyesi tutarı kullanıcı tarafından kişi+dönem bazında girilir.
+    /// Legacy NORMAL records may still carry a manually stored TİS amount.
+    /// New TİS entries are represented by a separate accrual node.
     pub tisIkramiyesi: Option<Decimal>,
 }
 

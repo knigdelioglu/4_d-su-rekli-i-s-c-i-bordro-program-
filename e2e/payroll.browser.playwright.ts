@@ -479,25 +479,36 @@ test('browser exact Decimal survives WASM result, IndexedDB reload, and the next
     expect(reloaded?.taxOpenings?.[0]?.gvCumulativeOpening).toBe(exactValue);
 
     await openPayrollScreen(page);
-    const tediyeInput = page
-      .locator('tbody tr')
-      .filter({ hasText: 'Ahmet Yılmaz' })
-      .first()
-      .locator('input[inputmode="decimal"]')
-      .first();
-    await tediyeInput.fill(exactValue);
-    expect(await tediyeInput.inputValue()).toBe(exactValue);
+    await expect(page.getByRole('columnheader', { name: 'Tediye (Manuel)' })).toHaveCount(0);
+    await expect(
+      page
+        .locator('tbody tr')
+        .filter({ hasText: 'Ahmet Yılmaz' })
+        .first()
+        .locator('input[inputmode="decimal"]')
+    ).toHaveCount(0);
+    await expect(page.getByTestId('normal-payment-date')).toBeVisible();
+    const activePeriod = reloaded?.donemler?.find((period) => period.id === periodId);
+    expect(activePeriod).toBeDefined();
+    const explicitPaymentDate = `${activePeriod!.taxYear}-${String(activePeriod!.taxMonth).padStart(2, '0')}-13`;
+    const normalPaymentDate = page.getByTestId('normal-payment-date');
+    await normalPaymentDate.fill(explicitPaymentDate);
+    expect(await normalPaymentDate.inputValue()).toBe(explicitPaymentDate);
 
-    // The manual input and the cross-period tax opening are both sent to the
-    // next WASM request as their original strings. Core may round the official
-    // payroll display to two places; that is separate from boundary fidelity.
+    // The explicit NORMAL payment date and cross-period tax opening are sent to
+    // the next WASM request as their original strings. Core may round the
+    // official payroll display to two places; that is separate from boundary
+    // fidelity.
     await calculateP1(page, periodId);
     const requests = await readCapturedWasmRequests(page);
     const calculationRequest = requests.find(
       (request) =>
         request.personnelId === 'p-1' &&
         request.periodId === periodId &&
-        (request.manualIncome as { tediye?: unknown } | undefined)?.tediye === exactValue
+        (request.accrual as { accrualType?: unknown; paymentDate?: unknown } | undefined)
+          ?.accrualType === 'NORMAL' &&
+        (request.accrual as { paymentDate?: unknown } | undefined)?.paymentDate ===
+          explicitPaymentDate
     );
     expect(calculationRequest).toBeDefined();
     expect(

@@ -686,6 +686,12 @@ struct AccrualOrder {
     accrual_id: String,
 }
 
+#[derive(Debug, Clone)]
+struct IncomingDevredenPekState {
+    records: Vec<DevredenPekKaydi>,
+    advances_tax_month: bool,
+}
+
 fn accrual_order_for_input(
     period: &BordroDonemi,
     input: &PayrollAccrualInput,
@@ -733,6 +739,63 @@ fn payroll_for_requested_accrual<'a>(
     existing_payroll(dataset, personnel_id, period_id)
 }
 
+fn validate_supplementary_after_normal(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+    supplementary: &PayrollAccrualInput,
+    supplementary_payment_date: NaiveDate,
+) -> Result<()> {
+    let normal = dataset
+        .payrolls
+        .iter()
+        .find(|payroll| {
+            payroll.personelId == personnel_id
+                && payroll.donemId == period.id
+                && payroll.accrualType == AccrualType::NORMAL
+        })
+        .ok_or_else(|| {
+            DomainError::ValidationError(
+                "Ek tahakkuk oluşturulmadan önce aynı dönemin normal maaş bordrosu hesaplanmalıdır."
+                    .into(),
+            )
+        })?;
+
+    match normal.status {
+        BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
+        BordroStatus::DRAFT | BordroStatus::STALE => {
+            return Err(DomainError::ValidationError(
+                "Ek tahakkuk oluşturulmadan önce aynı dönemin normal maaş bordrosu hesaplanmalıdır."
+                    .into(),
+            ));
+        }
+    }
+
+    if normal.sequence != 0 {
+        return Err(DomainError::InvalidData(
+            "Normal maaş tahakkukunun sıra numarası 0 olmalıdır; ek tahakkuk zinciri çözülemez."
+                .into(),
+        ));
+    }
+    let normal_payment_date = parse_period_date(
+        &effective_payment_date(normal, period),
+        &period.id,
+        "ödeme/tahakkuk",
+    )?;
+    if supplementary_payment_date < normal_payment_date {
+        return Err(DomainError::ValidationError(
+            "Ek tahakkukun ödeme tarihi normal maaş tahakkukundan önce olamaz.".into(),
+        ));
+    }
+    if supplementary.sequence < 1 {
+        return Err(DomainError::ValidationError(
+            "Ek tahakkuk sıra numarası 1 veya daha büyük olmalıdır; NORMAL tahakkuk sıra numarası 0'dır."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_accrual_input(
     request: &PayrollCalculationRequest,
     period: &BordroDonemi,
@@ -771,6 +834,11 @@ fn resolve_accrual_input(
         ));
     }
     if input.paymentDate.trim().is_empty() {
+        if request.accrual.is_some() {
+            return Err(DomainError::ValidationError(
+                "Tahakkuk ödeme/tahakkuk tarihi açıkça belirtilmelidir.".into(),
+            ));
+        }
         input.paymentDate = default_payment_date(period);
     }
     if input.sequence < 0 {
@@ -785,6 +853,36 @@ fn resolve_accrual_input(
             input.paymentDate, period.taxYear, period.taxMonth
         )));
     }
+
+    if input.accrualType == AccrualType::NORMAL && input.sequence != 0 {
+        return Err(DomainError::ValidationError(
+            "NORMAL tahakkuk sıra numarası 0 olmalıdır.".into(),
+        ));
+    }
+    if input.accrualType != AccrualType::NORMAL && input.sequence < 1 {
+        return Err(DomainError::ValidationError(
+            "Ek tahakkuk sıra numarası 1 veya daha büyük olmalıdır; NORMAL tahakkuk sıra numarası 0'dır."
+                .into(),
+        ));
+    }
+
+    let normal_count = request
+        .dataset
+        .payrolls
+        .iter()
+        .filter(|payroll| {
+            payroll.personelId == request.personnelId
+                && payroll.donemId == request.periodId
+                && payroll.accrualType == AccrualType::NORMAL
+        })
+        .count();
+    if normal_count > 1 {
+        return Err(DomainError::InvalidData(
+            "Personel+dönem için birden fazla NORMAL tahakkuk bulundu; hesap zinciri güvenli biçimde çözülemez."
+                .into(),
+        ));
+    }
+    let requested_order = accrual_order_for_input(period, &input)?;
 
     // Changing an existing node's ordering metadata would change every
     // downstream month-to-date state while retaining the old invalidation key.
@@ -811,6 +909,39 @@ fn resolve_accrual_input(
     }
 
     if input.accrualType != AccrualType::NORMAL {
+        validate_supplementary_after_normal(
+            &request.dataset,
+            &request.personnelId,
+            period,
+            &input,
+            payment_date,
+        )?;
+    } else if existing.is_none()
+        && request.dataset.payrolls.iter().any(|payroll| {
+            payroll.personelId == request.personnelId
+                && payroll.donemId == request.periodId
+                && payroll.accrualType != AccrualType::NORMAL
+        })
+    {
+        return Err(DomainError::ValidationError(
+            "Aynı dönemin normal maaş bordrosu ek tahakkuklardan önce hesaplanmalıdır.".into(),
+        ));
+    } else if input.accrualType == AccrualType::NORMAL {
+        for payroll in request.dataset.payrolls.iter().filter(|payroll| {
+            payroll.personelId == request.personnelId
+                && payroll.donemId == request.periodId
+                && payroll.accrualType != AccrualType::NORMAL
+        }) {
+            let payroll_order = accrual_order_for_payroll(&request.dataset, payroll)?;
+            if payroll_order < requested_order {
+                return Err(DomainError::ValidationError(
+                    "Aynı dönemin normal maaş tahakkuku ek tahakkuklardan önce gelmelidir.".into(),
+                ));
+            }
+        }
+    }
+
+    if input.accrualType != AccrualType::NORMAL {
         let amount = input.grossAmount.ok_or_else(|| {
             DomainError::ValidationError(
                 "Ek tahakkuk için brüt tutar zorunludur; normal ücret yeniden üretilmeyecek."
@@ -825,7 +956,6 @@ fn resolve_accrual_input(
         input.grossAmount = Some(round2(amount));
     }
 
-    let requested_order = accrual_order_for_input(period, &input)?;
     for payroll in request
         .dataset
         .payrolls
@@ -840,14 +970,20 @@ fn resolve_accrual_input(
         }
     }
 
-    for payroll in request.dataset.payrolls.iter().filter(|payroll| {
-        payroll.personelId == request.personnelId && payroll.donemId == request.periodId
-    }) {
+    for payroll in request
+        .dataset
+        .payrolls
+        .iter()
+        .filter(|payroll| payroll.personelId == request.personnelId)
+    {
         let same_record = effective_accrual_id(payroll) == input.accrualId;
         if same_record {
             continue;
         }
-        if input.accrualType == AccrualType::NORMAL && payroll.accrualType == AccrualType::NORMAL {
+        if input.accrualType == AccrualType::NORMAL
+            && payroll.donemId == request.periodId
+            && payroll.accrualType == AccrualType::NORMAL
+        {
             return Err(DomainError::ValidationError(
                 "Bir personel ve çalışma dönemi için yalnız bir NORMAL tahakkuk olabilir.".into(),
             ));
@@ -876,10 +1012,10 @@ fn resolve_prior_accrual_state<'a>(
     for payroll in dataset
         .payrolls
         .iter()
-        .filter(|payroll| payroll.personelId == personnel_id && payroll.donemId == period.id)
+        .filter(|payroll| payroll.personelId == personnel_id)
     {
         let order = accrual_order_for_payroll(dataset, payroll)?;
-        if order >= current_order {
+        if order.tax_ordinal != current_order.tax_ordinal || order >= current_order {
             continue;
         }
         match payroll.status {
@@ -927,7 +1063,8 @@ fn validate_prior_accruals_finalized(
         }
         return Err(DomainError::ValidationError(format!(
             "{} tahakkuk zinciri FINALIZED değil ({}). Önceki tahakkuklar kesinleştirilmeden sonraki tahakkuk FINALIZED yapılamaz.",
-            effective_accrual_id(payroll), format!("{:?}", payroll.status)
+            effective_accrual_id(payroll),
+            format_args!("{:?}", payroll.status)
         )));
     }
     Ok(())
@@ -1048,18 +1185,24 @@ fn incoming_devreden_pek(
     personnel_id: &str,
     active_period: &BordroDonemi,
     current: &PayrollAccrualInput,
-) -> Result<Vec<DevredenPekKaydi>> {
+) -> Result<IncomingDevredenPekState> {
     let prior_same_month =
         resolve_prior_accrual_state(dataset, personnel_id, active_period, current)?;
     if let Some(previous_accrual) = prior_same_month.last() {
-        return Ok(previous_accrual
-            .sonrakiDevredenPek
-            .clone()
-            .unwrap_or_default());
+        return Ok(IncomingDevredenPekState {
+            records: previous_accrual
+                .sonrakiDevredenPek
+                .clone()
+                .unwrap_or_default(),
+            advances_tax_month: false,
+        });
     }
 
     let Some(previous_period) = find_previous_work_period(dataset, active_period)? else {
-        return Ok(Vec::new());
+        return Ok(IncomingDevredenPekState {
+            records: Vec::new(),
+            advances_tax_month: false,
+        });
     };
     let previous_payrolls: Vec<&BordroKaydi> = dataset
         .payrolls
@@ -1068,32 +1211,47 @@ fn incoming_devreden_pek(
             payroll.personelId == personnel_id && payroll.donemId == previous_period.id
         })
         .collect();
+    for previous_payroll in &previous_payrolls {
+        match previous_payroll.status {
+            BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
+            BordroStatus::DRAFT | BordroStatus::STALE => {
+                return Err(DomainError::ValidationError(format!(
+                    "{} dönemindeki önceki {} tahakkuk {} durumda; devreden PEK authoritative değildir.",
+                    previous_period.id,
+                    effective_accrual_id(previous_payroll),
+                    match previous_payroll.status {
+                        BordroStatus::DRAFT => "DRAFT",
+                        BordroStatus::STALE => "STALE",
+                        _ => "",
+                    }
+                )))
+            }
+        }
+    }
     let mut ordered_previous: Vec<(AccrualOrder, &BordroKaydi)> = previous_payrolls
         .into_iter()
         .map(|payroll| Ok((accrual_order_for_payroll(dataset, payroll)?, payroll)))
         .collect::<Result<_>>()?;
     ordered_previous.sort_by(|left, right| left.0.cmp(&right.0));
-    let Some((_, previous_payroll)) = ordered_previous.last() else {
-        return Ok(Vec::new());
+    let Some((previous_order, previous_payroll)) = ordered_previous.last() else {
+        return Ok(IncomingDevredenPekState {
+            records: Vec::new(),
+            advances_tax_month: false,
+        });
     };
-    match previous_payroll.status {
-        BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
-        BordroStatus::DRAFT | BordroStatus::STALE => {
-            return Err(DomainError::ValidationError(format!(
-                "{} dönemindeki önceki bordro {} durumda; devreden PEK authoritative değildir.",
-                previous_period.id,
-                match previous_payroll.status {
-                    BordroStatus::DRAFT => "DRAFT",
-                    BordroStatus::STALE => "STALE",
-                    _ => "",
-                }
-            )))
-        }
+    let current_order = accrual_order_for_input(active_period, current)?;
+    if previous_order.tax_ordinal >= current_order.tax_ordinal {
+        return Err(DomainError::InvalidData(
+            "Devreden PEK kaynağı mevcut vergi ayından ileri veya aynı ayda çözümlenemedi.".into(),
+        ));
     }
-    Ok(previous_payroll
-        .sonrakiDevredenPek
-        .clone()
-        .unwrap_or_default())
+    Ok(IncomingDevredenPekState {
+        records: previous_payroll
+            .sonrakiDevredenPek
+            .clone()
+            .unwrap_or_default(),
+        advances_tax_month: true,
+    })
 }
 
 fn payroll_gv_base(payroll: &BordroKaydi) -> Result<Decimal> {
@@ -1516,7 +1674,7 @@ fn validate_devreden_pek_gap(
         &active_period.id,
         "başlangıç",
     )?;
-    let mut prior: Vec<(&BordroKaydi, &BordroDonemi)> = dataset
+    let prior: Vec<(&BordroKaydi, &BordroDonemi)> = dataset
         .payrolls
         .iter()
         .filter_map(|payroll| {
@@ -1531,8 +1689,26 @@ fn validate_devreden_pek_gap(
             (start < active_start).then_some((payroll, period))
         })
         .collect();
-    prior.sort_by_key(|(_, period)| (period.baslangicTarihi.clone(), period.id.clone()));
-    let Some((previous_payroll, previous_period)) = prior.pop() else {
+    let Some(previous_period_id) = prior
+        .iter()
+        .max_by_key(|(_, period)| (period.baslangicTarihi.clone(), period.id.clone()))
+        .map(|(_, period)| period.id.clone())
+    else {
+        return Ok(());
+    };
+    let mut ordered_previous: Vec<(AccrualOrder, &BordroKaydi, &BordroDonemi)> = prior
+        .into_iter()
+        .filter(|(_, period)| period.id == previous_period_id)
+        .map(|(payroll, period)| {
+            Ok((
+                accrual_order_for_payroll(dataset, payroll)?,
+                payroll,
+                period,
+            ))
+        })
+        .collect::<Result<_>>()?;
+    ordered_previous.sort_by(|left, right| left.0.cmp(&right.0));
+    let Some((_, previous_payroll, previous_period)) = ordered_previous.pop() else {
         return Ok(());
     };
     let positive: Vec<&DevredenPekKaydi> = previous_payroll
@@ -1954,30 +2130,34 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     let same_month_gv_used = same_month_gv_exemption_used(&prior_accruals)?;
     let previous_cumulative_gv = previous_gv(dataset, &person, &period, &accrual)?;
     let previous_cumulative_asgari_gv = previous_asgari_gv(dataset, &person, &period)?;
-    let incoming_devreden = incoming_devreden_pek(dataset, &person.id, &period, &accrual)?;
+    let incoming_devreden_state = incoming_devreden_pek(dataset, &person.id, &period, &accrual)?;
+    let incoming_devreden = &incoming_devreden_state.records;
     let tax_inputs = StatutoryDeductionTaxInputs {
         previous_cumulative_gv,
-        incoming_devreden_pek: &incoming_devreden,
+        incoming_devreden_pek: incoming_devreden,
         previous_cumulative_asgari_gv,
         tax_brackets: &annual_parameters.gelirVergisiDilimleri,
     };
     let (mut deductions, pek_detail, next_devreden) = if is_normal_accrual {
-        calculate_statutory_deductions_with_month_to_date(
+        calculate_statutory_deductions_with_month_to_date_and_devreden_state(
             &income,
             Some(&effective_settings),
             Some(&person),
             Some(&summary),
             &tax_inputs,
             Some(&statutory_snapshot),
-            month_to_date_pek,
-            prior_accruals.is_empty(),
+            StatutoryCalculationOptions {
+                month_to_date_pek,
+                advance_devreden_month: incoming_devreden_state.advances_tax_month,
+                apply_lower_bound: prior_accruals.is_empty(),
+            },
         )
     } else {
         let (pek_detail, next_devreden) = calculate_incremental_prime_esas_kazanc(
             &income,
             None,
             Some(&effective_settings),
-            &incoming_devreden,
+            incoming_devreden,
             Some(&statutory_snapshot),
             month_to_date_pek,
         );
@@ -2186,7 +2366,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         oncekiKumulatifGvMatrahi: Some(previous_cumulative_gv),
         oncekiKumulatifAsgariGvMatrahi: Some(previous_cumulative_asgari_gv),
         manuelKumulatifGvMatrahi: None,
-        devredenPekGelen: Some(incoming_devreden),
+        devredenPekGelen: Some(incoming_devreden.clone()),
         sonrakiDevredenPek: Some(next_devreden),
         pekDetay: Some(pek_detail),
         isPrimiDetay: is_primi_detail,

@@ -47,6 +47,9 @@ import {
   PayrollDatasetSnapshot,
 } from '../services/payrollEngine';
 import {
+  countAuthoritativeNormalPersonnel,
+} from './Listeler/accrualListData';
+import {
   isExactDecimalString,
   mergePayrollUiIntoBoundary,
   toPayrollUiModel,
@@ -132,9 +135,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [manualIncomeMap, setManualIncomeMap] = useState<
-    Record<string, { tediye?: string; tisIkramiyesi?: string }>
-  >({});
+  const [normalPaymentDateMap, setNormalPaymentDateMap] = useState<Record<string, string>>({});
   const [newAccrualPersonId, setNewAccrualPersonId] = useState<string | null>(null);
   const [supplementaryAccrualDraft, setSupplementaryAccrualDraft] = useState<SupplementaryAccrualDraft>({
     accrualType: 'TEDIYE',
@@ -150,9 +151,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState<boolean>(false);
 
   const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
-
-  const getManualIncomeStateKey = (personId: string): string =>
-    `${aktifDonem.id}:${personId}`;
 
   const getAccrualId = (payroll: BordroKaydi): string => payroll.accrualId || payroll.id;
 
@@ -171,49 +169,49 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const getNormalPayroll = (personId: string): BordroKaydi | undefined =>
     getPersonAccruals(personId).find((item) => item.accrualType === 'NORMAL');
 
-  const getManualIncomeInput = (personId: string): PayrollCalculationRequest['manualIncome'] => {
-    const existingPayroll = getNormalPayroll(personId);
+  const getNormalAccrualInput = (personId: string): PayrollBoundaryAccrualInput => {
     const exactPayroll = authoritativeDataset.payrolls.find(
       (item) =>
         item.personelId === personId &&
         item.donemId === aktifDonem.id &&
         item.accrualType === 'NORMAL'
     );
-    const draft = manualIncomeMap[getManualIncomeStateKey(personId)];
-    const resolveAmount = (
-      field: 'tediye' | 'tisIkramiyesi'
-    ): string | null => {
-      const raw = draft?.[field];
-      if (raw !== undefined) {
-        if (raw.trim() === '') return null;
-        return isExactDecimalString(raw.trim()) ? raw.trim() : null;
-      }
-      const exactValue = exactPayroll?.gelirler[field];
-      if (exactValue !== null && exactValue !== undefined) return exactValue;
-      return existingPayroll?.gelirler[field] == null
-        ? null
-        : String(existingPayroll.gelirler[field]);
-    };
-
+    const existingPayroll = getNormalPayroll(personId);
     return {
-      tediye: resolveAmount('tediye'),
-      tisIkramiyesi: resolveAmount('tisIkramiyesi'),
+      accrualId:
+        exactPayroll?.accrualId ||
+        exactPayroll?.id ||
+        existingPayroll?.accrualId ||
+        existingPayroll?.id ||
+        `${personId}_${aktifDonem.id}`,
+      accrualType: 'NORMAL',
+      paymentDate:
+        exactPayroll?.paymentDate ||
+        existingPayroll?.paymentDate ||
+        (exactPayroll || existingPayroll
+          ? getDefaultAccrualPaymentDate(aktifDonem)
+          : normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)),
+      sequence: exactPayroll?.sequence ?? existingPayroll?.sequence ?? 0,
+      grossAmount: null,
+      description:
+        exactPayroll?.accrualDescription ?? existingPayroll?.accrualDescription ?? null,
     };
   };
 
-  const updateManualIncomeDraft = (
-    personId: string,
-    field: 'tediye' | 'tisIkramiyesi',
-    value: string
-  ) => {
-    const stateKey = getManualIncomeStateKey(personId);
-    setManualIncomeMap((current) => ({
-      ...current,
-      [stateKey]: {
-        ...current[stateKey],
-        [field]: value,
-      },
-    }));
+  const getLegacyManualIncomeInput = (
+    personId: string
+  ): PayrollCalculationRequest['manualIncome'] => {
+    const exactPayroll = authoritativeDataset.payrolls.find(
+      (item) =>
+        item.personelId === personId &&
+        item.donemId === aktifDonem.id &&
+        item.accrualType === 'NORMAL'
+    );
+    if (!exactPayroll) return null;
+    const tediye = exactPayroll.gelirler.tediye ?? null;
+    const tisIkramiyesi = exactPayroll.gelirler.tisIkramiyesi ?? null;
+    if (tediye === null && tisIkramiyesi === null) return null;
+    return { tediye, tisIkramiyesi };
   };
 
   const getDevirGvMatrahiForActiveYear = (person: Personel): number => {
@@ -248,7 +246,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         personnelId: person.id,
         periodId: aktifDonem.id,
         calculatedAt: new Date().toISOString(),
-        manualIncome: getManualIncomeInput(person.id),
+        // Legacy NORMAL records may still carry manual Tediye/TİS income.
+        // New data entry is supplementary-accrual-only; this read-only bridge
+        // keeps imported historical payrolls recalculable without duplicating
+        // the old fields in the UI.
+        manualIncome: getLegacyManualIncomeInput(person.id),
+        accrual: getNormalAccrualInput(person.id),
         dataset: buildDataset(),
       });
       await onSaveBordro(calculated);
@@ -332,6 +335,14 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   const openSupplementaryAccrualForm = (person: Personel) => {
+    const normal = getNormalPayroll(person.id);
+    if (!normal || !['CALCULATED', 'FINALIZED'].includes(normal.status)) {
+      setNewAccrualPersonId(null);
+      setErrorMessage(
+        'Ek tahakkuk oluşturulmadan önce aynı dönemin normal maaş bordrosu hesaplanmalıdır.'
+      );
+      return;
+    }
     setNewAccrualPersonId(person.id);
     setSupplementaryAccrualDraft({
       accrualType: 'TEDIYE',
@@ -366,12 +377,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     const sequence = sameDateAccruals.reduce(
       (max, item) => Math.max(max, item.sequence),
       -1
-    ) + 1;
+    );
+    const nextSequence = Math.max(1, sequence + 1);
     const accrual: PayrollBoundaryAccrualInput = {
-      accrualId: `${person.id}_${aktifDonem.id}_${supplementaryAccrualDraft.accrualType.toLowerCase()}_${paymentDate}_${sequence}`,
+      accrualId: `${person.id}_${aktifDonem.id}_${supplementaryAccrualDraft.accrualType.toLowerCase()}_${paymentDate}_${nextSequence}`,
       accrualType: supplementaryAccrualDraft.accrualType,
       paymentDate,
-      sequence,
+      sequence: nextSequence,
       grossAmount,
       description: supplementaryAccrualDraft.description.trim() || null,
     };
@@ -462,6 +474,10 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     (acc, b) => acc + (b.pekDetay?.isverenPrimToplami ?? 0),
     0
   );
+  const calculatedNormalPersonnelCount = countAuthoritativeNormalPersonnel(
+    bordrolar,
+    aktifDonem.id
+  );
 
   return (
     <div
@@ -507,6 +523,34 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         </div>
       </div>
 
+      <div className="flex flex-col gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wide text-indigo-900">
+            Normal Maaş Ödeme / Tahakkuk Tarihi
+          </div>
+          <p className="mt-1 text-[11px] text-indigo-800">
+            Yeni NORMAL bordro için kullanılacak açık tarihtir. Kaydedilmiş tahakkukların tarihi değiştirilemez.
+            Tediye ve TİS ikramiyesi ayrı tahakkuk olarak eklenir.
+          </p>
+        </div>
+        <label className="flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-700">
+          <span className="sr-only">Normal Maaş Ödeme / Tahakkuk Tarihi</span>
+          <input
+            data-testid="normal-payment-date"
+            type="date"
+            required
+            value={normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)}
+            onChange={(event) =>
+              setNormalPaymentDateMap((current) => ({
+                ...current,
+                [aktifDonem.id]: event.target.value,
+              }))
+            }
+            className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500"
+          />
+        </label>
+      </div>
+
       {/* Alert Banners */}
       {successMessage && (
         <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center gap-2 animate-fade-in shadow-xs">
@@ -543,7 +587,10 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             <span className="text-xs text-slate-500 font-medium">Toplam Personel</span>
             <div className="text-lg font-bold text-slate-900">{personeller.length} Kişi</div>
             <span className="text-[11px] text-blue-600 font-medium">
-              {activePeriodBordrolar.length} / {personeller.length} Hesaplandı
+              {calculatedNormalPersonnelCount} / {personeller.length} Hesaplandı
+            </span>
+            <span className="block text-[10px] text-slate-500">
+              Toplam Tahakkuk: {activePeriodBordrolar.length}
             </span>
           </div>
         </div>
@@ -632,9 +679,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 <th className="py-3 px-4">İş Primi Grubu</th>
                 <th className="py-3 px-4 text-center">Puantaj İcmal</th>
                 <th className="py-3 px-4 text-right">Önceki Küm. GV</th>
+                <th className="py-3 px-4 text-center">Normal Ödeme/Tahakkuk</th>
                 <th className="py-3 px-4 text-right">Brüt Gelir</th>
-                <th className="py-3 px-4 text-right">Tediye (Manuel)</th>
-                <th className="py-3 px-4 text-right">TİS İkramiye (Manuel)</th>
                 <th className="py-3 px-4 text-right">Kesintiler</th>
                 <th className="py-3 px-4 text-right">Net Ele Geçen</th>
                 <th className="py-3 px-4 text-center">Durum</th>
@@ -644,7 +690,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             <tbody className="divide-y divide-slate-200 text-xs text-slate-800">
               {filteredPersoneller.length === 0 ? (
                 <tr>
-                  <td colSpan={12} className="py-12 text-center text-slate-500">
+                  <td colSpan={11} className="py-12 text-center text-slate-500">
                     Arama kriterlerine uygun personel kaydı bulunamadı.
                   </td>
                 </tr>
@@ -652,12 +698,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 filteredPersoneller.map((person, idx) => {
                   const personAccruals = getPersonAccruals(person.id);
                   const bordro = personAccruals.find((item) => item.accrualType === 'NORMAL');
-                  const exactBordro = authoritativeDataset.payrolls.find(
-                    (b) =>
-                      b.personelId === person.id &&
-                      b.donemId === aktifDonem.id &&
-                      b.accrualType === 'NORMAL'
-                  );
                   const pPuantaj = puantajlar.find(
                     (p) => p.personelId === person.id && p.donemId === aktifDonem.id
                   );
@@ -672,20 +712,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   const isStale = bordro?.status === 'STALE';
                   const isDraft = bordro?.status === 'DRAFT';
                   const isCalculated = bordro?.status === 'CALCULATED' || isFinalized;
+                  const canAddSupplementary =
+                    hasPuantaj && (bordro?.status === 'CALCULATED' || bordro?.status === 'FINALIZED');
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
-                  const manualIncomeStateKey = getManualIncomeStateKey(person.id);
-                  const tediyeInputValue =
-                    manualIncomeMap[manualIncomeStateKey]?.tediye ??
-                    (exactBordro?.gelirler.tediye ??
-                      (bordro?.gelirler.tediye != null ? String(bordro.gelirler.tediye) : ''));
-                  const tisInputValue =
-                    manualIncomeMap[manualIncomeStateKey]?.tisIkramiyesi ??
-                    (exactBordro?.gelirler.tisIkramiyesi ??
-                      (bordro?.gelirler.tisIkramiyesi != null
-                        ? String(bordro.gelirler.tisIkramiyesi)
-                        : ''));
 
                   return (
                     <React.Fragment key={person.id}>
@@ -811,37 +842,22 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         })()}
                       </td>
 
+                      {/* Normal ödeme/tahakkuk tarihi */}
+                      <td className="py-3 px-4 text-center font-mono text-[11px]">
+                        <div className="font-bold text-slate-800">
+                          {bordro
+                            ? bordro.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)
+                            : normalPaymentDateMap[aktifDonem.id] ??
+                              getDefaultAccrualPaymentDate(aktifDonem)}
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          {bordro ? 'Değiştirilemez' : 'Yeni NORMAL için'}
+                        </div>
+                      </td>
+
                       {/* Brüt */}
                       <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
                         {hasPayrollSnapshot ? formatTL(brut) : '—'}
-                      </td>
-
-                      {/* Manuel Tediye */}
-                      <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          disabled={isFinalized}
-                          value={tediyeInputValue}
-                          onChange={(e) => updateManualIncomeDraft(person.id, 'tediye', e.target.value)}
-                          placeholder="Boş"
-                          title="Brüt Tediye tutarını manuel girin. Boş bırakılırsa Tediye hesaplanmaz."
-                          className="w-28 px-2 py-1.5 text-right bg-white border border-amber-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500 disabled:bg-slate-100 disabled:text-slate-500"
-                        />
-                      </td>
-
-                      {/* Manuel TİS İkramiyesi */}
-                      <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          disabled={isFinalized}
-                          value={tisInputValue}
-                          onChange={(e) => updateManualIncomeDraft(person.id, 'tisIkramiyesi', e.target.value)}
-                          placeholder="Boş"
-                          title="Brüt TİS ikramiyesi tutarını manuel girin. Boş bırakılırsa TİS ikramiyesi hesaplanmaz."
-                          className="w-28 px-2 py-1.5 text-right bg-white border border-indigo-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-100 disabled:text-slate-500"
-                        />
                       </td>
 
                       {/* Kesintiler */}
@@ -954,7 +970,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       </td>
                     </tr>
                     <tr key={`${person.id}-accrual-timeline`}>
-                      <td colSpan={12} className="px-4 py-3 bg-slate-50/80">
+                      <td colSpan={11} className="px-4 py-3 bg-slate-50/80">
                         <div className="flex flex-col gap-2">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
@@ -966,6 +982,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <button
                               type="button"
                               data-testid={`add-accrual-${person.id}`}
+                              disabled={!canAddSupplementary}
                               onClick={(event) => {
                                 event.stopPropagation();
                                 if (!hasPuantaj) {
@@ -976,6 +993,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                 }
                                 openSupplementaryAccrualForm(person);
                               }}
+                              title={
+                                !hasPuantaj
+                                  ? 'Önce bu dönemin puantajını tamamlayın.'
+                                  : 'Ek tahakkuk için aynı dönemin NORMAL bordrosu CALCULATED veya FINALIZED olmalıdır.'
+                              }
                               className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 transition-colors hover:bg-indigo-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Plus className="h-3.5 w-3.5" />
@@ -1004,6 +1026,18 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                     <span className="text-[11px] font-bold text-indigo-700">
                                       {ACCRUAL_TYPE_LABELS[accrual.accrualType]}
                                     </span>
+                                    {accrual.accrualType === 'NORMAL' &&
+                                      accrual.gelirler.tediye != null && (
+                                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                                          Legacy Tediye {formatTL(accrual.gelirler.tediye)}
+                                        </span>
+                                      )}
+                                    {accrual.accrualType === 'NORMAL' &&
+                                      accrual.gelirler.tisIkramiyesi != null && (
+                                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+                                          Legacy TİS {formatTL(accrual.gelirler.tisIkramiyesi)}
+                                        </span>
+                                      )}
                                     <span className="text-[10px] text-slate-500">
                                       Sıra {accrual.sequence}
                                     </span>

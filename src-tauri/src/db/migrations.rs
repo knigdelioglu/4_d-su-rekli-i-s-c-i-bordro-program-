@@ -496,8 +496,7 @@ pub fn get_migrations() -> Migrations<'static> {
         }),
         M::up_with_hook("SELECT 1;", |tx| {
             ensure_multi_accrual_schema(tx).map_err(|error| {
-                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::other(
                     error.to_string(),
                 )))
             })?;

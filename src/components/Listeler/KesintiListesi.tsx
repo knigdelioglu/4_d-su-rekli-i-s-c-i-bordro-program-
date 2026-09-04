@@ -19,6 +19,11 @@ import {
 import { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
 import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel, printElement } from '../../utils/excelExport';
+import {
+  filterAccrualRowsByPaymentDate,
+  getAuthoritativeAccrualRows,
+  getPaymentDateOptions,
+} from './accrualListData';
 
 interface KesintiListesiProps {
   aktifDonem: BordroDonemi;
@@ -42,29 +47,21 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<KesintiTipi>('sendika');
   const [search, setSearch] = useState<string>('');
+  const [paymentDateFilter, setPaymentDateFilter] = useState<string>('all');
 
   // Resmî kesinti listelerine yalnız authoritative CALCULATED/FINALIZED
   // bordrolar girer. STALE/DRAFT snapshot'lar yeniden hesaplanmadan dışlanır.
-  const entries = personeller.flatMap((p) => {
-    const b = bordrolar.find(
-      (record) =>
-        record.personelId === p.id &&
-        record.donemId === aktifDonem.id &&
-        (record.status === 'CALCULATED' || record.status === 'FINALIZED')
-    );
-    if (!b) return [];
-    return [{
-      personel: p,
-      bordro: b,
-      sendikaAidati: b.kesintiler.sendikaAidati ?? 0,
-      bes: b.kesintiler.bes ?? 0,
-      icra: b.kesintiler.icra ?? 0,
-      kisiBorcu: b.kesintiler.kisiBorcu ?? 0,
-      dogumAskerlikBorclanmasi: b.kesintiler.dogumAskerlikBorclanmasi ?? 0,
-      hayatSaglikSigortasi: b.kesintiler.hayatSaglikSigortasi ?? 0,
-      digerKesinti: b.kesintiler.digerKesinti ?? 0,
-    }];
-  });
+  const entries = getAuthoritativeAccrualRows(aktifDonem, personeller, bordrolar).map((row) => ({
+    ...row,
+    sendikaAidati: row.bordro.kesintiler.sendikaAidati ?? 0,
+    bes: row.bordro.kesintiler.bes ?? 0,
+    icra: row.bordro.kesintiler.icra ?? 0,
+    kisiBorcu: row.bordro.kesintiler.kisiBorcu ?? 0,
+    dogumAskerlikBorclanmasi: row.bordro.kesintiler.dogumAskerlikBorclanmasi ?? 0,
+    hayatSaglikSigortasi: row.bordro.kesintiler.hayatSaglikSigortasi ?? 0,
+    digerKesinti: row.bordro.kesintiler.digerKesinti ?? 0,
+  }));
+  const paymentDateOptions = getPaymentDateOptions(entries);
 
   const getActiveTabConfig = () => {
     switch (activeTab) {
@@ -137,7 +134,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
   const config = getActiveTabConfig();
 
   // Filter entries that have amount > 0 or match search
-  const filteredList = entries
+  const filteredList = filterAccrualRowsByPaymentDate(entries, paymentDateFilter)
     .filter((e) => {
       const amount = e[config.fieldKey] || 0;
       return amount > 0;
@@ -145,9 +142,11 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
     .filter((e) => {
       const term = search.toLowerCase();
       return (
-        e.personel.ad.toLowerCase().includes(term) ||
-        e.personel.soyad.toLowerCase().includes(term) ||
-        e.personel.tcNo.includes(term)
+        (
+          e.personel.ad.toLowerCase().includes(term) ||
+          e.personel.soyad.toLowerCase().includes(term) ||
+          e.personel.tcNo.includes(term)
+        )
       );
     });
 
@@ -161,6 +160,9 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
       { header: 'T.C. Kimlik No', key: 'tcNo', width: 18 },
       { header: 'Ad Soyad', key: 'adSoyad', width: 26 },
       { header: 'İş Primi Grubu', key: 'unvan', width: 22 },
+      { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
+      { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
+      { header: 'Sıra', key: 'sequence', width: 8 },
       { header: `${config.label} (TL)`, key: 'tutar', width: 20 },
     ];
 
@@ -168,6 +170,9 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
       tcNo: e.personel.tcNo,
       adSoyad: `${e.personel.ad} ${e.personel.soyad}`,
       unvan: (e.personel.grup || e.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, ''),
+      paymentDate: e.paymentDate,
+      accrualType: e.accrualTypeLabel,
+      sequence: e.sequence,
       tutar: e[config.fieldKey] || 0,
     }));
 
@@ -176,12 +181,15 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
         tcNo: 'TOPLAM',
         adSoyad: '',
         unvan: '',
+        paymentDate: '',
+        accrualType: '',
+        sequence: '',
         tutar: toplamTutar,
       },
     ];
 
     exportToExcel(
-      `${config.title.replace(/\s+/g, '_')}_${aktifDonem.id}`,
+      `${config.title.replace(/\s+/g, '_')}_${aktifDonem.id}_${paymentDateFilter === 'all' ? 'Tumu' : paymentDateFilter}`,
       config.label,
       cols,
       data,
@@ -308,6 +316,21 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
             />
           </div>
 
+          <label className="flex items-center gap-2 text-xs font-semibold text-slate-600">
+            <span className="whitespace-nowrap">Ödeme Tarihi</span>
+            <select
+              data-testid="deduction-payment-date-filter"
+              value={paymentDateFilter}
+              onChange={(e) => setPaymentDateFilter(e.target.value)}
+              className="rounded-xl border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-900 focus:bg-white focus:ring-2 focus:ring-indigo-500"
+            >
+              <option value="all">Tümü</option>
+              {paymentDateOptions.map((date) => (
+                <option key={date} value={date}>{date}</option>
+              ))}
+            </select>
+          </label>
+
           <button
             onClick={handlePrint}
             className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5"
@@ -339,6 +362,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
           </div>
           <div className="text-right text-xs text-slate-500 font-mono">
             Kayıt Sayısı: {filteredList.length}
+            {paymentDateFilter !== 'all' && <div>Filtre: {paymentDateFilter}</div>}
           </div>
         </div>
 
@@ -351,6 +375,9 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
                 <th className="p-3">T.C. Kimlik No</th>
                 <th className="p-3">Adı Soyadı</th>
                 <th className="p-3">İş Primi Grubu</th>
+                <th className="p-3">Ödeme Tarihi</th>
+                <th className="p-3">Tahakkuk Türü</th>
+                <th className="p-3 text-center">Sıra</th>
                 <th className="p-3 text-right">{config.label} (TL)</th>
               </tr>
             </thead>
@@ -358,7 +385,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
               {filteredList.map((e, idx) => {
                 const amount = e[config.fieldKey] || 0;
                 return (
-                  <tr key={e.personel.id} className="hover:bg-slate-50/80">
+                  <tr key={`${e.personel.id}-${e.accrualId}`} className="hover:bg-slate-50/80">
                     <td className="p-3 text-slate-400 font-sans">{idx + 1}</td>
                     <td className="p-3 font-bold text-slate-900">{e.personel.tcNo}</td>
                     <td className="p-3 font-sans font-bold text-slate-900">
@@ -367,6 +394,9 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
                     <td className="p-3 font-sans font-semibold text-slate-800">
                       {(e.personel.grup || e.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, '')}
                     </td>
+                    <td className="p-3 text-slate-800">{e.paymentDate}</td>
+                    <td className="p-3 font-sans font-semibold text-indigo-700">{e.accrualTypeLabel}</td>
+                    <td className="p-3 text-center">{e.sequence}</td>
                     <td className="p-3 text-right font-bold text-slate-900 text-sm">
                       {formatTL(amount)}
                     </td>
@@ -376,12 +406,22 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
 
               {filteredList.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-slate-500 font-sans italic">
+                  <td colSpan={8} className="p-8 text-center text-slate-500 font-sans italic">
                     Bu dönem için {config.label.toLowerCase()} kaydı bulunan personel bulunmamaktadır.
                   </td>
                 </tr>
               )}
             </tbody>
+            <tfoot>
+              <tr className="bg-slate-50 border-t-2 border-slate-200 font-bold">
+                <td colSpan={7} className="p-4 text-right font-sans text-sm text-slate-900 uppercase">
+                  {config.totalLabel}:
+                </td>
+                <td className="p-4 text-right font-mono text-lg text-slate-900">
+                  {formatTL(toplamTutar)}
+                </td>
+              </tr>
+            </tfoot>
           </table>
         </div>
       </div>

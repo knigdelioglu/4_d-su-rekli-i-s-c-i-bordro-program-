@@ -826,14 +826,17 @@ pub fn calculate_incremental_prime_esas_kazanc(
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     month_to_date_pek: Decimal,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
-    calculate_prime_esas_kazanc_with_month_to_date(
+    calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
         gelirler,
         puantaj_ozeti,
         kurum_degerleri,
         devreden_pek_gelen,
         statutory_snapshot,
         month_to_date_pek,
-        false,
+        PekCalculationOptions {
+            advance_devreden_month: false,
+            apply_lower_bound: false,
+        },
     )
 }
 
@@ -846,6 +849,45 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
     month_to_date_pek: Decimal,
     apply_lower_bound: bool,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+        gelirler,
+        puantaj_ozeti,
+        kurum_degerleri,
+        devreden_pek_gelen,
+        statutory_snapshot,
+        month_to_date_pek,
+        PekCalculationOptions {
+            advance_devreden_month: true,
+            apply_lower_bound,
+        },
+    )
+}
+
+/// Calculates PEK with an explicit tax-month transition flag.
+///
+/// `advance_devreden_month` is true only when the incoming state came from a
+/// previous tax month. It must be false when the state came from an earlier
+/// accrual in the same tax month; accrual count is not a calendar-month
+/// transition.
+#[derive(Debug, Clone, Copy)]
+struct PekCalculationOptions {
+    advance_devreden_month: bool,
+    apply_lower_bound: bool,
+}
+
+fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+    gelirler: &GelirKalemleri,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    devreden_pek_gelen: &[DevredenPekKaydi],
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
+    month_to_date_pek: Decimal,
+    options: PekCalculationOptions,
+) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    let PekCalculationOptions {
+        advance_devreden_month,
+        apply_lower_bound,
+    } = options;
     let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
     let prim_gun_sayisi = statutory_snapshot
         .map_or(raw_prim_gun, |snapshot| snapshot.sgkPrimGunSayisi)
@@ -923,10 +965,14 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
         }
 
         let kalan_tutar = round2(item.tutar - eklenecek);
-        if kalan_tutar > dec!(0) && item.kalanAySayisi > 1 {
+        if kalan_tutar > dec!(0) && (item.kalanAySayisi > 1 || !advance_devreden_month) {
             sonraki_devreden_list.push(DevredenPekKaydi {
                 tutar: kalan_tutar,
-                kalanAySayisi: item.kalanAySayisi - 1,
+                kalanAySayisi: if advance_devreden_month {
+                    item.kalanAySayisi - 1
+                } else {
+                    item.kalanAySayisi
+                },
                 kaynakDonemId: item.kaynakDonemId.clone(),
             });
         }
@@ -1013,6 +1059,13 @@ pub struct StatutoryDeductionTaxInputs<'a> {
     pub tax_brackets: &'a [TaxBracket],
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StatutoryCalculationOptions {
+    pub(crate) month_to_date_pek: Decimal,
+    pub(crate) advance_devreden_month: bool,
+    pub(crate) apply_lower_bound: bool,
+}
+
 pub fn calculate_statutory_deductions_with_tax_brackets(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
@@ -1038,6 +1091,7 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
 /// equivalent for a first NORMAL accrual; this variant lets a NORMAL accrual
 /// that is chronologically after a supplementary node consume only the
 /// remaining monthly PEK capacity.
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_statutory_deductions_with_month_to_date(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
@@ -1048,21 +1102,54 @@ pub fn calculate_statutory_deductions_with_month_to_date(
     month_to_date_pek: Decimal,
     apply_lower_bound: bool,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
+    calculate_statutory_deductions_with_month_to_date_and_devreden_state(
+        gelirler,
+        kurum_degerleri,
+        personel,
+        puantaj_ozeti,
+        tax_inputs,
+        statutory_snapshot,
+        StatutoryCalculationOptions {
+            month_to_date_pek,
+            advance_devreden_month: true,
+            apply_lower_bound,
+        },
+    )
+}
+
+/// Calculates statutory deductions while making the devreden PEK calendar
+/// transition explicit. The compatibility wrapper above keeps the historical
+/// first-accrual behavior; the payroll engine supplies whether this request
+/// crossed a tax month boundary.
+pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_state(
+    gelirler: &GelirKalemleri,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    personel: Option<&Personel>,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    tax_inputs: &StatutoryDeductionTaxInputs<'_>,
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
+    options: StatutoryCalculationOptions,
+) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
+    let month_to_date_pek = options.month_to_date_pek;
     let brut_gelir = calculate_gelir_toplam(gelirler);
     let default_k = DonemselKurumDegerleri::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     // PEK önce çözülür. Cari brüt sıfır olsa bile tavan içine alınan devreden PEK
     // varsa işçi SGK/işsizlik ve OKS bu authoritative matrah üzerinden tahakkuk eder.
-    let (pek_detay, sonraki_devreden) = calculate_prime_esas_kazanc_with_month_to_date(
-        gelirler,
-        puantaj_ozeti,
-        kurum_degerleri,
-        tax_inputs.incoming_devreden_pek,
-        statutory_snapshot,
-        month_to_date_pek.max(Decimal::ZERO),
-        apply_lower_bound,
-    );
+    let (pek_detay, sonraki_devreden) =
+        calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+            gelirler,
+            puantaj_ozeti,
+            kurum_degerleri,
+            tax_inputs.incoming_devreden_pek,
+            statutory_snapshot,
+            month_to_date_pek.max(Decimal::ZERO),
+            PekCalculationOptions {
+                advance_devreden_month: options.advance_devreden_month,
+                apply_lower_bound: options.apply_lower_bound,
+            },
+        );
 
     // Sıfır brüt + sıfır PEK için önceki davranışı koru; ancak PEK varken kesintileri
     // gelir toplamına bakarak erken sıfırlama.

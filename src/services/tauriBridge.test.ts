@@ -2,6 +2,7 @@ import { expect, test, describe } from 'bun:test';
 import { tauriBridge } from './tauriBridge';
 import {
   ManualPayrollIncomeInput,
+  PayrollAccrualInput,
   PersonelPuantaj,
   PersonelTaxOpening,
 } from '../types/payroll';
@@ -61,6 +62,32 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
         tisIkramiyesi: '2000.75',
       },
       accrual: null,
+    });
+  });
+
+  test('calculatePayroll: explicit NORMAL ödeme tarihini exact accrual olarak göndermeli', async () => {
+    const mock = installMock();
+    const accrual: PayrollAccrualInput = {
+      accrualId: 'p-1_2026-05',
+      accrualType: 'NORMAL',
+      paymentDate: '2026-06-13',
+      sequence: 0,
+      grossAmount: null,
+      description: 'Normal maaş',
+    };
+    await tauriBridge.calculatePayroll('p-1', '2026-05', undefined, accrual);
+    expect(mock.args()).toEqual({
+      personnelId: 'p-1',
+      periodId: '2026-05',
+      manualIncome: null,
+      accrual: {
+        accrualId: 'p-1_2026-05',
+        accrualType: 'NORMAL',
+        paymentDate: '2026-06-13',
+        sequence: 0,
+        grossAmount: null,
+        description: 'Normal maaş',
+      },
     });
   });
 
