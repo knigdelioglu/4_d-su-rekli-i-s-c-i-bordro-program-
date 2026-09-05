@@ -34,3 +34,19 @@ describe('browser payroll invalidation policy', () => {
     ).toThrow('Kesinleştirilmiş');
   });
 });
+
+test('delete impact marks all mutable downstream events stale without changing snapshots', () => {
+  const events = ['tediye', 'normal', 'tis'].map((id, index) => ({
+    id, accrualId: id, personelId: 'p', donemId: 'august',
+    status: index === 2 ? 'DRAFT' : 'CALCULATED', gvDetay: { applied: '2000.00' },
+  }));
+  const impact = {
+    affectedPayrolls: events.map((e) => ({ personnelId: e.personelId, periodId: e.donemId, accrualId: e.accrualId })),
+    blockedByFinalized: [],
+  };
+  assertBrowserMutationImpactAllowed(impact);
+  const after = applyBrowserPayrollImpact(events, impact).filter((e) => e.id !== 'tediye');
+  expect(after.map((e) => e.status)).toEqual(['STALE', 'STALE']);
+  expect(after[0].gvDetay).toBe(events[1].gvDetay);
+  expect(events[1].status).toBe('CALCULATED');
+});

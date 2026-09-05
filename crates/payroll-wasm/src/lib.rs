@@ -347,6 +347,30 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn independent_payment_events_and_delete_policy_match_native() {
+        use payroll_core::{AccrualType, PayrollAccrualInput};
+        let mut request = standard_request();
+        request.manualIncome = None;
+        let period = request.dataset.periods.iter().find(|p| p.id == request.periodId).unwrap().clone();
+        for (index, kind) in [AccrualType::TEDIYE, AccrualType::NORMAL, AccrualType::TIS_IKRAMIYE].into_iter().enumerate() {
+            request.accrual = Some(PayrollAccrualInput {
+                accrualId: format!("event-{index}"), accrualType: kind,
+                paymentDate: format!("{}-{:02}-10", period.taxYear, period.taxMonth), sequence: index as i32,
+                grossAmount: if kind == AccrualType::NORMAL { None } else { Some(dec!(2000)) }, description: None,
+            });
+            assert_calculation_parity("independent-payment-event", request.clone(), true);
+            request.dataset.payrolls.push(calculate_payroll(&request).unwrap());
+        }
+        let mutation = PayrollMutation::AccrualDelete {
+            personnelId: request.personnelId.clone(), periodId: request.periodId.clone(), accrualId: "event-0".into(),
+        };
+        let input = serde_json::json!({ "dataset": request.dataset, "mutation": mutation });
+        let wasm: serde_json::Value = serde_json::from_str(&evaluate_mutation_policy_json(&input.to_string()).unwrap()).unwrap();
+        let native = evaluate_payroll_invalidation(&request.dataset, &mutation).unwrap();
+        assert_eq!(wasm, serde_json::to_value(native).unwrap());
+    }
+
+    #[wasm_bindgen_test]
     fn adapter_calculation_parity_fixture_matrix() {
         let mut fixtures: Vec<(&str, PayrollCalculationRequest, bool)> = Vec::new();
 

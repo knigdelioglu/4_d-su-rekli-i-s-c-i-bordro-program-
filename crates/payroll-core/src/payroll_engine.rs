@@ -679,7 +679,7 @@ fn effective_payment_date(payroll: &BordroKaydi, period: &BordroDonemi) -> Strin
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct AccrualOrder {
+pub struct AccrualOrder {
     tax_ordinal: i64,
     payment_date: NaiveDate,
     sequence: i32,
@@ -692,35 +692,33 @@ struct IncomingDevredenPekState {
     advances_tax_month: bool,
 }
 
-fn accrual_order_for_input(
+pub(crate) fn accrual_order_for_input(
     period: &BordroDonemi,
     input: &PayrollAccrualInput,
 ) -> Result<AccrualOrder> {
-    let payment_date = parse_period_date(&input.paymentDate, &period.id, "ödeme/tahakkuk")?;
+    payment_event_order(period, &input.paymentDate, input.sequence, &input.accrualId)
+}
+
+pub fn payment_event_order(
+    period: &BordroDonemi,
+    payment_date: &str,
+    sequence: i32,
+    accrual_id: &str,
+) -> Result<AccrualOrder> {
     Ok(AccrualOrder {
         tax_ordinal: tax_ordinal(period.taxYear, period.taxMonth),
-        payment_date,
-        sequence: input.sequence,
-        accrual_id: input.accrualId.clone(),
+        payment_date: parse_period_date(payment_date, &period.id, "ödeme/tahakkuk")?,
+        sequence,
+        accrual_id: accrual_id.into(),
     })
 }
 
-fn accrual_order_for_payroll(
+pub fn accrual_order_for_payroll(
     dataset: &PayrollDatasetSnapshot,
     payroll: &BordroKaydi,
 ) -> Result<AccrualOrder> {
     let period = period_by_id(dataset, &payroll.donemId)?;
-    let payment_date = parse_period_date(
-        &effective_payment_date(payroll, period),
-        &period.id,
-        "ödeme/tahakkuk",
-    )?;
-    Ok(AccrualOrder {
-        tax_ordinal: tax_ordinal(period.taxYear, period.taxMonth),
-        payment_date,
-        sequence: payroll.sequence,
-        accrual_id: effective_accrual_id(payroll),
-    })
+    payment_event_order(period, &effective_payment_date(payroll, period), payroll.sequence, &effective_accrual_id(payroll))
 }
 
 fn payroll_for_requested_accrual<'a>(
@@ -737,63 +735,6 @@ fn payroll_for_requested_accrual<'a>(
         });
     }
     existing_payroll(dataset, personnel_id, period_id)
-}
-
-fn validate_supplementary_after_normal(
-    dataset: &PayrollDatasetSnapshot,
-    personnel_id: &str,
-    period: &BordroDonemi,
-    supplementary: &PayrollAccrualInput,
-    supplementary_payment_date: NaiveDate,
-) -> Result<()> {
-    let normal = dataset
-        .payrolls
-        .iter()
-        .find(|payroll| {
-            payroll.personelId == personnel_id
-                && payroll.donemId == period.id
-                && payroll.accrualType == AccrualType::NORMAL
-        })
-        .ok_or_else(|| {
-            DomainError::ValidationError(
-                "Ek tahakkuk oluşturulmadan önce aynı dönemin normal maaş bordrosu hesaplanmalıdır."
-                    .into(),
-            )
-        })?;
-
-    match normal.status {
-        BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
-        BordroStatus::DRAFT | BordroStatus::STALE => {
-            return Err(DomainError::ValidationError(
-                "Ek tahakkuk oluşturulmadan önce aynı dönemin normal maaş bordrosu hesaplanmalıdır."
-                    .into(),
-            ));
-        }
-    }
-
-    if normal.sequence != 0 {
-        return Err(DomainError::InvalidData(
-            "Normal maaş tahakkukunun sıra numarası 0 olmalıdır; ek tahakkuk zinciri çözülemez."
-                .into(),
-        ));
-    }
-    let normal_payment_date = parse_period_date(
-        &effective_payment_date(normal, period),
-        &period.id,
-        "ödeme/tahakkuk",
-    )?;
-    if supplementary_payment_date < normal_payment_date {
-        return Err(DomainError::ValidationError(
-            "Ek tahakkukun ödeme tarihi normal maaş tahakkukundan önce olamaz.".into(),
-        ));
-    }
-    if supplementary.sequence < 1 {
-        return Err(DomainError::ValidationError(
-            "Ek tahakkuk sıra numarası 1 veya daha büyük olmalıdır; NORMAL tahakkuk sıra numarası 0'dır."
-                .into(),
-        ));
-    }
-    Ok(())
 }
 
 fn resolve_accrual_input(
@@ -822,7 +763,13 @@ fn resolve_accrual_input(
             accrualId: format!("{}_{}", request.personnelId, request.periodId),
             accrualType: AccrualType::NORMAL,
             paymentDate: default_payment_date(period),
-            sequence: 0,
+            sequence: request.dataset.payrolls.iter()
+                .filter(|event| event.personelId == request.personnelId)
+                .filter(|event| request.dataset.periods.iter().any(|owner|
+                    owner.id == event.donemId && owner.taxYear == period.taxYear && owner.taxMonth == period.taxMonth
+                    && effective_payment_date(event, owner) == default_payment_date(period)))
+                .map(|event| event.sequence.checked_add(1).ok_or_else(|| DomainError::InvalidData("Tahakkuk sıra numarası taştı.".into())))
+                .collect::<Result<Vec<_>>>()?.into_iter().max().unwrap_or(0),
             grossAmount: None,
             description: None,
         }
@@ -852,18 +799,6 @@ fn resolve_accrual_input(
             "Tahakkuk ödeme tarihi {} vergi yılı/ayı {}-{:02} ile uyumlu değil.",
             input.paymentDate, period.taxYear, period.taxMonth
         )));
-    }
-
-    if input.accrualType == AccrualType::NORMAL && input.sequence != 0 {
-        return Err(DomainError::ValidationError(
-            "NORMAL tahakkuk sıra numarası 0 olmalıdır.".into(),
-        ));
-    }
-    if input.accrualType != AccrualType::NORMAL && input.sequence < 1 {
-        return Err(DomainError::ValidationError(
-            "Ek tahakkuk sıra numarası 1 veya daha büyük olmalıdır; NORMAL tahakkuk sıra numarası 0'dır."
-                .into(),
-        ));
     }
 
     let normal_count = request
@@ -903,39 +838,6 @@ fn resolve_accrual_input(
                 return Err(DomainError::ValidationError(
                     "Mevcut tahakkukun türü, ödeme tarihi veya sıra numarası değiştirilemez; yeni tahakkuk oluşturun."
                         .into(),
-                ));
-            }
-        }
-    }
-
-    if input.accrualType != AccrualType::NORMAL {
-        validate_supplementary_after_normal(
-            &request.dataset,
-            &request.personnelId,
-            period,
-            &input,
-            payment_date,
-        )?;
-    } else if existing.is_none()
-        && request.dataset.payrolls.iter().any(|payroll| {
-            payroll.personelId == request.personnelId
-                && payroll.donemId == request.periodId
-                && payroll.accrualType != AccrualType::NORMAL
-        })
-    {
-        return Err(DomainError::ValidationError(
-            "Aynı dönemin normal maaş bordrosu ek tahakkuklardan önce hesaplanmalıdır.".into(),
-        ));
-    } else if input.accrualType == AccrualType::NORMAL {
-        for payroll in request.dataset.payrolls.iter().filter(|payroll| {
-            payroll.personelId == request.personnelId
-                && payroll.donemId == request.periodId
-                && payroll.accrualType != AccrualType::NORMAL
-        }) {
-            let payroll_order = accrual_order_for_payroll(&request.dataset, payroll)?;
-            if payroll_order < requested_order {
-                return Err(DomainError::ValidationError(
-                    "Aynı dönemin normal maaş tahakkuku ek tahakkuklardan önce gelmelidir.".into(),
                 ));
             }
         }
@@ -1198,26 +1100,24 @@ fn incoming_devreden_pek(
         });
     }
 
-    let Some(previous_period) = find_previous_work_period(dataset, active_period)? else {
-        return Ok(IncomingDevredenPekState {
-            records: Vec::new(),
-            advances_tax_month: false,
-        });
-    };
-    let previous_payrolls: Vec<&BordroKaydi> = dataset
-        .payrolls
-        .iter()
-        .filter(|payroll| {
-            payroll.personelId == personnel_id && payroll.donemId == previous_period.id
-        })
-        .collect();
+    let current_order = accrual_order_for_input(active_period, current)?;
+    let ordered_candidates = dataset.payrolls.iter()
+        .filter(|payroll| payroll.personelId == personnel_id)
+        .map(|payroll| Ok((accrual_order_for_payroll(dataset, payroll)?, payroll)))
+        .collect::<Result<Vec<_>>>()?;
+    let previous_month = ordered_candidates.iter()
+        .filter(|(order, _)| order < &current_order)
+        .map(|(order, _)| order.tax_ordinal).max();
+    let previous_payrolls: Vec<&BordroKaydi> = ordered_candidates.into_iter()
+        .filter(|(order, _)| Some(order.tax_ordinal) == previous_month)
+        .map(|(_, payroll)| payroll).collect();
     for previous_payroll in &previous_payrolls {
         match previous_payroll.status {
             BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
             BordroStatus::DRAFT | BordroStatus::STALE => {
                 return Err(DomainError::ValidationError(format!(
                     "{} dönemindeki önceki {} tahakkuk {} durumda; devreden PEK authoritative değildir.",
-                    previous_period.id,
+                    previous_payroll.donemId,
                     effective_accrual_id(previous_payroll),
                     match previous_payroll.status {
                         BordroStatus::DRAFT => "DRAFT",
@@ -2149,17 +2049,21 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
             StatutoryCalculationOptions {
                 month_to_date_pek,
                 advance_devreden_month: incoming_devreden_state.advances_tax_month,
-                apply_lower_bound: prior_accruals.is_empty(),
+                apply_lower_bound: true,
             },
         )
     } else {
-        let (pek_detail, next_devreden) = calculate_incremental_prime_esas_kazanc(
+        let (pek_detail, next_devreden) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
             &income,
             None,
             Some(&effective_settings),
             incoming_devreden,
             Some(&statutory_snapshot),
             month_to_date_pek,
+            PekCalculationOptions {
+                advance_devreden_month: incoming_devreden_state.advances_tax_month,
+                apply_lower_bound: false,
+            },
         );
         let sgk_rate = effective_settings
             .sgkIsciOraniYuzde

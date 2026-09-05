@@ -1,3 +1,4 @@
+import { comparePaymentEvents } from '../../services/payrollEngine/paymentEventOrder';
 import type { AccrualType, BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
 import { getDefaultAccrualPaymentDate } from '../../utils/payrollPresentation';
 
@@ -66,11 +67,8 @@ export function getAuthoritativeAccrualRows(
       ];
     })
     .sort((left, right) => {
-      const dateOrder = left.paymentDate.localeCompare(right.paymentDate);
-      if (dateOrder !== 0) return dateOrder;
-      if (left.sequence !== right.sequence) return left.sequence - right.sequence;
-      const accrualOrder = left.accrualId.localeCompare(right.accrualId);
-      if (accrualOrder !== 0) return accrualOrder;
+      const eventOrder = comparePaymentEvents(left.bordro, right.bordro, period);
+      if (eventOrder !== 0) return eventOrder;
       return left.personel.id.localeCompare(right.personel.id);
     });
 }

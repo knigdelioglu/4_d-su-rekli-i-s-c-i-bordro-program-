@@ -24,10 +24,11 @@
 - Aynı personel+dönem için yalnız **bir** `NORMAL` tahakkuk olabilir. Ek tahakkuk sayısı birden fazla olabilir.
 - Authoritative sıralama: `taxYear/taxMonth` → `paymentDate` → `sequence` → `accrualId`.
 - `paymentDate` açık ve gerçek ödeme/tahakkuk tarihidir; ilgili dönemin `taxYear/taxMonth` değeriyle uyumlu olmak zorundadır.
-- `NORMAL` için `sequence=0` zorunludur. Ek tahakkuklarda `sequence>=1` olmalıdır. Aynı tarihli tahakkuklar sequence ile deterministik sıralanır ve aynı vergi ayı+tarih+sequence kombinasyonu benzersizdir.
+- Her tahakkuk bağımsız payment event’tir. Tahakkuk tipi order belirlemez. Tüm türlerde `sequence>=0`; sequence yalnız aynı ödeme tarihinin tie-breaker değeridir. Aynı tarihli tahakkuklar sequence ile deterministik sıralanır ve aynı vergi ayı+tarih+sequence kombinasyonu benzersizdir.
 - Mevcut tahakkukun `accrualId`, `accrualType`, `paymentDate` ve `sequence` metadata'sı değiştirilemez; yeniden hesaplama yalnız parasal sonucu güncelleyebilir.
-- `TEDIYE`, `TIS_IKRAMIYE` veya `SUPPLEMENTAL` oluşturulmadan önce aynı dönem `NORMAL` tahakkuku `CALCULATED` veya `FINALIZED` olmalıdır. `DRAFT`/`STALE` NORMAL authoritative değildir.
-- Ek tahakkuk tarihi NORMAL ödeme tarihinden önce olamaz. Aynı gün desteklenir: NORMAL seq0, ek tahakkuk seq1+.
+- NORMAL zorunlu ilk event değildir; TEDIYE → NORMAL → TİS desteklenir. Cari state’i etkileyen önceki event’ler CALCULATED/FINALIZED olmalıdır.
+- Aynı-ay GV/DV istisnası ve PEK kapasitesi canonical payment order üzerinden paylaşılır. GV allocation pure `gv_exemption::GvExemptionState` policy’sidir; mutable bakiye tablosu yoktur.
+- Backdated insert, recalculation ve delete mutable downstream kayıtlarını STALE yapar; FINALIZED downstream’u etkileyen mutation reddedilir.
 - Ek tahakkuk normal maaş gelirlerini yeniden üretmez. `TEDIYE` yalnız tediye brütünü, `TIS_IKRAMIYE` yalnız TİS ikramiye brütünü, `SUPPLEMENTAL` yalnız kendi brütünü üretir.
 - Önceki tahakkuk zincirinde `DRAFT` veya `STALE` kayıt varsa kümülatif/PEK state'i sessiz fallback ile devam ettirilmez; hesap fail-closed olmalıdır.
 - `FINALIZED` tahakkuk immutable'dır. Önceki bir mutable düğüm değişince sonraki mutable bağımlılar STALE olabilir; downstream FINALIZED bağımlılığı bozan mutation reddedilir.
@@ -38,6 +39,7 @@
 - Devreden ücret dışı PEK'in taşıma penceresi takvimsel olarak ödemenin yapıldığı ayı takip eden en fazla iki aydır; prim günü olmayan ara ay taşıma ömrünü dondurmaz.
 - `kalanAySayisi` **tahakkuk sayısına göre değil vergi ayı geçişine göre** yaşlanır. Aynı `taxYear/taxMonth` içindeki NORMAL → TEDIYE → TİS/SUPPLEMENTAL zincirinde bakiye azalabilir fakat `kalanAySayisi` azalmaz. Bir sonraki vergi ayına geçildiğinde yalnız bir kez yaşlanır.
 - Aynı ay içindeki sonraki tahakkuk, önceki tahakkukun `sonrakiDevredenPek` state'inden devam eder; aylık PEK tavanı sıfırdan açılmaz.
+- NORMAL daha sonra geldiğinde işveren alt sınır tamamlama farkı, aylık alt sınırdan önceki event’lerin PEK’i düşülerek hesaplanır; işçi matrahına eklenmez.
 - Aylık PEK kapasitesi month-to-date paylaşılır: aynı vergi ayındaki tahakkukların authoritative `primMatrahi` toplamı aylık tavanı aşamaz.
 - Henüz cari ay PEK'ine alınmamış devreden bakiye işçi primi veya OKS matrahına sokulmaz.
 

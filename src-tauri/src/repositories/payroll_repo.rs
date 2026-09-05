@@ -613,7 +613,7 @@ impl PayrollRepository {
                         calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
                         is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json,
                         damga_snapshot_json, notlar
-                 FROM payroll_records ORDER BY calculated_at ASC, payment_date ASC, sequence ASC, id ASC",
+                 FROM payroll_records",
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
@@ -802,7 +802,31 @@ impl PayrollRepository {
             });
         }
 
-        Ok(result)
+        let dataset = payroll_core::PayrollDatasetSnapshot {
+            periods: crate::repositories::period_repo::PeriodRepository::get_all(conn)?,
+            ..Default::default()
+        };
+        let mut ordered = result.into_iter().map(|record| {
+            let order = payroll_core::payroll_engine::accrual_order_for_payroll(&dataset, &record)?;
+            Ok((order, record))
+        }).collect::<Result<Vec<_>>>()?;
+        ordered.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(ordered.into_iter().map(|(_, record)| record).collect())
+    }
+
+    /// Delete one event and invalidate its downstream in a single transaction.
+    pub fn delete_accrual(conn: &Connection, personnel_id: &str, period_id: &str, accrual_id: &str) -> Result<()> {
+        let tx = conn.unchecked_transaction().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if Self::get_status_and_created_at_for_accrual(&tx, personnel_id, period_id, accrual_id)?.is_none() {
+            return Err(DomainError::NotFound("Tahakkuk bulunamadı.".into()));
+        }
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(&tx, &PayrollMutation::AccrualDelete {
+            personnelId: personnel_id.into(), periodId: period_id.into(), accrualId: accrual_id.into(),
+        })?;
+        tx.execute("DELETE FROM payroll_records WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
+            params![personnel_id, period_id, accrual_id]).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        PayrollInvalidationRepository::apply_impact(&tx, &impact)?;
+        tx.commit().map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
 
     pub fn save(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {

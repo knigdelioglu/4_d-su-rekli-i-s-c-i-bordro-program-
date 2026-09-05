@@ -55,6 +55,7 @@ export type PayrollMutation =
   | { kind: 'PERIOD_FROM_POSITION'; startDate: string; taxYear: number; taxMonth: number }
   | { kind: 'PERSON_FROM_DATE'; personnelId: string; effectiveFrom: string }
   | { kind: 'PAYROLL_CALCULATION'; personnelId: string; periodId: string }
+  | { kind: 'ACCRUAL_DELETE'; personnelId: string; periodId: string; accrualId: string }
   | { kind: 'ACCRUAL_CALCULATION'; personnelId: string; periodId: string; accrualId: string }
   | {
       kind: 'ACCRUAL_INSERT';

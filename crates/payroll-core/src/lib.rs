@@ -16,6 +16,7 @@ pub use errors::DomainError;
 
 pub type Result<T> = std::result::Result<T, DomainError>;
 
+pub mod gv_exemption;
 pub mod notices;
 pub mod payroll_engine;
 pub mod policies;

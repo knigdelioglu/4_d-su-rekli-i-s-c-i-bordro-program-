@@ -3,6 +3,7 @@
  */
 
 import React, { useState } from 'react';
+import { comparePaymentEvents, nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import {
   Calculator,
   Search,
@@ -116,6 +117,7 @@ interface BordroHesaplamaProps {
   zamAylari: number[];
   activePayrollView: PayrollViewType;
   authoritativeDataset: PayrollDatasetSnapshot;
+  onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
   onSaveBordro: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
   onSavePersonel?: (personel: Personel | PayrollBoundaryPersonel) => Promise<void> | void;
   onSaveTaxOpening?: (
@@ -139,6 +141,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   activePayrollView,
   authoritativeDataset,
   onSaveBordro,
+  onDeleteBordro,
   onSavePersonel,
   onSaveTaxOpening,
   onGoToPuantaj,
@@ -150,6 +153,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     personel: Personel;
     bordro: BordroKaydi;
   } | null>(null);
+  const [deletingAccrualId, setDeletingAccrualId] = useState<string | null>(null);
   const [isBatchProcessing, setIsBatchProcessing] = useState<boolean>(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -187,14 +191,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   const getPersonAccruals = (personId: string): BordroKaydi[] =>
     bordrolar
       .filter((item) => item.personelId === personId && item.donemId === aktifDonem.id)
-      .sort((a, b) => {
-        const dateOrder = (a.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)).localeCompare(
-          b.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)
-        );
-        if (dateOrder !== 0) return dateOrder;
-        if (a.sequence !== b.sequence) return a.sequence - b.sequence;
-        return getAccrualId(a).localeCompare(getAccrualId(b));
-      });
+      .sort((a, b) => comparePaymentEvents(a, b, aktifDonem));
 
   const getNormalPayroll = (personId: string): BordroKaydi | undefined =>
     getPersonAccruals(personId).find((item) => item.accrualType === 'NORMAL');
@@ -227,7 +224,10 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         (exactPayroll || existingPayroll
           ? getDefaultAccrualPaymentDate(aktifDonem)
           : normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)),
-      sequence: exactPayroll?.sequence ?? existingPayroll?.sequence ?? 0,
+      sequence: exactPayroll?.sequence ?? existingPayroll?.sequence ?? nextPaymentSequence(
+        authoritativeDataset, personId, aktifDonem,
+        normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)
+      ),
       grossAmount: null,
       description:
         exactPayroll?.accrualDescription ?? existingPayroll?.accrualDescription ?? null,
@@ -377,14 +377,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   };
 
   const openSupplementaryAccrualForm = (person: Personel) => {
-    const normal = getNormalPayroll(person.id);
-    if (!normal || !['CALCULATED', 'FINALIZED'].includes(normal.status)) {
-      setNewAccrualPersonId(null);
-      setErrorMessage(
-        'Ek ödeme oluşturulmadan önce aynı dönemin normal maaş bordrosu hesaplanmalıdır.'
-      );
-      return;
-    }
     setNewAccrualPersonId(person.id);
     setExpandedTimelinePersonId(person.id);
     setSupplementaryAccrualDraft({
@@ -456,14 +448,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       return;
     }
 
-    const sameDateAccruals = getPersonAccruals(person.id).filter(
-      (item) => (item.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)) === paymentDate
-    );
-    const sequence = sameDateAccruals.reduce(
-      (max, item) => Math.max(max, item.sequence),
-      -1
-    );
-    const nextSequence = Math.max(1, sequence + 1);
+    const nextSequence = nextPaymentSequence(authoritativeDataset, person.id, aktifDonem, paymentDate);
     const accrual: PayrollBoundaryAccrualInput = {
       accrualId: `${person.id}_${aktifDonem.id}_${supplementaryAccrualDraft.accrualType.toLowerCase()}_${paymentDate}_${nextSequence}`,
       accrualType: supplementaryAccrualDraft.accrualType,
@@ -917,15 +902,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     ? viewAccruals[0]
                     : viewAccruals.find((item) => item.accrualType === activeAccrualType);
                   const additionalViewAccruals = isSupplementaryView ? viewAccruals.slice(1) : [];
-                  const normalBordro = personAccruals.find((item) => item.accrualType === 'NORMAL');
 
                   const hasPayrollSnapshot = !!bordro;
                   const isFinalized = bordro?.status === 'FINALIZED';
                   const isStale = bordro?.status === 'STALE';
                   const isDraft = bordro?.status === 'DRAFT';
                   const isCalculated = bordro?.status === 'CALCULATED' || isFinalized;
-                  const canAddSupplementary =
-                    hasPuantaj && (normalBordro?.status === 'CALCULATED' || normalBordro?.status === 'FINALIZED');
+                  const canAddSupplementary = hasPuantaj;
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
@@ -1315,7 +1298,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               title={
                                 !hasPuantaj
                                   ? 'Önce bu dönemin puantajını tamamlayın.'
-                                  : 'Ek ödeme için aynı dönemin normal maaş bordrosu hesaplanmış veya kesinleştirilmiş olmalıdır.'
+                                  : 'Bağımsız ödeme tahakkuku oluştur.'
                               }
                               className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 transition-colors hover:bg-indigo-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                             >
@@ -1372,6 +1355,20 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                       >
                                         <FileText className="h-3 w-3" />
                                         Bordro Gör
+                                      </button>
+                                    )}
+                                    {accrual.status !== 'FINALIZED' && (
+                                      <button type="button" disabled={deletingAccrualId !== null || isBatchProcessing}
+                                        className="rounded-lg px-2 py-1 text-[10px] font-bold text-rose-700 disabled:opacity-50"
+                                        onClick={async (event) => {
+                                          event.stopPropagation();
+                                          if (!window.confirm('Bu tahakkuk silinecek; sonraki tahakkukların yeniden hesaplanması gerekebilir. Devam edilsin mi?')) return;
+                                          setDeletingAccrualId(getAccrualId(accrual));
+                                          try { await onDeleteBordro(accrual); }
+                                          catch (error) { setErrorMessage(error instanceof Error ? error.message : String(error)); }
+                                          finally { setDeletingAccrualId(null); }
+                                        }}>
+                                        {deletingAccrualId === getAccrualId(accrual) ? 'Siliniyor…' : 'Tahakkuku Sil'}
                                       </button>
                                     )}
                                     {accrual.accrualType !== 'NORMAL' &&

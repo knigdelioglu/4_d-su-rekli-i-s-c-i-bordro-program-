@@ -27,6 +27,7 @@ import {
   BACKUP_FORMAT_VERSION,
   BackupPayload,
   BordroDonemi,
+  BordroKaydi,
   DönemselKurumDegerleri,
   Personel,
   PersonelPuantaj,
@@ -876,6 +877,23 @@ export default function App() {
     }));
   };
 
+  const handleDeleteBordro = async (event: BordroKaydi) => {
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.deletePayrollAccrual(event.personelId, event.donemId, event.accrualId || event.id);
+      await loadData();
+      return;
+    }
+    const impact = await evaluateBrowserMutations({
+      kind: 'ACCRUAL_DELETE', personnelId: event.personelId,
+      periodId: event.donemId, accrualId: event.accrualId || event.id,
+    });
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact)
+        .filter((item) => (item.accrualId || item.id) !== (event.accrualId || event.id)),
+    }));
+  };
+
   const handleSaveBordro = async (updatedBordro: PayrollBoundaryPayroll) => {
     if (tauriBridge.isTauriAvailable()) {
       // Re-fetch the whole ledger: recalculating an earlier payroll may have marked
@@ -1117,6 +1135,7 @@ export default function App() {
                     activePayrollView={activePayrollView}
                     authoritativeDataset={payrollDataset}
                     onSaveBordro={handleSaveBordro}
+                    onDeleteBordro={handleDeleteBordro}
                     onSavePersonel={handleSavePersonel}
                     onSaveTaxOpening={handleSaveTaxOpening}
                     initialPersonelId={targetPersonelIdForBordro}

@@ -4,7 +4,6 @@ use super::Result;
 use rust_decimal::Decimal;
 use rust_decimal::RoundingStrategy;
 use rust_decimal_macros::dec;
-use std::cmp::min;
 use std::collections::HashSet;
 
 fn round2(val: Decimal) -> Decimal {
@@ -16,7 +15,7 @@ fn round2(val: Decimal) -> Decimal {
 /// rounding değil): Ocak asgari istisnası tax(28.075,50) = 4.211,325 → 4.211,33.
 /// Yalnız GV kalemlerinde (brüt GV, asgari istisna, kesilen GV ve asgari ara değerler)
 /// kullanılır. `round2` (MidpointNearestEven) ve `round_sgk_amount` dokunulmaz.
-fn round_gv_amount(val: Decimal) -> Decimal {
+pub(crate) fn round_gv_amount(val: Decimal) -> Decimal {
     val.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
 }
 
@@ -190,10 +189,11 @@ pub fn calculate_gv_hesap_detayi_with_monthly_exemption_state(
         kumulatif_asgari_gv_onceki,
         brackets,
     );
-    let tahakkuk_oncesi_kalan =
-        (asgari_ucret_gv_istisnasi - ayni_ay_onceki_kullanilan_gv_istisnasi).max(dec!(0));
-    let uygulanan_gv_istisnasi = min(brut_gelir_vergisi, tahakkuk_oncesi_kalan);
-    let kesilen_gelir_vergisi = (brut_gelir_vergisi - uygulanan_gv_istisnasi).max(dec!(0));
+    let exemption = crate::gv_exemption::GvExemptionState::resolve(
+        asgari_ucret_gv_istisnasi,
+        ayni_ay_onceki_kullanilan_gv_istisnasi,
+        brut_gelir_vergisi,
+    );
 
     GvHesapDetayi {
         oncekiKumulatifGvMatrahi: kumulatif_gv_matrahi_onceki,
@@ -203,13 +203,12 @@ pub fn calculate_gv_hesap_detayi_with_monthly_exemption_state(
         asgariUcretGvMatrahi: asgari_ucret_aylik_gv_matrahi,
         asgariUcretReferansKumulatifMatrahi: kumulatif_asgari_gv_onceki
             + asgari_ucret_aylik_gv_matrahi,
-        asgariUcretGvIstisnasi: asgari_ucret_gv_istisnasi,
-        ayniAyOncekiKullanilanGvIstisnasi: ayni_ay_onceki_kullanilan_gv_istisnasi,
-        tahakkukOncesiKalanGvIstisnasi: tahakkuk_oncesi_kalan,
-        uygulananGvIstisnasi: uygulanan_gv_istisnasi,
-        tahakkukSonrasiKalanGvIstisnasi: (tahakkuk_oncesi_kalan - uygulanan_gv_istisnasi)
-            .max(dec!(0)),
-        kesilenGelirVergisi: kesilen_gelir_vergisi,
+        asgariUcretGvIstisnasi: exemption.monthly_entitlement,
+        ayniAyOncekiKullanilanGvIstisnasi: exemption.used_before,
+        tahakkukOncesiKalanGvIstisnasi: exemption.remaining_before,
+        uygulananGvIstisnasi: exemption.applied_current,
+        tahakkukSonrasiKalanGvIstisnasi: exemption.remaining_after,
+        kesilenGelirVergisi: exemption.withheld_income_tax,
         dogumAskerlikGvIndirimi: dec!(0),
         sigortaGvIndirimAdayi: dec!(0),
         sigortaGvAylikLimiti: dec!(0),
@@ -870,12 +869,12 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
 /// accrual in the same tax month; accrual count is not a calendar-month
 /// transition.
 #[derive(Debug, Clone, Copy)]
-struct PekCalculationOptions {
-    advance_devreden_month: bool,
-    apply_lower_bound: bool,
+pub(crate) struct PekCalculationOptions {
+    pub(crate) advance_devreden_month: bool,
+    pub(crate) apply_lower_bound: bool,
 }
 
-fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     gelirler: &GelirKalemleri,
     puantaj_ozeti: Option<&PuantajOzeti>,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
@@ -1000,17 +999,16 @@ fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     // `prim_matrahi`, cari ayda gerçekten primlendirilen kazançtır: cari ham PEK +
     // bu ay tavana sığan devreden PEK. Alt sınır tamamlama işçi matrahına dahil edilmez.
     let prim_matrahi = round2(pek_matrah_adayi.max(dec!(0)));
-    let mut final_pek = prim_matrahi;
+    // The normal wage event can follow another payment. Complete only the
+    // remaining monthly employer floor; worker PEK is never increased.
+    let remaining_floor = (pek_alt_sinir - month_to_date_pek).max(dec!(0));
     let alt_sinir_tamamlama_farki =
-        if apply_lower_bound && prim_matrahi > dec!(0) && prim_matrahi < pek_alt_sinir {
-            round2(pek_alt_sinir - prim_matrahi)
+        if apply_lower_bound && prim_matrahi > dec!(0) && prim_matrahi < remaining_floor {
+            round2(remaining_floor - prim_matrahi)
         } else {
             dec!(0)
         };
-
-    if apply_lower_bound && final_pek < pek_alt_sinir && prim_matrahi > dec!(0) {
-        final_pek = pek_alt_sinir;
-    }
+    let final_pek = prim_matrahi + alt_sinir_tamamlama_farki;
 
     let isveren_sgk_rate = k.sgkIsverenOraniYuzde.unwrap_or(dec!(21.75)) / dec!(100);
     let isveren_issizlik_rate = k.issizlikIsverenOraniYuzde.unwrap_or(dec!(2.00)) / dec!(100);

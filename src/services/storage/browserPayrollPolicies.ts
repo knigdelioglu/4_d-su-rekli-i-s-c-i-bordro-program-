@@ -38,7 +38,7 @@ export function applyBrowserPayrollImpact<T extends {
       .map((key) => `${key.personnelId}\u0000${key.periodId}`)
   );
   return payrolls.map((payroll) =>
-    payroll.status === 'CALCULATED' &&
+    (payroll.status === 'CALCULATED' || payroll.status === 'DRAFT') &&
     (affectedPeriods.has(`${payroll.personelId}\u0000${payroll.donemId}`) ||
       affected.has(
         `${payroll.personelId}\u0000${payroll.donemId}\u0000${payroll.accrualId ?? payroll.id}`

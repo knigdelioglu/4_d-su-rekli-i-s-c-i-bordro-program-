@@ -95,3 +95,9 @@ pub fn set_payroll_status(
         status,
     )
 }
+
+#[tauri::command]
+pub fn delete_payroll_accrual(db: State<'_, DbState>, personnel_id: String, period_id: String, accrual_id: String) -> Result<()> {
+    let conn = db.lock().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    PayrollRepository::delete_accrual(&conn, &personnel_id, &period_id, &accrual_id)
+}

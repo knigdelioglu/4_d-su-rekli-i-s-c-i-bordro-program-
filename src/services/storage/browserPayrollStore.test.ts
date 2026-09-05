@@ -748,6 +748,18 @@ describe('SQLite persistence invariant parity', () => {
     );
   });
 
+  test('payment-event backup preserves TEDIYE seq0 before NORMAL seq1', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const normal = firstRecord(payload, 'bordrolar');
+    normal.sequence = 1;
+    (payload.bordrolar as TestRecord[]).push({
+      ...normal, id: 'early-tediye', accrualId: 'early-tediye', accrualType: 'TEDIYE', sequence: 0,
+    });
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(parsed.bordrolar.map((item) => item.sequence)).toEqual([1, 0]);
+    expect(parsed.bordrolar.map((item) => item.accrualType)).toEqual(['NORMAL', 'TEDIYE']);
+  });
+
   test('rejects duplicate tax opening personnelId+year', () => {
     const duplicate = parseTestSnapshot(makeV2Snapshot());
     (duplicate.taxOpenings as TestRecord[]).push({

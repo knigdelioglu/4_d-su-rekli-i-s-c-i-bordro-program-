@@ -29,6 +29,7 @@ pub fn run() {
             commands::get_payroll_list,
             commands::get_payroll_notices,
             commands::calculate_payroll,
+            commands::delete_payroll_accrual,
             commands::finalize_payroll,
             commands::evaluate_mutation_policy,
             commands::set_payroll_status,

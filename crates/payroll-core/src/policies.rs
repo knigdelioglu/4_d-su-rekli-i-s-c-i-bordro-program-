@@ -6,7 +6,7 @@
 #![allow(non_snake_case)]
 
 use crate::models::{BordroDonemi, BordroStatus};
-use crate::payroll_engine::{default_payment_date, PayrollDatasetSnapshot};
+use crate::payroll_engine::{accrual_order_for_payroll as payroll_order, PayrollDatasetSnapshot};
 use crate::{DomainError, Result};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,12 @@ pub enum PayrollMutation {
     },
     #[serde(rename = "ACCRUAL_CALCULATION")]
     AccrualCalculation {
+        personnelId: String,
+        periodId: String,
+        accrualId: String,
+    },
+    #[serde(rename = "ACCRUAL_DELETE")]
+    AccrualDelete {
         personnelId: String,
         periodId: String,
         accrualId: String,
@@ -136,48 +142,16 @@ fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
     }
 }
 
-fn payroll_order(
-    dataset: &PayrollDatasetSnapshot,
-    payroll: &crate::models::BordroKaydi,
-) -> Result<(i64, NaiveDate, i32, String)> {
-    let period = require_period(dataset, &payroll.donemId)?;
-    let date_text = if payroll.paymentDate.trim().is_empty() {
-        default_payment_date(period)
-    } else {
-        payroll.paymentDate.clone()
-    };
-    let payment_date = NaiveDate::parse_from_str(&date_text, "%Y-%m-%d").map_err(|error| {
-        DomainError::InvalidData(format!(
-            "{} tahakkuk ödeme tarihi geçersiz: {}",
-            effective_accrual_id(payroll),
-            error
-        ))
-    })?;
-    Ok((
-        i64::from(period.taxYear) * 12 + i64::from(period.taxMonth),
-        payment_date,
-        payroll.sequence,
-        effective_accrual_id(payroll),
-    ))
-}
-
 fn input_order(
     dataset: &PayrollDatasetSnapshot,
     period_id: &str,
     payment_date: &str,
     sequence: i32,
     accrual_id: &str,
-) -> Result<(i64, NaiveDate, i32, String)> {
-    let period = require_period(dataset, period_id)?;
-    let date = NaiveDate::parse_from_str(payment_date, "%Y-%m-%d").map_err(|error| {
-        DomainError::ValidationError(format!("Tahakkuk ödeme tarihi geçersiz: {}", error))
-    })?;
-    Ok((
-        i64::from(period.taxYear) * 12 + i64::from(period.taxMonth),
-        date,
-        sequence,
-        accrual_id.to_string(),
-    ))
+) -> Result<crate::payroll_engine::AccrualOrder> {
+    crate::payroll_engine::payment_event_order(
+        require_period(dataset, period_id)?, payment_date, sequence, accrual_id,
+    )
 }
 
 fn affected_by_mutation(
@@ -242,7 +216,7 @@ fn affected_by_mutation(
             personnelId,
             periodId,
             accrualId,
-        } => {
+        } | PayrollMutation::AccrualDelete { personnelId, periodId, accrualId } => {
             let source = dataset
                 .payrolls
                 .iter()
@@ -258,7 +232,9 @@ fn affected_by_mutation(
                     ))
                 })?;
             Ok(payroll_personnel_id == personnelId
-                && payroll_order(dataset, payroll)? > payroll_order(dataset, source)?)
+                && (payroll_order(dataset, payroll)? > payroll_order(dataset, source)?
+                    || (matches!(mutation, PayrollMutation::AccrualDelete { .. })
+                        && effective_accrual_id(payroll) == *accrualId)))
         }
         PayrollMutation::AccrualInsert {
             personnelId,

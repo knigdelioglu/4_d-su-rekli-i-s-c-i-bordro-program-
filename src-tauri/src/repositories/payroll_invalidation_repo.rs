@@ -66,7 +66,7 @@ impl PayrollInvalidationRepository {
                      WHERE personnel_id = ?2
                        AND period_id = ?3
                        AND accrual_id = ?4
-                       AND status = 'CALCULATED'",
+                       AND status IN ('CALCULATED', 'DRAFT')",
                     params![now, key.personnelId, key.periodId, key.accrualId],
                 )
                 .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
