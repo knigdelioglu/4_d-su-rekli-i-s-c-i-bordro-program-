@@ -32,13 +32,15 @@
 - Puantajsız supplementary event de statutory GV, damga vergisi, SGK/PEK, vergi tarifesi ve asgari ücret referans kurallarına tabidir; puantaj eksikliği bu statutory snapshot'ı sıfır kapasiteye düşürmez.
 - Aynı-ay GV/DV istisnası ve PEK kapasitesi canonical payment order üzerinden paylaşılır. GV allocation pure `gv_exemption::GvExemptionState` policy’sidir; mutable bakiye tablosu yoktur.
 - Backdated insert, recalculation ve delete mutable downstream kayıtlarını STALE yapar; FINALIZED downstream’u etkileyen mutation reddedilir.
-- Puantaj/rapor mutation'ı attendance-dependent NORMAL köklerini ve canonical downstream event'lerini etkiler; NORMAL'den önceki bağımsız supplementary snapshot gereksiz yere STALE yapılmaz. FINALIZED immutability korunur.
+- Attendance dependency yalnız NORMAL'e ait değildir. `ATTENDANCE_BACKED` supplementary statutory snapshot puantaj input'una bağlıdır; puantaj mutation'ı NORMAL, `ATTENDANCE_BACKED` supplementary ve `PROVISIONAL_PAYMENT_MONTH` supplementary köklerini etkiler. Provenance'ı bilinmeyen (`LEGACY_UNKNOWN`) mutable supplementary kayıtlar fail-safe olarak attendance-dependent kabul edilir.
 - Ek tahakkuk normal maaş gelirlerini yeniden üretmez. `TEDIYE` yalnız tediye brütünü, `TIS_IKRAMIYE` yalnız TİS ikramiye brütünü, `SUPPLEMENTAL` yalnız kendi brütünü üretir.
 - Önceki tahakkuk zincirinde `DRAFT` veya `STALE` kayıt varsa kümülatif/PEK state'i sessiz fallback ile devam ettirilmez; hesap fail-closed olmalıdır.
 - `FINALIZED` tahakkuk immutable'dır. Önceki bir mutable düğüm değişince sonraki mutable bağımlılar STALE olabilir; downstream FINALIZED bağımlılığı bozan mutation reddedilir.
 - Attendance-free/incomplete supplementary statutory snapshot `PROVISIONAL_PAYMENT_MONTH` provenance'ı taşır; 30 günlük fallback gerçek attendance-backed SGK prim günü değildir.
 - Provisional statutory snapshot'lı event `CALCULATED` olabilir fakat `FINALIZED` olamaz; finalization core guard'ı native ve WASM yollarında ortaktır.
-- Authoritative attendance geldiğinde provisional supplementary downstream dependency olarak STALE edilir ve attendance-backed snapshot ile yeniden hesaplanır. Attendance-backed supplementary event sırf puantaj mutation'ı nedeniyle gereksiz yere STALE edilmez.
+- Provisional supplementary event attendance'ın authoritative hale gelmesine bağlıdır; puantaj mutation'ında event ve ondan sonraki aynı-personel canonical payment event zinciri yeniden hesaplanmak üzere STALE edilir. Attendance mutation affected dependency root'tan sonraki canonical payment event'lerini invalidate eder; NORMAL root'un bulunması şart değildir.
+- Sick leave mutation'ı, ilgili dönem effective date ile kesişiyorsa NORMAL ve `ATTENDANCE_BACKED` supplementary snapshot köklerini ve bunların canonical downstream event'lerini etkiler. `PROVISIONAL_PAYMENT_MONTH` supplementary event sırf sick leave değişti diye root değildir, ancak gerçek bir önceki root'un downstream bağımlısı olabilir.
+- Legacy `FINALIZED` supplementary kayıt yalnız mutation'ın gerçek dependency graph'ında affected ise blocker'dır; unrelated personnel/period/tax chain üzerindeki legacy kayıt global mutation blocker değildir. İlgili legacy FINALIZED kayıt fail-closed olarak immutable kalır.
 
 ## DEVREDEN PEK (2026-09-04 multi-accrual hardening)
 - Cari ayda PEK'e fiilen alınan devreden tutar `devredenPekKullanilan` ve `primMatrahi` içinde yer alır; işçi SGK/işsizlik bu authoritative matrahı izler.

@@ -5,11 +5,8 @@
 
 #![allow(non_snake_case)]
 
-use crate::models::{BordroDonemi, BordroStatus};
-use crate::payroll_engine::{
-    accrual_order_for_payroll as payroll_order, is_provisional_supplementary_payroll,
-    PayrollDatasetSnapshot,
-};
+use crate::models::{BordroDonemi, BordroStatus, StatutorySnapshotSource};
+use crate::payroll_engine::{accrual_order_for_payroll as payroll_order, PayrollDatasetSnapshot};
 use crate::{DomainError, Result};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -137,16 +134,47 @@ fn is_person_from_date(candidate: &BordroDonemi, effective_from: &str) -> Result
     Ok(end >= effective)
 }
 
-fn affected_after_any_normal_root(
+fn statutory_snapshot_source(payroll: &crate::models::BordroKaydi) -> StatutorySnapshotSource {
+    payroll
+        .statutorySnapshot
+        .as_ref()
+        .map(|snapshot| snapshot.source)
+        .unwrap_or_default()
+}
+
+fn is_attendance_dependency_root(payroll: &crate::models::BordroKaydi) -> bool {
+    if payroll.accrualType == crate::models::AccrualType::NORMAL {
+        return true;
+    }
+
+    // A supplementary record with missing provenance is legacy data. Treat it
+    // as attendance-dependent for mutation safety rather than guessing that it
+    // was independent of attendance.
+    matches!(
+        statutory_snapshot_source(payroll),
+        StatutorySnapshotSource::AttendanceBacked
+            | StatutorySnapshotSource::ProvisionalPaymentMonth
+            | StatutorySnapshotSource::LegacyUnknown
+    )
+}
+
+fn is_sick_leave_dependency_root(payroll: &crate::models::BordroKaydi) -> bool {
+    payroll.accrualType == crate::models::AccrualType::NORMAL
+        || (payroll.accrualType != crate::models::AccrualType::NORMAL
+            && statutory_snapshot_source(payroll)
+                == StatutorySnapshotSource::AttendanceBacked)
+}
+
+fn affected_after_dependency_roots(
     dataset: &PayrollDatasetSnapshot,
     payroll: &crate::models::BordroKaydi,
-    normal_roots: &[&crate::models::BordroKaydi],
+    dependency_roots: &[&crate::models::BordroKaydi],
 ) -> Result<bool> {
-    if normal_roots.is_empty() {
+    if dependency_roots.is_empty() {
         return Ok(false);
     }
     let candidate_order = payroll_order(dataset, payroll)?;
-    normal_roots
+    dependency_roots
         .iter()
         .try_fold(false, |affected, root| {
             if affected {
@@ -195,24 +223,16 @@ fn affected_by_mutation(
             if payroll_personnel_id != personnelId || candidate.is_none() {
                 return Ok(false);
             }
-            if is_provisional_supplementary_payroll(payroll) {
-                // A 30-day fallback snapshot depends on attendance becoming
-                // authoritative later, even when this event precedes NORMAL.
-                return Ok(payroll.donemId == source.id);
-            }
-            // Puantaj is an input to NORMAL only. A supplementary event that
-            // precedes the period's NORMAL root is independent and must not be
-            // made STALE merely because attendance was later entered/changed.
-            let normal_roots: Vec<&crate::models::BordroKaydi> = dataset
+            let dependency_roots: Vec<&crate::models::BordroKaydi> = dataset
                 .payrolls
                 .iter()
                 .filter(|root| {
                     root.personelId == *personnelId
                         && root.donemId == source.id
-                        && root.accrualType == crate::models::AccrualType::NORMAL
+                        && is_attendance_dependency_root(root)
                 })
                 .collect();
-            affected_after_any_normal_root(dataset, payroll, &normal_roots)
+            affected_after_dependency_roots(dataset, payroll, &dependency_roots)
         }
         PayrollMutation::PersonTaxYear {
             personnelId,
@@ -242,22 +262,19 @@ fn affected_by_mutation(
             if candidate.is_none() {
                 return Ok(false);
             }
-            if is_provisional_supplementary_payroll(payroll) {
-                return Ok(false);
-            }
-            let mut normal_roots = Vec::new();
+            let mut dependency_roots = Vec::new();
             for root in dataset.payrolls.iter().filter(|root| {
                 root.personelId == *personnelId
-                    && root.accrualType == crate::models::AccrualType::NORMAL
+                    && is_sick_leave_dependency_root(root)
             }) {
                 let Some(root_period) = period_for(dataset, &root.donemId) else {
                     continue;
                 };
                 if is_person_from_date(root_period, effectiveFrom)? {
-                    normal_roots.push(root);
+                    dependency_roots.push(root);
                 }
             }
-            affected_after_any_normal_root(dataset, payroll, &normal_roots)
+            affected_after_dependency_roots(dataset, payroll, &dependency_roots)
         }
         PayrollMutation::PayrollCalculation {
             personnelId,
@@ -312,14 +329,6 @@ pub fn evaluate_payroll_invalidation(
     dataset: &PayrollDatasetSnapshot,
     mutation: &PayrollMutation,
 ) -> Result<MutationImpact> {
-    if let Some(payroll) = dataset.payrolls.iter().find(|payroll| {
-        payroll.status == BordroStatus::FINALIZED && is_provisional_supplementary_payroll(payroll)
-    }) {
-        return Err(DomainError::InvalidData(format!(
-            "{} tahakkuku FINALIZED durumda ancak geçici/legacy statutory snapshot taşıyor; mutation reddedildi. Migration veya veri kalitesi incelemesi gerekir.",
-            effective_accrual_id(payroll)
-        )));
-    }
     let mut affected = BTreeSet::new();
     let mut blocked = BTreeSet::new();
 
@@ -353,20 +362,38 @@ pub fn evaluate_payroll_invalidation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{BordroKaydi, GelirKalemleri, KesintiKalemleri, PuantajOzeti};
+    use crate::models::{
+        AccrualType, BordroKaydi, GelirKalemleri, KesintiKalemleri, PuantajOzeti,
+        ResolvedStatutorySnapshot,
+    };
     use crate::payroll_engine::PayrollDatasetSnapshot;
 
-    fn period(id: &str, month: i32, tax_month: i32) -> BordroDonemi {
+    fn period_for_year(
+        id: &str,
+        year: i32,
+        month: i32,
+        tax_year: i32,
+        tax_month: i32,
+    ) -> BordroDonemi {
+        let (end_year, end_month) = if month == 12 {
+            (year + 1, 1)
+        } else {
+            (year, month + 1)
+        };
         BordroDonemi {
             id: id.into(),
-            yil: 2026,
+            yil: year,
             ay: month,
-            baslangicTarihi: format!("2026-{month:02}-15"),
-            bitisTarihi: format!("2026-{:02}-14", month + 1),
+            baslangicTarihi: format!("{year}-{month:02}-15"),
+            bitisTarihi: format!("{end_year}-{end_month:02}-14"),
             donemAdi: id.into(),
-            taxYear: 2026,
+            taxYear: tax_year,
             taxMonth: tax_month,
         }
+    }
+
+    fn period(id: &str, month: i32, tax_month: i32) -> BordroDonemi {
+        period_for_year(id, 2026, month, 2026, tax_month)
     }
 
     fn payroll(period_id: &str, status: BordroStatus) -> BordroKaydi {
@@ -402,6 +429,86 @@ mod tests {
             odenenRaporluGun: None,
             raporluGun: None,
         }
+    }
+
+    fn statutory_snapshot(source: StatutorySnapshotSource) -> ResolvedStatutorySnapshot {
+        ResolvedStatutorySnapshot {
+            source,
+            segments: Vec::new(),
+            sgkPrimGunSayisi: 0,
+            pekAltSinir: Default::default(),
+            pekUstSinir: Default::default(),
+            sgkYemekIstisnasiToplam: Default::default(),
+            gvYemekIstisnasiToplam: Default::default(),
+            gvReferansGunlukAsgariUcret: Default::default(),
+        }
+    }
+
+    fn supplementary(
+        accrual_id: &str,
+        period_id: &str,
+        status: BordroStatus,
+        source: StatutorySnapshotSource,
+        payment_date: &str,
+        sequence: i32,
+        accrual_type: AccrualType,
+    ) -> BordroKaydi {
+        let mut record = payroll(period_id, status);
+        record.id = accrual_id.into();
+        record.accrualId = accrual_id.into();
+        record.accrualType = accrual_type;
+        record.paymentDate = payment_date.into();
+        record.sequence = sequence;
+        record.statutorySnapshot = Some(statutory_snapshot(source));
+        record
+    }
+
+    fn legacy_supplementary(
+        accrual_id: &str,
+        period_id: &str,
+        status: BordroStatus,
+        payment_date: &str,
+        sequence: i32,
+        accrual_type: AccrualType,
+    ) -> BordroKaydi {
+        let mut record = supplementary(
+            accrual_id,
+            period_id,
+            status,
+            StatutorySnapshotSource::LegacyUnknown,
+            payment_date,
+            sequence,
+            accrual_type,
+        );
+        // Missing statutorySnapshot is the legacy representation whose
+        // provenance must be treated as LegacyUnknown by policy.
+        record.statutorySnapshot = None;
+        record
+    }
+
+    fn dataset_with_periods(
+        periods: Vec<BordroDonemi>,
+        payrolls: Vec<BordroKaydi>,
+    ) -> PayrollDatasetSnapshot {
+        PayrollDatasetSnapshot {
+            periods,
+            payrolls,
+            ..PayrollDatasetSnapshot::default()
+        }
+    }
+
+    fn has_accrual(impact: &MutationImpact, accrual_id: &str) -> bool {
+        impact
+            .affectedPayrolls
+            .iter()
+            .any(|key| key.accrualId == accrual_id)
+    }
+
+    fn has_blocked_accrual(impact: &MutationImpact, accrual_id: &str) -> bool {
+        impact
+            .blockedByFinalized
+            .iter()
+            .any(|key| key.accrualId == accrual_id)
     }
 
     fn dataset() -> PayrollDatasetSnapshot {
@@ -482,16 +589,19 @@ mod tests {
     }
 
     #[test]
-    fn attendance_mutation_keeps_independent_supplementary_before_normal_root_clean() {
-        let mut data = dataset();
-        data.payrolls[1].paymentDate = "2026-01-14".into();
-        let mut supplementary = payroll("2026-01", BordroStatus::CALCULATED);
-        supplementary.id = "person-1_2026-01_tediye".into();
-        supplementary.accrualId = supplementary.id.clone();
-        supplementary.accrualType = crate::models::AccrualType::TEDIYE;
-        supplementary.paymentDate = "2026-01-10".into();
-        supplementary.sequence = 0;
-        data.payrolls.push(supplementary);
+    fn attendance_mutation_includes_attendance_backed_before_normal_root() {
+        let mut normal = payroll("2026-01", BordroStatus::CALCULATED);
+        normal.paymentDate = "2026-01-14".into();
+        let tediye = supplementary(
+            "tediye",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![tediye, normal]);
 
         let impact = evaluate_payroll_invalidation(
             &data,
@@ -502,13 +612,281 @@ mod tests {
         )
         .expect("period must exist");
 
-        assert!(!impact
-            .affectedPayrolls
-            .iter()
-            .any(|key| key.accrualId == "person-1_2026-01_tediye"));
-        assert!(impact
-            .affectedPayrolls
-            .iter()
-            .any(|key| key.accrualId == "person-1_2026-01"));
+        assert!(has_accrual(&impact, "tediye"));
+        assert!(has_accrual(&impact, "person-1_2026-01"));
+    }
+
+    #[test]
+    fn attendance_mutation_propagates_without_a_normal_root() {
+        let tediye = supplementary(
+            "tediye",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let tis = supplementary(
+            "tis",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-20",
+            0,
+            AccrualType::TIS_IKRAMIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![tediye, tis]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("period must exist");
+
+        assert!(has_accrual(&impact, "tediye"));
+        assert!(has_accrual(&impact, "tis"));
+    }
+
+    #[test]
+    fn attendance_mutation_propagates_from_provisional_root() {
+        let tediye = supplementary(
+            "tediye",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::ProvisionalPaymentMonth,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let tis = supplementary(
+            "tis",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::ProvisionalPaymentMonth,
+            "2026-01-20",
+            0,
+            AccrualType::TIS_IKRAMIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![tediye, tis]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("period must exist");
+
+        assert!(has_accrual(&impact, "tediye"));
+        assert!(has_accrual(&impact, "tis"));
+    }
+
+    #[test]
+    fn attendance_backed_finalized_root_is_a_blocker() {
+        let tediye = supplementary(
+            "tediye",
+            "2026-01",
+            BordroStatus::FINALIZED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![tediye]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("period must exist");
+
+        assert!(has_blocked_accrual(&impact, "tediye"));
+    }
+
+    #[test]
+    fn sick_leave_mutation_includes_attendance_backed_root_and_downstream() {
+        let tediye = supplementary(
+            "tediye",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let tis = supplementary(
+            "tis",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-20",
+            0,
+            AccrualType::TIS_IKRAMIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![tediye, tis]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonFromDate {
+                personnelId: "person-1".into(),
+                effectiveFrom: "2026-01-20".into(),
+            },
+        )
+        .expect("date must parse");
+
+        assert!(has_accrual(&impact, "tediye"));
+        assert!(has_accrual(&impact, "tis"));
+    }
+
+    #[test]
+    fn sick_leave_mutation_does_not_root_provisional_supplementary() {
+        let tediye = supplementary(
+            "tediye",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::ProvisionalPaymentMonth,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![tediye]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonFromDate {
+                personnelId: "person-1".into(),
+                effectiveFrom: "2026-01-20".into(),
+            },
+        )
+        .expect("date must parse");
+
+        assert!(impact.affectedPayrolls.is_empty());
+        assert!(impact.blockedByFinalized.is_empty());
+    }
+
+    #[test]
+    fn sick_leave_mutation_preserves_normal_root_invalidation() {
+        let mut normal = payroll("2026-01", BordroStatus::CALCULATED);
+        normal.paymentDate = "2026-01-14".into();
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![normal]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonFromDate {
+                personnelId: "person-1".into(),
+                effectiveFrom: "2026-01-20".into(),
+            },
+        )
+        .expect("date must parse");
+
+        assert!(has_accrual(&impact, "person-1_2026-01"));
+    }
+
+    #[test]
+    fn unrelated_legacy_finalized_supplementary_does_not_block_mutation() {
+        let mut ahmet = legacy_supplementary(
+            "ahmet-legacy",
+            "2024-01",
+            BordroStatus::FINALIZED,
+            "2024-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        ahmet.personelId = "ahmet".into();
+        let mut mehmet = payroll("2026-01", BordroStatus::CALCULATED);
+        mehmet.personelId = "mehmet".into();
+        mehmet.id = "mehmet-normal".into();
+        mehmet.accrualId = "mehmet-normal".into();
+        mehmet.paymentDate = "2026-01-14".into();
+        let data = dataset_with_periods(
+            vec![
+                period_for_year("2024-01", 2024, 1, 2024, 1),
+                period("2026-01", 1, 1),
+            ],
+            vec![ahmet, mehmet],
+        );
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "mehmet".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("unrelated legacy data must not cause a global blocker");
+
+        assert!(has_accrual(&impact, "mehmet-normal"));
+        assert!(!has_accrual(&impact, "ahmet-legacy"));
+        assert!(!has_blocked_accrual(&impact, "ahmet-legacy"));
+    }
+
+    #[test]
+    fn relevant_legacy_finalized_supplementary_fails_closed() {
+        let legacy = supplementary(
+            "legacy",
+            "2026-01",
+            BordroStatus::FINALIZED,
+            StatutorySnapshotSource::LegacyUnknown,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let data = dataset_with_periods(vec![period("2026-01", 1, 1)], vec![legacy]);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("policy should return the relevant blocker");
+
+        assert!(has_blocked_accrual(&impact, "legacy"));
+    }
+
+    #[test]
+    fn relevant_legacy_finalized_downstream_supplementary_fails_closed() {
+        let root = supplementary(
+            "root",
+            "2026-01",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::AttendanceBacked,
+            "2026-01-10",
+            0,
+            AccrualType::TEDIYE,
+        );
+        let mut legacy = legacy_supplementary(
+            "legacy",
+            "2026-02",
+            BordroStatus::FINALIZED,
+            "2026-02-10",
+            0,
+            AccrualType::TIS_IKRAMIYE,
+        );
+        legacy.personelId = "person-1".into();
+        let data = dataset_with_periods(
+            vec![period("2026-01", 1, 1), period("2026-02", 2, 2)],
+            vec![root, legacy],
+        );
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("policy should return the relevant downstream blocker");
+
+        assert!(has_blocked_accrual(&impact, "legacy"));
     }
 }
