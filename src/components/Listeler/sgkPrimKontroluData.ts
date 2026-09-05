@@ -442,7 +442,8 @@ export function getSgkPrimKontroluRateLabels(
   institutionSettings?: Partial<DönemselKurumDegerleri>
 ): SgkPrimKontroluRateLabels {
   const fallbackRates = resolveSgkRates(institutionSettings);
-  const rateCandidates = rows.reduce(
+  const authoritativeRows = rows.filter((row) => row.status === 'authoritative');
+  const rateCandidates = authoritativeRows.reduce(
     (candidates, row) => ({
       isverenSgkOranlari: [
         ...candidates.isverenSgkOranlari,

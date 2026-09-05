@@ -499,4 +499,98 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     expect(payload.summaryRows[6].toplam).toBe(350);
     expect(payload.summaryRows[9].toplam).toBe(1);
   });
+
+  test('authoritative + stale farklı oran: stale satırın snapshot oranı header oranına sızmaz', () => {
+    const personAItem = payroll('p-1', 'accrual-a', 'FINALIZED', {
+      ...completeAmounts,
+      sgkIsverenOraniYuzde: 21.75,
+    });
+    const personBItem1 = payroll('p-2', 'accrual-b1', 'FINALIZED', {
+      ...completeAmounts,
+      sgkIsverenOraniYuzde: 22,
+    });
+    const personBItem2 = payroll('p-2', 'accrual-b2', 'STALE', completeAmounts);
+
+    const rows = getSgkPrimKontroluRows(
+      period,
+      [person1, person2],
+      [personAItem, personBItem1, personBItem2]
+    );
+
+    expect(rows.find((r) => r.personel.id === 'p-1')?.status).toBe('authoritative');
+    expect(rows.find((r) => r.personel.id === 'p-2')?.status).toBe('stale');
+    expect(getSgkPrimKontroluRateLabels(rows, institutionSettings).isverenSgk).toBe(
+      'SGK İşveren %21,75'
+    );
+  });
+
+  test('iki authoritative satırda farklı oran varsa Değişken Oran üretir', () => {
+    const personAItem = payroll('p-1', 'accrual-a', 'FINALIZED', {
+      ...completeAmounts,
+      sgkIsverenOraniYuzde: 21.75,
+    });
+    const personBItem = payroll('p-2', 'accrual-b', 'FINALIZED', {
+      ...completeAmounts,
+      sgkIsverenOraniYuzde: 22,
+    });
+
+    const rows = getSgkPrimKontroluRows(
+      period,
+      [person1, person2],
+      [personAItem, personBItem]
+    );
+
+    expect(getSgkPrimKontroluRateLabels(rows, institutionSettings).isverenSgk).toBe(
+      'SGK İşveren (Değişken Oran)'
+    );
+  });
+
+  test('hiç authoritative satır yoksa aktif dönem kurum değerindeki oran kullanılır', () => {
+    const stalePayroll = payroll('p-1', 'accrual-stale', 'STALE', {
+      ...completeAmounts,
+      sgkIsverenOraniYuzde: 25,
+    });
+    const draftPayroll = payroll('p-2', 'accrual-draft', 'DRAFT', {
+      ...completeAmounts,
+      sgkIsverenOraniYuzde: 25,
+    });
+
+    const rows = getSgkPrimKontroluRows(
+      period,
+      [person1, person2, person3],
+      [stalePayroll, draftPayroll]
+    );
+
+    expect(rows.map((r) => r.status)).toEqual(['stale', 'draft', 'notCalculated']);
+    expect(
+      getSgkPrimKontroluRateLabels(rows, { sgkIsverenOraniYuzde: 22 }).isverenSgk
+    ).toBe('SGK İşveren %22');
+  });
+
+  test('hiç authoritative satır ve kurum değeri yoksa DEFAULT_KURUM_DEGERLERI fallback çalışır', () => {
+    const stalePayroll = payroll('p-1', 'accrual-stale', 'STALE', completeAmounts);
+    const draftPayroll = payroll('p-2', 'accrual-draft', 'DRAFT', completeAmounts);
+
+    const rows = getSgkPrimKontroluRows(
+      period,
+      [person1, person2, person3],
+      [stalePayroll, draftPayroll]
+    );
+
+    const labelsWithoutSettings = getSgkPrimKontroluRateLabels(rows, undefined);
+    expect(labelsWithoutSettings).toEqual({
+      isverenSgk: 'SGK İşveren %21,75',
+      isverenIssizlik: 'İşveren İşsizlik %2',
+      isciSgk: 'SGK İşçi %14',
+      isciIssizlik: 'İşçi İşsizlik %1',
+    });
+
+    const labelsWithEmptySettings = getSgkPrimKontroluRateLabels(rows, {});
+    expect(labelsWithEmptySettings).toEqual({
+      isverenSgk: 'SGK İşveren %21,75',
+      isverenIssizlik: 'İşveren İşsizlik %2',
+      isciSgk: 'SGK İşçi %14',
+      isciIssizlik: 'İşçi İşsizlik %1',
+    });
+  });
 });
