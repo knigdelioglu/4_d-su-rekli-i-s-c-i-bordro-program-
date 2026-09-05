@@ -209,7 +209,7 @@ try {
   assert.match(runtimeMetadata.description, /4\/D .*bordro/i, 'Netlify runtime meta description beklenen kimliği içermiyor.');
   assert.equal(runtimeMetadata.manifest, '/manifest.webmanifest', 'Netlify runtime manifest bağlantısı beklenen değerde değil.');
   assert.equal(runtimeMetadata.serviceWorkerRegistrations, 0, 'Eski metadata taşıyabilecek kayıtlı service worker bulundu.');
-  await page.getByText('4/D Personel Kayıtları (0)').waitFor();
+  await page.getByTestId('period-summary').waitFor();
   const wasmBrowserResponse = page.waitForResponse(
     (response) => /\.wasm(?:\?|$)/.test(response.url()),
     { timeout: 30_000 }
@@ -217,6 +217,7 @@ try {
   page.once('dialog', (dialog) => dialog.accept());
   await page.getByTitle('Örnek Veriyi Yeniden Yükle').click();
   assert.equal((await wasmBrowserResponse).status(), 200, 'Chromium WASM isteği başarılı değil.');
+  await page.getByTestId('nav-personel').click();
   await page.getByText(/4\/D Personel Kayıtları \(5\)/).waitFor();
   await installCalculableFixture(page);
   await page.getByTestId('nav-bordro').click();

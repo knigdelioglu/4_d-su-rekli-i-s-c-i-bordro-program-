@@ -71,7 +71,7 @@ jobs:
       - name: Locate installer
         shell: pwsh
         run: |
-          $installer = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          $installer = Get-ChildItem "target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
           if (-not $installer) {
             throw "NSIS installer was not produced."
           }
@@ -82,7 +82,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: 4D-Bordro-Programi-Windows-x64
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          path: target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
       - name: Publish installer to GitHub Release
