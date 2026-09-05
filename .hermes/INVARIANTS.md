@@ -27,8 +27,12 @@
 - Her tahakkuk bağımsız payment event’tir. Tahakkuk tipi order belirlemez. Tüm türlerde `sequence>=0`; sequence yalnız aynı ödeme tarihinin tie-breaker değeridir. Aynı tarihli tahakkuklar sequence ile deterministik sıralanır ve aynı vergi ayı+tarih+sequence kombinasyonu benzersizdir.
 - Mevcut tahakkukun `accrualId`, `accrualType`, `paymentDate` ve `sequence` metadata'sı değiştirilemez; yeniden hesaplama yalnız parasal sonucu güncelleyebilir.
 - NORMAL zorunlu ilk event değildir; TEDIYE → NORMAL → TİS desteklenir. Cari state’i etkileyen önceki event’ler CALCULATED/FINALIZED olmalıdır.
+- NORMAL attendance-dependent event'tir ve hesaplanması için ilgili puantajın mevcut ve dolu olması gerekir.
+- TEDIYE / TIS_IKRAMIYE / SUPPLEMENTAL bağımsız gross payment event'leridir; attendance-derived gelir üretmedikleri için NORMAL puantajını hesaplama ön koşulu olarak gerektirmezler.
+- Puantajsız supplementary event de statutory GV, damga vergisi, SGK/PEK, vergi tarifesi ve asgari ücret referans kurallarına tabidir; puantaj eksikliği bu statutory snapshot'ı sıfır kapasiteye düşürmez.
 - Aynı-ay GV/DV istisnası ve PEK kapasitesi canonical payment order üzerinden paylaşılır. GV allocation pure `gv_exemption::GvExemptionState` policy’sidir; mutable bakiye tablosu yoktur.
 - Backdated insert, recalculation ve delete mutable downstream kayıtlarını STALE yapar; FINALIZED downstream’u etkileyen mutation reddedilir.
+- Puantaj/rapor mutation'ı attendance-dependent NORMAL köklerini ve canonical downstream event'lerini etkiler; NORMAL'den önceki bağımsız supplementary snapshot gereksiz yere STALE yapılmaz. FINALIZED immutability korunur.
 - Ek tahakkuk normal maaş gelirlerini yeniden üretmez. `TEDIYE` yalnız tediye brütünü, `TIS_IKRAMIYE` yalnız TİS ikramiye brütünü, `SUPPLEMENTAL` yalnız kendi brütünü üretir.
 - Önceki tahakkuk zincirinde `DRAFT` veya `STALE` kayıt varsa kümülatif/PEK state'i sessiz fallback ile devam ettirilmez; hesap fail-closed olmalıdır.
 - `FINALIZED` tahakkuk immutable'dır. Önceki bir mutable düğüm değişince sonraki mutable bağımlılar STALE olabilir; downstream FINALIZED bağımlılığı bozan mutation reddedilir.
@@ -37,7 +41,9 @@
 - Cari ayda PEK'e fiilen alınan devreden tutar `devredenPekKullanilan` ve `primMatrahi` içinde yer alır; işçi SGK/işsizlik bu authoritative matrahı izler.
 - Cari dönemde SGK prim günü yoksa PEK üst sınırı 0 olduğundan gelen devreden PEK **o ay tüketilemez**.
 - Devreden ücret dışı PEK'in taşıma penceresi takvimsel olarak ödemenin yapıldığı ayı takip eden en fazla iki aydır; prim günü olmayan ara ay taşıma ömrünü dondurmaz.
-- `kalanAySayisi` **tahakkuk sayısına göre değil vergi ayı geçişine göre** yaşlanır. Aynı `taxYear/taxMonth` içindeki NORMAL → TEDIYE → TİS/SUPPLEMENTAL zincirinde bakiye azalabilir fakat `kalanAySayisi` azalmaz. Bir sonraki vergi ayına geçildiğinde yalnız bir kez yaşlanır.
+- Devreden PEK zincirinde ara vergi ayının geçerli sayılması NORMAL tahakkuk varlığına bağlı değildir. O ayda en az bir `CALCULATED`/`FINALIZED` authoritative payment event bulunması yeterlidir; state, canonical order'daki son authoritative event'in `sonrakiDevredenPek` snapshot'ından alınır. `DRAFT`/`STALE` state sessizce atlanmaz, zincir fail-closed olur.
+- PEK carry aging boolean değildir. Kaynak ve cari vergi ayları `taxYear * 12 + taxMonth` ordinal'larıyla karşılaştırılır; `tax_months_elapsed` aynı ayda `0`, takip eden ayda `1`, iki ay sonraki event'te `2` olur. Çalışma dönemi `yil/ay` veya tahakkuk sayısı aging hesabına girmez.
+- `kalanAySayisi`, gerçek `tax_months_elapsed` kadar azaltılır: `old_remaining - tax_months_elapsed`. Sonuç `<= 0` ise kayıt taşınmaz; aynı vergi ayındaki event sayısı aging oluşturmaz.
 - Aynı ay içindeki sonraki tahakkuk, önceki tahakkukun `sonrakiDevredenPek` state'inden devam eder; aylık PEK tavanı sıfırdan açılmaz.
 - NORMAL daha sonra geldiğinde işveren alt sınır tamamlama farkı, aylık alt sınırdan önceki event’lerin PEK’i düşülerek hesaplanır; işçi matrahına eklenmez.
 - Aylık PEK kapasitesi month-to-date paylaşılır: aynı vergi ayındaki tahakkukların authoritative `primMatrahi` toplamı aylık tavanı aşamaz.

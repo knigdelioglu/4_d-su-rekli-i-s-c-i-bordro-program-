@@ -292,18 +292,39 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
     settings: &DonemselKurumDegerleri,
     paid_sick_dates: &[NaiveDate],
 ) -> Result<ResolvedStatutorySnapshot> {
+    resolve_statutory_snapshot_internal(Some(attendance), period, settings, paid_sick_dates)
+}
+
+/// Resolves the statutory payment-month reference for a supplementary event
+/// that has no attendance input. The event still receives the complete
+/// 15–14 period statutory SGK/PEK capacity (30 normalized days), while
+/// attendance-derived meal entitlements and sick-leave inputs remain empty.
+pub fn resolve_statutory_snapshot_for_payment_month(
+    period: &BordroDonemi,
+    settings: &DonemselKurumDegerleri,
+) -> Result<ResolvedStatutorySnapshot> {
+    resolve_statutory_snapshot_internal(None, period, settings, &[])
+}
+
+fn resolve_statutory_snapshot_internal(
+    attendance: Option<&PersonelPuantaj>,
+    period: &BordroDonemi,
+    settings: &DonemselKurumDegerleri,
+    paid_sick_dates: &[NaiveDate],
+) -> Result<ResolvedStatutorySnapshot> {
     validate_statutory_segments_for_period(period, settings)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let calendar_day_count = (end - start).num_days() + 1;
-    let full_calendar_coverage = attendance.gunler.len() as i64 == calendar_day_count;
+    let full_calendar_coverage = attendance
+        .is_some_and(|attendance| attendance.gunler.len() as i64 == calendar_day_count);
     let full_calendar_has_non_prim_day = if full_calendar_coverage {
-        attendance.gunler.iter().any(|(date_text, code)| {
+        attendance.is_some_and(|attendance| attendance.gunler.iter().any(|(date_text, code)| {
             let Ok(date) = NaiveDate::parse_from_str(date_text, "%Y-%m-%d") else {
                 return true;
             };
             !is_prim_bearing_code(code, date, paid_sick_dates)
-        })
+        }))
     } else {
         false
     };
@@ -364,22 +385,35 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
         };
         let mut segment_sgk_days = 0;
         let mut worked_days = 0;
-        for (date_text, code) in &attendance.gunler {
-            let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|_| {
-                DomainError::InvalidData(format!("Puantaj tarihi geçersiz: {}", date_text))
-            })?;
-            if date < *range_start || date > range_end {
-                continue;
+        if let Some(attendance) = attendance {
+            for (date_text, code) in &attendance.gunler {
+                let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|_| {
+                    DomainError::InvalidData(format!("Puantaj tarihi geçersiz: {}", date_text))
+                })?;
+                if date < *range_start || date > range_end {
+                    continue;
+                }
+                if is_prim_bearing_code(code, date, paid_sick_dates) {
+                    segment_sgk_days += if full_calendar_coverage && !full_calendar_has_non_prim_day {
+                        full_period_sgk_day_weight(date, start)?
+                    } else {
+                        1
+                    };
+                }
+                if matches!(code.as_str(), "Ç" | "GÇ") {
+                    worked_days += 1;
+                }
             }
-            if is_prim_bearing_code(code, date, paid_sick_dates) {
-                segment_sgk_days += if full_calendar_coverage && !full_calendar_has_non_prim_day {
-                    full_period_sgk_day_weight(date, start)?
-                } else {
-                    1
-                };
-            }
-            if matches!(code.as_str(), "Ç" | "GÇ") {
-                worked_days += 1;
+        } else {
+            // A supplementary event is not allowed to turn missing attendance
+            // into a zero PEK ceiling. Use the statutory 30-day normalized
+            // capacity and keep attendance-derived meal days at zero.
+            let mut date = *range_start;
+            while date <= range_end {
+                segment_sgk_days += full_period_sgk_day_weight(date, start)?;
+                date = date.succ_opt().ok_or_else(|| {
+                    DomainError::InvalidData("Yasal segment tarih aralığı çözülemedi.".into())
+                })?;
             }
         }
         total_sgk_days += segment_sgk_days;
@@ -634,6 +668,22 @@ fn person_by_id<'a>(dataset: &'a PayrollDatasetSnapshot, id: &str) -> Result<&'a
         .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", id)))
 }
 
+fn normal_attendance<'a>(
+    dataset: &'a PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period_id: &str,
+) -> Result<&'a PersonelPuantaj> {
+    dataset
+        .attendances
+        .iter()
+        .find(|attendance| {
+            attendance.personelId == personnel_id
+                && attendance.donemId == period_id
+                && !attendance.gunler.is_empty()
+        })
+        .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))
+}
+
 fn existing_payroll<'a>(
     dataset: &'a PayrollDatasetSnapshot,
     personnel_id: &str,
@@ -689,7 +739,7 @@ pub struct AccrualOrder {
 #[derive(Debug, Clone)]
 struct IncomingDevredenPekState {
     records: Vec<DevredenPekKaydi>,
-    advances_tax_month: bool,
+    tax_months_elapsed: i32,
 }
 
 pub(crate) fn accrual_order_for_input(
@@ -719,6 +769,37 @@ pub fn accrual_order_for_payroll(
 ) -> Result<AccrualOrder> {
     let period = period_by_id(dataset, &payroll.donemId)?;
     payment_event_order(period, &effective_payment_date(payroll, period), payroll.sequence, &effective_accrual_id(payroll))
+}
+
+fn ordered_prior_payment_events<'a>(
+    dataset: &'a PayrollDatasetSnapshot,
+    personnel_id: &str,
+    current_order: &AccrualOrder,
+) -> Result<Vec<(AccrualOrder, &'a BordroKaydi)>> {
+    let mut events = dataset
+        .payrolls
+        .iter()
+        .filter(|payroll| payroll.personelId == personnel_id)
+        .map(|payroll| Ok((accrual_order_for_payroll(dataset, payroll)?, payroll)))
+        .collect::<Result<Vec<_>>>()?;
+    events.retain(|(order, _)| order < current_order);
+    events.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(events)
+}
+
+fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
+    match payroll.status {
+        BordroStatus::CALCULATED | BordroStatus::FINALIZED => Ok(()),
+        BordroStatus::DRAFT | BordroStatus::STALE => Err(DomainError::ValidationError(format!(
+            "Payment-event/PEK zinciri çözülemez: {} tahakkuku {} durumda; authoritative state belirlenemiyor.",
+            effective_accrual_id(payroll),
+            match payroll.status {
+                BordroStatus::DRAFT => "DRAFT",
+                BordroStatus::STALE => "STALE",
+                _ => unreachable!(),
+            }
+        ))),
+    }
 }
 
 fn payroll_for_requested_accrual<'a>(
@@ -910,41 +991,14 @@ fn resolve_prior_accrual_state<'a>(
     current: &PayrollAccrualInput,
 ) -> Result<Vec<&'a BordroKaydi>> {
     let current_order = accrual_order_for_input(period, current)?;
-    let mut prior = Vec::new();
-    for payroll in dataset
-        .payrolls
-        .iter()
-        .filter(|payroll| payroll.personelId == personnel_id)
-    {
-        let order = accrual_order_for_payroll(dataset, payroll)?;
-        if order.tax_ordinal != current_order.tax_ordinal || order >= current_order {
-            continue;
-        }
-        match payroll.status {
-            BordroStatus::CALCULATED | BordroStatus::FINALIZED => prior.push(payroll),
-            BordroStatus::DRAFT | BordroStatus::STALE => {
-                return Err(DomainError::ValidationError(format!(
-                    "{} dönemindeki önceki {} tahakkuk {} durumda; aynı-ay state zinciri authoritative değildir.",
-                    period.id,
-                    effective_accrual_id(payroll),
-                    match payroll.status {
-                        BordroStatus::DRAFT => "DRAFT",
-                        BordroStatus::STALE => "STALE",
-                        _ => "",
-                    }
-                )))
-            }
-        }
-    }
-    let mut ordered_prior: Vec<(AccrualOrder, &'a BordroKaydi)> = prior
+    ordered_prior_payment_events(dataset, personnel_id, &current_order)?
         .into_iter()
-        .map(|payroll| Ok((accrual_order_for_payroll(dataset, payroll)?, payroll)))
-        .collect::<Result<_>>()?;
-    ordered_prior.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(ordered_prior
-        .into_iter()
-        .map(|(_, payroll)| payroll)
-        .collect())
+        .filter(|(order, _)| order.tax_ordinal == current_order.tax_ordinal)
+        .map(|(_, payroll)| {
+            ensure_authoritative_payment_event(payroll)?;
+            Ok(payroll)
+        })
+        .collect()
 }
 
 fn validate_prior_accruals_finalized(
@@ -1088,59 +1142,55 @@ fn incoming_devreden_pek(
     active_period: &BordroDonemi,
     current: &PayrollAccrualInput,
 ) -> Result<IncomingDevredenPekState> {
-    let prior_same_month =
-        resolve_prior_accrual_state(dataset, personnel_id, active_period, current)?;
+    let current_order = accrual_order_for_input(active_period, current)?;
+    let ordered_prior = ordered_prior_payment_events(dataset, personnel_id, &current_order)?;
+    let prior_same_month: Vec<&BordroKaydi> = ordered_prior
+        .iter()
+        .filter(|(order, _)| order.tax_ordinal == current_order.tax_ordinal)
+        .map(|(_, payroll)| *payroll)
+        .collect();
+    for payroll in &prior_same_month {
+        ensure_authoritative_payment_event(payroll)?;
+    }
     if let Some(previous_accrual) = prior_same_month.last() {
         return Ok(IncomingDevredenPekState {
             records: previous_accrual
                 .sonrakiDevredenPek
                 .clone()
                 .unwrap_or_default(),
-            advances_tax_month: false,
-        });
-    }
-
-    let current_order = accrual_order_for_input(active_period, current)?;
-    let ordered_candidates = dataset.payrolls.iter()
-        .filter(|payroll| payroll.personelId == personnel_id)
-        .map(|payroll| Ok((accrual_order_for_payroll(dataset, payroll)?, payroll)))
-        .collect::<Result<Vec<_>>>()?;
-    let previous_month = ordered_candidates.iter()
-        .filter(|(order, _)| order < &current_order)
-        .map(|(order, _)| order.tax_ordinal).max();
-    let previous_payrolls: Vec<&BordroKaydi> = ordered_candidates.into_iter()
-        .filter(|(order, _)| Some(order.tax_ordinal) == previous_month)
-        .map(|(_, payroll)| payroll).collect();
-    for previous_payroll in &previous_payrolls {
-        match previous_payroll.status {
-            BordroStatus::CALCULATED | BordroStatus::FINALIZED => {}
-            BordroStatus::DRAFT | BordroStatus::STALE => {
-                return Err(DomainError::ValidationError(format!(
-                    "{} dönemindeki önceki {} tahakkuk {} durumda; devreden PEK authoritative değildir.",
-                    previous_payroll.donemId,
-                    effective_accrual_id(previous_payroll),
-                    match previous_payroll.status {
-                        BordroStatus::DRAFT => "DRAFT",
-                        BordroStatus::STALE => "STALE",
-                        _ => "",
-                    }
-                )))
-            }
-        }
-    }
-    let mut ordered_previous: Vec<(AccrualOrder, &BordroKaydi)> = previous_payrolls
-        .into_iter()
-        .map(|payroll| Ok((accrual_order_for_payroll(dataset, payroll)?, payroll)))
-        .collect::<Result<_>>()?;
-    ordered_previous.sort_by(|left, right| left.0.cmp(&right.0));
-    let Some((previous_order, previous_payroll)) = ordered_previous.last() else {
-        return Ok(IncomingDevredenPekState {
-            records: Vec::new(),
-            advances_tax_month: false,
+            tax_months_elapsed: 0,
         });
     };
-    let current_order = accrual_order_for_input(active_period, current)?;
-    if previous_order.tax_ordinal >= current_order.tax_ordinal {
+
+    let Some(previous_tax_ordinal) = ordered_prior
+        .iter()
+        .map(|(order, _)| order.tax_ordinal)
+        .max()
+    else {
+        return Ok(IncomingDevredenPekState {
+            records: Vec::new(),
+            tax_months_elapsed: 0,
+        });
+    };
+    let previous_month: Vec<(AccrualOrder, &BordroKaydi)> = ordered_prior
+        .iter()
+        .map(|(order, payroll)| (order.clone(), *payroll))
+        .filter(|(order, _)| order.tax_ordinal == previous_tax_ordinal)
+        .collect();
+    for (_, previous_payroll) in &previous_month {
+        ensure_authoritative_payment_event(previous_payroll)?;
+    }
+    let Some((previous_order, previous_payroll)) = previous_month.last() else {
+        return Ok(IncomingDevredenPekState {
+            records: Vec::new(),
+            tax_months_elapsed: 0,
+        });
+    };
+    let tax_months_elapsed = tax_month_distance(
+        current_order.tax_ordinal,
+        previous_order.tax_ordinal,
+    )?;
+    if tax_months_elapsed <= 0 {
         return Err(DomainError::InvalidData(
             "Devreden PEK kaynağı mevcut vergi ayından ileri veya aynı ayda çözümlenemedi.".into(),
         ));
@@ -1150,7 +1200,7 @@ fn incoming_devreden_pek(
             .sonrakiDevredenPek
             .clone()
             .unwrap_or_default(),
-        advances_tax_month: true,
+        tax_months_elapsed,
     })
 }
 
@@ -1175,6 +1225,20 @@ fn payroll_gv_base(payroll: &BordroKaydi) -> Result<Decimal> {
 
 fn tax_ordinal(year: i32, month: i32) -> i64 {
     i64::from(year) * 12 + i64::from(month)
+}
+
+fn tax_month_distance(current_tax_ordinal: i64, source_tax_ordinal: i64) -> Result<i32> {
+    let distance = current_tax_ordinal
+        .checked_sub(source_tax_ordinal)
+        .ok_or_else(|| DomainError::InvalidData("Vergi ayı farkı çözülemedi.".into()))?;
+    if distance < 0 {
+        return Err(DomainError::InvalidData(
+            "Vergi ayı kaynağı mevcut vergi ayından ileri olamaz.".into(),
+        ));
+    }
+    i32::try_from(distance).map_err(|_| {
+        DomainError::InvalidData("Vergi ayı farkı desteklenen aralığı aşıyor.".into())
+    })
 }
 
 fn previous_gv(
@@ -1568,49 +1632,49 @@ fn validate_devreden_pek_gap(
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     active_period: &BordroDonemi,
+    current: &PayrollAccrualInput,
 ) -> Result<()> {
-    let active_start = parse_period_date(
-        &active_period.baslangicTarihi,
-        &active_period.id,
-        "başlangıç",
-    )?;
-    let prior: Vec<(&BordroKaydi, &BordroDonemi)> = dataset
-        .payrolls
+    let current_order = accrual_order_for_input(active_period, current)?;
+    let ordered_prior = ordered_prior_payment_events(dataset, personnel_id, &current_order)?;
+    let prior_same_month: Vec<&BordroKaydi> = ordered_prior
         .iter()
-        .filter_map(|payroll| {
-            if payroll.personelId != personnel_id {
-                return None;
-            }
-            let period = dataset
-                .periods
-                .iter()
-                .find(|period| period.id == payroll.donemId)?;
-            let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").ok()?;
-            (start < active_start).then_some((payroll, period))
-        })
+        .filter(|(order, _)| order.tax_ordinal == current_order.tax_ordinal)
+        .map(|(_, payroll)| *payroll)
         .collect();
-    let Some(previous_period_id) = prior
+    for payroll in &prior_same_month {
+        ensure_authoritative_payment_event(payroll)?;
+    }
+    if !prior_same_month.is_empty() {
+        return Ok(());
+    }
+
+    let Some(previous_tax_ordinal) = ordered_prior
         .iter()
-        .max_by_key(|(_, period)| (period.baslangicTarihi.clone(), period.id.clone()))
-        .map(|(_, period)| period.id.clone())
+        .map(|(order, _)| order.tax_ordinal)
+        .max()
     else {
         return Ok(());
     };
-    let mut ordered_previous: Vec<(AccrualOrder, &BordroKaydi, &BordroDonemi)> = prior
-        .into_iter()
-        .filter(|(_, period)| period.id == previous_period_id)
-        .map(|(payroll, period)| {
-            Ok((
-                accrual_order_for_payroll(dataset, payroll)?,
-                payroll,
-                period,
-            ))
-        })
-        .collect::<Result<_>>()?;
-    ordered_previous.sort_by(|left, right| left.0.cmp(&right.0));
-    let Some((_, previous_payroll, previous_period)) = ordered_previous.pop() else {
+    let previous_month: Vec<(AccrualOrder, &BordroKaydi)> = ordered_prior
+        .iter()
+        .map(|(order, payroll)| (order.clone(), *payroll))
+        .filter(|(order, _)| order.tax_ordinal == previous_tax_ordinal)
+        .collect();
+    for (_, payroll) in &previous_month {
+        ensure_authoritative_payment_event(payroll)?;
+    }
+    let Some((previous_order, previous_payroll)) = previous_month.last() else {
         return Ok(());
     };
+    let tax_months_elapsed = tax_month_distance(
+        current_order.tax_ordinal,
+        previous_order.tax_ordinal,
+    )?;
+    if tax_months_elapsed <= 0 {
+        return Err(DomainError::InvalidData(
+            "Devreden PEK vergi ayı kronolojisi geçersiz.".into(),
+        ));
+    }
     let positive: Vec<&DevredenPekKaydi> = previous_payroll
         .sonrakiDevredenPek
         .as_deref()
@@ -1618,62 +1682,38 @@ fn validate_devreden_pek_gap(
         .iter()
         .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
         .collect();
-    if positive.is_empty() {
+    if positive.is_empty() || tax_months_elapsed == 1 {
         return Ok(());
-    }
-    let source_ordinal = i64::from(previous_period.yil) * 12 + i64::from(previous_period.ay);
-    let active_ordinal = i64::from(active_period.yil) * 12 + i64::from(active_period.ay);
-    let distance = active_ordinal - source_ordinal;
-    if distance <= 0 {
-        return Err(DomainError::InvalidData(
-            "Devreden PEK çalışma dönemi kronolojisi geçersiz.".into(),
-        ));
-    }
-    if distance == 1 {
-        return Ok(());
-    }
-    let skipped_months = (distance - 1) as i32;
-    if !positive
-        .iter()
-        .any(|item| item.kalanAySayisi - skipped_months > 0)
-    {
-        return Ok(());
-    }
-    if !matches!(
-        previous_payroll.status,
-        BordroStatus::CALCULATED | BordroStatus::FINALIZED
-    ) {
-        return Err(DomainError::ValidationError(format!(
-            "{} dönemindeki son önceki bordro {} durumda ve devreden PEK taşıyor. Önce bu bordroyu yeniden hesaplayın.",
-            previous_period.id,
-            match previous_payroll.status {
-                BordroStatus::DRAFT => "DRAFT",
-                BordroStatus::STALE => "STALE",
-                _ => "",
-            }
-        )));
     }
 
-    let (expected_year, expected_month) = if active_period.ay == 1 {
-        (active_period.yil - 1, 12)
-    } else {
-        (active_period.yil, active_period.ay - 1)
-    };
-    let expected_period = dataset
-        .periods
-        .iter()
-        .find(|period| period.yil == expected_year && period.ay == expected_month);
-    let Some(expected_period) = expected_period else {
-        return Err(DomainError::ValidationError(format!(
-            "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli fakat {}-{:02} ara çalışma dönemi oluşturulmamış.",
-            personnel_id, previous_period.id, expected_year, expected_month
-        )));
-    };
-    if existing_payroll(dataset, personnel_id, &expected_period.id).is_none() {
-        return Err(DomainError::ValidationError(format!(
-            "{} personelinde {} döneminden gelen devreden PEK hâlâ geçerli, ancak aradaki {} dönemi için bordro yok. Devreden PEK'in sessizce kaybolmaması için önce ara dönem bordrosunu tamamlayın.",
-            personnel_id, previous_period.id, expected_period.id
-        )));
+    // A direct source-to-current tax-month distance is deterministic. If every
+    // carry record expires by the current event, no artificial intermediate
+    // period/event is required and no PEK is silently retained.
+    if !positive.iter().any(|item| {
+        i64::from(item.kalanAySayisi) > i64::from(tax_months_elapsed)
+    }) {
+        return Ok(());
+    }
+
+    // When a carry would still be alive at the current event, every skipped
+    // tax month in its active window must have an authoritative payment-event
+    // state. The event type is intentionally irrelevant.
+    let first_missing_tax_ordinal = previous_order.tax_ordinal + 1;
+    for tax_ordinal in first_missing_tax_ordinal..current_order.tax_ordinal {
+        let events: Vec<&BordroKaydi> = ordered_prior
+            .iter()
+            .filter(|(order, _)| order.tax_ordinal == tax_ordinal)
+            .map(|(_, payroll)| *payroll)
+            .collect();
+        if events.is_empty() {
+            return Err(DomainError::ValidationError(format!(
+                "Payment-event/PEK zinciri çözülemez: {} personelinde {} vergi ayındaki ara authoritative payment event bulunamadı; devreden PEK current event'te hâlâ geçerli.",
+                personnel_id, tax_ordinal
+            )));
+        }
+        for payroll in events {
+            ensure_authoritative_payment_event(payroll)?;
+        }
     }
     Ok(())
 }
@@ -1700,6 +1740,9 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
         ));
     }
     validate_period(period)?;
+    if accrual.accrualType == AccrualType::NORMAL {
+        normal_attendance(&request.dataset, &request.personnelId, &request.periodId)?;
+    }
     validate_tax_month_overlap(period)?;
     validate_tax_chronology(&request.dataset, period)?;
     validate_tax_month_chain(&request.dataset, person, period)?;
@@ -1715,7 +1758,7 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
         })?;
     validate_kurum_degerleri_for_payroll(settings)?;
     validate_statutory_tax_month_reference(period, settings)?;
-    validate_devreden_pek_gap(&request.dataset, &request.personnelId, period)?;
+    validate_devreden_pek_gap(&request.dataset, &request.personnelId, period, &accrual)?;
     resolve_prior_accrual_state(&request.dataset, &request.personnelId, period, &accrual)?;
     Ok(())
 }
@@ -1760,35 +1803,34 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
 
     validate_prior_accruals_finalized(&request.dataset, &request.personnelId, period, &accrual)?;
 
-    let attendance = request
-        .dataset
-        .attendances
-        .iter()
-        .find(|attendance| {
-            attendance.personelId == request.personnelId && attendance.donemId == request.periodId
-        })
-        .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
-    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
-    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
-    let mut missing_dates = Vec::new();
-    let mut current = start;
-    while current <= end {
-        let date_text = current.format("%Y-%m-%d").to_string();
-        if !attendance.gunler.contains_key(&date_text) {
-            missing_dates.push(date_text);
+    if accrual.accrualType == AccrualType::NORMAL {
+        let attendance = normal_attendance(
+            &request.dataset,
+            &request.personnelId,
+            &request.periodId,
+        )?;
+        let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+        let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+        let mut missing_dates = Vec::new();
+        let mut current = start;
+        while current <= end {
+            let date_text = current.format("%Y-%m-%d").to_string();
+            if !attendance.gunler.contains_key(&date_text) {
+                missing_dates.push(date_text);
+            }
+            current = current
+                .checked_add_signed(chrono::Duration::days(1))
+                .ok_or_else(|| {
+                    DomainError::InvalidData("Puantaj tarih aralığı çözümlenemedi.".into())
+                })?;
         }
-        current = current
-            .checked_add_signed(chrono::Duration::days(1))
-            .ok_or_else(|| {
-                DomainError::InvalidData("Puantaj tarih aralığı çözümlenemedi.".into())
-            })?;
-    }
-    if !missing_dates.is_empty() {
-        return Err(DomainError::ValidationError(format!(
-            "{} dönemi puantajı eksik: {} takvim günü için kayıt bulunmuyor.",
-            period.id,
-            missing_dates.len()
-        )));
+        if !missing_dates.is_empty() {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi puantajı eksik: {} takvim günü için kayıt bulunmuyor.",
+                period.id,
+                missing_dates.len()
+            )));
+        }
     }
 
     // Finalization recalculates the source payroll. A later FINALIZED payroll
@@ -1856,27 +1898,32 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         ));
     }
 
-    let attendance = dataset
-        .attendances
-        .iter()
-        .find(|attendance| {
-            attendance.personelId == request.personnelId && attendance.donemId == request.periodId
-        })
-        .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?
-        .clone();
+    let is_normal_accrual = accrual.accrualType == AccrualType::NORMAL;
+    let attendance = if is_normal_accrual {
+        Some(normal_attendance(dataset, &request.personnelId, &request.periodId)?)
+    } else {
+        None
+    };
     let mut summary = PuantajOzeti::default();
-    for code in attendance.gunler.values() {
-        add_puantaj_kodu(&mut summary, code, &period.id)?;
+    if let Some(attendance) = attendance {
+        for code in attendance.gunler.values() {
+            add_puantaj_kodu(&mut summary, code, &period.id)?;
+        }
     }
 
-    let sick_records: Vec<SickLeaveRecord> = dataset
-        .sickLeaveRecords
-        .iter()
-        .filter(|record| record.personnelId == request.personnelId)
-        .cloned()
-        .collect();
-    let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, &period);
-    validate_paid_sick_dates_against_attendance(&attendance, &paid_sick_dates, &period.id)?;
+    let paid_sick_dates = if let Some(attendance) = attendance {
+        let sick_records: Vec<SickLeaveRecord> = dataset
+            .sickLeaveRecords
+            .iter()
+            .filter(|record| record.personnelId == request.personnelId)
+            .cloned()
+            .collect();
+        let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, &period);
+        validate_paid_sick_dates_against_attendance(attendance, &paid_sick_dates, &period.id)?;
+        paid_sick_dates
+    } else {
+        Vec::new()
+    };
     let paid_sick_days = paid_sick_dates.len() as i32;
 
     let settings = dataset
@@ -1891,12 +1938,28 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         .clone();
     validate_kurum_degerleri_for_payroll(&settings)?;
     validate_statutory_segments_for_period(&period, &settings)?;
-    let statutory_snapshot = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
-        &attendance,
-        &period,
-        &settings,
-        &paid_sick_dates,
-    )?;
+
+    // Resolve prior payment-event state before calculating tax. This keeps a
+    // DRAFT/STALE chain fail-closed with the generic payment-event error and
+    // makes the same-month authoritative snapshot available to a supplementary
+    // event that has no attendance input.
+    let prior_accruals = resolve_prior_accrual_state(dataset, &person.id, &period, &accrual)?;
+    let incoming_devreden_state = incoming_devreden_pek(dataset, &person.id, &period, &accrual)?;
+    let statutory_snapshot = if is_normal_accrual {
+        resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+            attendance.ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
+            &period,
+            &settings,
+            &paid_sick_dates,
+        )?
+    } else if let Some(snapshot) = prior_accruals
+        .last()
+        .and_then(|payroll| payroll.statutorySnapshot.clone())
+    {
+        snapshot
+    } else {
+        resolve_statutory_snapshot_for_payment_month(&period, &settings)?
+    };
     validate_pek_bounds(
         statutory_snapshot.pekAltSinir,
         statutory_snapshot.pekUstSinir,
@@ -1913,10 +1976,11 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
                 period.taxYear
             ))
         })?;
-    let (before_summary, after_summary, raise_date) =
-        split_puantaj_by_zam_tarihi(&attendance, &period, &dataset.zamAylari)?;
-
-    let is_normal_accrual = accrual.accrualType == AccrualType::NORMAL;
+    let (before_summary, after_summary, raise_date) = if let Some(attendance) = attendance {
+        split_puantaj_by_zam_tarihi(attendance, &period, &dataset.zamAylari)?
+    } else {
+        (PuantajOzeti::default(), PuantajOzeti::default(), None)
+    };
     let (mut income, mut is_primi_detail) = if is_normal_accrual {
         let (mut income, is_primi_detail) = auto_fill_gelirler_from_puantaj(
             &summary,
@@ -2019,7 +2083,6 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         }
     }
 
-    let prior_accruals = resolve_prior_accrual_state(dataset, &person.id, &period, &accrual)?;
     let month_to_date_pek = same_month_pek_used(&prior_accruals)?;
     if month_to_date_pek > statutory_snapshot.pekUstSinir {
         return Err(DomainError::InvalidData(format!(
@@ -2030,7 +2093,6 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     let same_month_gv_used = same_month_gv_exemption_used(&prior_accruals)?;
     let previous_cumulative_gv = previous_gv(dataset, &person, &period, &accrual)?;
     let previous_cumulative_asgari_gv = previous_asgari_gv(dataset, &person, &period)?;
-    let incoming_devreden_state = incoming_devreden_pek(dataset, &person.id, &period, &accrual)?;
     let incoming_devreden = &incoming_devreden_state.records;
     let tax_inputs = StatutoryDeductionTaxInputs {
         previous_cumulative_gv,
@@ -2048,7 +2110,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
             Some(&statutory_snapshot),
             StatutoryCalculationOptions {
                 month_to_date_pek,
-                advance_devreden_month: incoming_devreden_state.advances_tax_month,
+                tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                 apply_lower_bound: true,
             },
         )
@@ -2061,7 +2123,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
             Some(&statutory_snapshot),
             month_to_date_pek,
             PekCalculationOptions {
-                advance_devreden_month: incoming_devreden_state.advances_tax_month,
+                tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                 apply_lower_bound: false,
             },
         );
@@ -2280,4 +2342,155 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         odenenRaporluGun: Some(paid_sick_days),
         raporluGun: Some(summary.r),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal_macros::dec;
+
+    fn tax_period(id: &str, tax_month: i32) -> BordroDonemi {
+        BordroDonemi {
+            id: id.into(),
+            yil: 2026,
+            ay: tax_month,
+            baslangicTarihi: format!("2026-{tax_month:02}-01"),
+            bitisTarihi: format!("2026-{tax_month:02}-28"),
+            donemAdi: id.into(),
+            taxYear: 2026,
+            taxMonth: tax_month,
+        }
+    }
+
+    fn event(
+        period_id: &str,
+        tax_month: i32,
+        accrual_id: &str,
+        accrual_type: AccrualType,
+        status: BordroStatus,
+        remaining_months: i32,
+    ) -> BordroKaydi {
+        BordroKaydi {
+            id: accrual_id.into(),
+            personelId: "person-1".into(),
+            donemId: period_id.into(),
+            accrualId: accrual_id.into(),
+            accrualType: accrual_type,
+            paymentDate: format!("2026-{tax_month:02}-10"),
+            sequence: 0,
+            accrualDescription: None,
+            puantajOzeti: PuantajOzeti::default(),
+            gelirler: GelirKalemleri::default(),
+            gelirToplam: Decimal::ZERO,
+            kesintiler: KesintiKalemleri::default(),
+            kesintiToplam: Decimal::ZERO,
+            netOdeme: Decimal::ZERO,
+            status,
+            olusturulmaTarihi: "2026-09-05T00:00:00Z".into(),
+            sonGuncellemeTarihi: "2026-09-05T00:00:00Z".into(),
+            notlar: None,
+            oncekiKumulatifGvMatrahi: None,
+            oncekiKumulatifAsgariGvMatrahi: None,
+            manuelKumulatifGvMatrahi: None,
+            devredenPekGelen: None,
+            sonrakiDevredenPek: (remaining_months > 0).then(|| {
+                vec![DevredenPekKaydi {
+                    tutar: dec!(1000),
+                    kalanAySayisi: remaining_months,
+                    kaynakDonemId: Some(period_id.into()),
+                }]
+            }),
+            pekDetay: None,
+            isPrimiDetay: None,
+            gvDetay: None,
+            damgaDetay: None,
+            statutorySnapshot: None,
+            odenenRaporluGun: None,
+            raporluGun: None,
+        }
+    }
+
+    #[test]
+    fn devreden_gap_accepts_authoritative_tediye_without_normal_and_rejects_stale() {
+        let source_period = tax_period("source", 1);
+        let intermediate_period = tax_period("intermediate", 2);
+        let current_period = tax_period("current", 3);
+        let source = event(
+            &source_period.id,
+            1,
+            "source-event",
+            AccrualType::NORMAL,
+            BordroStatus::CALCULATED,
+            3,
+        );
+        let intermediate = event(
+            &intermediate_period.id,
+            2,
+            "intermediate-tediye",
+            AccrualType::TEDIYE,
+            BordroStatus::CALCULATED,
+            2,
+        );
+        let current = PayrollAccrualInput {
+            accrualId: "current-event".into(),
+            accrualType: AccrualType::SUPPLEMENTAL,
+            paymentDate: "2026-03-10".into(),
+            sequence: 0,
+            grossAmount: Some(dec!(1000)),
+            description: None,
+        };
+        let mut dataset = PayrollDatasetSnapshot {
+            periods: vec![source_period, intermediate_period, current_period.clone()],
+            payrolls: vec![source, intermediate],
+            ..PayrollDatasetSnapshot::default()
+        };
+
+        validate_devreden_pek_gap(&dataset, "person-1", &current_period, &current)
+            .expect("authoritative intermediate TEDIYE is a valid chain state");
+
+        for status in [BordroStatus::DRAFT, BordroStatus::STALE] {
+            dataset.payrolls[1].status = status;
+            let error = validate_devreden_pek_gap(&dataset, "person-1", &current_period, &current)
+                .expect_err("non-authoritative intermediate event must fail closed");
+            assert!(error.to_string().contains("Payment-event/PEK"));
+        }
+    }
+
+    #[test]
+    fn devreden_carry_expires_after_the_exact_two_tax_month_distance() {
+        let settings = DonemselKurumDegerleri {
+            gunlukAsgariUcret: Some(dec!(1000)),
+            pekTavanKatsayisi: Some(Decimal::ONE),
+            gunlukYemekIstisnasiSGK: Some(Decimal::ZERO),
+            ..DonemselKurumDegerleri::default()
+        };
+        let attendance = PuantajOzeti {
+            c: 30,
+            ..PuantajOzeti::default()
+        };
+        let income = GelirKalemleri {
+            tabanBrutAylik: Some(dec!(29000)),
+            ..GelirKalemleri::default()
+        };
+        let incoming = vec![DevredenPekKaydi {
+            tutar: dec!(30000),
+            kalanAySayisi: 2,
+            kaynakDonemId: Some("source".into()),
+        }];
+
+        let (_, carried) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+            &income,
+            Some(&attendance),
+            Some(&settings),
+            &incoming,
+            None,
+            Decimal::ZERO,
+            PekCalculationOptions {
+                tax_months_elapsed: 2,
+                apply_lower_bound: false,
+            },
+        );
+
+        assert!(carried.is_empty());
+    }
 }

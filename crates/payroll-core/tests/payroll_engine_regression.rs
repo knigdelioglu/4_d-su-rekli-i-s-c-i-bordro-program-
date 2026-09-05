@@ -140,6 +140,72 @@ fn supplementary_is_independent_and_only_prior_events_must_be_authoritative() {
 }
 
 #[test]
+fn supplementary_events_calculate_without_attendance_but_normal_still_fails_closed() {
+    for (sequence, accrual_type) in [
+        (0, AccrualType::TEDIYE),
+        (1, AccrualType::TIS_IKRAMIYE),
+        (2, AccrualType::SUPPLEMENTAL),
+    ] {
+        let mut request = fixture_request();
+        request.manualIncome = None;
+        request.dataset.attendances.clear();
+        request.accrual = Some(PayrollAccrualInput {
+            accrualId: format!("person-1_supplementary_{sequence}"),
+            accrualType: accrual_type,
+            paymentDate: "2026-02-10".into(),
+            sequence,
+            grossAmount: Some(dec!(2000)),
+            description: None,
+        });
+
+        let payroll = calculate_payroll(&request).expect("supplementary event is attendance-independent");
+        assert_eq!(payroll.gelirToplam, dec!(2000));
+        assert_eq!(payroll.puantajOzeti.c, 0);
+        assert_eq!(payroll.puantajOzeti.t, 0);
+        assert_eq!(payroll.puantajOzeti.r, 0);
+        assert_eq!(payroll.odenenRaporluGun, Some(0));
+        assert_eq!(payroll.raporluGun, Some(0));
+        assert_eq!(payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi, 30);
+        assert!(payroll.pekDetay.as_ref().unwrap().primMatrahi > Decimal::ZERO);
+    }
+
+    let mut normal_request = explicit_normal_request("2026-02-14");
+    normal_request.dataset.attendances.clear();
+    let error = calculate_payroll(&normal_request).expect_err("NORMAL still requires attendance");
+    assert!(error.to_string().contains("puantaj"));
+}
+
+#[test]
+fn normal_after_attendance_free_tediye_reuses_payment_event_state() {
+    let mut tediye_request = supplementary_request("2026-02-10");
+    tediye_request.dataset.attendances.clear();
+    tediye_request.accrual.as_mut().unwrap().grossAmount = Some(dec!(1000000));
+    let tediye = calculate_payroll(&tediye_request).expect("attendance-free tediye should calculate");
+
+    let mut normal_request = explicit_normal_request("2026-02-14");
+    normal_request.dataset.payrolls.push(tediye.clone());
+    let normal = calculate_payroll(&normal_request).expect("NORMAL should calculate after tediye");
+
+    assert!(normal.gelirler.tabanBrutAylik.is_some());
+    assert_eq!(
+        normal.gvDetay.as_ref().unwrap().oncekiKumulatifGvMatrahi,
+        tediye.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
+    );
+    assert_eq!(
+        normal.gvDetay.as_ref().unwrap().ayniAyOncekiKullanilanGvIstisnasi,
+        tediye.gvDetay.as_ref().unwrap().uygulananGvIstisnasi
+    );
+    assert_eq!(
+        normal.damgaDetay.as_ref().unwrap().ayniAyOncekiKullanilanDamgaIstisnasi,
+        tediye.damgaDetay.as_ref().unwrap().uygulananDamgaIstisnasi
+    );
+    assert_eq!(
+        serde_json::to_value(&normal.devredenPekGelen).unwrap(),
+        serde_json::to_value(&tediye.sonrakiDevredenPek).unwrap()
+    );
+}
+
+#[test]
 fn normal_explicit_payment_date_is_persisted_and_immutable() {
     let request = explicit_normal_request("2026-02-13");
     let normal = calculate_payroll(&request).expect("explicit normal should calculate");

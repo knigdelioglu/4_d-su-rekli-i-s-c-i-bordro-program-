@@ -134,6 +134,26 @@ fn is_person_from_date(candidate: &BordroDonemi, effective_from: &str) -> Result
     Ok(end >= effective)
 }
 
+fn affected_after_any_normal_root(
+    dataset: &PayrollDatasetSnapshot,
+    payroll: &crate::models::BordroKaydi,
+    normal_roots: &[&crate::models::BordroKaydi],
+) -> Result<bool> {
+    if normal_roots.is_empty() {
+        return Ok(false);
+    }
+    let candidate_order = payroll_order(dataset, payroll)?;
+    normal_roots
+        .iter()
+        .try_fold(false, |affected, root| {
+            if affected {
+                Ok(true)
+            } else {
+                Ok(candidate_order >= payroll_order(dataset, root)?)
+            }
+        })
+}
+
 fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
     if payroll.accrualId.trim().is_empty() {
         payroll.id.clone()
@@ -169,8 +189,22 @@ fn affected_by_mutation(
             periodId,
         } => {
             let source = require_period(dataset, periodId)?;
-            Ok(payroll_personnel_id == personnelId
-                && candidate.is_some_and(|candidate| is_period_dependent(candidate, source)))
+            if payroll_personnel_id != personnelId || candidate.is_none() {
+                return Ok(false);
+            }
+            // Puantaj is an input to NORMAL only. A supplementary event that
+            // precedes the period's NORMAL root is independent and must not be
+            // made STALE merely because attendance was later entered/changed.
+            let normal_roots: Vec<&crate::models::BordroKaydi> = dataset
+                .payrolls
+                .iter()
+                .filter(|root| {
+                    root.personelId == *personnelId
+                        && root.donemId == source.id
+                        && root.accrualType == crate::models::AccrualType::NORMAL
+                })
+                .collect();
+            affected_after_any_normal_root(dataset, payroll, &normal_roots)
         }
         PayrollMutation::PersonTaxYear {
             personnelId,
@@ -197,10 +231,22 @@ fn affected_by_mutation(
             if payroll_personnel_id != personnelId {
                 return Ok(false);
             }
-            match candidate {
-                Some(candidate) => is_person_from_date(candidate, effectiveFrom),
-                None => Ok(false),
+            if candidate.is_none() {
+                return Ok(false);
             }
+            let mut normal_roots = Vec::new();
+            for root in dataset.payrolls.iter().filter(|root| {
+                root.personelId == *personnelId
+                    && root.accrualType == crate::models::AccrualType::NORMAL
+            }) {
+                let Some(root_period) = period_for(dataset, &root.donemId) else {
+                    continue;
+                };
+                if is_person_from_date(root_period, effectiveFrom)? {
+                    normal_roots.push(root);
+                }
+            }
+            affected_after_any_normal_root(dataset, payroll, &normal_roots)
         }
         PayrollMutation::PayrollCalculation {
             personnelId,
@@ -414,5 +460,36 @@ mod tests {
 
         assert_eq!(impact.affectedPayrolls.len(), 1);
         assert_eq!(impact.affectedPayrolls[0].periodId, "2026-03");
+    }
+
+    #[test]
+    fn attendance_mutation_keeps_independent_supplementary_before_normal_root_clean() {
+        let mut data = dataset();
+        data.payrolls[1].paymentDate = "2026-01-14".into();
+        let mut supplementary = payroll("2026-01", BordroStatus::CALCULATED);
+        supplementary.id = "person-1_2026-01_tediye".into();
+        supplementary.accrualId = supplementary.id.clone();
+        supplementary.accrualType = crate::models::AccrualType::TEDIYE;
+        supplementary.paymentDate = "2026-01-10".into();
+        supplementary.sequence = 0;
+        data.payrolls.push(supplementary);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("period must exist");
+
+        assert!(!impact
+            .affectedPayrolls
+            .iter()
+            .any(|key| key.accrualId == "person-1_2026-01_tediye"));
+        assert!(impact
+            .affectedPayrolls
+            .iter()
+            .any(|key| key.accrualId == "person-1_2026-01"));
     }
 }

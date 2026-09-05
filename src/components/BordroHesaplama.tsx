@@ -458,16 +458,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       description: supplementaryAccrualDraft.description.trim() || null,
     };
 
-    const pPuantaj = puantajlar.find(
-      (item) => item.personelId === person.id && item.donemId === aktifDonem.id
-    );
-    if (!pPuantaj || !Object.keys(pPuantaj.gunler || {}).length) {
-      setErrorMessage(
-        `${person.ad} ${person.soyad} için kayıtlı puantaj bulunmadığından ek ödeme hesaplanamaz.`
-      );
-      return;
-    }
-
     try {
       const calculated = await payrollEngine.calculatePayroll({
         personnelId: person.id,
@@ -560,7 +550,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     if (isSupplementaryView) {
       const payrolls = getActiveViewAccruals(person.id);
       if (rowFilter === 'notCalculated') {
-        return hasAttendance && (payrolls.length === 0 || payrolls.some(matchesSupplementaryAccrualStatus));
+        return payrolls.length === 0 || payrolls.some(matchesSupplementaryAccrualStatus);
       }
       return payrolls.some(matchesSupplementaryAccrualStatus);
     }
@@ -908,7 +898,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   const isStale = bordro?.status === 'STALE';
                   const isDraft = bordro?.status === 'DRAFT';
                   const isCalculated = bordro?.status === 'CALCULATED' || isFinalized;
-                  const canAddSupplementary = hasPuantaj;
+                  const canAddSupplementary = isSupplementaryView;
                   const brut = bordro?.gelirToplam || 0;
                   const kesinti = bordro?.kesintiToplam || 0;
                   const net = bordro?.netOdeme || 0;
@@ -1044,7 +1034,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             <span>Hesaplandı</span>
                           </span>
-                        ) : hasPuantaj ? (
+                        ) : isSupplementaryView || hasPuantaj ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             <Clock className="w-3 h-3 text-amber-600" />
                             <span>{isSupplementaryView ? 'Tahakkuk Eklenmedi' : 'Hesaplanmadı'}</span>
@@ -1060,7 +1050,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       {/* Actions */}
                       <td className="py-3 px-4 text-center">
                         <div className="flex flex-wrap items-center justify-center gap-1.5">
-                          {hasPuantaj ? (
+                          {isSupplementaryView || hasPuantaj ? (
                             <>
                               {!isFinalized && (
                                 <button
@@ -1209,7 +1199,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           </td>
                           <td className="py-3 px-4 text-center">
                             <div className="flex flex-wrap items-center justify-center gap-1.5">
-                              {hasPuantaj ? (
+                              {isSupplementaryView || hasPuantaj ? (
                                 <>
                                   {!accrualIsFinalized && (
                                     <button
@@ -1287,19 +1277,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               disabled={!canAddSupplementary}
                               onClick={(event) => {
                                 event.stopPropagation();
-                                if (!hasPuantaj) {
-                                  setErrorMessage(
-                                    `${person.ad} ${person.soyad} için önce bu dönemin puantajını tamamlayın.`
-                                  );
-                                  return;
-                                }
                                 openSupplementaryAccrualForm(person);
                               }}
-                              title={
-                                !hasPuantaj
-                                  ? 'Önce bu dönemin puantajını tamamlayın.'
-                                  : 'Bağımsız ödeme tahakkuku oluştur.'
-                              }
+                              title="Bağımsız ödeme tahakkuku oluştur."
                               className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-indigo-700 transition-colors hover:bg-indigo-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Plus className="h-3.5 w-3.5" />

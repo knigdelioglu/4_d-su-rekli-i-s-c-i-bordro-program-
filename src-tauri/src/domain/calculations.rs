@@ -833,7 +833,7 @@ pub fn calculate_incremental_prime_esas_kazanc(
         statutory_snapshot,
         month_to_date_pek,
         PekCalculationOptions {
-            advance_devreden_month: false,
+            tax_months_elapsed: 0,
             apply_lower_bound: false,
         },
     )
@@ -856,21 +856,21 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
         statutory_snapshot,
         month_to_date_pek,
         PekCalculationOptions {
-            advance_devreden_month: true,
+            tax_months_elapsed: 1,
             apply_lower_bound,
         },
     )
 }
 
-/// Calculates PEK with an explicit tax-month transition flag.
+/// Calculates PEK with the exact number of tax months elapsed since the
+/// incoming carry state was produced.
 ///
-/// `advance_devreden_month` is true only when the incoming state came from a
-/// previous tax month. It must be false when the state came from an earlier
-/// accrual in the same tax month; accrual count is not a calendar-month
-/// transition.
+/// Same-tax-month payment events pass `0`; a state from the immediately prior
+/// tax month passes `1`. The value is a tax-calendar distance, not an accrual
+/// count and not a work-period distance.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PekCalculationOptions {
-    pub(crate) advance_devreden_month: bool,
+    pub(crate) tax_months_elapsed: i32,
     pub(crate) apply_lower_bound: bool,
 }
 
@@ -884,9 +884,11 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     options: PekCalculationOptions,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
     let PekCalculationOptions {
-        advance_devreden_month,
+        tax_months_elapsed,
         apply_lower_bound,
     } = options;
+    debug_assert!(tax_months_elapsed >= 0, "tax-month distance cannot be negative");
+    let tax_months_elapsed = tax_months_elapsed.max(0);
     let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
     let prim_gun_sayisi = statutory_snapshot
         .map_or(raw_prim_gun, |snapshot| snapshot.sgkPrimGunSayisi)
@@ -964,16 +966,18 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
         }
 
         let kalan_tutar = round2(item.tutar - eklenecek);
-        if kalan_tutar > dec!(0) && (item.kalanAySayisi > 1 || !advance_devreden_month) {
-            sonraki_devreden_list.push(DevredenPekKaydi {
-                tutar: kalan_tutar,
-                kalanAySayisi: if advance_devreden_month {
-                    item.kalanAySayisi - 1
-                } else {
-                    item.kalanAySayisi
-                },
-                kaynakDonemId: item.kaynakDonemId.clone(),
-            });
+        if kalan_tutar > dec!(0) {
+            let Some(kalan_ay_sayisi) = item.kalanAySayisi.checked_sub(tax_months_elapsed)
+            else {
+                continue;
+            };
+            if kalan_ay_sayisi > 0 {
+                sonraki_devreden_list.push(DevredenPekKaydi {
+                    tutar: kalan_tutar,
+                    kalanAySayisi: kalan_ay_sayisi,
+                    kaynakDonemId: item.kaynakDonemId.clone(),
+                });
+            }
         }
     }
 
@@ -1060,7 +1064,7 @@ pub struct StatutoryDeductionTaxInputs<'a> {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StatutoryCalculationOptions {
     pub(crate) month_to_date_pek: Decimal,
-    pub(crate) advance_devreden_month: bool,
+    pub(crate) tax_months_elapsed: i32,
     pub(crate) apply_lower_bound: bool,
 }
 
@@ -1109,16 +1113,16 @@ pub fn calculate_statutory_deductions_with_month_to_date(
         statutory_snapshot,
         StatutoryCalculationOptions {
             month_to_date_pek,
-            advance_devreden_month: true,
+            tax_months_elapsed: 1,
             apply_lower_bound,
         },
     )
 }
 
 /// Calculates statutory deductions while making the devreden PEK calendar
-/// transition explicit. The compatibility wrapper above keeps the historical
-/// first-accrual behavior; the payroll engine supplies whether this request
-/// crossed a tax month boundary.
+/// distance explicit. The compatibility wrapper above keeps the historical
+/// first-accrual behavior; the payroll engine supplies the exact tax-month
+/// distance for the current payment event.
 pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_state(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
@@ -1144,7 +1148,7 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
             statutory_snapshot,
             month_to_date_pek.max(Decimal::ZERO),
             PekCalculationOptions {
-                advance_devreden_month: options.advance_devreden_month,
+                tax_months_elapsed: options.tax_months_elapsed,
                 apply_lower_bound: options.apply_lower_bound,
             },
         );
