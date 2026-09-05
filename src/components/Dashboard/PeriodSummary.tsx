@@ -90,7 +90,7 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
     );
     const legalParametersReady = hasCompletePeriodLegalParameters(
       activeKurumDegerleri,
-      aktifDonem.id
+      aktifDonem
     );
     const annualParametersReady = annualPayrollParameters.some((parameters) =>
       hasCompleteAnnualPayrollParameters(parameters, aktifDonem.taxYear)
@@ -259,7 +259,7 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
               tone={summary.legalParametersReady ? 'success' : 'critical'}
               icon={summary.legalParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
               label={summary.legalParametersReady ? 'Vergi ve yasal oranlar hazır' : 'Vergi ve yasal oranlar eksik'}
-              detail={summary.legalParametersReady ? undefined : 'Vergi & Yasal Oranlar bölümüne kayıt gerekli'}
+              detail={summary.legalParametersReady ? undefined : 'Vergi & Yasal Oranlar bölümündeki zorunlu değerleri kontrol edin.'}
             />
             <StatusRow
               tone={summary.annualParametersReady ? 'success' : 'critical'}

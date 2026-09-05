@@ -14,6 +14,7 @@ import type {
   IsPrimiGrupItem,
   PuantajKodu,
   PuantajOzeti,
+  StatutoryParameterSegment,
   TaxBracket,
   TediyeKalemi,
   TisIkramiyeKalemi,
@@ -132,8 +133,40 @@ const PERIOD_PERCENTAGE_FIELDS = [
   'issizlikIsverenOraniYuzde',
 ] as const;
 
+/**
+ * Persistence-safe sentinel for the open-ended final tax bracket.
+ * No browser/shared counterpart exists; keep this in parity with
+ * `src-tauri/src/domain/models.rs:11` (`OPEN_ENDED_TAX_BRACKET_LIMIT`).
+ */
+export const OPEN_ENDED_TAX_BRACKET_LIMIT = 1_000_000_000_000_000;
+
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isOptionalConstrainedNumber(
+  value: unknown,
+  constraint: (value: number) => boolean
+): boolean {
+  return value === undefined || value === null || (isFiniteNumber(value) && constraint(value));
+}
+
+/** Strict Gregorian YYYY-MM-DD parsing without Date's rollover behavior. */
+function parseCalendarDate(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(5, 7));
+  const day = Number(value.slice(8, 10));
+  if (year <= 0 || month < 1 || month > 12) return null;
+
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][
+    month - 1
+  ];
+  if (!daysInMonth || day < 1 || day > daysInMonth) return null;
+
+  return year * 10000 + month * 100 + day;
 }
 
 /**
@@ -145,7 +178,14 @@ export function hasCompletePeriodIncomeParameters(
   kurumDegerleri: Partial<DönemselKurumDegerleri> | undefined,
   donemId: string
 ): boolean {
-  if (!kurumDegerleri || kurumDegerleri.donemId !== donemId) return false;
+  if (
+    !kurumDegerleri ||
+    typeof kurumDegerleri.donemId !== 'string' ||
+    typeof donemId !== 'string' ||
+    kurumDegerleri.donemId !== donemId
+  ) {
+    return false;
+  }
 
   return REQUIRED_PERIOD_INCOME_FIELDS.every((field) => {
     const value = kurumDegerleri[field];
@@ -154,33 +194,93 @@ export function hasCompletePeriodIncomeParameters(
   });
 }
 
-function hasCompleteIsPrimiGroups(
-  groups: DönemselKurumDegerleri['isPrimiGruplari']
-): boolean {
+function hasCompleteIsPrimiGroups(groups: unknown): boolean {
   if (!Array.isArray(groups) || groups.length === 0) return false;
 
   const activeIds = new Set<string>();
   const activeNames = new Set<string>();
 
   for (const group of groups) {
+    if (!group || typeof group !== 'object' || Array.isArray(group)) return false;
+    const candidate = group as Partial<IsPrimiGrupItem>;
+    const trimmedId = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+    const trimmedName = typeof candidate.ad === 'string' ? candidate.ad.trim() : '';
     if (
-      !group ||
-      typeof group.id !== 'string' ||
-      typeof group.ad !== 'string' ||
-      group.id.trim().length === 0 ||
-      group.ad.trim().length === 0 ||
-      !isFiniteNumber(group.oran) ||
-      group.oran < 0 ||
-      group.oran > 100 ||
-      (group.aktif !== undefined && typeof group.aktif !== 'boolean')
+      trimmedId.length === 0 ||
+      trimmedName.length === 0 ||
+      !isFiniteNumber(candidate.oran) ||
+      candidate.oran < 0 ||
+      candidate.oran > 100 ||
+      (candidate.aktif !== undefined && typeof candidate.aktif !== 'boolean')
     ) {
       return false;
     }
 
-    if (group.aktif !== false) {
-      if (activeIds.has(group.id.trim()) || activeNames.has(group.ad.trim())) return false;
-      activeIds.add(group.id.trim());
-      activeNames.add(group.ad.trim());
+    // Rust serde defaults a missing `aktif` field to true; only explicit false
+    // is inactive and excluded from the duplicate-active identity sets.
+    if (candidate.aktif !== false) {
+      if (activeIds.has(trimmedId) || activeNames.has(trimmedName)) return false;
+      activeIds.add(trimmedId);
+      activeNames.add(trimmedName);
+    }
+  }
+
+  return true;
+}
+
+function hasValidStatutoryParameterSegments(
+  kurumDegerleri: Partial<DönemselKurumDegerleri>,
+  aktifDonem: BordroDonemi
+): boolean {
+  const periodStart = parseCalendarDate(aktifDonem.baslangicTarihi);
+  const periodEnd = parseCalendarDate(aktifDonem.bitisTarihi);
+  if (periodStart === null || periodEnd === null || periodStart > periodEnd) return false;
+
+  const segments = kurumDegerleri.statutoryParameterSegments;
+  if (
+    segments === undefined ||
+    segments === null ||
+    (Array.isArray(segments) && segments.length === 0)
+  ) {
+    return true;
+  }
+  if (!Array.isArray(segments)) return false;
+
+  let previousDate: number | undefined;
+  for (const segment of segments) {
+    if (!segment || typeof segment !== 'object' || Array.isArray(segment)) return false;
+    const candidate = segment as Partial<StatutoryParameterSegment>;
+    const effectiveDate = parseCalendarDate(candidate.effectiveFrom);
+    if (
+      effectiveDate === null ||
+      effectiveDate < periodStart ||
+      effectiveDate > periodEnd ||
+      (previousDate !== undefined && effectiveDate <= previousDate)
+    ) {
+      return false;
+    }
+    previousDate = effectiveDate;
+
+    const hasOverride =
+      (candidate.gunlukAsgariUcret !== undefined && candidate.gunlukAsgariUcret !== null) ||
+      (candidate.pekTavanKatsayisi !== undefined && candidate.pekTavanKatsayisi !== null) ||
+      (candidate.gunlukYemekIstisnasiSGK !== undefined &&
+        candidate.gunlukYemekIstisnasiSGK !== null) ||
+      (candidate.gunlukYemekIstisnasiGV !== undefined &&
+        candidate.gunlukYemekIstisnasiGV !== null);
+    if (!hasOverride) return false;
+
+    if (!isOptionalConstrainedNumber(candidate.gunlukAsgariUcret, (value) => value > 0)) {
+      return false;
+    }
+    if (!isOptionalConstrainedNumber(candidate.pekTavanKatsayisi, (value) => value >= 1)) {
+      return false;
+    }
+    if (
+      !isOptionalConstrainedNumber(candidate.gunlukYemekIstisnasiSGK, (value) => value >= 0) ||
+      !isOptionalConstrainedNumber(candidate.gunlukYemekIstisnasiGV, (value) => value >= 0)
+    ) {
+      return false;
     }
   }
 
@@ -188,15 +288,23 @@ function hasCompleteIsPrimiGroups(
 }
 
 /**
- * Mirrors the authoritative period-level payroll validation boundary without
- * applying defaults. Optional TypeScript fields are therefore not considered
- * ready merely because a settings form can display a fallback value.
+ * This readiness helper is the presentation-side fail-closed mirror of the
+ * authoritative Rust payroll validation boundary. It intentionally does not
+ * apply form defaults: a fallback value is not a saved/current value.
  */
 export function hasCompletePeriodLegalParameters(
   kurumDegerleri: Partial<DönemselKurumDegerleri> | undefined,
-  donemId: string
+  aktifDonem: BordroDonemi | undefined
 ): boolean {
-  if (!kurumDegerleri || kurumDegerleri.donemId !== donemId) return false;
+  if (
+    !kurumDegerleri ||
+    !aktifDonem ||
+    typeof kurumDegerleri.donemId !== 'string' ||
+    typeof aktifDonem.id !== 'string' ||
+    kurumDegerleri.donemId !== aktifDonem.id
+  ) {
+    return false;
+  }
 
   if (
     !REQUIRED_PERIOD_LEGAL_NON_NEGATIVE_FIELDS.every((field) => {
@@ -226,15 +334,31 @@ export function hasCompletePeriodLegalParameters(
   }
 
   if (
-    kurumDegerleri.gunlukAsgariUcret === undefined ||
+    !isFiniteNumber(kurumDegerleri.gunlukAsgariUcret) ||
     kurumDegerleri.gunlukAsgariUcret <= 0 ||
-    kurumDegerleri.pekTavanKatsayisi === undefined ||
+    !isFiniteNumber(kurumDegerleri.pekTavanKatsayisi) ||
     kurumDegerleri.pekTavanKatsayisi < 1
   ) {
     return false;
   }
 
-  return hasCompleteIsPrimiGroups(kurumDegerleri.isPrimiGruplari);
+  if (
+    ![
+      'sabitSendikaAidati',
+      'sabitBesTutar',
+      'ekOdeme',
+      'digerGelirVarsayilan',
+    ].every((field) =>
+      isOptionalConstrainedNumber(kurumDegerleri[field], (value) => value >= 0)
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    hasCompleteIsPrimiGroups(kurumDegerleri.isPrimiGruplari) &&
+    hasValidStatutoryParameterSegments(kurumDegerleri, aktifDonem)
+  );
 }
 
 function isValidTaxBracket(bracket: unknown): bracket is TaxBracket {
@@ -243,6 +367,7 @@ function isValidTaxBracket(bracket: unknown): bracket is TaxBracket {
   return (
     isFiniteNumber(candidate.limit) &&
     candidate.limit > 0 &&
+    candidate.limit <= OPEN_ENDED_TAX_BRACKET_LIMIT &&
     isFiniteNumber(candidate.oran) &&
     candidate.oran >= 0 &&
     candidate.oran <= 1
@@ -260,6 +385,12 @@ export function hasCompleteAnnualPayrollParameters(
 ): boolean {
   if (
     !parameters ||
+    !isFiniteNumber(taxYear) ||
+    !Number.isInteger(taxYear) ||
+    taxYear <= 0 ||
+    !isFiniteNumber(parameters.year) ||
+    !Number.isInteger(parameters.year) ||
+    parameters.year <= 0 ||
     parameters.year !== taxYear ||
     !Array.isArray(parameters.gelirVergisiDilimleri) ||
     parameters.gelirVergisiDilimleri.length === 0
@@ -273,7 +404,10 @@ export function hasCompleteAnnualPayrollParameters(
     previousLimit = bracket.limit;
   }
 
-  return true;
+  return isOptionalConstrainedNumber(
+    parameters.sigortaGvYillikBrutAsgariUcretTavani,
+    (value) => value > 0
+  );
 }
 
 export function createBordroDonemi(

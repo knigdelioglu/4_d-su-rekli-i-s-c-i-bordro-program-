@@ -26,6 +26,7 @@ import {
   Receipt,
   Scale,
   Settings,
+  ShieldCheck,
   Users,
   Users2,
   Wallet,
@@ -159,7 +160,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       setIsListsExpanded(true);
       setIsKesintilerExpanded(true);
     }
-    if (activeTab === 'banka') setIsListsExpanded(true);
+    if (activeTab === 'banka' || activeTab === 'sgkKontrol') setIsListsExpanded(true);
     if (activeTab === 'bordro') setIsPayrollExpanded(true);
     if (activeTab === 'parametrelar') setIsParametrelerExpanded(true);
   }, [activeTab]);
@@ -293,7 +294,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 type="button"
                 data-testid="nav-listeler"
                 onClick={() => {
-                  if (activeTab !== 'banka' && activeTab !== 'kesintiler') {
+                  if (activeTab !== 'banka' && activeTab !== 'sgkKontrol' && activeTab !== 'kesintiler') {
                     onTabChange('banka');
                     setIsListsExpanded(true);
                     return;
@@ -302,9 +303,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 }}
                 aria-expanded={isListsExpanded}
                 aria-controls="sidebar-list-items"
-                className={groupButtonClass(activeTab === 'banka' || activeTab === 'kesintiler')}
+                className={groupButtonClass(activeTab === 'banka' || activeTab === 'sgkKontrol' || activeTab === 'kesintiler')}
               >
-                <Layers aria-hidden="true" className={`h-4 w-4 shrink-0 ${activeTab === 'banka' || activeTab === 'kesintiler' ? 'text-indigo-600' : 'text-slate-400 group-hover:text-indigo-600'}`} />
+                <Layers aria-hidden="true" className={`h-4 w-4 shrink-0 ${activeTab === 'banka' || activeTab === 'sgkKontrol' || activeTab === 'kesintiler' ? 'text-indigo-600' : 'text-slate-400 group-hover:text-indigo-600'}`} />
                 <span className="flex-1">Listeler</span>
                 {isListsExpanded ? <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0" /> : <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0" />}
               </button>
@@ -325,6 +326,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   >
                     <Building aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${activeTab === 'banka' ? 'text-white' : 'text-slate-400 group-hover:text-indigo-600'}`} />
                     <span>Banka Listesi</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    data-testid="nav-sgk-kontrol"
+                    onClick={() => {
+                      onTabChange('sgkKontrol');
+                      onClose();
+                    }}
+                    aria-current={activeTab === 'sgkKontrol' ? 'page' : undefined}
+                    className={`group flex min-h-10 w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1 ${
+                      activeTab === 'sgkKontrol' ? 'bg-indigo-600 text-white shadow-sm' : 'text-slate-600 hover:bg-indigo-50 hover:text-indigo-700'
+                    }`}
+                  >
+                    <ShieldCheck aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${activeTab === 'sgkKontrol' ? 'text-white' : 'text-slate-400 group-hover:text-indigo-600'}`} />
+                    <span>SGK Prim Kontrolü</span>
                   </button>
 
                   <button

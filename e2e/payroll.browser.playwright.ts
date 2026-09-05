@@ -387,7 +387,7 @@ test('desktop primary navigation lives in the sidebar and period parameters open
 
   await expect(page.getByTestId('nav-ozet')).toHaveAttribute('aria-current', 'page');
   await expect(page.getByTestId('period-summary')).toBeVisible();
-  for (const tab of ['personel', 'puantaj', 'bordro', 'banka', 'kesintiler', 'parametrelar']) {
+  for (const tab of ['personel', 'puantaj', 'bordro', 'banka', 'sgk-kontrol', 'kesintiler', 'parametrelar']) {
     await expect(page.getByTestId(`nav-${tab}`)).toBeVisible();
   }
   await expect(page.locator('header').getByRole('button', { name: '3. Bordro Hesaplama' })).toHaveCount(0);
@@ -400,6 +400,32 @@ test('desktop primary navigation lives in the sidebar and period parameters open
   await expect(page.getByTestId('nav-parametrelar')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('period-settings-page')).toBeVisible();
   await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+});
+
+test('SGK prim kontrolü tüm personeli ve manuel mutabakat farkını gösterir', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+
+  await page.getByTestId('nav-sgk-kontrol').click();
+  const screen = page.getByTestId('sgk-prim-kontrolu-screen');
+  await expect(screen).toBeVisible();
+  await expect(page.getByTestId('nav-sgk-kontrol')).toHaveAttribute('aria-current', 'page');
+  await expect(screen.getByRole('columnheader').allTextContents()).resolves.toEqual([
+    'S.No',
+    'T.C. Kimlik No',
+    'SGK Sicil No',
+    'Ad Soyad',
+    'SGK İşveren %21,75',
+    'İşveren İşsizlik %2',
+    'SGK İşçi %14',
+    'İşçi İşsizlik %1',
+    'Toplam',
+  ]);
+  await expect(screen.locator('tbody tr')).toHaveCount(5);
+  await expect(screen.getByText('Bordro hesaplanmadı')).toHaveCount(5);
+
+  await screen.getByTestId('sgk-reported-total-input').fill('1.000,00');
+  await expect(screen.getByText('Program SGK tutarından 1.000,00 TL düşük')).toBeVisible();
 });
 
 test('first opening uses the period summary and a valid saved tab survives reload', async ({ page }) => {

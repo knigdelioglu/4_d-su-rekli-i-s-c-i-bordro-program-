@@ -20,6 +20,7 @@ import { PersonelList } from './components/PersonelList';
 import { PuantajGrid } from './components/PuantajGrid';
 import { BordroHesaplama } from './components/BordroHesaplama';
 import { BankaListesi } from './components/Listeler/BankaListesi';
+import { SgkPrimKontrolu } from './components/Listeler/SgkPrimKontrolu';
 import { KesintiListesi } from './components/Listeler/KesintiListesi';
 import {
   AnnualPayrollParameters,
@@ -1014,6 +1015,13 @@ export default function App() {
                 )}
 
                 {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
+                {aktifDonem && activeTab === 'sgkKontrol' && (
+                  <SgkPrimKontrolu
+                    aktifDonem={aktifDonem}
+                    personeller={personeller}
+                    bordrolar={bordrolar}
+                  />
+                )}
                 {aktifDonem && activeTab === 'kesintiler' && (
                   <KesintiListesi
                     aktifDonem={aktifDonem}

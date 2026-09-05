@@ -12,6 +12,7 @@ describe('ilk açılış sekmesi', () => {
 
   test('geçerli kayıtlı sekme korunur', () => {
     expect(getInitialActiveTab(storage('puantaj'))).toBe('puantaj');
+    expect(getInitialActiveTab(storage('sgkKontrol'))).toBe('sgkKontrol');
   });
 
   test('geçersiz kayıt Dönem Özeti fallbackine döner', () => {
