@@ -347,6 +347,7 @@ async function loadSampleDataset(page: Page): Promise<void> {
   const response = await wasmResponse;
   expect(response.status()).toBe(200);
   expect(response.headers()['content-type']).toContain('application/wasm');
+  await page.getByTestId('nav-personel').click();
   await expect(page.getByText(/4\/D Personel Kayıtları \(5\)/)).toBeVisible();
   await installCalculableFixture(page);
 }
@@ -367,7 +368,7 @@ async function calculateP1(page: Page, periodId: string): Promise<StoredPayroll>
 
 async function seedCalculatedSnapshot(page: Page): Promise<string> {
   await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect(page.getByTestId('period-summary')).toBeVisible();
   await loadSampleDataset(page);
   const periodId = await openPayrollScreen(page);
   await calculateP1(page, periodId);
@@ -384,6 +385,8 @@ async function selectPeriod(page: Page, periodId: string): Promise<void> {
 test('desktop primary navigation lives in the sidebar and period parameters open as a page', async ({ page }) => {
   await page.goto('/');
 
+  await expect(page.getByTestId('nav-ozet')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('period-summary')).toBeVisible();
   for (const tab of ['personel', 'puantaj', 'bordro', 'banka', 'kesintiler', 'parametrelar']) {
     await expect(page.getByTestId(`nav-${tab}`)).toBeVisible();
   }
@@ -397,6 +400,33 @@ test('desktop primary navigation lives in the sidebar and period parameters open
   await expect(page.getByTestId('nav-parametrelar')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByTestId('period-settings-page')).toBeVisible();
   await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+});
+
+test('first opening uses the period summary and a valid saved tab survives reload', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('nav-ozet')).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByTestId('period-summary')).toBeVisible();
+
+  await page.getByTestId('nav-puantaj').click();
+  await page.reload();
+  await expect(page.getByTestId('nav-puantaj')).toHaveAttribute('aria-current', 'page');
+});
+
+test('normal payroll table keeps core columns and moves secondary details to the payslip', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  const screen = page.getByTestId('payroll-screen');
+  await openPayrollScreen(page);
+
+  await expect
+    .poll(async () =>
+      (await screen.getByRole('columnheader').allTextContents()).map((header) => header.trim())
+    )
+    .toEqual(['Personel', 'Puantaj', 'Brüt', 'Kesinti', 'Net', 'Durum', 'İşlemler']);
+  await expect(screen.getByRole('columnheader', { name: 'İş Primi Grubu' })).toHaveCount(0);
+  await expect(screen.getByRole('columnheader', { name: 'Önceki Küm. GV' })).toHaveCount(0);
+  await expect(screen.getByRole('columnheader', { name: 'Normal Ödeme/Tahakkuk' })).toHaveCount(0);
+  await expect(screen).not.toContainText(/Sıra\s+\d+|Yeni NORMAL|CALCULATED|FINALIZED|STALE|DRAFT|SUPPLEMENTAL/);
 });
 
 test('period settings child navigation renders sections and persists after reload', async ({ page }) => {
@@ -443,7 +473,7 @@ test('period settings child navigation renders sections and persists after reloa
 
 test('period settings expose new period creation without an active period', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect(page.getByTestId('period-summary')).toBeVisible();
 
   await page.getByTestId('nav-parametrelar').click();
   await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
@@ -535,7 +565,7 @@ test('top bar keeps the active period and backup export/import actions', async (
 
 test('browser WASM calculation persists in IndexedDB and survives reload', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect(page.getByTestId('period-summary')).toBeVisible();
   await loadSampleDataset(page);
 
   const periodId = await openPayrollScreen(page);
@@ -566,8 +596,9 @@ test('browser rejects a corrupt authoritative IndexedDB snapshot without autosav
   await page.reload();
   const storageError = page.getByTestId('storage-error');
   await expect(storageError).toBeVisible();
-  await expect(storageError).toContainText('Decimal string');
-  await expect(storageError).toContainText('mevcut snapshot değiştirilmedi');
+  await expect(storageError).toContainText('Tarayıcıdaki bordro verisi okunamadı.');
+  await expect(storageError).toContainText('Mevcut veriler değiştirilmedi.');
+  await expect(storageError).not.toContainText(/snapshot|indexeddb|decimal/i);
   await expect(page.getByTestId('data-loading-state')).not.toBeVisible();
   await expect(page.getByText('4/D Personel Kayıtları (0)')).not.toBeVisible();
   await expect.poll(() => readStoredPayload(page)).toBe(corruptSnapshot);
@@ -584,9 +615,9 @@ test('browser rejects a schema-corrupt authoritative snapshot without autosaving
   await page.reload();
   const storageError = page.getByTestId('storage-error');
   await expect(storageError).toBeVisible();
-  await expect(storageError).toContainText('status');
-  await expect(storageError).toContainText('DONE');
-  await expect(storageError).toContainText('mevcut snapshot değiştirilmedi');
+  await expect(storageError).toContainText('Tarayıcıdaki bordro verisi okunamadı.');
+  await expect(storageError).toContainText('Mevcut veriler değiştirilmedi.');
+  await expect(storageError).not.toContainText(/status|done|snapshot|indexeddb|decimal/i);
   await expect(page.getByTestId('payroll-screen')).not.toBeVisible();
   await expect(page.getByText('4/D Personel Kayıtları (5)')).not.toBeVisible();
   await expect.poll(() => readStoredPayload(page)).toBe(corruptSnapshot);
@@ -616,7 +647,7 @@ test('browser migrates a numeric legacy localStorage backup into exact IndexedDB
 test('browser exact Decimal survives WASM result, IndexedDB reload, and the next WASM request', async ({ page }) => {
   await installWasmRequestCapture(page);
   await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect(page.getByTestId('period-summary')).toBeVisible();
   await loadSampleDataset(page);
 
   const periodId = await openPayrollScreen(page);
@@ -672,7 +703,7 @@ test('browser exact Decimal survives WASM result, IndexedDB reload, and the next
 
 test('browser finalization uses WASM, persists FINALIZED, and rejects a finalized mutation', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect(page.getByTestId('period-summary')).toBeVisible();
   await loadSampleDataset(page);
 
   const periodId = await openPayrollScreen(page);
@@ -710,7 +741,7 @@ test('browser finalization uses WASM, persists FINALIZED, and rejects a finalize
 
 test('browser source mutation marks downstream calculated payrolls STALE and persists the state', async ({ page }) => {
   await page.goto('/');
-  await expect(page.getByText('4/D Personel Kayıtları (0)')).toBeVisible();
+  await expect(page.getByTestId('period-summary')).toBeVisible();
   await loadSampleDataset(page);
 
   const activePeriodId = await openPayrollScreen(page);

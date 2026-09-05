@@ -23,7 +23,7 @@ export const DataBackupPage: React.FC<DataBackupPageProps> = ({
   lastSavedAt,
   hasData,
   storageLabel = 'Bu tarayıcıda yerel kayıt',
-  storageDetail = 'Veriler IndexedDB içinde tutulur; düzenli JSON yedeği almanız önerilir.',
+  storageDetail = 'Veriler bu tarayıcıda yerel olarak tutulur; düzenli JSON yedeği almanız önerilir.',
   onExportBackup,
   onImportBackup,
   onResetSampleData,

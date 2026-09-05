@@ -36,7 +36,11 @@ import {
 } from '../types/payroll';
 import type { PayrollViewType } from '../types/navigation';
 import { PAYROLL_VIEW_LABELS } from '../types/navigation';
-import { formatTL, getDefaultAccrualPaymentDate } from '../utils/payrollPresentation';
+import {
+  formatCompactPuantaj,
+  formatTL,
+  getDefaultAccrualPaymentDate,
+} from '../utils/payrollPresentation';
 import { PaySlipModal } from './PaySlipModal';
 import { PayrollFinalizeModal } from './PayrollFinalizeModal';
 import {
@@ -681,7 +685,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             Normal Maaş Ödeme / Tahakkuk Tarihi
           </div>
           <p className="mt-1 text-[11px] text-indigo-800">
-            Yeni NORMAL bordro için kullanılacak açık tarihtir. Kaydedilmiş tahakkukların tarihi değiştirilemez.
+            Yeni normal maaş bordrosu için kullanılacak tarihtir. Kaydedilmiş tahakkukların tarihi değiştirilemez.
             Tediye ve TİS ikramiyesi ayrı tahakkuk olarak eklenir.
           </p>
         </div>
@@ -867,12 +871,10 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-100 text-slate-700 text-[11px] uppercase tracking-wider font-bold border-b border-slate-200">
-                <th className="py-3 px-4">S.No</th>
-                <th className="py-3 px-4">Personel Adı Soyadı</th>
-                {!isSupplementaryView && <th className="py-3 px-4">İş Primi Grubu</th>}
-                {!isSupplementaryView && <th className="py-3 px-4 text-center">Puantaj İcmal</th>}
-                {!isSupplementaryView && <th className="py-3 px-4 text-right">Önceki Küm. GV</th>}
-                <th className="py-3 px-4 text-center">{isSupplementaryView ? 'Ödeme Tarihi' : 'Normal Ödeme/Tahakkuk'}</th>
+                {isSupplementaryView && <th className="py-3 px-4">S.No</th>}
+                <th className="py-3 px-4">{isSupplementaryView ? 'Personel Adı Soyadı' : 'Personel'}</th>
+                {!isSupplementaryView && <th className="py-3 px-4 text-center">Puantaj</th>}
+                {isSupplementaryView && <th className="py-3 px-4 text-center">Ödeme Tarihi</th>}
                 <th className="py-3 px-4 text-right">Brüt</th>
                 {isSupplementaryView ? (
                   <>
@@ -880,9 +882,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     <th className="py-3 px-4 text-right">GV</th>
                   </>
                 ) : (
-                  <th className="py-3 px-4 text-right">Kesintiler</th>
+                  <th className="py-3 px-4 text-right">Kesinti</th>
                 )}
-                <th className="py-3 px-4 text-right">Net Ele Geçen</th>
+                <th className="py-3 px-4 text-right">{isSupplementaryView ? 'Net Ele Geçen' : 'Net'}</th>
                 <th className="py-3 px-4 text-center">Durum</th>
                 <th className="py-3 px-4 text-center">İşlemler</th>
               </tr>
@@ -890,7 +892,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             <tbody className="divide-y divide-slate-200 text-xs text-slate-800">
               {filteredPersoneller.length === 0 ? (
                 <tr>
-                  <td colSpan={isSupplementaryView ? 9 : 11} className="py-12 text-center text-slate-500">
+                  <td colSpan={isSupplementaryView ? 9 : 7} className="py-12 text-center text-slate-500">
                     Arama kriterlerine uygun personel kaydı bulunamadı.
                   </td>
                 </tr>
@@ -935,9 +937,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       onClick={() => void handleOpenPaySlip(person, bordro)}
                       className={`transition-colors group ${isStale || isDraft ? 'bg-amber-50/40 cursor-default' : 'hover:bg-indigo-50/50 cursor-pointer'}`}
                     >
-                      <td className="py-3 px-4 font-mono text-slate-400 font-medium">
-                        {idx + 1}{isSupplementaryView && viewAccruals.length > 1 ? '.1' : ''}
-                      </td>
+                      {isSupplementaryView && (
+                        <td className="py-3 px-4 font-mono text-slate-400 font-medium">
+                          {idx + 1}{viewAccruals.length > 1 ? '.1' : ''}
+                        </td>
+                      )}
 
                       {/* Person Name & TC */}
                       <td className="py-3 px-4 font-medium">
@@ -977,47 +981,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         </div>
                       </td>
 
-                      {/* Group */}
-                      {!isSupplementaryView && <td className="py-3 px-4 text-slate-700">
-                        <div className="font-bold text-slate-900">
-                          {person.grup || (person.unvan ? person.unvan.replace(/\s*\(.*?\)/, '') : '1. Grup')}
-                        </div>
-                        <div className="text-[10px] text-indigo-700 font-mono font-semibold">
-                          {person.hizmetYili} Yıl Kıdem
-                        </div>
-                      </td>}
-
-                      {/* Puantaj Summary Pills */}
+                      {/* Compact attendance summary */}
                       {!isSupplementaryView && <td className="py-3 px-4 text-center">
                         {bordro ? (
-                          <div className="inline-flex flex-wrap items-center justify-center gap-1 text-[10px] font-mono max-w-[220px]">
-                            <span className="px-1.5 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold" title="Çalışılan Gün">
-                              {bordro.puantajOzeti.Ç} Ç
-                            </span>
-                            <span className="px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold" title="Hafta Tatili">
-                              {bordro.puantajOzeti.T} T
-                            </span>
-                            {bordro.puantajOzeti.GÇ > 0 && (
-                              <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded font-bold" title="Gece Çalışması">
-                                {bordro.puantajOzeti.GÇ} GÇ
-                              </span>
-                            )}
-                            {bordro.puantajOzeti.GÇT > 0 && (
-                              <span className="px-1.5 py-0.5 bg-teal-100 text-teal-800 rounded font-bold" title="Gece Çalışması Tatili">
-                                {bordro.puantajOzeti.GÇT} GÇT
-                              </span>
-                            )}
-                            {bordro.puantajOzeti.İ > 0 && (
-                              <span className="px-1.5 py-0.5 bg-amber-100 text-amber-800 rounded font-bold" title="İzin">
-                                {bordro.puantajOzeti.İ} İ
-                              </span>
-                            )}
-                            {bordro.puantajOzeti.R > 0 && (
-                              <span className="px-1.5 py-0.5 bg-rose-100 text-rose-800 rounded font-bold" title="Raporlu Gün / Kurumun Ödediği Gün">
-                                {bordro.puantajOzeti.R} R {bordro.odenenRaporluGun !== undefined ? `(${bordro.odenenRaporluGun} Öd.)` : ''}
-                              </span>
-                            )}
-                          </div>
+                          <span
+                            className="inline-flex max-w-[155px] items-center gap-1 whitespace-nowrap text-[10px] font-mono font-semibold"
+                            title={`Puantaj: ${formatCompactPuantaj(bordro.puantajOzeti)}`}
+                            aria-label={`Puantaj: ${formatCompactPuantaj(bordro.puantajOzeti)}`}
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                            <span className="truncate">{formatCompactPuantaj(bordro.puantajOzeti)}</span>
+                          </span>
                         ) : hasPuantaj ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
                             <CalendarCheck className="w-3 h-3 text-amber-600" />
@@ -1031,62 +1005,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         )}
                       </td>}
 
-                      {/* Önceki Küm. GV Matrahı */}
-                      {!isSupplementaryView && <td className="py-3 px-4 text-right font-mono text-xs">
-                        {(() => {
-                          const sessionManual = manualKumulatifGvMap[person.id];
-                          const isManual = sessionManual !== undefined || bordro?.manuelKumulatifGvMatrahi !== undefined;
-                          const val = Number(
-                            sessionManual ??
-                              bordro?.oncekiKumulatifGvMatrahi ??
-                              bordro?.manuelKumulatifGvMatrahi ??
-                              getDevirGvMatrahiForActiveYear(person)
-                          ) || 0;
-
-                          if (val > 0) {
-                            return (
-                              <div className="flex flex-col items-end">
-                                <span className={`font-bold ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>{formatTL(val)}</span>
-                                {isManual && (
-                                  <span className="text-[10px] text-indigo-600 font-semibold">(Manuel)</span>
-                                )}
-                              </div>
-                            );
-                          } else if (aktifDonem.ay > 1) {
-                            return (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setIsKumulatifModalOpen(true);
-                                }}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200 transition-colors"
-                                title="İlk ayda olunmadığı için Önceki Kümülatif Vergi Matrahı girilmelidir."
-                              >
-                                <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
-                                <span>Matrah Girin</span>
-                              </button>
-                            );
-                          } else {
-                            return <span className="text-slate-400 font-mono">0,00 TL</span>;
-                          }
-                        })()}
-                      </td>}
-
-                      {/* Ödeme/tahakkuk tarihi */}
-                      <td className="py-3 px-4 text-center font-mono text-[11px]">
+                      {/* Ödeme/tahakkuk tarihi — supplementary views only */}
+                      {isSupplementaryView && <td className="py-3 px-4 text-center font-mono text-[11px]">
                         <div className="font-bold text-slate-800">
-                          {bordro
-                            ? bordro.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)
-                            : isSupplementaryView
-                              ? '—'
-                              : normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)}
+                          {bordro ? bordro.paymentDate || getDefaultAccrualPaymentDate(aktifDonem) : '—'}
                         </div>
-                        <div className="text-[10px] text-slate-500">
-                          {bordro
-                            ? (isSupplementaryView ? `Sıra ${bordro.sequence}` : 'Değiştirilemez')
-                            : isSupplementaryView ? `${activeViewTitle} için` : 'Yeni NORMAL için'}
-                        </div>
-                      </td>
+                        {!bordro && <div className="text-[10px] text-slate-500">{activeViewTitle} için</div>}
+                      </td>}
 
                       {/* Brüt */}
                       <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
@@ -1251,7 +1176,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <div className="font-bold text-slate-900">{person.ad} {person.soyad}</div>
                             <div className="font-mono text-[11px] text-slate-500">TC: {person.tcNo}</div>
                             <div className="mt-0.5 text-[10px] font-semibold text-indigo-600">
-                              {ACCRUAL_TYPE_LABELS[accrual.accrualType]} · kayıt {additionalIndex + 2}
+                              {ACCRUAL_TYPE_LABELS[accrual.accrualType]}
                             </div>
                             {accrual.accrualDescription && (
                               <div className="max-w-64 truncate text-[10px] text-slate-500" title={accrual.accrualDescription}>
@@ -1263,7 +1188,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <div className="font-bold text-slate-800">
                               {accrual.paymentDate || getDefaultAccrualPaymentDate(aktifDonem)}
                             </div>
-                            <div className="text-[10px] text-slate-500">Sıra {accrual.sequence}</div>
                           </td>
                           <td className={`py-3 px-4 text-right font-mono font-medium ${accrualIsStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
                             {formatTL(accrual.gelirToplam || 0)}
@@ -1365,7 +1289,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     })}
 
                     {expandedTimelinePersonId === person.id && <tr key={`${person.id}-accrual-timeline`}>
-                      <td colSpan={isSupplementaryView ? 9 : 11} className="px-4 py-3 bg-slate-50/80">
+                      <td colSpan={isSupplementaryView ? 9 : 7} className="px-4 py-3 bg-slate-50/80">
                         <div className="flex flex-col gap-2">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">

@@ -105,16 +105,23 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function formatBrowserStorageLoadError(error: unknown): string {
-  return `Tarayıcıdaki mevcut bordro snapshotı geçersiz veya okunamadı: ${getErrorMessage(
-    error
-  )} Finansal alanların exact Decimal string olması gerekiyor. Veri otomatik dönüştürülmedi ve mevcut snapshot değiştirilmedi.`;
+interface UserFacingStorageError {
+  userMessage: string;
+  technicalDetail: string;
 }
 
-function formatBrowserStorageSaveError(error: unknown): string {
-  return `Tarayıcı verisi kaydedilemedi: ${getErrorMessage(
-    error
-  )} IndexedDB snapshotı değiştirilmedi; başka bir storage kullanılmadı.`;
+function formatBrowserStorageLoadError(error: unknown): UserFacingStorageError {
+  return {
+    userMessage: 'Tarayıcıdaki bordro verisi okunamadı. Mevcut veriler değiştirilmedi.',
+    technicalDetail: getErrorMessage(error),
+  };
+}
+
+function formatBrowserStorageSaveError(error: unknown): UserFacingStorageError {
+  return {
+    userMessage: 'Veriler kaydedilemedi. Mevcut kayıt korunuyor.',
+    technicalDetail: getErrorMessage(error),
+  };
 }
 
 function getInitialActiveKesintiType(): KesintiTipi {
@@ -127,14 +134,14 @@ function getInitialActiveKesintiType(): KesintiTipi {
   return 'sendika';
 }
 
-function getInitialActiveTab(): TabType {
+export function getInitialActiveTab(storage?: Pick<Storage, 'getItem'>): TabType {
   try {
-    const saved = localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+    const saved = (storage ?? localStorage).getItem(ACTIVE_TAB_STORAGE_KEY);
     if (isTabType(saved)) return saved;
   } catch {
     // localStorage may be unavailable in a restricted browser context.
   }
-  return 'personel';
+  return 'ozet';
 }
 
 function getInitialActiveParametreSection(): ParametreSection {
@@ -325,10 +332,15 @@ export default function App() {
       }
       setIsDataLoaded(true);
     } catch (err) {
+      const browserError = isNative ? null : formatBrowserStorageLoadError(err);
       const message = isNative
         ? `Veri yüklenemedi: ${getErrorMessage(err)}`
-        : formatBrowserStorageLoadError(err);
-      console.error(message, err);
+        : browserError!.userMessage;
+      console.error(
+        isNative ? 'Veri yüklenemedi.' : 'Tarayıcıdaki bordro verisi okunamadı.',
+        browserError?.technicalDetail,
+        err
+      );
       setLoadError(message);
       // Native failures stop here. Browser failures also remain visible rather
       // than being replaced with an empty, apparently valid dataset.
@@ -346,9 +358,9 @@ export default function App() {
   useEffect(() => {
     if (!isDataLoaded || tauriBridge.isTauriAvailable() || !authoritativePayload) return;
     void browserPayrollStore.savePayload(serializePayrollStorage(authoritativePayload)).catch((err) => {
-      const message = formatBrowserStorageSaveError(err);
-      console.error(message, err);
-      setLoadError(message);
+      const browserError = formatBrowserStorageSaveError(err);
+      console.error('Tarayıcı verisi kaydedilemedi.', browserError.technicalDetail, err);
+      setLoadError(browserError.userMessage);
     });
   }, [authoritativePayload, isDataLoaded]);
 
@@ -490,7 +502,7 @@ export default function App() {
       alert('Yedek başarıyla yüklendi!');
     } catch (err) {
       console.error('Yedek yükleme başarısız:', err);
-      alert(`Yedek yüklenemedi: ${getErrorMessage(err)}`);
+      alert('Yedek yüklenemedi. Mevcut kayıt korunuyor.');
     }
   };
 
@@ -1040,7 +1052,7 @@ export default function App() {
                     storageLabel={tauriBridge.isTauriAvailable() ? 'Bu cihazda yerel kayıt' : 'Bu tarayıcıda yerel kayıt'}
                     storageDetail={tauriBridge.isTauriAvailable()
                       ? 'Veriler bu cihazdaki yerel uygulama veritabanında tutulur; düzenli JSON yedeği almanız önerilir.'
-                      : 'Veriler IndexedDB içinde tutulur; düzenli JSON yedeği almanız önerilir.'}
+                      : 'Veriler bu tarayıcıda yerel olarak tutulur; düzenli JSON yedeği almanız önerilir.'}
                     onExportBackup={handleExportBackup}
                     onImportBackup={handleImportBackup}
                     onResetSampleData={handleResetSampleData}

@@ -19,8 +19,13 @@ import type {
 } from '../../types/payroll';
 import type { PayrollNotice } from '../../types/payrollNotice';
 import type { ParametreSection, PayrollViewType, TabType } from '../../types/navigation';
-import { AY_ISIMLERI, formatDateTR } from '../../utils/payrollPresentation';
+import {
+  AY_ISIMLERI,
+  formatDateTR,
+  hasCompletePeriodInstitutionParameters,
+} from '../../utils/payrollPresentation';
 import { PayrollNoticeCenter } from '../PayrollNoticeCenter';
+import { getPeriodSummaryNextTask } from './periodSummaryLogic';
 
 interface PeriodSummaryProps {
   aktifDonem?: BordroDonemi;
@@ -77,6 +82,10 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
     const authoritativeNormal = normalPayrolls.filter(isAuthoritative);
     const calculatedNormal = normalPayrolls.filter((payroll) => payroll.status === 'CALCULATED');
     const staleNormal = normalPayrolls.filter((payroll) => payroll.status === 'STALE');
+    const periodParametersReady = hasCompletePeriodInstitutionParameters(
+      activeKurumDegerleri,
+      aktifDonem.id
+    );
     const annualParametersReady = annualPayrollParameters.some(
       (parameters) => parameters.year === aktifDonem.taxYear
     );
@@ -103,12 +112,29 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
         .filter((payroll) => payroll.accrualType === 'TIS_IKRAMIYE' && isAuthoritative(payroll))
         .map((payroll) => payroll.personelId)
     );
+    const staleNormalPersonnelIds = new Set(staleNormal.map((payroll) => payroll.personelId));
+    const authoritativeNormalPersonnelIds = new Set(
+      authoritativeNormal.map((payroll) => payroll.personelId)
+    );
+    const staleNormalPeople = personeller.filter((person) =>
+      staleNormalPersonnelIds.has(person.id)
+    );
+    const missingNormalPeople = personeller.filter(
+      (person) =>
+        !authoritativeNormalPersonnelIds.has(person.id) &&
+        !staleNormalPersonnelIds.has(person.id)
+    );
 
     return {
       missingAttendance,
-      normalCount: new Set(authoritativeNormal.map((payroll) => payroll.personelId)).size,
+      missingAttendanceCount: missingAttendance.length,
+      normalCount: authoritativeNormalPersonnelIds.size,
       calculatedNormalCount: calculatedNormal.length,
-      staleNormalCount: staleNormal.length,
+      staleNormalPeople,
+      staleNormalCount: staleNormalPeople.length,
+      missingNormalPeople,
+      missingNormalCount: missingNormalPeople.length,
+      periodParametersReady,
       annualParametersReady,
       activeTediyeReference,
       activeTisReference,
@@ -139,21 +165,7 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
     );
   }
 
-  const nextTask = !summary.annualParametersReady
-    ? { label: 'Dönem ayarlarını tamamla', action: () => onNavigate('parametrelar', undefined, 'annualTax') }
-    : summary.missingAttendance.length > 0
-      ? { label: 'Eksik puantajları tamamla', action: () => onNavigate('puantaj') }
-      : summary.normalCount < personeller.length
-        ? { label: 'Normal maaşları hesapla', action: () => onNavigate('bordro', 'normal') }
-        : summary.staleNormalCount > 0
-          ? { label: 'Yeniden hesaplanması gereken bordrolara git', action: () => onNavigate('bordro', 'normal') }
-          : summary.missingTis > 0
-            ? { label: 'Bekleyen TİS ikramiyelerine git', action: () => onNavigate('bordro', 'tis') }
-            : summary.missingTediye > 0
-              ? { label: 'Bekleyen tediye kayıtlarına git', action: () => onNavigate('bordro', 'tediye') }
-              : summary.finalizedPending > 0
-                ? { label: 'Bordroları kesinleştir', action: () => onNavigate('bordro', 'normal') }
-                : null;
+  const nextTask = getPeriodSummaryNextTask(summary);
 
   const StatusRow: React.FC<{
     icon: React.ReactNode;
@@ -197,7 +209,9 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
           <button
             type="button"
             data-testid="period-summary-next-action"
-            onClick={nextTask.action}
+            onClick={() =>
+              onNavigate(nextTask.tab, nextTask.payrollView, nextTask.parametreSection)
+            }
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
             {nextTask.label} <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -229,10 +243,16 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
           </div>
           <ul className="mt-3 space-y-2" aria-label="Dönem durum özeti">
             <StatusRow
+              tone={summary.periodParametersReady ? 'success' : 'critical'}
+              icon={summary.periodParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+              label={summary.periodParametersReady ? 'Dönem ücret ve yardım parametreleri hazır' : 'Dönem ücret parametreleri eksik'}
+              detail={summary.periodParametersReady ? undefined : 'Ücretler bölümüne kayıt gerekli'}
+            />
+            <StatusRow
               tone={summary.annualParametersReady ? 'success' : 'critical'}
               icon={summary.annualParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-              label={summary.annualParametersReady ? 'Dönem parametreleri hazır' : 'Yıllık vergi parametresi eksik'}
-              detail={summary.annualParametersReady ? `${aktifDonem.taxYear} vergi yılı` : `${aktifDonem.taxYear} yılı için kayıt gerekli`}
+              label={`${aktifDonem.taxYear} vergi tarifesi ${summary.annualParametersReady ? 'hazır' : 'eksik'}`}
+              detail={summary.annualParametersReady ? undefined : 'Yıllık GV Tarifesi bölümüne kayıt gerekli'}
             />
             <StatusRow
               tone={summary.missingAttendance.length === 0 ? 'success' : 'warning'}
@@ -244,7 +264,11 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
               tone={summary.normalCount === personeller.length ? 'success' : 'neutral'}
               icon={summary.normalCount === personeller.length ? <CheckCircle2 className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
               label={`${summary.normalCount} / ${personeller.length} normal maaş hesaplandı`}
-              detail={summary.staleNormalCount > 0 ? `${summary.staleNormalCount} yeniden hesaplanmalı` : undefined}
+              detail={summary.staleNormalCount > 0
+                ? `${summary.staleNormalCount} yeniden hesaplanmalı`
+                : summary.missingNormalCount > 0
+                  ? `${summary.missingNormalCount} hesaplanmalı`
+                  : undefined}
             />
             <StatusRow
               tone={summary.finalizedPending === 0 ? 'success' : 'neutral'}

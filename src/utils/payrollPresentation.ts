@@ -95,6 +95,33 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   issizlikIsverenOraniYuzde: 2.00,
 };
 
+const REQUIRED_PERIOD_INSTITUTION_FIELDS = [
+  'gunlukTabanUcret',
+  'gunlukYemek',
+  'birlestirilmisSosyalYardim',
+  'gunlukVasitaYol',
+  'giyimYardimi',
+  'hizmetZammiBirimi',
+] as const;
+
+/**
+ * Readiness check for the period-level values required by the payroll input
+ * contract. The payroll domain permits zero for every required value except
+ * the daily base wage, which must be positive.
+ */
+export function hasCompletePeriodInstitutionParameters(
+  kurumDegerleri: Partial<DönemselKurumDegerleri> | undefined,
+  donemId: string
+): boolean {
+  if (!kurumDegerleri || kurumDegerleri.donemId !== donemId) return false;
+
+  return REQUIRED_PERIOD_INSTITUTION_FIELDS.every((field) => {
+    const value = kurumDegerleri[field];
+    if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+    return field === 'gunlukTabanUcret' ? value > 0 : value >= 0;
+  });
+}
+
 export function createBordroDonemi(
   yil: number,
   ay: number,
@@ -190,6 +217,15 @@ export function calculatePuantajOzeti(gunler: Record<string, PuantajKodu>): Puan
     if (summary[kod] !== undefined) summary[kod]++;
   });
   return summary;
+}
+
+const COMPACT_PUANTAJ_CODES: readonly PuantajKodu[] = ['Ç', 'T', 'G', 'GÇ', 'GÇT', 'İ', 'R'];
+
+export function formatCompactPuantaj(summary: PuantajOzeti): string {
+  const entries = COMPACT_PUANTAJ_CODES
+    .filter((code) => summary[code] > 0)
+    .map((code) => `${summary[code]} ${code}`);
+  return entries.length > 0 ? entries.join(' · ') : '0 gün';
 }
 
 export function generateDefaultPuantajGunler(
