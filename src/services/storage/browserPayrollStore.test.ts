@@ -10,6 +10,7 @@ import {
   parseCurrentBrowserSnapshot,
   parseImportedBackup,
   parseLegacyBackup,
+  repairAndCanonicalizeBackup,
 } from './payrollPayload';
 import type { PayrollStorageDto } from '../payrollEngine/decimalBoundary';
 
@@ -566,6 +567,54 @@ describe('BrowserPayrollStore', () => {
     expect(() => parseImportedBackup(JSON.stringify(malformedCurrentShape))).toThrow(
       '$.bordrolar[0].id zorunlu alan eksik'
     );
+  });
+
+  test('canonicalizes legacy periods missing taxYear or taxMonth', () => {
+    const legacy = parseTestSnapshot(makeLegacyV2Snapshot());
+    const period = firstRecord(legacy, 'donemler');
+    delete period.taxYear;
+    delete period.taxMonth;
+
+    const parsed = parseImportedBackup(JSON.stringify(legacy));
+    expect(parsed.donemler[0].taxYear).toBe(2026);
+    expect(parsed.donemler[0].taxMonth).toBe(2);
+  });
+
+  test('filters out orphan records in legacy backups without failing cross-record integrity', () => {
+    const legacy = parseTestSnapshot(makeLegacyV2Snapshot());
+    (legacy.bordrolar as unknown[]).push({
+      id: 'ghost_2026-01',
+      personelId: 'ghost-person',
+      donemId: '2026-01',
+      olusturulmaTarihi: '2026-01-15T00:00:00.000Z',
+      sonGuncellemeTarihi: '2026-01-15T00:00:00.000Z',
+      puantajOzeti: { 'Ç': 20, 'T': 4, 'G': 0, 'İ': 0, 'GÇ': 0, 'GÇT': 0, 'R': 0 },
+      gelirler: { tabanBrutAylik: '30000.00' },
+      gelirToplam: '30000.00',
+      kesintiler: { isciSgkPrimi: '4200.00', isciIssizlikPrimi: '300.00', gelirVergisi: '3825.00', damgaVergisi: '227.70' },
+      kesintiToplam: '8552.70',
+      netOdeme: '21447.30',
+      status: 'CALCULATED',
+    });
+
+    const parsed = parseImportedBackup(JSON.stringify(legacy));
+    expect(parsed.bordrolar.length).toBe(1);
+    expect(parsed.bordrolar[0].personelId).toBe('person-1');
+  });
+
+  test('repairAndCanonicalizeBackup repairs a payload with numeric fields and missing accrual info', () => {
+    const rawWithNumbers = parseTestSnapshot(makeV2Snapshot(64179.78));
+    rawWithNumbers.backupVersion = 2;
+    delete firstRecord(rawWithNumbers, 'bordrolar').accrualId;
+    delete firstRecord(rawWithNumbers, 'donemler').taxYear;
+    delete firstRecord(rawWithNumbers, 'donemler').taxMonth;
+
+    const repaired = repairAndCanonicalizeBackup(rawWithNumbers);
+    expect(repaired.backupVersion).toBe(3);
+    expect(typeof repaired.bordrolar[0].netOdeme).toBe('string');
+    expect(repaired.bordrolar[0].netOdeme).toBe('64179.78');
+    expect(repaired.bordrolar[0].accrualType).toBe('NORMAL');
+    expect(repaired.donemler[0].taxYear).toBe(2026);
   });
 
   test('serializes concurrent saves and lets the latest completed operation win', async () => {

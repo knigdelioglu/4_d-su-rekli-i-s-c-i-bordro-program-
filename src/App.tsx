@@ -60,6 +60,7 @@ import {
 import {
   parseCurrentBrowserSnapshot,
   parseImportedBackup,
+  repairAndCanonicalizeBackup,
 } from './services/storage/payrollPayload';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { PeriodSummary } from './components/Dashboard/PeriodSummary';
@@ -312,10 +313,19 @@ export default function App() {
 
       const saved = await browserPayrollStore.loadPayload();
       if (saved) {
-        // IndexedDB may contain a pre-v3 backup. Route every persisted
-        // snapshot through the import normalizer so legacy single-payroll
-        // records become one NORMAL accrual without losing their snapshot.
-        const payload = parseImportedBackup(saved);
+        // IndexedDB may contain a pre-v3 backup or slightly malformed snapshot.
+        // Route through normalizer, and attempt safe canonical repair if strict parse fails.
+        let payload: PayrollStorageDto;
+        try {
+          payload = parseImportedBackup(saved);
+        } catch (strictError) {
+          const raw = JSON.parse(saved);
+          if (raw && typeof raw === 'object') {
+            payload = repairAndCanonicalizeBackup(raw as Record<string, unknown>);
+          } else {
+            throw strictError;
+          }
+        }
         applyDataset(payload);
       } else {
         applyDataset(toPayrollBoundaryDto({
@@ -332,6 +342,7 @@ export default function App() {
         }));
       }
       setIsDataLoaded(true);
+      setLoadError(null);
     } catch (err) {
       const browserError = isNative ? null : formatBrowserStorageLoadError(err);
       const message = isNative
@@ -461,15 +472,72 @@ export default function App() {
         return;
       }
 
-      await evaluateBrowserMutations({ kind: 'ALL' });
+      if (isDataLoaded) {
+        await evaluateBrowserMutations({ kind: 'ALL' });
+      }
+      await browserPayrollStore.savePayload(serializePayrollStorage(payload));
       applyDataset(payload);
       setIsDataLoaded(true);
+      setLoadError(null);
     } catch (err) {
       const message = `Örnek veriler yüklenemedi: ${String(err)}`;
       console.error(message, err);
       setLoadError(message);
       alert(message);
     }
+  };
+
+  const handleClearAndStartFresh = async () => {
+    if (
+      !window.confirm(
+        'Tarayıcıdaki tüm yerel bordro verileri temizlenecek ve boş olarak başlatılacak. Emin misiniz?'
+      )
+    ) {
+      return;
+    }
+    const empty = toPayrollBoundaryDto({
+      donemler: [],
+      aktifDonemId: '',
+      personeller: [],
+      kurumDegerleriMap: {},
+      puantajlar: [],
+      bordrolar: [],
+      taxOpenings: [],
+      sickLeaveRecords: [],
+      annualPayrollParameters: [],
+      zamAylari: [],
+    });
+    const payload = makeBackupPayload(empty);
+    try {
+      if (tauriBridge.isTauriAvailable()) {
+        await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
+        await loadData();
+        return;
+      }
+      await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+      applyDataset(payload);
+      setIsDataLoaded(true);
+      setLoadError(null);
+    } catch (err) {
+      const message = `Veriler sıfırlanamadı: ${String(err)}`;
+      console.error(message, err);
+      setLoadError(message);
+      alert(message);
+    }
+  };
+
+  const handleRecoveryFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        await handleImportBackup(content);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   };
 
   const handleExportBackup = () => {
@@ -493,12 +561,15 @@ export default function App() {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();
       } else {
-        await evaluateBrowserMutations({ kind: 'ALL' });
+        if (isDataLoaded) {
+          await evaluateBrowserMutations({ kind: 'ALL' });
+        }
         // Import is a user-visible commit point. Verify the IndexedDB write
         // before replacing the in-memory dataset or announcing success.
         await browserPayrollStore.savePayload(serializePayrollStorage(payload));
         applyDataset(payload);
         setIsDataLoaded(true);
+        setLoadError(null);
       }
       alert('Yedek başarıyla yüklendi!');
     } catch (err) {
@@ -909,7 +980,7 @@ export default function App() {
 
         <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
           <div className="mx-auto w-full max-w-[1600px]">
-            {loadError && (
+            {loadError && isDataLoaded && (
               <div
                 role="alert"
                 data-testid="storage-error"
@@ -926,6 +997,48 @@ export default function App() {
                 className="mx-auto my-16 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-600 shadow-sm"
               >
                 Veriler yükleniyor…
+              </div>
+            )}
+
+            {!isDataLoaded && loadError && (
+              <div className="mx-auto my-12 max-w-xl space-y-4 rounded-2xl border border-rose-200 bg-white p-8 text-center shadow-sm">
+                <div
+                  role="alert"
+                  data-testid="storage-error"
+                  className="rounded-xl border border-rose-300 bg-rose-50 p-4 text-xs font-semibold text-rose-900 text-left"
+                >
+                  {loadError}
+                </div>
+                <p className="text-xs leading-relaxed text-slate-600">
+                  Tarayıcınızda kayıtlı veriler yeni sürümle tam uyumlu olmayabilir veya veri okuma hatası oluştu. İşlemlere devam etmek için örnek verileri yükleyebilir veya temiz bir başlangıç yapabilirsiniz.
+                </p>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleResetSampleData}
+                    className="w-full sm:w-auto rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 cursor-pointer"
+                  >
+                    Örnek Verileri Yükle
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearAndStartFresh}
+                    className="w-full sm:w-auto rounded-xl bg-slate-100 px-4 py-2.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200 cursor-pointer"
+                  >
+                    Verileri Sıfırla (Temiz Başla)
+                  </button>
+                </div>
+                <div className="pt-2 border-t border-slate-100">
+                  <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-medium text-indigo-600 hover:text-indigo-700">
+                    <span>veya Yedek Dosyası (.json) Yükle</span>
+                    <input
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={handleRecoveryFileImport}
+                    />
+                  </label>
+                </div>
               </div>
             )}
 

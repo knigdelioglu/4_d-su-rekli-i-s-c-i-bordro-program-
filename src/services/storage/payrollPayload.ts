@@ -138,12 +138,29 @@ function canonicalizeLegacyPuantajOzeti(value: unknown): unknown {
   return canonicalizeLegacyMissingFields(value, LEGACY_PUANTAJ_OZETI_KEYS, 0);
 }
 
+function canonicalizeLegacyDonem(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const period = { ...value };
+  if (!hasOwn(period, 'taxYear') || period.taxYear === null || typeof period.taxYear !== 'number') {
+    period.taxYear = typeof period.yil === 'number' ? period.yil : new Date().getFullYear();
+  }
+  if (!hasOwn(period, 'taxMonth') || period.taxMonth === null || typeof period.taxMonth !== 'number') {
+    const ay = typeof period.ay === 'number' ? period.ay : 1;
+    period.taxMonth = ay + 1 > 12 ? 1 : ay + 1;
+  }
+  return period;
+}
+
 function legacyPaymentDate(periods: unknown, periodId: unknown): string {
-  if (!Array.isArray(periods) || typeof periodId !== 'string') return '';
+  if (!Array.isArray(periods) || typeof periodId !== 'string') {
+    return new Date().toISOString().slice(0, 10);
+  }
   const period = periods.find(
     (candidate) => isRecord(candidate) && candidate.id === periodId
   );
-  if (!isRecord(period) || typeof period.bitisTarihi !== 'string') return '';
+  if (!isRecord(period) || typeof period.bitisTarihi !== 'string' || period.bitisTarihi.trim() === '') {
+    return new Date().toISOString().slice(0, 10);
+  }
   if (
     typeof period.taxYear !== 'number' ||
     !Number.isInteger(period.taxYear) ||
@@ -171,7 +188,9 @@ function canonicalizeLegacyBordro(value: unknown, periods: unknown): unknown {
   // V1/V2 had one record per person+period. It maps losslessly to the only
   // legal legacy accrual: one NORMAL node carrying the old record id/items.
   if (!hasOwn(bordro, 'accrualId') || bordro.accrualId === null || bordro.accrualId === '') {
-    bordro.accrualId = typeof bordro.id === 'string' ? bordro.id : '';
+    bordro.accrualId = typeof bordro.id === 'string' && bordro.id.trim() !== ''
+      ? bordro.id
+      : `${String(bordro.personelId || 'person')}_${String(bordro.donemId || 'period')}`;
   }
   // Every pre-V3 backup had one person+period payroll. Even if a producer
   // accidentally emitted partial accrual metadata, its only lossless meaning
@@ -314,40 +333,101 @@ function firstPeriodId(value: unknown): string {
 }
 
 function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
-  const periods = legacyValueOrDefault(parsed, 'donemler', []);
-  const rawPayrolls = legacyValueOrDefault(parsed, 'bordrolar', []);
-  const payrolls = Array.isArray(rawPayrolls)
-    ? rawPayrolls.map((payroll) => canonicalizeLegacyBordro(payroll, periods))
-    : rawPayrolls;
+  const rawPeriods = legacyValueOrDefault(parsed, 'donemler', []);
+  const periods = Array.isArray(rawPeriods)
+    ? rawPeriods.map(canonicalizeLegacyDonem)
+    : rawPeriods;
 
   const rawPersonnel = legacyValueOrDefault(parsed, 'personeller', []);
   const personnel = Array.isArray(rawPersonnel)
     ? rawPersonnel.map(canonicalizeLegacyPersonel)
     : rawPersonnel;
+
+  const validPersonnelIds = new Set(
+    Array.isArray(personnel)
+      ? personnel.map((p) => (isRecord(p) && typeof p.id === 'string' ? p.id : '')).filter(Boolean)
+      : []
+  );
+  const validPeriodIds = new Set(
+    Array.isArray(periods)
+      ? periods.map((p) => (isRecord(p) && typeof p.id === 'string' ? p.id : '')).filter(Boolean)
+      : []
+  );
+
+  const rawPayrolls = legacyValueOrDefault(parsed, 'bordrolar', []);
+  const payrolls = Array.isArray(rawPayrolls)
+    ? rawPayrolls
+        .filter(
+          (payroll) =>
+            !isRecord(payroll) ||
+            ((!validPersonnelIds.size || validPersonnelIds.has(String(payroll.personelId))) &&
+              (!validPeriodIds.size || validPeriodIds.has(String(payroll.donemId))))
+        )
+        .map((payroll) => canonicalizeLegacyBordro(payroll, periods))
+    : rawPayrolls;
+
+  const rawPuantajlar = legacyValueOrDefault(parsed, 'puantajlar', []);
+  const puantajlar = Array.isArray(rawPuantajlar)
+    ? rawPuantajlar.filter(
+        (pj) =>
+          !isRecord(pj) ||
+          ((!validPersonnelIds.size || validPersonnelIds.has(String(pj.personelId))) &&
+            (!validPeriodIds.size || validPeriodIds.has(String(pj.donemId))))
+      )
+    : rawPuantajlar;
+
+  const rawTaxOpenings = legacyValueOrDefault(parsed, 'taxOpenings', []);
+  const taxOpenings = Array.isArray(rawTaxOpenings)
+    ? rawTaxOpenings.filter(
+        (item) =>
+          !isRecord(item) ||
+          ((!validPersonnelIds.size || validPersonnelIds.has(String(item.personnelId))) &&
+            (!validPeriodIds.size || validPeriodIds.has(String(item.effectiveFromPeriodId))))
+      )
+    : rawTaxOpenings;
+
+  const rawSickLeaves = legacyValueOrDefault(parsed, 'sickLeaveRecords', []);
+  const sickLeaveRecords = Array.isArray(rawSickLeaves)
+    ? rawSickLeaves.filter(
+        (item) =>
+          !isRecord(item) ||
+          !validPersonnelIds.size ||
+          validPersonnelIds.has(String(item.personnelId))
+      )
+    : rawSickLeaves;
+
   const annualPayrollParameters = canonicalizeLegacyAnnualParameters(
     legacyValueOrDefault(parsed, 'annualPayrollParameters', []),
     periods
   );
 
+  let aktifDonemId = legacyValueOrDefault(parsed, 'aktifDonemId', firstPeriodId(periods));
+  if (
+    typeof aktifDonemId !== 'string' ||
+    (validPeriodIds.size > 0 && !validPeriodIds.has(aktifDonemId))
+  ) {
+    aktifDonemId = firstPeriodId(periods);
+  }
+
   return {
     backupVersion: BACKUP_FORMAT_VERSION,
     exportedAt: legacyValueOrDefault(parsed, 'exportedAt', new Date().toISOString()),
     donemler: periods,
-    aktifDonemId: legacyValueOrDefault(parsed, 'aktifDonemId', firstPeriodId(periods)),
+    aktifDonemId,
     personeller: personnel,
     kurumDegerleriMap: canonicalizeLegacyInstitutionSettings(
       legacyValueOrDefault(parsed, 'kurumDegerleriMap', {})
     ),
-    puantajlar: legacyValueOrDefault(parsed, 'puantajlar', []),
+    puantajlar,
     bordrolar: payrolls,
-    taxOpenings: legacyValueOrDefault(parsed, 'taxOpenings', []),
-    sickLeaveRecords: legacyValueOrDefault(parsed, 'sickLeaveRecords', []),
+    taxOpenings,
+    sickLeaveRecords,
     annualPayrollParameters,
     zamAylari: legacyValueOrDefault(parsed, 'zamAylari', []),
   };
 }
 
-function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
+export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   if (!isLegacyCandidate(raw)) {
     throw new Error('Desteklenen legacy yedek yapısı bulunamadı.');
   }
@@ -369,6 +449,18 @@ function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
     throw new Error('Legacy yedek canonical nesne içermiyor.');
   }
   return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(encodedLegacy));
+}
+
+/**
+ * Emergency repair helper for damaged, pre-v3, or numeric-tainted payloads in browser storage.
+ * Coerces numbers into Decimal strings, fills missing fields, and prunes dangling references.
+ */
+export function repairAndCanonicalizeBackup(raw: UnknownRecord): PayrollStorageDto {
+  const converted = parseLegacyPayrollStorage<unknown>(JSON.stringify(raw));
+  if (!isRecord(converted)) {
+    throw new Error('Kurtarılacak veri geçerli bir nesne değil.');
+  }
+  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted));
 }
 
 /** Explicit structural/version predicate for legacy localStorage or imports. */
