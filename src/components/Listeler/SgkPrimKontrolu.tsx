@@ -1,11 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, ShieldCheck } from 'lucide-react';
-import type { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
+import type { BordroDonemi, BordroKaydi, DönemselKurumDegerleri, Personel } from '../../types/payroll';
 import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel } from '../../utils/excelExport';
 import {
+  buildSgkPrimKontroluExcelPayload,
   compareSgkPrimTotals,
   getSgkPrimKontroluRows,
+  getSgkPrimKontroluRateLabels,
+  getSgkPrimKontroluStatusLabel,
   getSgkPrimKontroluTotals,
   kurusToAmount,
   type SgkPrimKontroluRow,
@@ -15,23 +18,27 @@ interface SgkPrimKontroluProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   bordrolar: BordroKaydi[];
+  kurumDegerleri?: DönemselKurumDegerleri;
 }
 
 const periodLabel = (period: BordroDonemi): string =>
   period.donemAdi.match(/\(([^)]+)\)/)?.[1] || period.donemAdi;
 
-function missingStatusLabel(row: SgkPrimKontroluRow): string {
-  return row.status === 'stale' ? 'Yeniden hesaplanmalı' : 'Bordro hesaplanmadı';
-}
-
 function displayAmount(row: SgkPrimKontroluRow, amount: number): string {
   return row.status === 'authoritative' ? formatTL(amount) : '—';
+}
+
+function statusBadgeClass(row: SgkPrimKontroluRow): string {
+  return row.status === 'authoritative'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : 'border-amber-200 bg-amber-50 text-amber-800';
 }
 
 export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
   aktifDonem,
   personeller,
   bordrolar,
+  kurumDegerleri,
 }) => {
   const [sgkTutarInput, setSgkTutarInput] = useState('');
 
@@ -44,88 +51,27 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
     [aktifDonem, personeller, bordrolar]
   );
   const totals = useMemo(() => getSgkPrimKontroluTotals(rows), [rows]);
+  const rateLabels = useMemo(
+    () => getSgkPrimKontroluRateLabels(rows, kurumDegerleri),
+    [rows, kurumDegerleri]
+  );
   const comparison = useMemo(
-    () => compareSgkPrimTotals(totals.genelPrimToplami, sgkTutarInput),
-    [sgkTutarInput, totals.genelPrimToplami]
+    () =>
+      compareSgkPrimTotals(
+        totals.sgkMutabakatToplami,
+        sgkTutarInput,
+        totals.reconciliationReady
+      ),
+    [sgkTutarInput, totals.reconciliationReady, totals.sgkMutabakatToplami]
   );
 
   const handleExportExcel = () => {
-    const columns = [
-      { header: 'S.No', key: 'siraNo', width: 8 },
-      { header: 'T.C. Kimlik No', key: 'tcNo', width: 18 },
-      { header: 'SGK Sicil No', key: 'sgkSicilNo', width: 18 },
-      { header: 'Ad Soyad', key: 'adSoyad', width: 28 },
-      { header: 'SGK İşveren %21,75', key: 'isverenSgkPrimi', width: 20 },
-      { header: 'İşveren İşsizlik %2', key: 'isverenIssizlikPrimi', width: 20 },
-      { header: 'SGK İşçi %14', key: 'isciSgkPrimi', width: 18 },
-      { header: 'İşçi İşsizlik %1', key: 'isciIssizlikPrimi', width: 18 },
-      { header: 'Toplam', key: 'toplam', width: 18 },
-    ];
-
-    const data = rows.map((row, index) => ({
-      siraNo: index + 1,
-      tcNo: row.personel.tcNo,
-      sgkSicilNo: row.personel.sgkSicilNo,
-      adSoyad: `${row.personel.ad} ${row.personel.soyad}`,
-      isverenSgkPrimi: row.status === 'authoritative' ? row.isverenSgkPrimi : '',
-      isverenIssizlikPrimi: row.status === 'authoritative' ? row.isverenIssizlikPrimi : '',
-      isciSgkPrimi: row.status === 'authoritative' ? row.isciSgkPrimi : '',
-      isciIssizlikPrimi: row.status === 'authoritative' ? row.isciIssizlikPrimi : '',
-      toplam: row.status === 'authoritative' ? row.toplam : '',
-    }));
-
-    const summaryRows = [
-      {
-        siraNo: 'TOPLAM',
-        tcNo: '',
-        sgkSicilNo: '',
-        adSoyad: 'Dört prim kolonu toplamı',
-        isverenSgkPrimi: totals.isverenSgkPrimi,
-        isverenIssizlikPrimi: totals.isverenIssizlikPrimi,
-        isciSgkPrimi: totals.isciSgkPrimi,
-        isciIssizlikPrimi: totals.isciIssizlikPrimi,
-        toplam: totals.genelPrimToplami,
-      },
-      {
-        siraNo: '',
-        tcNo: '',
-        sgkSicilNo: '',
-        adSoyad: 'GENEL PRİM TOPLAMI',
-        isverenSgkPrimi: '',
-        isverenIssizlikPrimi: '',
-        isciSgkPrimi: '',
-        isciIssizlikPrimi: '',
-        toplam: totals.genelPrimToplami,
-      },
-    ];
-
-    if (comparison.sgkTutarKurus !== null) {
-      summaryRows.push({
-        siraNo: '',
-        tcNo: '',
-        sgkSicilNo: '',
-        adSoyad: "SGK'dan Girilen Tutar",
-        isverenSgkPrimi: '',
-        isverenIssizlikPrimi: '',
-        isciSgkPrimi: '',
-        isciIssizlikPrimi: '',
-        toplam: kurusToAmount(comparison.sgkTutarKurus),
-      });
-    }
-
-    if (comparison.farkKurus !== null) {
-      summaryRows.push({
-        siraNo: '',
-        tcNo: '',
-        sgkSicilNo: '',
-        adSoyad: 'FARK',
-        isverenSgkPrimi: '',
-        isverenIssizlikPrimi: '',
-        isciSgkPrimi: '',
-        isciIssizlikPrimi: '',
-        toplam: kurusToAmount(comparison.farkKurus),
-      });
-    }
+    const { columns, data, summaryRows } = buildSgkPrimKontroluExcelPayload(
+      rows,
+      totals,
+      rateLabels,
+      comparison
+    );
 
     exportToExcel(
       `SGK_Prim_Kontrolu_${aktifDonem.id}`,
@@ -174,19 +120,40 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
         </button>
       </div>
 
+      {totals.hazirOlmayanPersonelSayisi > 0 && (
+        <div
+          data-testid="sgk-reconciliation-warning"
+          role="alert"
+          className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900"
+        >
+          <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+          <div>
+            <div className="font-bold">
+              {totals.hazirOlmayanPersonelSayisi} personel SGK kontrolüne hazır değil
+            </div>
+            <div className="mt-1 text-xs text-rose-800">
+              Eksik, taslak veya güncel olmayan bordrolar genel toplama dahil edilmedi.
+              Mutabakatı tamamlamak için ilgili bordroları yeniden hesaplayın veya tamamlayın.
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xs">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] border-collapse text-left text-xs">
+          <table className="w-full min-w-[1450px] border-collapse text-left text-xs">
             <thead>
               <tr className="border-b border-slate-200 bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-900">
                 <th scope="col" className="p-3">S.No</th>
                 <th scope="col" className="p-3">T.C. Kimlik No</th>
                 <th scope="col" className="p-3">SGK Sicil No</th>
                 <th scope="col" className="p-3">Ad Soyad</th>
-                <th scope="col" className="p-3 text-right">SGK İşveren %21,75</th>
-                <th scope="col" className="p-3 text-right">İşveren İşsizlik %2</th>
-                <th scope="col" className="p-3 text-right">SGK İşçi %14</th>
-                <th scope="col" className="p-3 text-right">İşçi İşsizlik %1</th>
+                <th scope="col" className="p-3">Durum</th>
+                <th scope="col" className="p-3 text-right">{rateLabels.isverenSgk}</th>
+                <th scope="col" className="p-3 text-right">{rateLabels.isverenIssizlik}</th>
+                <th scope="col" className="p-3 text-right">{rateLabels.isciSgk}</th>
+                <th scope="col" className="p-3 text-right">{rateLabels.isciIssizlik}</th>
+                <th scope="col" className="p-3 text-right">PEK Alt Sınır İşveren Tamamlama</th>
                 <th scope="col" className="p-3 text-right">Toplam</th>
               </tr>
             </thead>
@@ -197,24 +164,29 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
                   <td className="p-3 font-mono font-bold text-slate-900">{row.personel.tcNo}</td>
                   <td className="p-3 font-mono text-slate-800">{row.personel.sgkSicilNo || '—'}</td>
                   <td className="p-3 font-sans font-semibold text-slate-900">
-                    <div>{row.personel.ad} {row.personel.soyad}</div>
-                    {row.status !== 'authoritative' && (
-                      <span className="mt-1 inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
+                    {row.personel.ad} {row.personel.soyad}
+                  </td>
+                  <td className="p-3">
+                    <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-semibold ${statusBadgeClass(row)}`}>
+                      {row.status === 'authoritative' ? (
+                        <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
+                      ) : (
                         <AlertTriangle className="h-3 w-3" aria-hidden="true" />
-                        {missingStatusLabel(row)}
-                      </span>
-                    )}
+                      )}
+                      {getSgkPrimKontroluStatusLabel(row.status)}
+                    </span>
                   </td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenSgkPrimi)}</td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenIssizlikPrimi)}</td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciSgkPrimi)}</td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciIssizlikPrimi)}</td>
+                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.pekAltSinirTamamlamaIsverenPrimi)}</td>
                   <td className="p-3 text-right font-mono text-sm font-bold tabular-nums text-indigo-900">{displayAmount(row, row.toplam)}</td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="p-8 text-center font-sans italic text-slate-500">
+                  <td colSpan={11} className="p-8 text-center font-sans italic text-slate-500">
                     Bu dönem için kayıtlı personel bulunmamaktadır.
                   </td>
                 </tr>
@@ -224,21 +196,26 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" aria-label="SGK prim toplamları">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="SGK prim toplamları">
         {[
-          ['SGK İşveren %21,75 Toplamı', totals.isverenSgkPrimi],
-          ['İşveren İşsizlik %2 Toplamı', totals.isverenIssizlikPrimi],
-          ['SGK İşçi %14 Toplamı', totals.isciSgkPrimi],
-          ['İşçi İşsizlik %1 Toplamı', totals.isciIssizlikPrimi],
-        ].map(([label, value]) => (
-          <div key={label as string} className="rounded-xl border border-slate-200 bg-white p-4 shadow-2xs">
+          { label: `${rateLabels.isverenSgk} Toplamı`, value: totals.isverenSgkPrimi },
+          { label: `${rateLabels.isverenIssizlik} Toplamı`, value: totals.isverenIssizlikPrimi },
+          { label: `${rateLabels.isciSgk} Toplamı`, value: totals.isciSgkPrimi },
+          { label: `${rateLabels.isciIssizlik} Toplamı`, value: totals.isciIssizlikPrimi },
+          { label: 'Dört Ana Prim Toplamı', value: totals.dortPrimToplami },
+          {
+            label: 'PEK Alt Sınır İşveren Tamamlama',
+            value: totals.pekAltSinirTamamlamaIsverenPrimi,
+          },
+        ].map(({ label, value }) => (
+          <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-2xs">
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</div>
-            <div className="mt-2 font-mono text-lg font-bold tabular-nums text-slate-900">{formatTL(value as number)}</div>
+            <div className="mt-2 font-mono text-lg font-bold tabular-nums text-slate-900">{formatTL(value)}</div>
           </div>
         ))}
-        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-2xs sm:col-span-2 xl:col-span-1">
-          <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-700">GENEL PRİM TOPLAMI</div>
-          <div className="mt-2 font-mono text-xl font-black tabular-nums text-indigo-950">{formatTL(totals.genelPrimToplami)}</div>
+        <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-2xs sm:col-span-2 xl:col-span-2">
+          <div className="text-[10px] font-bold uppercase tracking-wide text-indigo-700">SGK MUTABAKAT TOPLAMI</div>
+          <div className="mt-2 font-mono text-xl font-black tabular-nums text-indigo-950">{formatTL(totals.sgkMutabakatToplami)}</div>
         </div>
       </div>
 
@@ -275,8 +252,8 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
         <div className={`mt-5 rounded-xl border p-4 ${comparisonCardClass}`} role="status" aria-live="polite">
           <div className="grid gap-4 sm:grid-cols-3">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Program Genel Prim Toplamı</div>
-              <div className="mt-1 font-mono text-base font-bold tabular-nums text-slate-900">{formatTL(totals.genelPrimToplami)}</div>
+              <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Program SGK Mutabakat Toplamı</div>
+              <div className="mt-1 font-mono text-base font-bold tabular-nums text-slate-900">{formatTL(totals.sgkMutabakatToplami)}</div>
             </div>
             <div>
               <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">SGK Tutarı</div>
@@ -294,10 +271,11 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
 
           <div className={`mt-4 flex items-center gap-2 border-t pt-3 text-xs font-bold ${comparisonTextClass}`}>
             {comparison.status === 'compatible' && <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
-            {comparison.status === 'programHigher' || comparison.status === 'programLower' ? <AlertTriangle className="h-4 w-4" aria-hidden="true" /> : null}
+            {comparison.status === 'incomplete' || comparison.status === 'programHigher' || comparison.status === 'programLower' ? <AlertTriangle className="h-4 w-4" aria-hidden="true" /> : null}
             <span>
               {comparison.status === 'empty' && 'SGK tutarını giriniz.'}
               {comparison.status === 'invalid' && 'Karşılaştırma için geçerli bir SGK tutarı giriniz.'}
+              {comparison.status === 'incomplete' && `Mutabakat tamamlanamaz — ${formatTL(kurusToAmount(comparison.farkKurus ?? 0))} fark var; ${totals.hazirOlmayanPersonelSayisi} personelin bordrosu eksik veya güncel değil.`}
               {comparison.status === 'compatible' && 'Uyumlu'}
               {comparison.status === 'programHigher' && `Program SGK tutarından ${formatTL(kurusToAmount(comparison.farkKurus ?? 0))} fazla`}
               {comparison.status === 'programLower' && `Program SGK tutarından ${formatTL(Math.abs(kurusToAmount(comparison.farkKurus ?? 0)))} düşük`}

@@ -1,7 +1,25 @@
-import type { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
+import type {
+  BordroDonemi,
+  BordroKaydi,
+  DönemselKurumDegerleri,
+  Personel,
+} from '../../types/payroll';
 import { isAuthoritativePayroll } from './accrualListData';
+import { DEFAULT_KURUM_DEGERLERI } from '../../utils/payrollPresentation';
 
-export type SgkPrimKontroluRowStatus = 'authoritative' | 'notCalculated' | 'stale';
+export type SgkPrimKontroluRowStatus =
+  | 'authoritative'
+  | 'stale'
+  | 'draft'
+  | 'missingSnapshot'
+  | 'notCalculated';
+
+export interface SgkPrimKontroluRateCandidates {
+  isverenSgkOranlari: Array<number | undefined>;
+  isverenIssizlikOranlari: Array<number | undefined>;
+  isciSgkOranlari: Array<number | undefined>;
+  isciIssizlikOranlari: Array<number | undefined>;
+}
 
 export interface SgkPrimKontroluRow {
   personel: Personel;
@@ -9,8 +27,11 @@ export interface SgkPrimKontroluRow {
   isverenIssizlikPrimi: number;
   isciSgkPrimi: number;
   isciIssizlikPrimi: number;
+  pekAltSinirTamamlamaIsverenPrimi: number;
+  dortPrimToplami: number;
   toplam: number;
   status: SgkPrimKontroluRowStatus;
+  rateCandidates: SgkPrimKontroluRateCandidates;
 }
 
 export interface SgkPrimKontroluTotals {
@@ -18,12 +39,34 @@ export interface SgkPrimKontroluTotals {
   isverenIssizlikPrimi: number;
   isciSgkPrimi: number;
   isciIssizlikPrimi: number;
+  pekAltSinirTamamlamaIsverenPrimi: number;
+  dortPrimToplami: number;
+  sgkMutabakatToplami: number;
+  /** Backward-compatible alias for callers that still use the old name. */
   genelPrimToplami: number;
+  hazirOlmayanPersonelSayisi: number;
+  reconciliationReady: boolean;
+}
+
+export interface SgkPrimKontroluRateLabels {
+  isverenSgk: string;
+  isverenIssizlik: string;
+  isciSgk: string;
+  isciIssizlik: string;
+}
+
+type SgkPrimKontroluExcelValue = string | number;
+
+export interface SgkPrimKontroluExcelPayload {
+  columns: Array<{ header: string; key: string; width: number }>;
+  data: Array<Record<string, SgkPrimKontroluExcelValue>>;
+  summaryRows: Array<Record<string, SgkPrimKontroluExcelValue>>;
 }
 
 export type SgkPrimComparisonStatus =
   | 'empty'
   | 'invalid'
+  | 'incomplete'
   | 'compatible'
   | 'programHigher'
   | 'programLower';
@@ -32,6 +75,81 @@ export interface SgkPrimComparison {
   status: SgkPrimComparisonStatus;
   sgkTutarKurus: number | null;
   farkKurus: number | null;
+}
+
+const DEFAULT_SGK_RATES = {
+  isverenSgkOraniYuzde: DEFAULT_KURUM_DEGERLERI.sgkIsverenOraniYuzde,
+  isverenIssizlikOraniYuzde: DEFAULT_KURUM_DEGERLERI.issizlikIsverenOraniYuzde,
+  isciSgkOraniYuzde: DEFAULT_KURUM_DEGERLERI.sgkIsciOraniYuzde,
+  isciIssizlikOraniYuzde: DEFAULT_KURUM_DEGERLERI.issizlikIsciOraniYuzde,
+};
+
+type SgkPrimKontroluResolvedRates = typeof DEFAULT_SGK_RATES;
+type SgkPeriodRateKey =
+  | 'sgkIsverenOraniYuzde'
+  | 'issizlikIsverenOraniYuzde'
+  | 'sgkIsciOraniYuzde'
+  | 'issizlikIsciOraniYuzde';
+
+const EMPTY_SNAPSHOT_TOTALS = {
+  isverenSgkPrimi: 0,
+  isverenIssizlikPrimi: 0,
+  isciSgkPrimi: 0,
+  isciIssizlikPrimi: 0,
+  pekAltSinirTamamlamaIsverenPrimi: 0,
+};
+
+function isNonNegativeFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isValidRate(value: unknown): value is number {
+  return isNonNegativeFiniteNumber(value) && value <= 100;
+}
+
+function resolvePeriodRate(
+  institutionSettings: Partial<DönemselKurumDegerleri> | undefined,
+  key: SgkPeriodRateKey,
+  fallback: number
+): number {
+  const value = institutionSettings?.[key];
+  return isValidRate(value) ? value : fallback;
+}
+
+function resolveSgkRates(
+  institutionSettings: Partial<DönemselKurumDegerleri> | undefined
+): SgkPrimKontroluResolvedRates {
+  return {
+    isverenSgkOraniYuzde: resolvePeriodRate(
+      institutionSettings,
+      'sgkIsverenOraniYuzde',
+      DEFAULT_SGK_RATES.isverenSgkOraniYuzde
+    ),
+    isverenIssizlikOraniYuzde: resolvePeriodRate(
+      institutionSettings,
+      'issizlikIsverenOraniYuzde',
+      DEFAULT_SGK_RATES.isverenIssizlikOraniYuzde
+    ),
+    isciSgkOraniYuzde: resolvePeriodRate(
+      institutionSettings,
+      'sgkIsciOraniYuzde',
+      DEFAULT_SGK_RATES.isciSgkOraniYuzde
+    ),
+    isciIssizlikOraniYuzde: resolvePeriodRate(
+      institutionSettings,
+      'issizlikIsciOraniYuzde',
+      DEFAULT_SGK_RATES.isciIssizlikOraniYuzde
+    ),
+  };
+}
+
+export function hasCompleteSgkSnapshot(payroll: BordroKaydi | null | undefined): boolean {
+  return [
+    payroll?.pekDetay?.isverenSgkPrimi,
+    payroll?.pekDetay?.isverenIssizlikPrimi,
+    payroll?.kesintiler?.isciSgkPrimi,
+    payroll?.kesintiler?.isciIssizlikPrimi,
+  ].every(isNonNegativeFiniteNumber);
 }
 
 function decimalTextToKurus(value: string): number {
@@ -114,27 +232,69 @@ export function parseSgkTutarToKurus(value: string): number | null {
   return Number.isSafeInteger(result) ? result : null;
 }
 
-function sumSnapshotValues(payrolls: BordroKaydi[]): {
+interface SgkSnapshotKurus {
   isverenSgkPrimi: number;
   isverenIssizlikPrimi: number;
   isciSgkPrimi: number;
   isciIssizlikPrimi: number;
-} {
-  const totals = {
-    isverenSgkPrimi: 0,
-    isverenIssizlikPrimi: 0,
-    isciSgkPrimi: 0,
-    isciIssizlikPrimi: 0,
-  };
+  pekAltSinirTamamlamaIsverenPrimi: number;
+}
 
-  for (const payroll of payrolls) {
-    totals.isverenSgkPrimi += amountToKurus(payroll.pekDetay?.isverenSgkPrimi);
-    totals.isverenIssizlikPrimi += amountToKurus(payroll.pekDetay?.isverenIssizlikPrimi);
-    totals.isciSgkPrimi += amountToKurus(payroll.kesintiler?.isciSgkPrimi);
-    totals.isciIssizlikPrimi += amountToKurus(payroll.kesintiler?.isciIssizlikPrimi);
+function getSgkSnapshotKurus(payroll: BordroKaydi): SgkSnapshotKurus | null {
+  if (!hasCompleteSgkSnapshot(payroll)) return null;
+
+  const pekAltSinirTamamlama = payroll.pekDetay?.pekAltSinirTamamlamaIsverenPrimi;
+  if (
+    pekAltSinirTamamlama !== null &&
+    pekAltSinirTamamlama !== undefined &&
+    !isNonNegativeFiniteNumber(pekAltSinirTamamlama)
+  ) {
+    return null;
   }
 
-  return totals;
+  try {
+    return {
+      isverenSgkPrimi: amountToKurus(payroll.pekDetay?.isverenSgkPrimi),
+      isverenIssizlikPrimi: amountToKurus(payroll.pekDetay?.isverenIssizlikPrimi),
+      isciSgkPrimi: amountToKurus(payroll.kesintiler?.isciSgkPrimi),
+      isciIssizlikPrimi: amountToKurus(payroll.kesintiler?.isciIssizlikPrimi),
+      // The optional field is absent in legacy snapshots; that means no
+      // lower-bound completion was recorded, so it is safely treated as zero.
+      pekAltSinirTamamlamaIsverenPrimi: amountToKurus(pekAltSinirTamamlama),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function sumSnapshotValues(snapshots: SgkSnapshotKurus[]): SgkSnapshotKurus {
+  return snapshots.reduce(
+    (totals, snapshot) => ({
+      isverenSgkPrimi: totals.isverenSgkPrimi + snapshot.isverenSgkPrimi,
+      isverenIssizlikPrimi: totals.isverenIssizlikPrimi + snapshot.isverenIssizlikPrimi,
+      isciSgkPrimi: totals.isciSgkPrimi + snapshot.isciSgkPrimi,
+      isciIssizlikPrimi: totals.isciIssizlikPrimi + snapshot.isciIssizlikPrimi,
+      pekAltSinirTamamlamaIsverenPrimi:
+        totals.pekAltSinirTamamlamaIsverenPrimi +
+        snapshot.pekAltSinirTamamlamaIsverenPrimi,
+    }),
+    { ...EMPTY_SNAPSHOT_TOTALS }
+  );
+}
+
+function getRateCandidates(authoritativePayrolls: BordroKaydi[]): SgkPrimKontroluRateCandidates {
+  return {
+    isverenSgkOranlari: authoritativePayrolls.map(
+      (payroll) => payroll.pekDetay?.sgkIsverenOraniYuzde ?? undefined
+    ),
+    isverenIssizlikOranlari: authoritativePayrolls.map(
+      (payroll) => payroll.pekDetay?.isverenIssizlikOraniYuzde ?? undefined
+    ),
+    // Worker-side rates are not persisted in the payroll snapshot; these are
+    // resolved from the active period settings when the header is built.
+    isciSgkOranlari: authoritativePayrolls.map(() => undefined),
+    isciIssizlikOranlari: authoritativePayrolls.map(() => undefined),
+  };
 }
 
 export function getSgkPrimKontroluRows(
@@ -155,13 +315,44 @@ export function getSgkPrimKontroluRows(
   return personnel.map((personel) => {
     const personPayrolls = payrollsByPerson.get(personel.id) ?? [];
     const authoritativePayrolls = personPayrolls.filter(isAuthoritativePayroll);
-    const snapshotTotals = sumSnapshotValues(authoritativePayrolls);
     const hasStalePayroll = personPayrolls.some((payroll) => payroll.status === 'STALE');
+    const hasDraftPayroll = personPayrolls.some((payroll) => payroll.status === 'DRAFT');
+    const snapshots = authoritativePayrolls.map(getSgkSnapshotKurus);
+    const hasMissingSnapshot = snapshots.some((snapshot) => snapshot === null);
+    const status: SgkPrimKontroluRowStatus = hasStalePayroll
+      ? 'stale'
+      : hasMissingSnapshot
+        ? 'missingSnapshot'
+        : hasDraftPayroll
+          ? 'draft'
+          : authoritativePayrolls.length > 0
+            ? 'authoritative'
+            : 'notCalculated';
+    const snapshotTotals =
+      status === 'authoritative'
+        ? sumSnapshotValues(snapshots.filter((snapshot): snapshot is SgkSnapshotKurus => snapshot !== null))
+        : { ...EMPTY_SNAPSHOT_TOTALS };
 
     const isverenSgkPrimi = kurusToAmount(snapshotTotals.isverenSgkPrimi);
     const isverenIssizlikPrimi = kurusToAmount(snapshotTotals.isverenIssizlikPrimi);
     const isciSgkPrimi = kurusToAmount(snapshotTotals.isciSgkPrimi);
     const isciIssizlikPrimi = kurusToAmount(snapshotTotals.isciIssizlikPrimi);
+    const pekAltSinirTamamlamaIsverenPrimi = kurusToAmount(
+      snapshotTotals.pekAltSinirTamamlamaIsverenPrimi
+    );
+    const dortPrimToplami = kurusToAmount(
+      snapshotTotals.isverenSgkPrimi +
+        snapshotTotals.isverenIssizlikPrimi +
+        snapshotTotals.isciSgkPrimi +
+        snapshotTotals.isciIssizlikPrimi
+    );
+    const sgkMutabakatToplami = kurusToAmount(
+      snapshotTotals.isverenSgkPrimi +
+        snapshotTotals.isverenIssizlikPrimi +
+        snapshotTotals.isciSgkPrimi +
+        snapshotTotals.isciIssizlikPrimi +
+        snapshotTotals.pekAltSinirTamamlamaIsverenPrimi
+    );
 
     return {
       personel,
@@ -169,18 +360,11 @@ export function getSgkPrimKontroluRows(
       isverenIssizlikPrimi,
       isciSgkPrimi,
       isciIssizlikPrimi,
-      toplam: kurusToAmount(
-        snapshotTotals.isverenSgkPrimi +
-          snapshotTotals.isverenIssizlikPrimi +
-          snapshotTotals.isciSgkPrimi +
-          snapshotTotals.isciIssizlikPrimi
-      ),
-      status:
-        authoritativePayrolls.length > 0
-          ? 'authoritative'
-          : hasStalePayroll
-            ? 'stale'
-            : 'notCalculated',
+      pekAltSinirTamamlamaIsverenPrimi,
+      dortPrimToplami,
+      toplam: sgkMutabakatToplami,
+      status,
+      rateCandidates: getRateCandidates(authoritativePayrolls),
     };
   });
 }
@@ -193,6 +377,9 @@ export function getSgkPrimKontroluTotals(rows: SgkPrimKontroluRow[]): SgkPrimKon
       totals.isverenIssizlikPrimi += amountToKurus(row.isverenIssizlikPrimi);
       totals.isciSgkPrimi += amountToKurus(row.isciSgkPrimi);
       totals.isciIssizlikPrimi += amountToKurus(row.isciIssizlikPrimi);
+      totals.pekAltSinirTamamlamaIsverenPrimi += amountToKurus(
+        row.pekAltSinirTamamlamaIsverenPrimi
+      );
       return totals;
     },
     {
@@ -200,27 +387,113 @@ export function getSgkPrimKontroluTotals(rows: SgkPrimKontroluRow[]): SgkPrimKon
       isverenIssizlikPrimi: 0,
       isciSgkPrimi: 0,
       isciIssizlikPrimi: 0,
+      pekAltSinirTamamlamaIsverenPrimi: 0,
     }
   );
 
-  const genelPrimToplami =
+  const dortPrimToplami =
     totalsKurus.isverenSgkPrimi +
     totalsKurus.isverenIssizlikPrimi +
     totalsKurus.isciSgkPrimi +
     totalsKurus.isciIssizlikPrimi;
+  const sgkMutabakatToplami = dortPrimToplami + totalsKurus.pekAltSinirTamamlamaIsverenPrimi;
+  const hazirOlmayanPersonelSayisi = rows.filter((row) => row.status !== 'authoritative').length;
 
   return {
     isverenSgkPrimi: kurusToAmount(totalsKurus.isverenSgkPrimi),
     isverenIssizlikPrimi: kurusToAmount(totalsKurus.isverenIssizlikPrimi),
     isciSgkPrimi: kurusToAmount(totalsKurus.isciSgkPrimi),
     isciIssizlikPrimi: kurusToAmount(totalsKurus.isciIssizlikPrimi),
-    genelPrimToplami: kurusToAmount(genelPrimToplami),
+    pekAltSinirTamamlamaIsverenPrimi: kurusToAmount(
+      totalsKurus.pekAltSinirTamamlamaIsverenPrimi
+    ),
+    dortPrimToplami: kurusToAmount(dortPrimToplami),
+    sgkMutabakatToplami: kurusToAmount(sgkMutabakatToplami),
+    genelPrimToplami: kurusToAmount(sgkMutabakatToplami),
+    hazirOlmayanPersonelSayisi,
+    reconciliationReady: hazirOlmayanPersonelSayisi === 0,
+  };
+}
+
+function uniqueResolvedRates(values: Array<number | undefined>, fallback: number): number[] {
+  const resolvedValues = values.length
+    ? values.map((value) => (isValidRate(value) ? value : fallback))
+    : [fallback];
+  return [...new Set(resolvedValues)];
+}
+
+function formatRate(value: number): string {
+  return new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 2 }).format(value);
+}
+
+function formatRateLabel(
+  label: string,
+  values: Array<number | undefined>,
+  fallback: number
+): string {
+  const uniqueRates = uniqueResolvedRates(values, fallback);
+  return uniqueRates.length === 1
+    ? `${label} %${formatRate(uniqueRates[0])}`
+    : `${label} (Değişken Oran)`;
+}
+
+export function getSgkPrimKontroluRateLabels(
+  rows: SgkPrimKontroluRow[],
+  institutionSettings?: Partial<DönemselKurumDegerleri>
+): SgkPrimKontroluRateLabels {
+  const fallbackRates = resolveSgkRates(institutionSettings);
+  const rateCandidates = rows.reduce(
+    (candidates, row) => ({
+      isverenSgkOranlari: [
+        ...candidates.isverenSgkOranlari,
+        ...row.rateCandidates.isverenSgkOranlari,
+      ],
+      isverenIssizlikOranlari: [
+        ...candidates.isverenIssizlikOranlari,
+        ...row.rateCandidates.isverenIssizlikOranlari,
+      ],
+      isciSgkOranlari: [...candidates.isciSgkOranlari, ...row.rateCandidates.isciSgkOranlari],
+      isciIssizlikOranlari: [
+        ...candidates.isciIssizlikOranlari,
+        ...row.rateCandidates.isciIssizlikOranlari,
+      ],
+    }),
+    {
+      isverenSgkOranlari: [] as Array<number | undefined>,
+      isverenIssizlikOranlari: [] as Array<number | undefined>,
+      isciSgkOranlari: [] as Array<number | undefined>,
+      isciIssizlikOranlari: [] as Array<number | undefined>,
+    }
+  );
+
+  return {
+    isverenSgk: formatRateLabel(
+      'SGK İşveren',
+      rateCandidates.isverenSgkOranlari,
+      fallbackRates.isverenSgkOraniYuzde
+    ),
+    isverenIssizlik: formatRateLabel(
+      'İşveren İşsizlik',
+      rateCandidates.isverenIssizlikOranlari,
+      fallbackRates.isverenIssizlikOraniYuzde
+    ),
+    isciSgk: formatRateLabel(
+      'SGK İşçi',
+      rateCandidates.isciSgkOranlari,
+      fallbackRates.isciSgkOraniYuzde
+    ),
+    isciIssizlik: formatRateLabel(
+      'İşçi İşsizlik',
+      rateCandidates.isciIssizlikOranlari,
+      fallbackRates.isciIssizlikOraniYuzde
+    ),
   };
 }
 
 export function compareSgkPrimTotals(
-  programGenelPrimToplami: number,
-  input: string
+  programSgkMutabakatToplami: number,
+  input: string,
+  reconciliationReady = true
 ): SgkPrimComparison {
   if (!input.trim()) {
     return { status: 'empty', sgkTutarKurus: null, farkKurus: null };
@@ -231,10 +504,11 @@ export function compareSgkPrimTotals(
     return { status: 'invalid', sgkTutarKurus: null, farkKurus: null };
   }
 
-  const farkKurus = amountToKurus(programGenelPrimToplami) - sgkTutarKurus;
+  const farkKurus = amountToKurus(programSgkMutabakatToplami) - sgkTutarKurus;
   return {
-    status:
-      farkKurus === 0
+    status: !reconciliationReady
+      ? 'incomplete'
+      : farkKurus === 0
         ? 'compatible'
         : farkKurus > 0
           ? 'programHigher'
@@ -242,4 +516,122 @@ export function compareSgkPrimTotals(
     sgkTutarKurus,
     farkKurus,
   };
+}
+
+export function getSgkPrimKontroluStatusLabel(status: SgkPrimKontroluRowStatus): string {
+  switch (status) {
+    case 'authoritative':
+      return 'Hazır';
+    case 'stale':
+      return 'Yeniden hesaplanmalı';
+    case 'draft':
+      return 'Bordro tamamlanmamış';
+    case 'missingSnapshot':
+      return 'SGK verisi eksik';
+    case 'notCalculated':
+      return 'Bordro hesaplanmadı';
+  }
+}
+
+export function buildSgkPrimKontroluExcelPayload(
+  rows: SgkPrimKontroluRow[],
+  totals: SgkPrimKontroluTotals,
+  rateLabels: SgkPrimKontroluRateLabels,
+  comparison: SgkPrimComparison
+): SgkPrimKontroluExcelPayload {
+  const columns = [
+    { header: 'S.No', key: 'siraNo', width: 8 },
+    { header: 'T.C. Kimlik No', key: 'tcNo', width: 18 },
+    { header: 'SGK Sicil No', key: 'sgkSicilNo', width: 18 },
+    { header: 'Ad Soyad', key: 'adSoyad', width: 28 },
+    { header: 'Durum', key: 'durum', width: 24 },
+    { header: rateLabels.isverenSgk, key: 'isverenSgkPrimi', width: 20 },
+    { header: rateLabels.isverenIssizlik, key: 'isverenIssizlikPrimi', width: 20 },
+    { header: rateLabels.isciSgk, key: 'isciSgkPrimi', width: 18 },
+    { header: rateLabels.isciIssizlik, key: 'isciIssizlikPrimi', width: 18 },
+    {
+      header: 'PEK Alt Sınır İşveren Tamamlama',
+      key: 'pekAltSinirTamamlamaIsverenPrimi',
+      width: 28,
+    },
+    { header: 'Toplam', key: 'toplam', width: 18 },
+  ];
+
+  const data = rows.map((row, index) => {
+    const isReady = row.status === 'authoritative';
+    return {
+      siraNo: index + 1,
+      tcNo: row.personel.tcNo,
+      sgkSicilNo: row.personel.sgkSicilNo,
+      adSoyad: `${row.personel.ad} ${row.personel.soyad}`,
+      durum: getSgkPrimKontroluStatusLabel(row.status),
+      isverenSgkPrimi: isReady ? row.isverenSgkPrimi : '',
+      isverenIssizlikPrimi: isReady ? row.isverenIssizlikPrimi : '',
+      isciSgkPrimi: isReady ? row.isciSgkPrimi : '',
+      isciIssizlikPrimi: isReady ? row.isciIssizlikPrimi : '',
+      pekAltSinirTamamlamaIsverenPrimi: isReady
+        ? row.pekAltSinirTamamlamaIsverenPrimi
+        : '',
+      toplam: isReady ? row.toplam : '',
+    };
+  });
+
+  const emptySummaryRow = (label: string): Record<string, SgkPrimKontroluExcelValue> => ({
+    siraNo: '',
+    tcNo: '',
+    sgkSicilNo: '',
+    adSoyad: label,
+    durum: '',
+    isverenSgkPrimi: '',
+    isverenIssizlikPrimi: '',
+    isciSgkPrimi: '',
+    isciIssizlikPrimi: '',
+    pekAltSinirTamamlamaIsverenPrimi: '',
+    toplam: '',
+  });
+
+  const summaryRows = [
+    {
+      ...emptySummaryRow('SGK İşveren Toplamı'),
+      isverenSgkPrimi: totals.isverenSgkPrimi,
+    },
+    {
+      ...emptySummaryRow('İşveren İşsizlik Toplamı'),
+      isverenIssizlikPrimi: totals.isverenIssizlikPrimi,
+    },
+    {
+      ...emptySummaryRow('SGK İşçi Toplamı'),
+      isciSgkPrimi: totals.isciSgkPrimi,
+    },
+    {
+      ...emptySummaryRow('İşçi İşsizlik Toplamı'),
+      isciIssizlikPrimi: totals.isciIssizlikPrimi,
+    },
+    {
+      ...emptySummaryRow('Dört Ana Prim Toplamı'),
+      toplam: totals.dortPrimToplami,
+    },
+    {
+      ...emptySummaryRow('PEK Alt Sınır İşveren Tamamlama Toplamı'),
+      pekAltSinirTamamlamaIsverenPrimi: totals.pekAltSinirTamamlamaIsverenPrimi,
+    },
+    {
+      ...emptySummaryRow('SGK Mutabakat Toplamı'),
+      toplam: totals.sgkMutabakatToplami,
+    },
+    {
+      ...emptySummaryRow("SGK'dan Girilen Tutar"),
+      toplam: comparison.sgkTutarKurus === null ? '' : kurusToAmount(comparison.sgkTutarKurus),
+    },
+    {
+      ...emptySummaryRow('Fark'),
+      toplam: comparison.farkKurus === null ? '' : kurusToAmount(comparison.farkKurus),
+    },
+    {
+      ...emptySummaryRow('Hazır Olmayan Personel Sayısı'),
+      toplam: totals.hazirOlmayanPersonelSayisi,
+    },
+  ];
+
+  return { columns, data, summaryRows };
 }

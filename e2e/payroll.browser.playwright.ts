@@ -415,17 +415,20 @@ test('SGK prim kontrolü tüm personeli ve manuel mutabakat farkını gösterir'
     'T.C. Kimlik No',
     'SGK Sicil No',
     'Ad Soyad',
+    'Durum',
     'SGK İşveren %21,75',
     'İşveren İşsizlik %2',
     'SGK İşçi %14',
     'İşçi İşsizlik %1',
+    'PEK Alt Sınır İşveren Tamamlama',
     'Toplam',
   ]);
   await expect(screen.locator('tbody tr')).toHaveCount(5);
   await expect(screen.getByText('Bordro hesaplanmadı')).toHaveCount(5);
 
   await screen.getByTestId('sgk-reported-total-input').fill('1.000,00');
-  await expect(screen.getByText('Program SGK tutarından 1.000,00 TL düşük')).toBeVisible();
+  await expect(screen.getByText(/Mutabakat tamamlanamaz/)).toBeVisible();
+  await expect(screen.getByText('Uyumlu')).toHaveCount(0);
 });
 
 test('first opening uses the period summary and a valid saved tab survives reload', async ({ page }) => {

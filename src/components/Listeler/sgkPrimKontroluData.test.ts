@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import type { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
+import type { BordroDonemi, BordroKaydi, DönemselKurumDegerleri, Personel } from '../../types/payroll';
 import {
   amountToKurus,
+  buildSgkPrimKontroluExcelPayload,
   compareSgkPrimTotals,
   getSgkPrimKontroluRows,
+  getSgkPrimKontroluRateLabels,
   getSgkPrimKontroluTotals,
   parseSgkTutarToKurus,
 } from './sgkPrimKontroluData';
@@ -43,15 +45,25 @@ const person3 = {
   sgkSicilNo: 'SGK-3',
 } as Personel;
 
+const completeAmounts = {
+  isverenSgkPrimi: 100,
+  isverenIssizlikPrimi: 20,
+  isciSgkPrimi: 70,
+  isciIssizlikPrimi: 10,
+};
+
 function payroll(
   personelId: string,
   accrualId: string,
   status: BordroKaydi['status'],
   amounts: {
-    isverenSgkPrimi?: number;
-    isverenIssizlikPrimi?: number;
-    isciSgkPrimi?: number;
-    isciIssizlikPrimi?: number;
+    isverenSgkPrimi?: number | null;
+    isverenIssizlikPrimi?: number | null;
+    isciSgkPrimi?: number | null;
+    isciIssizlikPrimi?: number | null;
+    pekAltSinirTamamlamaIsverenPrimi?: number | null;
+    sgkIsverenOraniYuzde?: number | null;
+    isverenIssizlikOraniYuzde?: number | null;
   }
 ): BordroKaydi {
   return {
@@ -66,6 +78,9 @@ function payroll(
     pekDetay: {
       isverenSgkPrimi: amounts.isverenSgkPrimi,
       isverenIssizlikPrimi: amounts.isverenIssizlikPrimi,
+      pekAltSinirTamamlamaIsverenPrimi: amounts.pekAltSinirTamamlamaIsverenPrimi,
+      sgkIsverenOraniYuzde: amounts.sgkIsverenOraniYuzde,
+      isverenIssizlikOraniYuzde: amounts.isverenIssizlikOraniYuzde,
     },
     kesintiler: {
       isciSgkPrimi: amounts.isciSgkPrimi ?? null,
@@ -160,7 +175,12 @@ describe('SGK prim kontrolü dataset', () => {
       isverenIssizlikPrimi: 30,
       isciSgkPrimi: 210,
       isciIssizlikPrimi: 15,
+      pekAltSinirTamamlamaIsverenPrimi: 0,
+      dortPrimToplami: 555,
+      sgkMutabakatToplami: 555,
       genelPrimToplami: 555,
+      hazirOlmayanPersonelSayisi: 0,
+      reconciliationReady: true,
     });
   });
 
@@ -180,7 +200,7 @@ describe('SGK prim kontrolü dataset', () => {
       }),
     ]);
 
-    expect(rows.map((row) => row.status)).toEqual(['notCalculated', 'stale', 'notCalculated']);
+    expect(rows.map((row) => row.status)).toEqual(['draft', 'stale', 'notCalculated']);
     expect(rows.map((row) => row.toplam)).toEqual([0, 0, 0]);
     expect(getSgkPrimKontroluTotals(rows).genelPrimToplami).toBe(0);
   });
@@ -227,5 +247,256 @@ describe('SGK prim kontrolü kuruş ve karşılaştırma sınırı', () => {
       sgkTutarKurus: null,
       farkKurus: null,
     });
+  });
+});
+
+describe('SGK prim kontrolü güvenilirlik sınırı', () => {
+  test('FINALIZED + STALE aynı kişiyi güvenilmez yapar ve authoritative kısmı toplamaz', () => {
+    const staleTediye = payroll('p-1', 'tediye-stale', 'STALE', completeAmounts);
+    staleTediye.accrualType = 'TEDIYE';
+
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'normal-finalized', 'FINALIZED', completeAmounts),
+      staleTediye,
+    ]);
+
+    expect(rows[0].status).toBe('stale');
+    expect(rows[0].toplam).toBe(0);
+    expect({
+      sgkMutabakatToplami: getSgkPrimKontroluTotals(rows).sgkMutabakatToplami,
+      hazirOlmayanPersonelSayisi: getSgkPrimKontroluTotals(rows).hazirOlmayanPersonelSayisi,
+    }).toEqual({
+      sgkMutabakatToplami: 0,
+      hazirOlmayanPersonelSayisi: 1,
+    });
+  });
+
+  test('FINALIZED + DRAFT aynı kişiyi toplama dahil etmez', () => {
+    const draftTediye = payroll('p-1', 'tediye-draft', 'DRAFT', completeAmounts);
+    draftTediye.accrualType = 'TEDIYE';
+
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'normal-finalized', 'FINALIZED', completeAmounts),
+      draftTediye,
+    ]);
+
+    expect(rows[0].status).toBe('draft');
+    expect(rows[0].toplam).toBe(0);
+    expect(getSgkPrimKontroluTotals(rows).sgkMutabakatToplami).toBe(0);
+  });
+
+  test('CALCULATED ama işveren SGK snapshot alanı eksikse missingSnapshot olur', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'missing-employer-sgk', 'CALCULATED', {
+        isverenIssizlikPrimi: 20,
+        isciSgkPrimi: 70,
+        isciIssizlikPrimi: 10,
+      }),
+    ]);
+
+    expect(rows[0].status).toBe('missingSnapshot');
+    expect(getSgkPrimKontroluTotals(rows).sgkMutabakatToplami).toBe(0);
+  });
+
+  test('CALCULATED ama işveren işsizlik snapshot alanı eksikse missingSnapshot olur', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'missing-employer-unemployment', 'CALCULATED', {
+        isverenSgkPrimi: 100,
+        isciSgkPrimi: 70,
+        isciIssizlikPrimi: 10,
+      }),
+    ]);
+
+    expect(rows[0].status).toBe('missingSnapshot');
+    expect(getSgkPrimKontroluTotals(rows).sgkMutabakatToplami).toBe(0);
+  });
+
+  test('CALCULATED ama işçi SGK snapshot alanı null ise missingSnapshot olur', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'missing-worker-sgk', 'CALCULATED', {
+        isverenSgkPrimi: 100,
+        isverenIssizlikPrimi: 20,
+        isciSgkPrimi: null,
+        isciIssizlikPrimi: 10,
+      }),
+    ]);
+
+    expect(rows[0].status).toBe('missingSnapshot');
+    expect(getSgkPrimKontroluTotals(rows).sgkMutabakatToplami).toBe(0);
+  });
+
+  test('CALCULATED ama işçi işsizlik snapshot alanı null ise missingSnapshot olur', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'missing-worker-unemployment', 'CALCULATED', {
+        isverenSgkPrimi: 100,
+        isverenIssizlikPrimi: 20,
+        isciSgkPrimi: 70,
+        isciIssizlikPrimi: null,
+      }),
+    ]);
+
+    expect(rows[0].status).toBe('missingSnapshot');
+    expect(getSgkPrimKontroluTotals(rows).sgkMutabakatToplami).toBe(0);
+  });
+
+  test('negatif SGK snapshot değeri geçersiz sayılır ve toplama girmez', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'negative-sgk', 'CALCULATED', {
+        ...completeAmounts,
+        isverenSgkPrimi: -1,
+      }),
+    ]);
+
+    expect(rows[0].status).toBe('missingSnapshot');
+    expect(getSgkPrimKontroluTotals(rows).sgkMutabakatToplami).toBe(0);
+  });
+
+  test('PEK alt sınır işveren tamamlama mutabakat toplamına eklenir', () => {
+    const item = payroll('p-1', 'with-lower-bound', 'FINALIZED', {
+      isverenSgkPrimi: 500,
+      isverenIssizlikPrimi: 200,
+      isciSgkPrimi: 200,
+      isciIssizlikPrimi: 100,
+    });
+    item.pekDetay!.pekAltSinirTamamlamaIsverenPrimi = 150;
+
+    const rows = getSgkPrimKontroluRows(period, [person1], [item]);
+    const totals = getSgkPrimKontroluTotals(rows);
+
+    expect(rows[0].dortPrimToplami).toBe(1000);
+    expect(rows[0].pekAltSinirTamamlamaIsverenPrimi).toBe(150);
+    expect(rows[0].toplam).toBe(1150);
+    expect({
+      dortPrimToplami: totals.dortPrimToplami,
+      pekAltSinirTamamlamaIsverenPrimi: 150,
+      sgkMutabakatToplami: totals.sgkMutabakatToplami,
+    }).toEqual({
+      dortPrimToplami: 1000,
+      pekAltSinirTamamlamaIsverenPrimi: 150,
+      sgkMutabakatToplami: 1150,
+    });
+  });
+
+  test('PEK dahil program mutabakatı 1150, SGK 1140 ise fark +10 olur', () => {
+    const item = payroll('p-1', 'with-lower-bound-comparison', 'FINALIZED', {
+      isverenSgkPrimi: 500,
+      isverenIssizlikPrimi: 200,
+      isciSgkPrimi: 200,
+      isciIssizlikPrimi: 100,
+      pekAltSinirTamamlamaIsverenPrimi: 150,
+    });
+    const totals = getSgkPrimKontroluTotals(getSgkPrimKontroluRows(period, [person1], [item]));
+
+    expect(totals.dortPrimToplami).toBe(1000);
+    expect(totals.sgkMutabakatToplami).toBe(1150);
+    expect(compareSgkPrimTotals(totals.sgkMutabakatToplami, '1.140,00')).toEqual({
+      status: 'programHigher',
+      sgkTutarKurus: 114000,
+      farkKurus: 1000,
+    });
+  });
+
+  test('eksik personel ve sıfır fark olsa bile karşılaştırma incomplete olur', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'stale-for-comparison', 'STALE', completeAmounts),
+    ]);
+    const totals = getSgkPrimKontroluTotals(rows);
+
+    expect(totals.reconciliationReady).toBe(false);
+    expect(compareSgkPrimTotals(totals.sgkMutabakatToplami, '0,00', totals.reconciliationReady)).toEqual({
+      status: 'incomplete',
+      sgkTutarKurus: 0,
+      farkKurus: 0,
+    });
+  });
+});
+
+describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
+  const institutionSettings: Partial<DönemselKurumDegerleri> = {
+    donemId: period.id,
+    sgkIsverenOraniYuzde: 19.5,
+    issizlikIsverenOraniYuzde: 1.5,
+    sgkIsciOraniYuzde: 13,
+    issizlikIsciOraniYuzde: 0.5,
+  };
+
+  test('aktif kurum oranları başlıklara yansır', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'period-rate', 'FINALIZED', completeAmounts),
+    ]);
+
+    expect(getSgkPrimKontroluRateLabels(rows, institutionSettings)).toEqual({
+      isverenSgk: 'SGK İşveren %19,5',
+      isverenIssizlik: 'İşveren İşsizlik %1,5',
+      isciSgk: 'SGK İşçi %13',
+      isciIssizlik: 'İşçi İşsizlik %0,5',
+    });
+  });
+
+  test('işveren snapshot oranı aktif kurum oranına tercih edilir', () => {
+    const item = payroll('p-1', 'snapshot-rate', 'FINALIZED', completeAmounts);
+    item.pekDetay!.sgkIsverenOraniYuzde = 22;
+    item.pekDetay!.isverenIssizlikOraniYuzde = 3;
+    const rows = getSgkPrimKontroluRows(period, [person1], [item]);
+
+    expect({
+      isverenSgk: getSgkPrimKontroluRateLabels(rows, institutionSettings).isverenSgk,
+      isverenIssizlik: getSgkPrimKontroluRateLabels(rows, institutionSettings).isverenIssizlik,
+    }).toEqual({
+      isverenSgk: 'SGK İşveren %22',
+      isverenIssizlik: 'İşveren İşsizlik %3',
+    });
+  });
+
+  test('farklı authoritative snapshot oranları başlıkta Değişken Oran olarak gösterilir', () => {
+    const first = payroll('p-1', 'snapshot-rate-1', 'FINALIZED', completeAmounts);
+    const second = payroll('p-1', 'snapshot-rate-2', 'CALCULATED', completeAmounts);
+    first.pekDetay!.sgkIsverenOraniYuzde = 21;
+    second.pekDetay!.sgkIsverenOraniYuzde = 22;
+    const rows = getSgkPrimKontroluRows(period, [person1], [first, second]);
+
+    expect(getSgkPrimKontroluRateLabels(rows, institutionSettings).isverenSgk).toBe(
+      'SGK İşveren (Değişken Oran)'
+    );
+  });
+
+  test('Excel payload PEK kolonunu, mutabakat özetini ve hazır olmayan kişi sayısını taşır', () => {
+    const ready = payroll('p-1', 'excel-ready', 'FINALIZED', {
+      ...completeAmounts,
+      pekAltSinirTamamlamaIsverenPrimi: 150,
+    });
+    const notReady = payroll('p-2', 'excel-stale', 'STALE', completeAmounts);
+    const rows = getSgkPrimKontroluRows(period, [person1, person2], [ready, notReady]);
+    const totals = getSgkPrimKontroluTotals(rows);
+    const rateLabels = getSgkPrimKontroluRateLabels(rows, institutionSettings);
+    const comparison = compareSgkPrimTotals(totals.sgkMutabakatToplami, '350,00', false);
+    const payload = buildSgkPrimKontroluExcelPayload(rows, totals, rateLabels, comparison);
+
+    expect(payload.columns.map((column) => column.header).includes('PEK Alt Sınır İşveren Tamamlama')).toBe(true);
+    expect({
+      durum: payload.data[1].durum,
+      isverenSgkPrimi: payload.data[1].isverenSgkPrimi,
+      pekAltSinirTamamlamaIsverenPrimi: payload.data[1].pekAltSinirTamamlamaIsverenPrimi,
+      toplam: payload.data[1].toplam,
+    }).toEqual({
+      durum: 'Yeniden hesaplanmalı',
+      isverenSgkPrimi: '',
+      pekAltSinirTamamlamaIsverenPrimi: '',
+      toplam: '',
+    });
+    expect(payload.summaryRows.map((row) => row.adSoyad)).toEqual([
+      'SGK İşveren Toplamı',
+      'İşveren İşsizlik Toplamı',
+      'SGK İşçi Toplamı',
+      'İşçi İşsizlik Toplamı',
+      'Dört Ana Prim Toplamı',
+      'PEK Alt Sınır İşveren Tamamlama Toplamı',
+      'SGK Mutabakat Toplamı',
+      "SGK'dan Girilen Tutar",
+      'Fark',
+      'Hazır Olmayan Personel Sayısı',
+    ]);
+    expect(payload.summaryRows[6].toplam).toBe(350);
+    expect(payload.summaryRows[9].toplam).toBe(1);
   });
 });

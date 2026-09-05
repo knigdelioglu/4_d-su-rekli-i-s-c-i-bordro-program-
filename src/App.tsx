@@ -1020,6 +1020,7 @@ export default function App() {
                     aktifDonem={aktifDonem}
                     personeller={personeller}
                     bordrolar={bordrolar}
+                    kurumDegerleri={kurumDegerleriMap[aktifDonem.id]}
                   />
                 )}
                 {aktifDonem && activeTab === 'kesintiler' && (
