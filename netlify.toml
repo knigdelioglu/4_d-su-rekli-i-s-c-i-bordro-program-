@@ -1,6 +1,7 @@
 [build]
   command = "bun run build"
   publish = "dist"
+  ignore = "exit 0"
 
 # Vite's fingerprinted assets can be cached until their content hash changes.
 [[headers]]
