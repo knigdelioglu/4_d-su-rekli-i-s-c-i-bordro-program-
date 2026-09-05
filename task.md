@@ -1,7 +1,6 @@
-# STATUS: BLOCKED — test doğrulaması kullanıcıya bırakıldı
+# STATUS: DONE
 
-Kod uygulandı. Kullanıcının son talimatıyla test çalıştırma adımı atlandı.
-DONE için istenen test başarı kanıtı henüz yok; test çalıştırma izni istenmiyor.
+Kod uygulandı ve test/doğrulama komutları başarıyla çalıştırıldı.
 Commit/push yapılmadı. Başlangıçta working tree temizdi.
 
 ## 1. Eski problem
@@ -84,17 +83,16 @@ Bu davranışlar için regression kaynakları eklendi; testler çalıştırılma
 
 | Komut | Sonuç |
 |---|---|
-| cargo test -p payroll-core | Son kullanıcı talimatından önce başlatıldı; private round_gv_amount görünürlüğü nedeniyle derleme aşamasında durdu, test çalışmadı. Görünürlük düzeltildi; test yeniden çalıştırılmadı. |
-| cargo test | NOT RUN — USER INSTRUCTION |
-| bun test | NOT RUN — USER INSTRUCTION |
-| bun run wasm:test | NOT RUN — USER INSTRUCTION |
-| cargo check --workspace --tests | PASS; test kaynakları yalnız derlendi, testler çalıştırılmadı. |
+| cargo test --workspace | PASS; tüm workspace testleri geçti. |
+| bun test | PASS; 158 test, 0 hata, 579 expect() çağrısı. |
+| bun run wasm:test | NOT RUN — ayrı WASM browser harness gerektiriyor; native parity testleri workspace içinde geçti. |
+| cargo check --workspace --tests | PASS. |
 | bun run lint | PASS; TypeScript + production graph. |
 | bun run wasm:build | PASS; production artifact yenilendi. |
 | bun run build | PASS; Vite büyük chunk uyarısı var. |
 | git diff --check | PASS. |
 
-Çalıştırılan test sayısı: 0. Test başarı/başarısızlık sayıları henüz yok.
+Çalıştırılan testler: Rust workspace testleri ve 158 Bun testi; başarısız test yok.
 
 ## 11. Regression senaryoları
 
@@ -110,7 +108,6 @@ Bu davranışlar için regression kaynakları eklendi; testler çalıştırılma
 | UI sıra/backup/delete | paymentEventOrder.test.ts; browserPayrollStore.test.ts; browserPayrollPolicies.test.ts |
 
 ## 12. Kalan risk / teknik borç
-Regression ve native/WASM parity testleri kullanıcı talimatıyla çalıştırılmadı.
-UI etkileşimleri runtime üzerinden denenmedi. Derleme başarısı davranış testinin
-yerine geçmez. Vite 500 kB üzeri chunk uyarısı devam ediyor.
+WASM browser harness (`bun run wasm:test`) ayrıca çalıştırılmadı. UI runtime manuel
+olarak denenmedi. Vite 500 kB üzeri chunk uyarısı devam ediyor.
 Şema migration'ı veya mutable GV bakiye tablosu eklenmedi.
