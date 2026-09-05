@@ -7,12 +7,14 @@
  */
 
 import type {
+  AnnualPayrollParameters,
   BordroDonemi,
   DönemselKurumDegerleri,
   IsPrimiGrubu,
   IsPrimiGrupItem,
   PuantajKodu,
   PuantajOzeti,
+  TaxBracket,
   TediyeKalemi,
   TisIkramiyeKalemi,
 } from '../types/payroll';
@@ -95,7 +97,7 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   issizlikIsverenOraniYuzde: 2.00,
 };
 
-const REQUIRED_PERIOD_INSTITUTION_FIELDS = [
+const REQUIRED_PERIOD_INCOME_FIELDS = [
   'gunlukTabanUcret',
   'gunlukYemek',
   'birlestirilmisSosyalYardim',
@@ -104,22 +106,174 @@ const REQUIRED_PERIOD_INSTITUTION_FIELDS = [
   'hizmetZammiBirimi',
 ] as const;
 
+const REQUIRED_PERIOD_LEGAL_NON_NEGATIVE_FIELDS = [
+  'sgkIsciOraniYuzde',
+  'issizlikIsciOraniYuzde',
+  'sendikaAidatiYuzde',
+  'besOraniYuzde',
+  'geceCalismaPrimiYuzde',
+  'geceCalismaTatiliPrimiYuzde',
+  'gunlukYemekIstisnasiSGK',
+  'gunlukYemekIstisnasiGV',
+  'gunlukAsgariUcret',
+  'pekTavanKatsayisi',
+  'sgkIsverenOraniYuzde',
+  'issizlikIsverenOraniYuzde',
+] as const;
+
+const PERIOD_PERCENTAGE_FIELDS = [
+  'sgkIsciOraniYuzde',
+  'issizlikIsciOraniYuzde',
+  'sendikaAidatiYuzde',
+  'besOraniYuzde',
+  'geceCalismaPrimiYuzde',
+  'geceCalismaTatiliPrimiYuzde',
+  'sgkIsverenOraniYuzde',
+  'issizlikIsverenOraniYuzde',
+] as const;
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
 /**
- * Readiness check for the period-level values required by the payroll input
- * contract. The payroll domain permits zero for every required value except
- * the daily base wage, which must be positive.
+ * Readiness check for period income and aid values. The payroll domain permits
+ * zero for every required value except the daily base wage, which must be
+ * positive.
  */
-export function hasCompletePeriodInstitutionParameters(
+export function hasCompletePeriodIncomeParameters(
   kurumDegerleri: Partial<DönemselKurumDegerleri> | undefined,
   donemId: string
 ): boolean {
   if (!kurumDegerleri || kurumDegerleri.donemId !== donemId) return false;
 
-  return REQUIRED_PERIOD_INSTITUTION_FIELDS.every((field) => {
+  return REQUIRED_PERIOD_INCOME_FIELDS.every((field) => {
     const value = kurumDegerleri[field];
-    if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+    if (!isFiniteNumber(value)) return false;
     return field === 'gunlukTabanUcret' ? value > 0 : value >= 0;
   });
+}
+
+function hasCompleteIsPrimiGroups(
+  groups: DönemselKurumDegerleri['isPrimiGruplari']
+): boolean {
+  if (!Array.isArray(groups) || groups.length === 0) return false;
+
+  const activeIds = new Set<string>();
+  const activeNames = new Set<string>();
+
+  for (const group of groups) {
+    if (
+      !group ||
+      typeof group.id !== 'string' ||
+      typeof group.ad !== 'string' ||
+      group.id.trim().length === 0 ||
+      group.ad.trim().length === 0 ||
+      !isFiniteNumber(group.oran) ||
+      group.oran < 0 ||
+      group.oran > 100 ||
+      (group.aktif !== undefined && typeof group.aktif !== 'boolean')
+    ) {
+      return false;
+    }
+
+    if (group.aktif !== false) {
+      if (activeIds.has(group.id.trim()) || activeNames.has(group.ad.trim())) return false;
+      activeIds.add(group.id.trim());
+      activeNames.add(group.ad.trim());
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Mirrors the authoritative period-level payroll validation boundary without
+ * applying defaults. Optional TypeScript fields are therefore not considered
+ * ready merely because a settings form can display a fallback value.
+ */
+export function hasCompletePeriodLegalParameters(
+  kurumDegerleri: Partial<DönemselKurumDegerleri> | undefined,
+  donemId: string
+): boolean {
+  if (!kurumDegerleri || kurumDegerleri.donemId !== donemId) return false;
+
+  if (
+    !REQUIRED_PERIOD_LEGAL_NON_NEGATIVE_FIELDS.every((field) => {
+      const value = kurumDegerleri[field];
+      return isFiniteNumber(value) && value >= 0;
+    })
+  ) {
+    return false;
+  }
+
+  if (
+    !PERIOD_PERCENTAGE_FIELDS.every((field) => {
+      const value = kurumDegerleri[field];
+      return isFiniteNumber(value) && value >= 0 && value <= 100;
+    })
+  ) {
+    return false;
+  }
+
+  const damgaVergisiOraniBinde = kurumDegerleri.damgaVergisiOraniBinde;
+  if (
+    !isFiniteNumber(damgaVergisiOraniBinde) ||
+    damgaVergisiOraniBinde < 0 ||
+    damgaVergisiOraniBinde > 1000
+  ) {
+    return false;
+  }
+
+  if (
+    kurumDegerleri.gunlukAsgariUcret === undefined ||
+    kurumDegerleri.gunlukAsgariUcret <= 0 ||
+    kurumDegerleri.pekTavanKatsayisi === undefined ||
+    kurumDegerleri.pekTavanKatsayisi < 1
+  ) {
+    return false;
+  }
+
+  return hasCompleteIsPrimiGroups(kurumDegerleri.isPrimiGruplari);
+}
+
+function isValidTaxBracket(bracket: unknown): bracket is TaxBracket {
+  if (!bracket || typeof bracket !== 'object') return false;
+  const candidate = bracket as Partial<TaxBracket>;
+  return (
+    isFiniteNumber(candidate.limit) &&
+    candidate.limit > 0 &&
+    isFiniteNumber(candidate.oran) &&
+    candidate.oran >= 0 &&
+    candidate.oran <= 1
+  );
+}
+
+/**
+ * Readiness check for the annual tariff used by the active tax year. The
+ * tariff is only accepted when every stored bracket is usable by the payroll
+ * engine; no tax value is inferred or rewritten here.
+ */
+export function hasCompleteAnnualPayrollParameters(
+  parameters: Partial<AnnualPayrollParameters> | undefined,
+  taxYear: number
+): boolean {
+  if (
+    !parameters ||
+    parameters.year !== taxYear ||
+    !Array.isArray(parameters.gelirVergisiDilimleri) ||
+    parameters.gelirVergisiDilimleri.length === 0
+  ) {
+    return false;
+  }
+
+  let previousLimit = 0;
+  for (const bracket of parameters.gelirVergisiDilimleri) {
+    if (!isValidTaxBracket(bracket) || bracket.limit <= previousLimit) return false;
+    previousLimit = bracket.limit;
+  }
+
+  return true;
 }
 
 export function createBordroDonemi(

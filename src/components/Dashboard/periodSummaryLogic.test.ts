@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { getPeriodSummaryNextTask, type PeriodSummaryDecisionState } from './periodSummaryLogic';
 
 const readyState: PeriodSummaryDecisionState = {
-  periodParametersReady: true,
+  incomeParametersReady: true,
+  legalParametersReady: true,
   annualParametersReady: true,
   missingAttendanceCount: 0,
   staleNormalCount: 0,
@@ -17,13 +18,21 @@ function state(overrides: Partial<PeriodSummaryDecisionState>): PeriodSummaryDec
 }
 
 describe('Dönem özeti sonraki iş kararı', () => {
-  test('period institution parameters take priority and open Ücretler', () => {
+  test('income parameters take priority and open Ücretler', () => {
     expect(
-      getPeriodSummaryNextTask(state({ periodParametersReady: false }))
+      getPeriodSummaryNextTask(state({ incomeParametersReady: false }))
     ).toEqual({
-      label: 'Dönem ücret parametrelerini tamamla',
+      label: 'Ücret ve yardım parametrelerini tamamla',
       tab: 'parametrelar',
       parametreSection: 'gelir',
+    });
+  });
+
+  test('legal parameters open Vergi & Yasal Oranlar after income parameters', () => {
+    expect(getPeriodSummaryNextTask(state({ legalParametersReady: false }))).toEqual({
+      label: 'Vergi ve yasal oranları tamamla',
+      tab: 'parametrelar',
+      parametreSection: 'kesinti',
     });
   });
 
@@ -35,9 +44,19 @@ describe('Dönem özeti sonraki iş kararı', () => {
     });
   });
 
+  test('legal parameters take priority over stale payrolls', () => {
+    expect(
+      getPeriodSummaryNextTask(state({ legalParametersReady: false, staleNormalCount: 1 }))
+    ).toEqual({
+      label: 'Vergi ve yasal oranları tamamla',
+      tab: 'parametrelar',
+      parametreSection: 'kesinti',
+    });
+  });
+
   test('stale normal payrolls take priority over never-calculated payrolls', () => {
     expect(
-      getPeriodSummaryNextTask(state({ staleNormalCount: 1, missingNormalCount: 0 }))
+      getPeriodSummaryNextTask(state({ staleNormalCount: 1, missingNormalCount: 1 }))
     ).toEqual({
       label: 'Yeniden hesaplanması gereken bordrolara git',
       tab: 'bordro',

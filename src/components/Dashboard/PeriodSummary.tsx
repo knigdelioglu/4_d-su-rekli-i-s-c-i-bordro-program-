@@ -22,7 +22,9 @@ import type { ParametreSection, PayrollViewType, TabType } from '../../types/nav
 import {
   AY_ISIMLERI,
   formatDateTR,
-  hasCompletePeriodInstitutionParameters,
+  hasCompleteAnnualPayrollParameters,
+  hasCompletePeriodIncomeParameters,
+  hasCompletePeriodLegalParameters,
 } from '../../utils/payrollPresentation';
 import { PayrollNoticeCenter } from '../PayrollNoticeCenter';
 import { getPeriodSummaryNextTask } from './periodSummaryLogic';
@@ -82,12 +84,16 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
     const authoritativeNormal = normalPayrolls.filter(isAuthoritative);
     const calculatedNormal = normalPayrolls.filter((payroll) => payroll.status === 'CALCULATED');
     const staleNormal = normalPayrolls.filter((payroll) => payroll.status === 'STALE');
-    const periodParametersReady = hasCompletePeriodInstitutionParameters(
+    const incomeParametersReady = hasCompletePeriodIncomeParameters(
       activeKurumDegerleri,
       aktifDonem.id
     );
-    const annualParametersReady = annualPayrollParameters.some(
-      (parameters) => parameters.year === aktifDonem.taxYear
+    const legalParametersReady = hasCompletePeriodLegalParameters(
+      activeKurumDegerleri,
+      aktifDonem.id
+    );
+    const annualParametersReady = annualPayrollParameters.some((parameters) =>
+      hasCompleteAnnualPayrollParameters(parameters, aktifDonem.taxYear)
     );
     // 15–14 çalışma aralığının kullanıcıya görünen bordro ayı, tahakkukun
     // ait olduğu taxMonth/taxYear'dır. Örn. 15 Ağustos–14 Eylül => Eylül 2026.
@@ -134,7 +140,8 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
       staleNormalCount: staleNormalPeople.length,
       missingNormalPeople,
       missingNormalCount: missingNormalPeople.length,
-      periodParametersReady,
+      incomeParametersReady,
+      legalParametersReady,
       annualParametersReady,
       activeTediyeReference,
       activeTisReference,
@@ -243,15 +250,21 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
           </div>
           <ul className="mt-3 space-y-2" aria-label="Dönem durum özeti">
             <StatusRow
-              tone={summary.periodParametersReady ? 'success' : 'critical'}
-              icon={summary.periodParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-              label={summary.periodParametersReady ? 'Dönem ücret ve yardım parametreleri hazır' : 'Dönem ücret parametreleri eksik'}
-              detail={summary.periodParametersReady ? undefined : 'Ücretler bölümüne kayıt gerekli'}
+              tone={summary.incomeParametersReady ? 'success' : 'critical'}
+              icon={summary.incomeParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+              label={summary.incomeParametersReady ? 'Ücret ve yardım parametreleri hazır' : 'Ücret ve yardım parametreleri eksik'}
+              detail={summary.incomeParametersReady ? undefined : 'Ücretler bölümüne kayıt gerekli'}
+            />
+            <StatusRow
+              tone={summary.legalParametersReady ? 'success' : 'critical'}
+              icon={summary.legalParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+              label={summary.legalParametersReady ? 'Vergi ve yasal oranlar hazır' : 'Vergi ve yasal oranlar eksik'}
+              detail={summary.legalParametersReady ? undefined : 'Vergi & Yasal Oranlar bölümüne kayıt gerekli'}
             />
             <StatusRow
               tone={summary.annualParametersReady ? 'success' : 'critical'}
               icon={summary.annualParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-              label={`${aktifDonem.taxYear} vergi tarifesi ${summary.annualParametersReady ? 'hazır' : 'eksik'}`}
+              label={`${aktifDonem.taxYear} yıllık GV tarifesi ${summary.annualParametersReady ? 'hazır' : 'eksik'}`}
               detail={summary.annualParametersReady ? undefined : 'Yıllık GV Tarifesi bölümüne kayıt gerekli'}
             />
             <StatusRow

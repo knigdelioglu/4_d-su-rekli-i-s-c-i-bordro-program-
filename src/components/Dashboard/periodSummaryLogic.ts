@@ -1,7 +1,8 @@
 import type { ParametreSection, PayrollViewType, TabType } from '../../types/navigation';
 
 export interface PeriodSummaryDecisionState {
-  periodParametersReady: boolean;
+  incomeParametersReady: boolean;
+  legalParametersReady: boolean;
   annualParametersReady: boolean;
   missingAttendanceCount: number;
   staleNormalCount: number;
@@ -21,11 +22,18 @@ export interface PeriodSummaryNextTask {
 export function getPeriodSummaryNextTask(
   summary: PeriodSummaryDecisionState
 ): PeriodSummaryNextTask | null {
-  if (!summary.periodParametersReady) {
+  if (!summary.incomeParametersReady) {
     return {
-      label: 'Dönem ücret parametrelerini tamamla',
+      label: 'Ücret ve yardım parametrelerini tamamla',
       tab: 'parametrelar',
       parametreSection: 'gelir',
+    };
+  }
+  if (!summary.legalParametersReady) {
+    return {
+      label: 'Vergi ve yasal oranları tamamla',
+      tab: 'parametrelar',
+      parametreSection: 'kesinti',
     };
   }
   if (!summary.annualParametersReady) {
