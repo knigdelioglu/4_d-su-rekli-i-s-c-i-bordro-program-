@@ -837,6 +837,7 @@ pub fn calculate_incremental_prime_esas_kazanc(
             apply_lower_bound: false,
         },
     )
+    .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
 
 fn calculate_prime_esas_kazanc_with_month_to_date(
@@ -860,6 +861,7 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
             apply_lower_bound,
         },
     )
+    .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
 
 /// Calculates PEK with the exact number of tax months elapsed since the
@@ -882,13 +884,16 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     month_to_date_pek: Decimal,
     options: PekCalculationOptions,
-) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+) -> Result<(PekDetayi, Vec<DevredenPekKaydi>)> {
     let PekCalculationOptions {
         tax_months_elapsed,
         apply_lower_bound,
     } = options;
-    debug_assert!(tax_months_elapsed >= 0, "tax-month distance cannot be negative");
-    let tax_months_elapsed = tax_months_elapsed.max(0);
+    if tax_months_elapsed < 0 {
+        return Err(DomainError::InvalidData(
+            "Devreden PEK vergi ayı farkı negatif olamaz.".into(),
+        ));
+    }
     let raw_prim_gun = puantaj_ozeti.map_or(0, |p| p.c + p.t + p.g + p.i + p.gc + p.gct + p.r);
     let prim_gun_sayisi = statutory_snapshot
         .map_or(raw_prim_gun, |snapshot| snapshot.sgkPrimGunSayisi)
@@ -955,6 +960,12 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
 
     for item in devreden_pek_gelen {
         if item.tutar <= dec!(0) || item.kalanAySayisi <= 0 {
+            continue;
+        }
+        // A carry can be consumed in its last eligible tax month
+        // (kalanAySayisi == tax_months_elapsed), but it must not be revived
+        // after the true tax-month distance has already exceeded its lifetime.
+        if tax_months_elapsed > item.kalanAySayisi {
             continue;
         }
         let tavan_boslugu = (pek_ust_sinir - month_to_date_pek - pek_matrah_adayi).max(dec!(0));
@@ -1051,7 +1062,7 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
         isverenIssizlikOraniYuzde: Some(k.issizlikIsverenOraniYuzde.unwrap_or(dec!(2.00))),
     };
 
-    (det, sonraki_devreden_list)
+    Ok((det, sonraki_devreden_list))
 }
 
 pub struct StatutoryDeductionTaxInputs<'a> {
@@ -1117,6 +1128,7 @@ pub fn calculate_statutory_deductions_with_month_to_date(
             apply_lower_bound,
         },
     )
+    .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
 
 /// Calculates statutory deductions while making the devreden PEK calendar
@@ -1131,7 +1143,7 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     options: StatutoryCalculationOptions,
-) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
+) -> Result<(KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>)> {
     let month_to_date_pek = options.month_to_date_pek;
     let brut_gelir = calculate_gelir_toplam(gelirler);
     let default_k = DonemselKurumDegerleri::default();
@@ -1151,12 +1163,12 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
                 tax_months_elapsed: options.tax_months_elapsed,
                 apply_lower_bound: options.apply_lower_bound,
             },
-        );
+        )?;
 
     // Sıfır brüt + sıfır PEK için önceki davranışı koru; ancak PEK varken kesintileri
     // gelir toplamına bakarak erken sıfırlama.
     if brut_gelir <= dec!(0) && pek_detay.primMatrahi <= dec!(0) {
-        return (KesintiKalemleri::default(), pek_detay, sonraki_devreden);
+        return Ok((KesintiKalemleri::default(), pek_detay, sonraki_devreden));
     }
 
     // İşçi SGK, işsizlik ve OKS aynı authoritative PEK matrahını izler. Cari ayda
@@ -1253,7 +1265,7 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
         digerKesinti: diger_kesinti,
     };
 
-    (kesintiler, pek_detay, sonraki_devreden)
+    Ok((kesintiler, pek_detay, sonraki_devreden))
 }
 
 /// Test fixture/geriye dönük API. Üretim yolu yıllık parametre tablosunu kullanır.

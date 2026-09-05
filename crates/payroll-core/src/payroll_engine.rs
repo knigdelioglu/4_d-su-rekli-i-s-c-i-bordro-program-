@@ -295,10 +295,11 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
     resolve_statutory_snapshot_internal(Some(attendance), period, settings, paid_sick_dates)
 }
 
-/// Resolves the statutory payment-month reference for a supplementary event
-/// that has no attendance input. The event still receives the complete
-/// 15–14 period statutory SGK/PEK capacity (30 normalized days), while
-/// attendance-derived meal entitlements and sick-leave inputs remain empty.
+/// Resolves the provisional statutory payment-month reference for a
+/// supplementary event that has no authoritative attendance input. The event
+/// still receives the complete 15–14 period statutory SGK/PEK capacity (30
+/// normalized days), while attendance-derived meal entitlements and
+/// sick-leave inputs remain empty.
 pub fn resolve_statutory_snapshot_for_payment_month(
     period: &BordroDonemi,
     settings: &DonemselKurumDegerleri,
@@ -315,9 +316,10 @@ fn resolve_statutory_snapshot_internal(
     validate_statutory_segments_for_period(period, settings)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
-    let calendar_day_count = (end - start).num_days() + 1;
     let full_calendar_coverage = attendance
-        .is_some_and(|attendance| attendance.gunler.len() as i64 == calendar_day_count);
+        .map(|attendance| attendance_has_full_calendar_coverage(attendance, period))
+        .transpose()?
+        .unwrap_or(false);
     let full_calendar_has_non_prim_day = if full_calendar_coverage {
         attendance.is_some_and(|attendance| attendance.gunler.iter().any(|(date_text, code)| {
             let Ok(date) = NaiveDate::parse_from_str(date_text, "%Y-%m-%d") else {
@@ -446,6 +448,9 @@ fn resolve_statutory_snapshot_internal(
         .map(|segment| segment.gunlukAsgariUcret)
         .ok_or_else(|| DomainError::InvalidData("Yasal parametre snapshot'ı boş.".into()))?;
     Ok(ResolvedStatutorySnapshot {
+        source: attendance
+            .map(|_| StatutorySnapshotSource::AttendanceBacked)
+            .unwrap_or(StatutorySnapshotSource::ProvisionalPaymentMonth),
         segments: snapshots,
         sgkPrimGunSayisi: total_sgk_days,
         pekAltSinir: pek_alt_sinir.round_dp(2),
@@ -684,6 +689,38 @@ fn normal_attendance<'a>(
         .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))
 }
 
+fn attendance_missing_calendar_days(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+) -> Result<Vec<String>> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    let mut missing = Vec::new();
+    let mut current = start;
+    while current <= end {
+        let date_text = current.format("%Y-%m-%d").to_string();
+        if !attendance.gunler.contains_key(&date_text) {
+            missing.push(date_text);
+        }
+        current = current
+            .checked_add_signed(Duration::days(1))
+            .ok_or_else(|| {
+                DomainError::InvalidData("Puantaj tarih aralığı çözülemedi.".into())
+            })?;
+    }
+    Ok(missing)
+}
+
+fn attendance_has_full_calendar_coverage(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+) -> Result<bool> {
+    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+    Ok(attendance.gunler.len() as i64 == (end - start).num_days() + 1
+        && attendance_missing_calendar_days(attendance, period)?.is_empty())
+}
+
 fn existing_payroll<'a>(
     dataset: &'a PayrollDatasetSnapshot,
     personnel_id: &str,
@@ -788,6 +825,14 @@ fn ordered_prior_payment_events<'a>(
 }
 
 fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
+    if payroll.status == BordroStatus::FINALIZED
+        && is_provisional_supplementary_payroll(payroll)
+    {
+        return Err(DomainError::InvalidData(format!(
+            "{} tahakkuku FINALIZED durumda ancak geçici/legacy statutory snapshot taşıyor; kayıt sessizce değiştirilemez. Migration veya veri kalitesi incelemesi gerekir.",
+            effective_accrual_id(payroll)
+        )));
+    }
     match payroll.status {
         BordroStatus::CALCULATED | BordroStatus::FINALIZED => Ok(()),
         BordroStatus::DRAFT | BordroStatus::STALE => Err(DomainError::ValidationError(format!(
@@ -800,6 +845,23 @@ fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
             }
         ))),
     }
+}
+
+pub fn is_provisional_supplementary_payroll(payroll: &BordroKaydi) -> bool {
+    payroll.accrualType != AccrualType::NORMAL
+        && !matches!(
+            payroll.statutorySnapshot.as_ref().map(|snapshot| snapshot.source),
+            Some(StatutorySnapshotSource::AttendanceBacked)
+        )
+}
+
+fn ensure_finalizable_statutory_snapshot(payroll: &BordroKaydi) -> Result<()> {
+    if is_provisional_supplementary_payroll(payroll) {
+        return Err(DomainError::ValidationError(
+            "Bu tahakkuk geçici 30 günlük SGK/PEK kapasitesiyle hesaplandı. Kesinleştirme için SGK prim günü bilgisinin authoritative olması gerekir.".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn payroll_for_requested_accrual<'a>(
@@ -1014,7 +1076,11 @@ fn validate_prior_accruals_finalized(
         .filter(|payroll| payroll.personelId == personnel_id)
     {
         let order = accrual_order_for_payroll(dataset, payroll)?;
-        if order >= current_order || payroll.status == BordroStatus::FINALIZED {
+        if order >= current_order {
+            continue;
+        }
+        if payroll.status == BordroStatus::FINALIZED {
+            ensure_authoritative_payment_event(payroll)?;
             continue;
         }
         return Err(DomainError::ValidationError(format!(
@@ -1740,9 +1806,6 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
         ));
     }
     validate_period(period)?;
-    if accrual.accrualType == AccrualType::NORMAL {
-        normal_attendance(&request.dataset, &request.personnelId, &request.periodId)?;
-    }
     validate_tax_month_overlap(period)?;
     validate_tax_chronology(&request.dataset, period)?;
     validate_tax_month_chain(&request.dataset, person, period)?;
@@ -1760,6 +1823,9 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
     validate_statutory_tax_month_reference(period, settings)?;
     validate_devreden_pek_gap(&request.dataset, &request.personnelId, period, &accrual)?;
     resolve_prior_accrual_state(&request.dataset, &request.personnelId, period, &accrual)?;
+    if accrual.accrualType == AccrualType::NORMAL {
+        normal_attendance(&request.dataset, &request.personnelId, &request.periodId)?;
+    }
     Ok(())
 }
 
@@ -1784,6 +1850,11 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
     .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
     match existing.status {
         BordroStatus::FINALIZED => {
+            if is_provisional_supplementary_payroll(existing) {
+                return Err(DomainError::InvalidData(
+                    "Legacy/imported FINALIZED supplementary tahakkuk geçici statutory snapshot taşıyor; kayıt otomatik olarak yeniden yazılamaz. Migration veya veri kalitesi incelemesi gerekir.".into(),
+                ));
+            }
             return Err(DomainError::PayrollFinalized(
                 "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
             ));
@@ -1809,21 +1880,7 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
             &request.personnelId,
             &request.periodId,
         )?;
-        let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
-        let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
-        let mut missing_dates = Vec::new();
-        let mut current = start;
-        while current <= end {
-            let date_text = current.format("%Y-%m-%d").to_string();
-            if !attendance.gunler.contains_key(&date_text) {
-                missing_dates.push(date_text);
-            }
-            current = current
-                .checked_add_signed(chrono::Duration::days(1))
-                .ok_or_else(|| {
-                    DomainError::InvalidData("Puantaj tarih aralığı çözümlenemedi.".into())
-                })?;
-        }
+        let missing_dates = attendance_missing_calendar_days(attendance, period)?;
         if !missing_dates.is_empty() {
             return Err(DomainError::ValidationError(format!(
                 "{} dönemi puantajı eksik: {} takvim günü için kayıt bulunmuyor.",
@@ -1865,6 +1922,7 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
 pub fn finalize_payroll(request: &PayrollCalculationRequest) -> Result<BordroKaydi> {
     validate_payroll_finalization_request(request)?;
     let mut payroll = calculate_payroll(request)?;
+    ensure_finalizable_statutory_snapshot(&payroll)?;
     payroll.status = BordroStatus::FINALIZED;
     Ok(payroll)
 }
@@ -1904,6 +1962,24 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     } else {
         None
     };
+    let supplementary_attendance = if is_normal_accrual {
+        None
+    } else {
+        dataset.attendances.iter().find(|candidate| {
+            candidate.personelId == request.personnelId
+                && candidate.donemId == request.periodId
+        })
+    };
+    let attendance_for_snapshot = if is_normal_accrual {
+        attendance
+    } else if let Some(candidate) = supplementary_attendance {
+        attendance_has_full_calendar_coverage(candidate, &period)?.then_some(candidate)
+    } else {
+        None
+    };
+    let supplementary_attendance_incomplete = !is_normal_accrual
+        && supplementary_attendance.is_some()
+        && attendance_for_snapshot.is_none();
     let mut summary = PuantajOzeti::default();
     if let Some(attendance) = attendance {
         for code in attendance.gunler.values() {
@@ -1911,7 +1987,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         }
     }
 
-    let paid_sick_dates = if let Some(attendance) = attendance {
+    let paid_sick_dates = if let Some(attendance) = attendance_for_snapshot {
         let sick_records: Vec<SickLeaveRecord> = dataset
             .sickLeaveRecords
             .iter()
@@ -1924,7 +2000,11 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     } else {
         Vec::new()
     };
-    let paid_sick_days = paid_sick_dates.len() as i32;
+    let paid_sick_days = if is_normal_accrual {
+        paid_sick_dates.len() as i32
+    } else {
+        0
+    };
 
     let settings = dataset
         .institutionSettings
@@ -1952,6 +2032,15 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
             &settings,
             &paid_sick_dates,
         )?
+    } else if let Some(attendance) = attendance_for_snapshot {
+        resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+            attendance,
+            &period,
+            &settings,
+            &paid_sick_dates,
+        )?
+    } else if supplementary_attendance_incomplete {
+        resolve_statutory_snapshot_for_payment_month(&period, &settings)?
     } else if let Some(snapshot) = prior_accruals
         .last()
         .and_then(|payroll| payroll.statutorySnapshot.clone())
@@ -2113,7 +2202,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
                 tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                 apply_lower_bound: true,
             },
-        )
+        )?
     } else {
         let (pek_detail, next_devreden) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
             &income,
@@ -2126,7 +2215,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
                 tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                 apply_lower_bound: false,
             },
-        );
+        )?;
         let sgk_rate = effective_settings
             .sgkIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
@@ -2478,7 +2567,7 @@ mod tests {
             kaynakDonemId: Some("source".into()),
         }];
 
-        let (_, carried) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+        let (pek, carried) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
             &income,
             Some(&attendance),
             Some(&settings),
@@ -2489,8 +2578,70 @@ mod tests {
                 tax_months_elapsed: 2,
                 apply_lower_bound: false,
             },
-        );
+        )
+        .expect("distance=2 should be valid");
 
+        assert_eq!(pek.devredenPekKullanilan, dec!(1000));
+        assert_eq!(pek.primMatrahi, dec!(30000));
         assert!(carried.is_empty());
+    }
+
+    #[test]
+    fn devreden_carry_is_not_used_after_its_tax_month_lifetime() {
+        let settings = DonemselKurumDegerleri {
+            gunlukAsgariUcret: Some(dec!(1000)),
+            pekTavanKatsayisi: Some(Decimal::ONE),
+            gunlukYemekIstisnasiSGK: Some(Decimal::ZERO),
+            ..DonemselKurumDegerleri::default()
+        };
+        let attendance = PuantajOzeti {
+            c: 30,
+            ..PuantajOzeti::default()
+        };
+        let income = GelirKalemleri {
+            tabanBrutAylik: Some(dec!(29000)),
+            ..GelirKalemleri::default()
+        };
+        let incoming = vec![DevredenPekKaydi {
+            tutar: dec!(30000),
+            kalanAySayisi: 2,
+            kaynakDonemId: Some("source".into()),
+        }];
+
+        let (pek, carried) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+            &income,
+            Some(&attendance),
+            Some(&settings),
+            &incoming,
+            None,
+            Decimal::ZERO,
+            PekCalculationOptions {
+                tax_months_elapsed: 3,
+                apply_lower_bound: false,
+            },
+        )
+        .expect("distance=3 should be valid");
+
+        assert_eq!(pek.devredenPekKullanilan, Decimal::ZERO);
+        assert!(carried.is_empty());
+    }
+
+    #[test]
+    fn negative_tax_month_distance_fails_closed() {
+        let error = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+            &GelirKalemleri::default(),
+            None,
+            None,
+            &[],
+            None,
+            Decimal::ZERO,
+            PekCalculationOptions {
+                tax_months_elapsed: -1,
+                apply_lower_bound: false,
+            },
+        )
+        .expect_err("negative tax-month distance must be rejected");
+
+        assert!(error.to_string().contains("negatif"));
     }
 }

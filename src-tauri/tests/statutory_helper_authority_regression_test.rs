@@ -52,6 +52,7 @@ fn zero_gross_with_used_deferred_pek_still_accrues_worker_premiums_and_oks() {
         ..DonemselKurumDegerleri::default()
     };
     let snapshot = ResolvedStatutorySnapshot {
+        source: StatutorySnapshotSource::AttendanceBacked,
         segments: vec![],
         sgkPrimGunSayisi: 1,
         pekAltSinir: dec!(1000),

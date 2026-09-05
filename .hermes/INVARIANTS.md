@@ -36,6 +36,9 @@
 - Ek tahakkuk normal maaş gelirlerini yeniden üretmez. `TEDIYE` yalnız tediye brütünü, `TIS_IKRAMIYE` yalnız TİS ikramiye brütünü, `SUPPLEMENTAL` yalnız kendi brütünü üretir.
 - Önceki tahakkuk zincirinde `DRAFT` veya `STALE` kayıt varsa kümülatif/PEK state'i sessiz fallback ile devam ettirilmez; hesap fail-closed olmalıdır.
 - `FINALIZED` tahakkuk immutable'dır. Önceki bir mutable düğüm değişince sonraki mutable bağımlılar STALE olabilir; downstream FINALIZED bağımlılığı bozan mutation reddedilir.
+- Attendance-free/incomplete supplementary statutory snapshot `PROVISIONAL_PAYMENT_MONTH` provenance'ı taşır; 30 günlük fallback gerçek attendance-backed SGK prim günü değildir.
+- Provisional statutory snapshot'lı event `CALCULATED` olabilir fakat `FINALIZED` olamaz; finalization core guard'ı native ve WASM yollarında ortaktır.
+- Authoritative attendance geldiğinde provisional supplementary downstream dependency olarak STALE edilir ve attendance-backed snapshot ile yeniden hesaplanır. Attendance-backed supplementary event sırf puantaj mutation'ı nedeniyle gereksiz yere STALE edilmez.
 
 ## DEVREDEN PEK (2026-09-04 multi-accrual hardening)
 - Cari ayda PEK'e fiilen alınan devreden tutar `devredenPekKullanilan` ve `primMatrahi` içinde yer alır; işçi SGK/işsizlik bu authoritative matrahı izler.
@@ -44,6 +47,8 @@
 - Devreden PEK zincirinde ara vergi ayının geçerli sayılması NORMAL tahakkuk varlığına bağlı değildir. O ayda en az bir `CALCULATED`/`FINALIZED` authoritative payment event bulunması yeterlidir; state, canonical order'daki son authoritative event'in `sonrakiDevredenPek` snapshot'ından alınır. `DRAFT`/`STALE` state sessizce atlanmaz, zincir fail-closed olur.
 - PEK carry aging boolean değildir. Kaynak ve cari vergi ayları `taxYear * 12 + taxMonth` ordinal'larıyla karşılaştırılır; `tax_months_elapsed` aynı ayda `0`, takip eden ayda `1`, iki ay sonraki event'te `2` olur. Çalışma dönemi `yil/ay` veya tahakkuk sayısı aging hesabına girmez.
 - `kalanAySayisi`, gerçek `tax_months_elapsed` kadar azaltılır: `old_remaining - tax_months_elapsed`. Sonuç `<= 0` ise kayıt taşınmaz; aynı vergi ayındaki event sayısı aging oluşturmaz.
+- Devreden PEK current event'te kullanılmadan önce tax-month expiry kontrolünden geçer; `tax_months_elapsed > kalanAySayisi` ise carry current event'te dahi kullanılamaz.
+- `tax_months_elapsed == kalanAySayisi` ise carry current event'te kullanılabilir fakat residual ileri taşınamaz. Negatif distance production'da sessizce `max(0)` ile düzeltilmez; Result seviyesinde reddedilir.
 - Aynı ay içindeki sonraki tahakkuk, önceki tahakkukun `sonrakiDevredenPek` state'inden devam eder; aylık PEK tavanı sıfırdan açılmaz.
 - NORMAL daha sonra geldiğinde işveren alt sınır tamamlama farkı, aylık alt sınırdan önceki event’lerin PEK’i düşülerek hesaplanır; işçi matrahına eklenmez.
 - Aylık PEK kapasitesi month-to-date paylaşılır: aynı vergi ayındaki tahakkukların authoritative `primMatrahi` toplamı aylık tavanı aşamaz.
@@ -88,3 +93,5 @@
 - Damga vergisi snapshot'ı aylık hak, aynı ay önce kullanılan, cari uygulanan, kalan ve kesilen damga vergisi state'ini taşır.
 - `pekDetay`, `devredenPekGelen` ve `sonrakiDevredenPek` tahakkuklar arası month-to-date PEK/devreden PEK zincirinin denetlenebilir state'idir.
 - `statutorySnapshot`, hesapta kullanılan segment çözümünü ve SGK/PEK sınırlarını bordroyla birlikte dondurur.
+- `statutorySnapshot.source` `ATTENDANCE_BACKED`, `PROVISIONAL_PAYMENT_MONTH` veya legacy provenance bilinmiyorsa `LEGACY_UNKNOWN` değerini taşır; eski JSON kayıtları source yokken okunabilir ve supplementary finalized legacy kayıtları fail-closed veri kalitesi hatasıdır.
+- NORMAL-first kuralı yoktur; payment-event ordering ve canonical same-month state korunur.

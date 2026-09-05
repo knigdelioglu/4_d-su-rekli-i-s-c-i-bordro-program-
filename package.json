@@ -6,10 +6,11 @@
   "scripts": {
     "predev": "if command -v wasm-pack >/dev/null 2>&1; then bun run wasm:build; fi",
     "dev": "vite --port=3000 --host=0.0.0.0",
-    "build": "vite build",
+    "build": "bun run verify:wasm-freshness && vite build",
     "web:verify": "bun scripts/verify-web-build.mjs",
     "verify:wasm-package": "bun scripts/verify-wasm-package.mjs",
-    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-opt --no-typescript && rm -f src/wasm/pkg/.gitignore",
+    "verify:wasm-freshness": "bun scripts/verify-wasm-freshness.mjs",
+    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-opt --no-typescript && rm -f src/wasm/pkg/.gitignore && bun scripts/verify-wasm-freshness.mjs --write",
     "wasm:test": "wasm-pack test --node crates/payroll-wasm",
     "web:build": "bun run wasm:build && vite build",
     "preview": "vite preview",

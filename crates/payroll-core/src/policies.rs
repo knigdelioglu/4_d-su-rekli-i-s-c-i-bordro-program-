@@ -6,7 +6,10 @@
 #![allow(non_snake_case)]
 
 use crate::models::{BordroDonemi, BordroStatus};
-use crate::payroll_engine::{accrual_order_for_payroll as payroll_order, PayrollDatasetSnapshot};
+use crate::payroll_engine::{
+    accrual_order_for_payroll as payroll_order, is_provisional_supplementary_payroll,
+    PayrollDatasetSnapshot,
+};
 use crate::{DomainError, Result};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -192,6 +195,11 @@ fn affected_by_mutation(
             if payroll_personnel_id != personnelId || candidate.is_none() {
                 return Ok(false);
             }
+            if is_provisional_supplementary_payroll(payroll) {
+                // A 30-day fallback snapshot depends on attendance becoming
+                // authoritative later, even when this event precedes NORMAL.
+                return Ok(payroll.donemId == source.id);
+            }
             // Puantaj is an input to NORMAL only. A supplementary event that
             // precedes the period's NORMAL root is independent and must not be
             // made STALE merely because attendance was later entered/changed.
@@ -232,6 +240,9 @@ fn affected_by_mutation(
                 return Ok(false);
             }
             if candidate.is_none() {
+                return Ok(false);
+            }
+            if is_provisional_supplementary_payroll(payroll) {
                 return Ok(false);
             }
             let mut normal_roots = Vec::new();
@@ -301,6 +312,14 @@ pub fn evaluate_payroll_invalidation(
     dataset: &PayrollDatasetSnapshot,
     mutation: &PayrollMutation,
 ) -> Result<MutationImpact> {
+    if let Some(payroll) = dataset.payrolls.iter().find(|payroll| {
+        payroll.status == BordroStatus::FINALIZED && is_provisional_supplementary_payroll(payroll)
+    }) {
+        return Err(DomainError::InvalidData(format!(
+            "{} tahakkuku FINALIZED durumda ancak geçici/legacy statutory snapshot taşıyor; mutation reddedildi. Migration veya veri kalitesi incelemesi gerekir.",
+            effective_accrual_id(payroll)
+        )));
+    }
     let mut affected = BTreeSet::new();
     let mut blocked = BTreeSet::new();
 

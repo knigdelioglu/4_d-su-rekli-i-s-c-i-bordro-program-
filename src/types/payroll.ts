@@ -233,7 +233,14 @@ export interface ResolvedStatutorySegmentSnapshot {
   gunlukYemekIstisnasiGV: number;
 }
 
+export type StatutorySnapshotSource =
+  | 'ATTENDANCE_BACKED'
+  | 'PROVISIONAL_PAYMENT_MONTH'
+  | 'LEGACY_UNKNOWN';
+
 export interface ResolvedStatutorySnapshot {
+  /** Optional for legacy persisted snapshots created before provenance existed. */
+  source?: StatutorySnapshotSource;
   segments: ResolvedStatutorySegmentSnapshot[];
   sgkPrimGunSayisi: number;
   pekAltSinir: number;

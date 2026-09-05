@@ -7,6 +7,7 @@ const expectedFiles = new Set([
   'package.json',
   'payroll_wasm.js',
   'payroll_wasm_bg.wasm',
+  'source-hash.txt',
 ]);
 
 if (!existsSync(packageDir)) {

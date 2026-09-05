@@ -1,10 +1,11 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
     calculate_incremental_prime_esas_kazanc, calculate_payroll, calculate_prime_esas_kazanc,
-    finalize_payroll, validate_payroll_request, AccrualType, AnnualPayrollParameters, BordroDonemi,
-    BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri, GelirKalemleri,
-    ManualPayrollIncomeInput, PayrollAccrualInput, PayrollCalculationRequest,
-    PayrollDatasetSnapshot, Personel, PersonelPuantaj, PuantajOzeti,
+    evaluate_payroll_invalidation, finalize_payroll, validate_payroll_request, AccrualType,
+    AnnualPayrollParameters, BordroDonemi, BordroStatus, DevredenPekKaydi,
+    DonemselKurumDegerleri, GelirKalemleri, ManualPayrollIncomeInput, PayrollAccrualInput,
+    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation, Personel, PersonelPuantaj,
+    PuantajOzeti, StatutorySnapshotSource,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -166,6 +167,10 @@ fn supplementary_events_calculate_without_attendance_but_normal_still_fails_clos
         assert_eq!(payroll.odenenRaporluGun, Some(0));
         assert_eq!(payroll.raporluGun, Some(0));
         assert_eq!(payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi, 30);
+        assert_eq!(
+            payroll.statutorySnapshot.as_ref().unwrap().source,
+            StatutorySnapshotSource::ProvisionalPaymentMonth
+        );
         assert!(payroll.pekDetay.as_ref().unwrap().primMatrahi > Decimal::ZERO);
     }
 
@@ -173,6 +178,121 @@ fn supplementary_events_calculate_without_attendance_but_normal_still_fails_clos
     normal_request.dataset.attendances.clear();
     let error = calculate_payroll(&normal_request).expect_err("NORMAL still requires attendance");
     assert!(error.to_string().contains("puantaj"));
+}
+
+#[test]
+fn provisional_supplementary_finalization_is_rejected_but_complete_attendance_is_authoritative() {
+    let mut provisional_request = supplementary_request("2026-02-10");
+    provisional_request.dataset.attendances.clear();
+    let provisional = calculate_payroll(&provisional_request)
+        .expect("attendance-free supplementary event should calculate");
+    assert_eq!(
+        provisional.statutorySnapshot.as_ref().unwrap().source,
+        StatutorySnapshotSource::ProvisionalPaymentMonth
+    );
+
+    provisional_request.dataset.payrolls.push(provisional);
+    let finalize_error = finalize_payroll(&provisional_request)
+        .expect_err("provisional supplementary event must not finalize");
+    assert!(finalize_error.to_string().contains("geçici 30 günlük"));
+
+    let authoritative = calculate_payroll(&supplementary_request("2026-02-10"))
+        .expect("complete attendance supplementary event should calculate");
+    assert_eq!(
+        authoritative.statutorySnapshot.as_ref().unwrap().source,
+        StatutorySnapshotSource::AttendanceBacked
+    );
+}
+
+#[test]
+fn incomplete_supplementary_attendance_remains_provisional() {
+    let mut request = supplementary_request("2026-02-10");
+    let attendance = request.dataset.attendances.first_mut().unwrap();
+    attendance
+        .gunler
+        .retain(|date, _| date.as_str() == "2026-01-15");
+
+    let payroll = calculate_payroll(&request).expect("incomplete attendance must not block supplementary calculation");
+    assert_eq!(
+        payroll.statutorySnapshot.as_ref().unwrap().source,
+        StatutorySnapshotSource::ProvisionalPaymentMonth
+    );
+    assert_eq!(payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi, 30);
+}
+
+#[test]
+fn attendance_mutation_invalidates_only_provisional_supplementary_events() {
+    let mut provisional_request = supplementary_request("2026-02-10");
+    provisional_request.dataset.attendances.clear();
+    let provisional = calculate_payroll(&provisional_request).expect("provisional event should calculate");
+    let provisional_impact = evaluate_payroll_invalidation(
+        &PayrollDatasetSnapshot {
+            payrolls: vec![provisional],
+            ..provisional_request.dataset.clone()
+        },
+        &PayrollMutation::PersonPeriod {
+            personnelId: "person-1".into(),
+            periodId: "2026-01".into(),
+        },
+    )
+    .expect("attendance mutation policy should calculate");
+    assert_eq!(provisional_impact.affectedPayrolls.len(), 1);
+
+    let authoritative = calculate_payroll(&supplementary_request("2026-02-10"))
+        .expect("attendance-backed event should calculate");
+    let authoritative_impact = evaluate_payroll_invalidation(
+        &PayrollDatasetSnapshot {
+            payrolls: vec![authoritative],
+            ..supplementary_request("2026-02-10").dataset
+        },
+        &PayrollMutation::PersonPeriod {
+            personnelId: "person-1".into(),
+            periodId: "2026-01".into(),
+        },
+    )
+    .expect("attendance mutation policy should calculate");
+    assert!(authoritative_impact.affectedPayrolls.is_empty());
+}
+
+#[test]
+fn provisional_supplementary_recalculates_as_attendance_backed_then_finalizes() {
+    let mut provisional_request = supplementary_request("2026-02-10");
+    provisional_request.dataset.attendances.clear();
+    let provisional = calculate_payroll(&provisional_request).expect("provisional event should calculate");
+
+    let mut recalculation_request = supplementary_request("2026-02-10");
+    recalculation_request.dataset.payrolls.push(provisional);
+    let recalculated = calculate_payroll(&recalculation_request)
+        .expect("attendance-backed recalculation should calculate");
+    assert_eq!(
+        recalculated.statutorySnapshot.as_ref().unwrap().source,
+        StatutorySnapshotSource::AttendanceBacked
+    );
+
+    recalculation_request.dataset.payrolls = vec![recalculated];
+    let finalized = finalize_payroll(&recalculation_request)
+        .expect("attendance-backed supplementary event should finalize");
+    assert_eq!(finalized.status, BordroStatus::FINALIZED);
+}
+
+#[test]
+fn legacy_finalized_provisional_supplementary_state_fails_closed() {
+    let mut request = supplementary_request("2026-02-10");
+    request.dataset.attendances.clear();
+    let mut legacy = calculate_payroll(&request).expect("legacy fixture should calculate");
+    legacy.status = BordroStatus::FINALIZED;
+    legacy.statutorySnapshot.as_mut().unwrap().source = StatutorySnapshotSource::LegacyUnknown;
+    request.dataset.payrolls = vec![legacy];
+
+    let error = evaluate_payroll_invalidation(
+        &request.dataset,
+        &PayrollMutation::PersonPeriod {
+            personnelId: "person-1".into(),
+            periodId: "2026-01".into(),
+        },
+    )
+    .expect_err("legacy finalized provisional state must block mutation");
+    assert!(error.to_string().contains("Migration"));
 }
 
 #[test]

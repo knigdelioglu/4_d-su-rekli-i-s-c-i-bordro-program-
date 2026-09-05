@@ -104,7 +104,10 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
   );
   const hasCritical = hasBlockingFinalizeNotice(relevantNotices);
   const authoritativeBordro = review?.bordro ?? bordro;
-  const canFinalize = !isLoading && !isFinalizing && !reviewError;
+  const isProvisionalSupplementary =
+    authoritativeBordro.accrualType !== 'NORMAL' &&
+    authoritativeBordro.statutorySnapshot?.source !== 'ATTENDANCE_BACKED';
+  const canFinalize = !isLoading && !isFinalizing && !reviewError && !isProvisionalSupplementary;
 
   const loadReview = async (showLoading: boolean): Promise<ReviewSnapshot> => {
     if (showLoading) setIsLoading(true);
@@ -167,12 +170,20 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
     try {
       // Modal açık kaldığı sırada başka bir girdi değişmiş olabilir. Kilitlemeden
       // hemen önce native bordro ve notice listesi ikinci kez authoritative kaynaktan okunur.
-      await loadReview(false);
+      const latestReview = await loadReview(false);
+      if (
+        latestReview.bordro.accrualType !== 'NORMAL' &&
+        latestReview.bordro.statutorySnapshot?.source !== 'ATTENDANCE_BACKED'
+      ) {
+        throw new Error(
+          'Bu tahakkuk geçici 30 günlük SGK/PEK kapasitesiyle hesaplandı. Puantaj kesinleşince yeniden hesaplayın.'
+        );
+      }
       const finalized = await engine.finalizePayroll(
         personel.id,
         donem.id,
         dataset,
-        authoritativeBordro.accrualId || authoritativeBordro.id
+        latestReview.bordro.accrualId || latestReview.bordro.id
       );
       await onFinalized(finalized);
       setIsOpen(false);
@@ -252,6 +263,12 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
                   <div className="mt-1 text-xs font-bold text-emerald-700">{formatTL(authoritativeBordro.netOdeme)}</div>
                 </div>
               </div>
+
+              {isProvisionalSupplementary && (
+                <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs font-semibold text-amber-950">
+                  SGK/PEK kapasitesi geçici 30 gün kabulüyle hesaplandı. Puantaj kesinleşince yeniden hesaplanacaktır; bu kayıt kesinleştirilemez.
+                </div>
+              )}
 
               {isLoading ? (
                 <div className="flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-slate-50 p-8 text-xs font-semibold text-slate-600">

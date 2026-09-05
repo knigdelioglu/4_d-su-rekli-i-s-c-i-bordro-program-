@@ -337,7 +337,10 @@ fn missing_tax_month_period_fails_closed() {
 
     let error = PayrollPreflightService::validate_for_calculation(&conn, &p.id, &tax_month_3.id)
         .unwrap_err();
-    assert!(error.to_string().contains("referans zinciri eksik"));
+    assert!(
+        error.to_string().contains("referans zinciri eksik"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -360,7 +363,10 @@ fn tax_month_minimum_wage_reference_mismatch_fails_closed() {
 
     let error =
         PayrollPreflightService::validate_for_calculation(&conn, &p.id, &active.id).unwrap_err();
-    assert!(error.to_string().contains("Yanlış GV/DV istisnası"));
+    assert!(
+        error.to_string().contains("Yanlış GV/DV istisnası"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -385,7 +391,7 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
             &june.id,
             Some(vec![DevredenPekKaydi {
                 tutar: dec!(20000),
-                kalanAySayisi: 2,
+                kalanAySayisi: 3,
                 kaynakDonemId: Some(june.id.clone()),
             }]),
         ),
@@ -394,6 +400,12 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
 
     let error =
         PayrollPreflightService::validate_for_calculation(&conn, &p.id, &august.id).unwrap_err();
-    assert!(error.to_string().contains("devreden PEK"));
-    assert!(error.to_string().contains("ara dönem bordrosunu"));
+    assert!(
+        error.to_string().contains("Payment-event/PEK"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains("ara authoritative payment event"),
+        "unexpected error: {error}"
+    );
 }

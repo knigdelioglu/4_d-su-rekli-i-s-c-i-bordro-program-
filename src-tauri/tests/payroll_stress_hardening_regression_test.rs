@@ -202,12 +202,13 @@ fn setup_devreden_case(
     let p = person(personnel_id, bes_uyesi);
     PersonnelRepository::save(&conn, &p)?;
 
-    // Önceki çalışma dönemi bilinçli olarak başka vergi yılına alınır; böylece
-    // test yalnız devreden PEK davranışını sınar, kümülatif GV zinciri araya girmez.
-    let prior = period("2026-06-stress", 2026, 6, 2025, 12);
+    // Kaynak event gerçek bir önceki vergi ayında olmalı; PEK aging'i çalışma
+    // dönemi sayısına değil tax-month distance'a bağlıdır.
+    let prior = period("2026-06-stress", 2026, 6, 2026, 7);
     let active = period("2026-07-stress", 2026, 7, 2026, 8);
     PeriodRepository::save(&conn, &prior)?;
     PeriodRepository::save(&conn, &active)?;
+    SettingsRepository::save_institution_settings(&conn, &settings(&prior.id))?;
     SettingsRepository::save_institution_settings(&conn, &settings(&active.id))?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
 

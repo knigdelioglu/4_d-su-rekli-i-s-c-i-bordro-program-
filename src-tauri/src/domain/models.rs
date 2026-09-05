@@ -504,9 +504,29 @@ pub struct ResolvedStatutorySegmentSnapshot {
     pub gunlukYemekIstisnasiGV: Decimal,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum StatutorySnapshotSource {
+    AttendanceBacked,
+    ProvisionalPaymentMonth,
+    /// Old/imported snapshots did not record provenance. Keep them readable,
+    /// but let domain policy treat supplementary records conservatively.
+    LegacyUnknown,
+}
+
+impl Default for StatutorySnapshotSource {
+    fn default() -> Self {
+        Self::LegacyUnknown
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedStatutorySnapshot {
+    /// Provenance of the statutory/PEK capacity used by the calculation.
+    /// Missing in legacy JSON and therefore defaults to `LegacyUnknown`.
+    #[serde(default)]
+    pub source: StatutorySnapshotSource,
     pub segments: Vec<ResolvedStatutorySegmentSnapshot>,
     pub sgkPrimGunSayisi: i32,
     pub pekAltSinir: Decimal,

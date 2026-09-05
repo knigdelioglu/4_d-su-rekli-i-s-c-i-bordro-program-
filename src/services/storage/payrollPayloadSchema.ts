@@ -8,6 +8,11 @@ type UnknownRecord = Record<string, unknown>;
 
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
 const ACCRUAL_TYPE_VALUES = ['NORMAL', 'TEDIYE', 'TIS_IKRAMIYE', 'SUPPLEMENTAL'] as const;
+const STATUTORY_SNAPSHOT_SOURCE_VALUES = [
+  'ATTENDANCE_BACKED',
+  'PROVISIONAL_PAYMENT_MONTH',
+  'LEGACY_UNKNOWN',
+] as const;
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -373,6 +378,13 @@ function validateResolvedStatutorySegmentSnapshot(value: unknown, path: string):
 
 function validateResolvedStatutorySnapshot(value: unknown, path: string): void {
   assertRecord(value, path);
+  const source = optional(value, 'source', path);
+  if (source !== undefined) {
+    assertString(source, fieldPath(path, 'source'));
+    if (!STATUTORY_SNAPSHOT_SOURCE_VALUES.includes(source as (typeof STATUTORY_SNAPSHOT_SOURCE_VALUES)[number])) {
+      fail(fieldPath(path, 'source'), 'geçerli bir statutory snapshot kaynağı olmalıdır.');
+    }
+  }
   const segmentsPath = fieldPath(path, 'segments');
   const segments = required(value, 'segments', path);
   assertArray(segments, segmentsPath);

@@ -5,7 +5,8 @@
   "version": "0.1.0",
   "files": [
     "payroll_wasm_bg.wasm",
-    "payroll_wasm.js"
+    "payroll_wasm.js",
+    "source-hash.txt"
   ],
   "main": "payroll_wasm.js",
   "sideEffects": [
