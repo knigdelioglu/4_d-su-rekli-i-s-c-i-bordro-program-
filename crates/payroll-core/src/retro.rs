@@ -284,6 +284,12 @@ fn selected_override<'a>(
 }
 
 fn validate_override_value(key: RetroParameterKey, value: Decimal) -> Result<()> {
+    if matches!(key, RetroParameterKey::TEDIYE | RetroParameterKey::TIS_BONUS) {
+        return Err(DomainError::ValidationError(format!(
+            "{:?} revision override'ı event tarihini ve kısmi dönem geometrisini belirtmeden güvenli şekilde replay edilemez; ayrı ödeme event'i olarak tanımlanmalıdır.",
+            key
+        )));
+    }
     if value < Decimal::ZERO {
         return Err(DomainError::ValidationError(format!(
             "{:?} revision değeri negatif olamaz.",
@@ -1078,7 +1084,76 @@ fn apply_source_month_sgk(
         allocation.employerUnemploymentDelta = round2(incremental * employer_unemployment_rate);
         current_pek = allocation.adjustedPek;
     }
+
+    // Statutory payroll calculates each premium from the source month's
+    // aggregate PEK.  The allocation rows are kept per earning code for
+    // auditability, but independently rounding every row can create a
+    // different total (for example, two 0.05 PEK rows at 14% become 0.02
+    // instead of the aggregate 0.01).  Reconcile the deterministic last row
+    // so the ledger and the payment calculation use the same aggregate rule.
+    rebalance_source_sgk_component(
+        allocations,
+        &period.id,
+        worker_sgk_rate,
+        |allocation| allocation.workerSgkDelta,
+        |allocation, value| allocation.workerSgkDelta = value,
+    );
+    rebalance_source_sgk_component(
+        allocations,
+        &period.id,
+        worker_unemployment_rate,
+        |allocation| allocation.workerUnemploymentDelta,
+        |allocation, value| allocation.workerUnemploymentDelta = value,
+    );
+    rebalance_source_sgk_component(
+        allocations,
+        &period.id,
+        employer_sgk_rate,
+        |allocation| allocation.employerSgkDelta,
+        |allocation, value| allocation.employerSgkDelta = value,
+    );
+    rebalance_source_sgk_component(
+        allocations,
+        &period.id,
+        employer_unemployment_rate,
+        |allocation| allocation.employerUnemploymentDelta,
+        |allocation, value| allocation.employerUnemploymentDelta = value,
+    );
     Ok(())
+}
+
+fn rebalance_source_sgk_component(
+    allocations: &mut [RetroAllocation],
+    source_period_id: &str,
+    rate: Decimal,
+    read: fn(&RetroAllocation) -> Decimal,
+    write: fn(&mut RetroAllocation, Decimal),
+) {
+    let indices = allocations
+        .iter()
+        .enumerate()
+        .filter_map(|(index, allocation)| {
+            (allocation.sourcePeriodId == source_period_id
+                && allocation.sgkTreatment == RetroSgkTreatment::WAGE_SOURCE_MONTH)
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let Some(last_index) = indices.last().copied() else {
+        return;
+    };
+
+    let total_pek_delta = indices.iter().fold(Decimal::ZERO, |sum, index| {
+        sum + allocations[*index].retroPekDelta
+    });
+    let expected_total = round2(total_pek_delta * rate);
+    let assigned_total = indices.iter().fold(Decimal::ZERO, |sum, index| {
+        sum + read(&allocations[*index])
+    });
+    let adjustment = round2(expected_total - assigned_total);
+    if adjustment != Decimal::ZERO {
+        let corrected = round2(read(&allocations[last_index]) + adjustment);
+        write(&mut allocations[last_index], corrected);
+    }
 }
 
 fn policy_map_for_income(

@@ -532,3 +532,41 @@ fn native_payroll_save_cannot_reuse_another_record_primary_id() {
     assert_eq!(after.len(), 1);
     assert_eq!(after[0].accrualId, source.accrualId);
 }
+
+#[test]
+fn native_retro_payment_totals_must_reconcile_with_income_and_deductions() {
+    let (conn, _source_period, _payment_period, _revision) = setup_full_retro_database();
+    let source = PayrollRepository::get_all(&conn)
+        .expect("bordrolar okunmalı")
+        .into_iter()
+        .next()
+        .expect("source bordro bulunmalı");
+
+    let mut forged = source.clone();
+    forged.id = "retro-total-check".into();
+    forged.accrualId = "retro-total-check".into();
+    forged.accrualType = AccrualType::RETRO_ADJUSTMENT;
+    forged.sequence = 1;
+    forged.netOdeme += dec!(1);
+
+    let error = PayrollRepository::save_in_transaction(&conn, &forged)
+        .expect_err("retro payment net toplamı kalemlerden bağımsız değiştirilememeli");
+    assert!(error.to_string().contains("finansal toplamları"));
+    assert_eq!(
+        PayrollRepository::get_all(&conn)
+            .expect("bordrolar okunmalı")
+            .len(),
+        1,
+        "reddedilen retro event veritabanına yazılmamalı"
+    );
+
+    forged.netOdeme = (forged.gelirToplam - forged.kesintiToplam).round_dp(2);
+    PayrollRepository::save_in_transaction(&conn, &forged)
+        .expect("kalemlerle eşleşen retro toplamları yazılmalı");
+    assert_eq!(
+        PayrollRepository::get_all(&conn)
+            .expect("bordrolar okunmalı")
+            .len(),
+        2
+    );
+}

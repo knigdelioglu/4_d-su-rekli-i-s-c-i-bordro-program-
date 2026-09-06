@@ -154,9 +154,105 @@ fn native_v3_restore_imports_retro_graph_inside_outer_transaction() {
 
     assert_eq!(get_revisions(&conn).expect("revision okunmalı").len(), 1);
     assert_eq!(get_batches(&conn).expect("batch okunmalı").len(), 1);
+    let restored_batch = &get_batches(&conn).expect("batch okunmalı")[0];
+    assert_eq!(
+        restored_batch.status,
+        bordro_programi_lib::domain::models::CompensationRevisionStatus::STALE
+    );
+    assert_eq!(
+        restored_batch.settlementStatus,
+        bordro_programi_lib::domain::models::RetroSettlementStatus::UNSETTLED
+    );
     let allocations = get_allocations(&conn).expect("allocation okunmalı");
     assert_eq!(allocations.len(), 1);
     assert_eq!(allocations[0].deltaAmount, Decimal::from(10));
+}
+
+#[test]
+fn native_v3_restore_downgrades_linked_nonfinal_retro_event_with_batch() {
+    let mut conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
+    let mut retro_payroll = legacy_payroll_value();
+    retro_payroll["id"] = json!("retro-payment-v3");
+    retro_payroll["accrualId"] = json!("batch-v3-linked");
+    retro_payroll["accrualType"] = json!("RETRO_ADJUSTMENT");
+    retro_payroll["donemId"] = json!("2026-05");
+    retro_payroll["paymentDate"] = json!("2026-06-20");
+    retro_payroll["status"] = json!("CALCULATED");
+    let payload = json!({
+        "backupVersion": 3,
+        "donemler": [
+            {
+                "id": "2026-03",
+                "yil": 2026,
+                "ay": 3,
+                "baslangicTarihi": "2026-03-15",
+                "bitisTarihi": "2026-04-14",
+                "donemAdi": "Mart 2026",
+                "taxYear": 2026,
+                "taxMonth": 4
+            },
+            {
+                "id": "2026-05",
+                "yil": 2026,
+                "ay": 5,
+                "baslangicTarihi": "2026-05-15",
+                "bitisTarihi": "2026-06-14",
+                "donemAdi": "Mayıs 2026",
+                "taxYear": 2026,
+                "taxMonth": 6
+            }
+        ],
+        "personeller": [{
+            "id": "person-1",
+            "tcNo": "10000000004",
+            "ad": "V3",
+            "soyad": "Linked",
+            "grup": "1. Grup"
+        }],
+        "bordrolar": [retro_payroll],
+        "taxOpenings": [],
+        "sickLeaveRecords": [],
+        "annualPayrollParameters": [],
+        "compensationRevisions": [{
+            "id": "revision-v3-linked",
+            "reason": "COLLECTIVE_AGREEMENT",
+            "title": "2026 V3 linked",
+            "effectiveFrom": "2026-03-15",
+            "status": "FINALIZED",
+            "scope": "SELECTED_PERSONNEL",
+            "personnelIds": ["person-1"]
+        }],
+        "compensationRevisionOverrides": [],
+        "retroBatches": [{
+            "id": "batch-v3-linked",
+            "revisionId": "revision-v3-linked",
+            "personnelId": "person-1",
+            "paymentDate": "2026-06-20",
+            "status": "FINALIZED",
+            "totalGrossDelta": 0
+        }],
+        "retroAllocations": []
+    })
+    .to_string();
+
+    MigrationService::replace_backup_data(&mut conn, &payload)
+        .expect("tutarsız V3 graph güvenli biçimde stale'e indirilmeli");
+
+    let batch = get_batches(&conn).expect("batch okunmalı").remove(0);
+    assert_eq!(
+        batch.status,
+        bordro_programi_lib::domain::models::CompensationRevisionStatus::STALE
+    );
+    assert_eq!(
+        batch.settlementStatus,
+        bordro_programi_lib::domain::models::RetroSettlementStatus::UNSETTLED
+    );
+    let payroll = PayrollRepository::get_all(&conn)
+        .expect("payment event okunmalı")
+        .into_iter()
+        .next()
+        .expect("payment event bulunmalı");
+    assert_eq!(payroll.status, BordroStatus::STALE);
 }
 
 #[test]
@@ -216,7 +312,10 @@ fn native_v4_restore_rejects_retro_batch_payment_lifecycle_mismatch() {
     retro_payroll["donemId"] = json!("2026-03");
     retro_payroll["paymentDate"] = json!("2026-04-20");
     retro_payroll["sequence"] = json!(0);
+    retro_payroll["gelirler"] = json!({"ekOdeme": 10});
     retro_payroll["gelirToplam"] = json!(10);
+    retro_payroll["kesintiToplam"] = json!(0);
+    retro_payroll["netOdeme"] = json!(10);
     retro_payroll["status"] = json!("FINALIZED");
 
     let payload = json!({

@@ -184,6 +184,10 @@ mod tests {
                 sickLeaveRecords: Vec::new(),
                 annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
                 zamAylari: Vec::new(),
+                compensationRevisions: Vec::new(),
+                compensationRevisionOverrides: Vec::new(),
+                retroBatches: Vec::new(),
+                retroAllocations: Vec::new(),
             },
         })
         .expect("fixture should serialize")

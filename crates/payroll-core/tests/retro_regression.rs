@@ -667,6 +667,72 @@ fn source_month_worker_sgk_is_deducted_once_from_retro_gv_base() {
 }
 
 #[test]
+fn source_month_sgk_rounding_uses_aggregate_pek_across_earning_codes() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let mut source_attendance = attendance("p1", &source.periods[0], true);
+    for (date, code) in &mut source_attendance.gunler {
+        if date != "2026-02-15" {
+            *code = "R".into();
+        }
+    }
+    source.attendances = vec![source_attendance];
+    source
+        .institutionSettings
+        .get_mut("2026-02")
+        .expect("source settings")
+        .geceCalismaPrimiYuzde = Some(dec!(1));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let current_revision = revision("rev-sgk-rounding", "2026-02-15");
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-sgk-rounding",
+        current_revision,
+        vec![
+            wage_override("ov-sgk-rounding-wage", "rev-sgk-rounding", dec!(100.05)),
+            CompensationRevisionOverride {
+                id: "ov-sgk-rounding-night".into(),
+                revisionId: "rev-sgk-rounding".into(),
+                parameter: RetroParameterKey::GECE_CALISMA_PRIMI_YUZDE,
+                value: dec!(1.05),
+                personnelId: None,
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect("multi-code source SGK correction should calculate");
+
+    assert_eq!(result.batch.totalGrossDelta, dec!(0.10));
+    assert_eq!(
+        result
+            .allocations
+            .iter()
+            .map(|allocation| allocation.retroPekDelta)
+            .sum::<Decimal>(),
+        dec!(0.10)
+    );
+    assert_eq!(
+        result
+            .allocations
+            .iter()
+            .map(|allocation| allocation.workerSgkDelta)
+            .sum::<Decimal>(),
+        dec!(0.01)
+    );
+    assert_eq!(
+        result
+            .allocations
+            .iter()
+            .map(|allocation| allocation.workerUnemploymentDelta)
+            .sum::<Decimal>(),
+        dec!(0.00)
+    );
+}
+
+#[test]
 fn partial_effective_dates_follow_the_15_to_14_service_geometry() {
     let february = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut feb_source = dataset(&[february], dec!(100), dec!(9));
@@ -1020,4 +1086,26 @@ fn one_retro_payment_shares_gv_dv_exemption_and_july_starts_fresh() {
         july.oncekiKumulatifGvMatrahi,
         Some(retro.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi)
     );
+}
+
+#[test]
+fn event_specific_tediye_and_tis_overrides_fail_closed() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let request = retro_request(
+        dataset(&[source_period], dec!(100), dec!(9)),
+        "retro-event-specific",
+        revision("rev-event-specific", "2026-02-15"),
+        vec![CompensationRevisionOverride {
+            id: "override-event-specific".into(),
+            revisionId: "rev-event-specific".into(),
+            parameter: RetroParameterKey::TEDIYE,
+            value: dec!(5000),
+            personnelId: None,
+        }],
+        "2026-06-20",
+    );
+
+    let error = RetroEntitlementEngine::calculate(&request)
+        .expect_err("event tarihini modellemeyen tediye override'ı sessizce replay edilmemeli");
+    assert!(error.to_string().contains("event tarihini"));
 }

@@ -12,7 +12,7 @@ import {
   parseLegacyBackup,
   repairAndCanonicalizeBackup,
 } from './payrollPayload';
-import type { PayrollStorageDto } from '../payrollEngine/decimalBoundary';
+import { serializePayrollStorage, type PayrollStorageDto } from '../payrollEngine/decimalBoundary';
 
 type TestRecord = Record<string, unknown>;
 
@@ -301,6 +301,42 @@ function firstRecord(snapshot: TestRecord, collection: string): TestRecord {
   return (snapshot[collection] as TestRecord[])[0];
 }
 
+function retroIncome(base: unknown): TestRecord {
+  return {
+    ...(base as TestRecord),
+    tabanBrutAylik: '10.00',
+    tediye: '0.00',
+    tisIkramiyesi: '0.00',
+    ekOdeme: '0.00',
+    yemek: '0.00',
+    birlestirilmisSosyalYardim: '0.00',
+    vasitaYol: '0.00',
+    giyimYardimi: '0.00',
+    isPrimi: '0.00',
+    geceCalismasiUcreti: '0.00',
+    geceCalismasiTatiliUcreti: '0.00',
+    hizmetZammi: '0.00',
+    digerGelir: '0.00',
+  };
+}
+
+function retroDeductions(base: unknown): TestRecord {
+  return {
+    ...(base as TestRecord),
+    isciSgkPrimi: '0.00',
+    isciIssizlikPrimi: '0.00',
+    gelirVergisi: '0.00',
+    damgaVergisi: '0.00',
+    sendikaAidati: '0.00',
+    bes: '0.00',
+    icra: '0.00',
+    kisiBorcu: '0.00',
+    dogumAskerlikBorclanmasi: '0.00',
+    hayatSaglikSigortasi: '0.00',
+    digerKesinti: '0.00',
+  };
+}
+
 function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
   const legacy = parseTestSnapshot(makeV2Snapshot(netOdeme));
   legacy.backupVersion = 1;
@@ -419,7 +455,11 @@ describe('BrowserPayrollStore', () => {
       accrualType: 'RETRO_ADJUSTMENT',
       paymentDate: '2026-02-14',
       sequence: 1,
+      gelirler: retroIncome(normal.gelirler),
       gelirToplam: '10.00',
+      kesintiler: retroDeductions(normal.kesintiler),
+      kesintiToplam: '0.00',
+      netOdeme: '10.00',
     });
     legacy.compensationRevisions = [{
       id: 'revision-v3',
@@ -574,7 +614,11 @@ describe('BrowserPayrollStore', () => {
         accrualId: 'batch-lifecycle',
         accrualType: 'RETRO_ADJUSTMENT',
         sequence: 1,
+        gelirler: retroIncome(normal.gelirler),
         gelirToplam: '10.00',
+        kesintiler: retroDeductions(normal.kesintiler),
+        kesintiToplam: '0.00',
+        netOdeme: '10.00',
         status: 'CALCULATED',
       },
     ];
@@ -611,6 +655,12 @@ describe('BrowserPayrollStore', () => {
     }];
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(valid))).not.toThrow();
 
+    const inconsistentFinancialSnapshot = JSON.parse(JSON.stringify(valid)) as TestRecord;
+    (inconsistentFinancialSnapshot.bordrolar as TestRecord[])[1].netOdeme = '9.99';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(inconsistentFinancialSnapshot))).toThrow(
+      'finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor'
+    );
+
     const mismatched = JSON.parse(JSON.stringify(valid)) as TestRecord;
     (mismatched.bordrolar as TestRecord[])[1].status = 'FINALIZED';
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(mismatched))).toThrow(
@@ -622,6 +672,84 @@ describe('BrowserPayrollStore', () => {
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(staleWithPayment))).toThrow(
       'lifecycle durumu ile bağlı payment event'
     );
+
+    const legacyFinalizedWithoutPayment = JSON.parse(JSON.stringify(valid)) as TestRecord;
+    legacyFinalizedWithoutPayment.backupVersion = 3;
+    legacyFinalizedWithoutPayment.bordrolar = [normal];
+    (legacyFinalizedWithoutPayment.retroBatches as TestRecord[])[0].status = 'FINALIZED';
+    (legacyFinalizedWithoutPayment.retroBatches as TestRecord[])[0].settlementStatus = 'PAID';
+    const downgraded = parseImportedBackup(JSON.stringify(legacyFinalizedWithoutPayment));
+    expect(downgraded.retroBatches[0].status).toBe('STALE');
+    expect(downgraded.retroBatches[0].settlementStatus).toBe('UNSETTLED');
+  });
+
+  test('round-trips a finalized retro graph without changing identity or settlement state', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const normal = firstRecord(payload, 'bordrolar');
+    payload.bordrolar = [
+      normal,
+      {
+        ...normal,
+        id: 'retro-payment-roundtrip',
+        accrualId: 'batch-roundtrip',
+        accrualType: 'RETRO_ADJUSTMENT',
+        sequence: 1,
+        gelirler: retroIncome(normal.gelirler),
+        gelirToplam: '10.00',
+        kesintiler: retroDeductions(normal.kesintiler),
+        kesintiToplam: '0.00',
+        netOdeme: '10.00',
+        status: 'FINALIZED',
+      },
+    ];
+    payload.compensationRevisions = [{
+      id: 'revision-roundtrip',
+      reason: 'COLLECTIVE_AGREEMENT',
+      title: 'Round trip',
+      effectiveFrom: '2026-01-15',
+      status: 'FINALIZED',
+      scope: 'SELECTED_PERSONNEL',
+      personnelIds: ['person-1'],
+    }];
+    payload.retroBatches = [{
+      id: 'batch-roundtrip',
+      revisionId: 'revision-roundtrip',
+      personnelId: 'person-1',
+      paymentDate: '2026-02-14',
+      status: 'FINALIZED',
+      settlementStatus: 'PAID',
+      totalGrossDelta: '10.00',
+    }];
+    payload.retroAllocations = [{
+      id: 'allocation-roundtrip',
+      batchId: 'batch-roundtrip',
+      personnelId: 'person-1',
+      sourcePeriodId: '2026-01',
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: '0.00',
+      targetAmount: '10.00',
+      deltaAmount: '10.00',
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+    }];
+
+    const before = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    const after = parseCurrentBrowserSnapshot(serializePayrollStorage(before));
+    expect(after.compensationRevisions[0].id).toBe('revision-roundtrip');
+    expect(after.compensationRevisions[0].status).toBe('FINALIZED');
+    expect(after.retroBatches[0].id).toBe('batch-roundtrip');
+    expect(after.retroBatches[0].status).toBe('FINALIZED');
+    expect(after.retroBatches[0].settlementStatus).toBe('PAID');
+    expect(after.retroBatches[0].totalGrossDelta).toBe('10.00');
+    expect(after.retroAllocations[0].id).toBe('allocation-roundtrip');
+    expect(after.retroAllocations[0].batchId).toBe('batch-roundtrip');
+    expect(after.retroAllocations[0].deltaAmount).toBe('10.00');
+    expect(after.bordrolar.filter((payroll) => payroll.accrualType === 'RETRO_ADJUSTMENT').length)
+      .toBe(1);
+    const retroPayroll = after.bordrolar.find((payroll) => payroll.accrualId === 'batch-roundtrip');
+    expect(retroPayroll?.status).toBe('FINALIZED');
+    expect(retroPayroll?.netOdeme).toBe('10.00');
   });
 
   test('normalizes a pre-accrual V2 backup to one NORMAL accrual', () => {

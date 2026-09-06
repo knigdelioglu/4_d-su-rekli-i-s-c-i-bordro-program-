@@ -1380,14 +1380,19 @@ export default function App() {
     };
     const impact = await payrollEngine.evaluateMutationPolicy(mutation, datasetWithBatch);
     assertBrowserMutationImpactAllowed(impact);
-    const calculated = await payrollEngine.calculatePayroll({
+    const paymentRequest = {
       personnelId: batch.personnelId,
       periodId: paymentPeriod.id,
       calculatedAt: new Date().toISOString(),
       manualIncome: null,
       accrual: toPayrollBoundaryDto(accrual) as unknown as Parameters<typeof payrollEngine.calculatePayroll>[0]['accrual'],
       dataset: datasetWithBatch,
-    });
+    };
+    // `calculatePayroll` is a pure formula call in the browser adapter. Run
+    // the same strict cross-period/tax-month preflight that the native retro
+    // service runs before accepting the result as a payment event.
+    await payrollEngine.validatePayroll(paymentRequest);
+    const calculated = await payrollEngine.calculatePayroll(paymentRequest);
     updateAuthoritativePayload((current) => {
       const invalidated = applyBrowserPayrollImpact(current.bordrolar, impact);
       const existingPayrollIndex = invalidated.findIndex((item) => item.accrualId === batch.id || item.id === batch.id);

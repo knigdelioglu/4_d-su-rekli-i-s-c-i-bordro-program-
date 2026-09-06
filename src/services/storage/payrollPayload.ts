@@ -344,13 +344,36 @@ function legacyAmountIsNegative(value: unknown): boolean {
     (typeof value === 'number' && value < 0);
 }
 
-function canonicalizeLegacyRetroBatches(value: unknown, allocations: unknown): unknown {
+function canonicalizeLegacyRetroBatches(
+  value: unknown,
+  allocations: unknown,
+  payrolls: unknown
+): unknown {
   if (!Array.isArray(value)) return value;
   return value.map((item) => {
     if (!isRecord(item)) return item;
     const batch = { ...item };
     const status = batch.status ?? 'DRAFT';
     if (!hasOwn(batch, 'status') || batch.status === null) batch.status = status;
+
+    if (status === 'FINALIZED') {
+      const hasMatchingFinalizedPayment = Array.isArray(payrolls) && payrolls.some((payroll) =>
+        isRecord(payroll) &&
+        payroll.accrualId === batch.id &&
+        payroll.accrualType === 'RETRO_ADJUSTMENT' &&
+        payroll.personelId === batch.personnelId &&
+        payroll.paymentDate === batch.paymentDate &&
+        payroll.status === 'FINALIZED'
+      );
+      if (!hasMatchingFinalizedPayment) {
+        // A legacy FINALIZED batch without its settlement event cannot be
+        // treated as paid. Keep the data for audit, but exclude it from the
+        // authoritative recognized ledger until it is replayed.
+        batch.status = 'STALE';
+        batch.settlementStatus = 'UNSETTLED';
+      }
+    }
+
     if (!hasOwn(batch, 'settlementStatus') || batch.settlementStatus === null) {
       const batchAllocations = Array.isArray(allocations)
         ? allocations.filter((allocation) =>
@@ -363,7 +386,7 @@ function canonicalizeLegacyRetroBatches(value: unknown, allocations: unknown): u
         );
       batch.settlementStatus = hasNegativeDelta
         ? 'OVERPAYMENT'
-        : status === 'FINALIZED'
+        : batch.status === 'FINALIZED'
           ? 'PAID'
           : 'UNSETTLED';
     }
@@ -463,7 +486,8 @@ function toCanonicalLegacyPayload(
   const retroAllocations = legacyValueOrDefault(parsed, 'retroAllocations', []);
   const retroBatches = canonicalizeLegacyRetroBatches(
     legacyValueOrDefault(parsed, 'retroBatches', []),
-    retroAllocations
+    retroAllocations,
+    payrolls
   );
 
   let aktifDonemId = legacyValueOrDefault(parsed, 'aktifDonemId', firstPeriodId(periods));

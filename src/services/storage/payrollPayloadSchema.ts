@@ -788,6 +788,81 @@ function retroCents(value: string, path: string): bigint {
   return negative ? -coefficient : coefficient;
 }
 
+const RETRO_PAYMENT_INCOME_KEYS = [
+  'tabanBrutAylik',
+  'tediye',
+  'tisIkramiyesi',
+  'ekOdeme',
+  'yemek',
+  'birlestirilmisSosyalYardim',
+  'vasitaYol',
+  'giyimYardimi',
+  'isPrimi',
+  'geceCalismasiUcreti',
+  'geceCalismasiTatiliUcreti',
+  'hizmetZammi',
+  'digerGelir',
+] as const;
+
+const RETRO_PAYMENT_DEDUCTION_KEYS = [
+  'isciSgkPrimi',
+  'isciIssizlikPrimi',
+  'gelirVergisi',
+  'damgaVergisi',
+  'sendikaAidati',
+  'bes',
+  'icra',
+  'kisiBorcu',
+  'dogumAskerlikBorclanmasi',
+  'hayatSaglikSigortasi',
+  'digerKesinti',
+] as const;
+
+function sumRetroPaymentFields(
+  record: UnknownRecord,
+  keys: readonly string[],
+  path: string
+): bigint {
+  return keys.reduce((sum, key) => {
+    const value = record[key];
+    if (value === undefined || value === null) return sum;
+    if (typeof value !== 'string') {
+      fail(fieldPath(path, key), 'retro parasal değeri exact Decimal metni olmalıdır.');
+    }
+    return sum + retroCents(value, fieldPath(path, key));
+  }, 0n);
+}
+
+function assertRetroPaymentFinancialTotals(
+  payroll: PayrollStorageDto['bordrolar'][number],
+  path: string
+): void {
+  const gross = sumRetroPaymentFields(
+    payroll.gelirler as unknown as UnknownRecord,
+    RETRO_PAYMENT_INCOME_KEYS,
+    `${path}.gelirler`
+  );
+  const deductions = sumRetroPaymentFields(
+    payroll.kesintiler as unknown as UnknownRecord,
+    RETRO_PAYMENT_DEDUCTION_KEYS,
+    `${path}.kesintiler`
+  );
+  const snapshotGross = retroCents(payroll.gelirToplam, `${path}.gelirToplam`);
+  const snapshotDeductions = retroCents(payroll.kesintiToplam, `${path}.kesintiToplam`);
+  const snapshotNet = retroCents(payroll.netOdeme, `${path}.netOdeme`);
+  const calculatedNet = gross - deductions;
+
+  if (gross < 0n || deductions < 0n || snapshotNet < 0n) {
+    fail(path, 'RETRO_ADJUSTMENT payment event finansal toplamları negatif olamaz.');
+  }
+  if (gross !== snapshotGross || deductions !== snapshotDeductions || calculatedNet !== snapshotNet) {
+    fail(
+      path,
+      `RETRO_ADJUSTMENT payment event finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor (hesap ${gross}/${deductions}/${calculatedNet}, snapshot ${snapshotGross}/${snapshotDeductions}/${snapshotNet}).`
+    );
+  }
+}
+
 function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
   const allocationsByBatch = new Map<string, Array<{ index: number; allocation: PayrollStorageDto['retroAllocations'][number] }>>();
   payload.retroAllocations.forEach((allocation, index) => {
@@ -1046,10 +1121,12 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
   payload.bordrolar
     .filter((payroll) => payroll.accrualType === 'RETRO_ADJUSTMENT')
     .forEach((payroll) => {
+      const payrollPath = `$.bordrolar[${payload.bordrolar.indexOf(payroll)}]`;
+      assertRetroPaymentFinancialTotals(payroll, payrollPath);
       const batch = batches.find((candidate) => candidate.id === payroll.accrualId);
       if (!batch) {
         fail(
-          `$.bordrolar[${payload.bordrolar.indexOf(payroll)}]`,
+          payrollPath,
           `retro payment event'i için batch bulunamadı: ${payroll.accrualId}.`
         );
       }
@@ -1058,7 +1135,7 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
         batch.paymentDate !== payroll.paymentDate
       )) {
         fail(
-          `$.bordrolar[${payload.bordrolar.indexOf(payroll)}]`,
+          payrollPath,
           'retro payment event batch personel/ödeme tarihiyle eşleşmiyor.'
         );
       }

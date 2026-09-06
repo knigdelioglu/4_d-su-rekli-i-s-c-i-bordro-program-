@@ -103,7 +103,11 @@ const EARNING_LABELS: Record<RetroEarningCode, string> = {
   OTHER: 'Diğer',
 };
 
-const PARAMETER_KEYS = Object.keys(PARAMETER_LABELS) as RetroParameterKey[];
+// Tediye/TİS ikramiyesi event-specific payments.  Until their exact payment
+// date and partial-period rules are modeled, the core rejects them instead of
+// applying one amount to every affected service period.
+const PARAMETER_KEYS = (Object.keys(PARAMETER_LABELS) as RetroParameterKey[])
+  .filter((key) => key !== 'TEDIYE' && key !== 'TIS_BONUS');
 
 function newId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {

@@ -1,4 +1,5 @@
 use super::{dec_to_kurus, kurus_to_dec};
+use crate::domain::calculations::{calculate_gelir_toplam, calculate_kesinti_toplam};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
@@ -101,6 +102,40 @@ impl PayrollRepository {
             return Err(DomainError::ValidationError(format!(
                 "{} bordrosunun ödeme tarihi {} dönem vergi ayı {:04}-{:02} ile eşleşmiyor.",
                 bordro.accrualId, bordro.paymentDate, tax_year, tax_month
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_retro_financial_totals(bordro: &BordroKaydi) -> Result<()> {
+        if bordro.accrualType != AccrualType::RETRO_ADJUSTMENT {
+            return Ok(());
+        }
+
+        let calculated_gross = calculate_gelir_toplam(&bordro.gelirler);
+        let calculated_deductions = calculate_kesinti_toplam(&bordro.kesintiler);
+        let calculated_net = (calculated_gross - calculated_deductions).round_dp(2);
+
+        if bordro.gelirToplam < Decimal::ZERO
+            || bordro.kesintiToplam < Decimal::ZERO
+            || bordro.netOdeme < Decimal::ZERO
+        {
+            return Err(DomainError::InvalidData(
+                "RETRO_ADJUSTMENT payment event finansal toplamları negatif olamaz.".into(),
+            ));
+        }
+        if calculated_gross != bordro.gelirToplam
+            || calculated_deductions != bordro.kesintiToplam
+            || calculated_net != bordro.netOdeme
+        {
+            return Err(DomainError::InvalidData(format!(
+                "RETRO_ADJUSTMENT payment event finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor (gelir {}, kesinti {}, net {}; snapshot gelir {}, kesinti {}, net {}).",
+                calculated_gross,
+                calculated_deductions,
+                calculated_net,
+                bordro.gelirToplam,
+                bordro.kesintiToplam,
+                bordro.netOdeme,
             )));
         }
         Ok(())
@@ -1002,6 +1037,7 @@ impl PayrollRepository {
     /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
         Self::validate_payment_date_matches_period(conn, b)?;
+        Self::validate_retro_financial_totals(b)?;
         let now = Utc::now().to_rfc3339();
         let calculated_at = if b.olusturulmaTarihi.trim().is_empty() {
             now.clone()

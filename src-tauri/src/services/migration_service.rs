@@ -227,7 +227,7 @@ impl MigrationService {
             personeller,
             kurumDegerleriMap,
             puantajlar,
-            bordrolar,
+            mut bordrolar,
             taxOpenings,
             sickLeaveRecords,
             annualPayrollParameters,
@@ -420,25 +420,63 @@ impl MigrationService {
                     .filter(|allocation| allocation.batchId == batch.id)
                     .cloned()
                     .collect::<Vec<_>>();
-                // V3 did not persist settlementStatus.  Its FINALIZED state
-                // was the only available indication that the retro event had
-                // been settled, so derive the new explicit state during the
-                // versioned compatibility import.  V4 remains strict and
-                // must carry the field explicitly through the current
-                // contract/validation path.
+                // V3 did not persist settlementStatus, and some V3 payloads
+                // contain the retro graph without the corresponding payment
+                // event.  Do not upgrade such a dangling FINALIZED batch to
+                // PAID: retain the graph for audit, but make it STALE so it
+                // cannot be counted as an authoritative entitlement on the
+                // next calculation.  Only a matching FINALIZED payment event
+                // can establish settlement during the compatibility import.
                 if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION
                     && batch.status == CompensationRevisionStatus::FINALIZED
-                    && batch.settlementStatus == RetroSettlementStatus::UNSETTLED
                 {
-                    batch.settlementStatus = if batch.totalGrossDelta < rust_decimal::Decimal::ZERO
-                        || batch_allocations
-                            .iter()
-                            .any(|allocation| allocation.deltaAmount < rust_decimal::Decimal::ZERO)
-                    {
-                        RetroSettlementStatus::OVERPAYMENT
-                    } else {
-                        RetroSettlementStatus::PAID
-                    };
+                    let has_matching_finalized_payment = bordrolar.as_ref().is_some_and(|payrolls| {
+                        payrolls.iter().any(|payroll| {
+                            payroll.accrualId == batch.id
+                                && payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
+                                && payroll.personelId == batch.personnelId
+                                && payroll.paymentDate == batch.paymentDate
+                                && payroll.status == BordroStatus::FINALIZED
+                        })
+                    });
+                    if !has_matching_finalized_payment {
+                        let linked_finalized_mismatch = bordrolar.as_ref().is_some_and(|payrolls| {
+                            payrolls.iter().any(|payroll| {
+                                payroll.accrualId == batch.id
+                                    && payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
+                                    && payroll.status == BordroStatus::FINALIZED
+                            })
+                        });
+                        if linked_finalized_mismatch {
+                            return Err(DomainError::InvalidData(format!(
+                                "V3 FINALIZED retro batch {} için bağlı FINALIZED payment event personel veya ödeme tarihiyle eşleşmiyor.",
+                                batch.id
+                            )));
+                        }
+                        if let Some(payrolls) = bordrolar.as_mut() {
+                            for payroll in payrolls.iter_mut().filter(|payroll| {
+                                payroll.accrualId == batch.id
+                                    && payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
+                            }) {
+                                // A non-final legacy event cannot remain in the
+                                // authoritative tax chain after its FINALIZED
+                                // batch is downgraded to an unsettled graph.
+                                payroll.status = BordroStatus::STALE;
+                            }
+                        }
+                        batch.status = CompensationRevisionStatus::STALE;
+                        batch.settlementStatus = RetroSettlementStatus::UNSETTLED;
+                    } else if batch.settlementStatus == RetroSettlementStatus::UNSETTLED {
+                        batch.settlementStatus = if batch.totalGrossDelta < rust_decimal::Decimal::ZERO
+                            || batch_allocations.iter().any(|allocation| {
+                                allocation.deltaAmount < rust_decimal::Decimal::ZERO
+                            })
+                        {
+                            RetroSettlementStatus::OVERPAYMENT
+                        } else {
+                            RetroSettlementStatus::PAID
+                        };
+                    }
                 }
                 crate::repositories::retro_repo::restore_batch_in_transaction(
                     conn,
