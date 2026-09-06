@@ -59,9 +59,7 @@ import {
   type PayrollStorageFields,
 } from './services/payrollEngine/decimalBoundary';
 import {
-  parseCurrentBrowserSnapshot,
   parseImportedBackup,
-  repairAndCanonicalizeBackup,
 } from './services/storage/payrollPayload';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { PeriodSummary } from './components/Dashboard/PeriodSummary';
@@ -314,19 +312,9 @@ export default function App() {
 
       const saved = await browserPayrollStore.loadPayload();
       if (saved) {
-        // IndexedDB may contain a pre-v3 backup or slightly malformed snapshot.
-        // Route through normalizer, and attempt safe canonical repair if strict parse fails.
-        let payload: PayrollStorageDto;
-        try {
-          payload = parseImportedBackup(saved);
-        } catch (strictError) {
-          const raw = JSON.parse(saved);
-          if (raw && typeof raw === 'object') {
-            payload = repairAndCanonicalizeBackup(raw as Record<string, unknown>);
-          } else {
-            throw strictError;
-          }
-        }
+        // Version-aware parsing keeps legacy compatibility explicit while a
+        // current V3 snapshot remains strict and never reaches repair logic.
+        const payload: PayrollStorageDto = parseImportedBackup(saved);
         applyDataset(payload);
       } else {
         applyDataset(toPayrollBoundaryDto({
