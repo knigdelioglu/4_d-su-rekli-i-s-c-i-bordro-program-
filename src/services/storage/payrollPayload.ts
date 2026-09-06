@@ -179,7 +179,7 @@ function legacyPaymentDate(periods: unknown, periodId: unknown): string {
     : monthEnd.toISOString().slice(0, 10);
 }
 
-function canonicalizeLegacyBordro(value: unknown, periods: unknown): unknown {
+function canonicalizeLegacyBordro(value: unknown, periods: unknown, version: number): unknown {
   if (!isRecord(value)) return value;
 
   const bordro = { ...value };
@@ -192,14 +192,27 @@ function canonicalizeLegacyBordro(value: unknown, periods: unknown): unknown {
       ? bordro.id
       : `${String(bordro.personelId || 'person')}_${String(bordro.donemId || 'period')}`;
   }
-  // Every pre-V3 backup had one person+period payroll. Even if a producer
-  // accidentally emitted partial accrual metadata, its only lossless meaning
-  // is the legacy NORMAL node.
-  bordro.accrualType = 'NORMAL';
-  if (!hasOwn(bordro, 'paymentDate') || bordro.paymentDate === null || bordro.paymentDate === '') {
-    bordro.paymentDate = legacyPaymentDate(periods, bordro.donemId);
+  // V1/V2 predate the multi-accrual contract and therefore have one
+  // person+period NORMAL node. V3 already carries independent payment-event
+  // identity; changing its type/sequence here would silently destroy a
+  // retro/TEDIYE/NORMAL chain during V4 upgrade.
+  if (version < 3) {
+    bordro.accrualType = 'NORMAL';
+    if (!hasOwn(bordro, 'paymentDate') || bordro.paymentDate === null || bordro.paymentDate === '') {
+      bordro.paymentDate = legacyPaymentDate(periods, bordro.donemId);
+    }
+    bordro.sequence = 0;
+  } else {
+    if (!hasOwn(bordro, 'accrualType') || bordro.accrualType === null || bordro.accrualType === '') {
+      bordro.accrualType = 'NORMAL';
+    }
+    if (!hasOwn(bordro, 'paymentDate') || bordro.paymentDate === null || bordro.paymentDate === '') {
+      bordro.paymentDate = legacyPaymentDate(periods, bordro.donemId);
+    }
+    if (!hasOwn(bordro, 'sequence') || bordro.sequence === null || bordro.sequence === '') {
+      bordro.sequence = 0;
+    }
   }
-  bordro.sequence = 0;
   if (!hasOwn(bordro, 'accrualDescription')) {
     bordro.accrualDescription = hasOwn(bordro, 'notlar') ? bordro.notlar : null;
   }
@@ -326,13 +339,49 @@ function canonicalizeLegacyPersonel(value: unknown): unknown {
   return personel;
 }
 
+function legacyAmountIsNegative(value: unknown): boolean {
+  return (typeof value === 'string' && value.trim().startsWith('-')) ||
+    (typeof value === 'number' && value < 0);
+}
+
+function canonicalizeLegacyRetroBatches(value: unknown, allocations: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => {
+    if (!isRecord(item)) return item;
+    const batch = { ...item };
+    const status = batch.status ?? 'DRAFT';
+    if (!hasOwn(batch, 'status') || batch.status === null) batch.status = status;
+    if (!hasOwn(batch, 'settlementStatus') || batch.settlementStatus === null) {
+      const batchAllocations = Array.isArray(allocations)
+        ? allocations.filter((allocation) =>
+            isRecord(allocation) && allocation.batchId === batch.id
+          )
+        : [];
+      const hasNegativeDelta = legacyAmountIsNegative(batch.totalGrossDelta) ||
+        batchAllocations.some((allocation) =>
+          isRecord(allocation) && legacyAmountIsNegative(allocation.deltaAmount)
+        );
+      batch.settlementStatus = hasNegativeDelta
+        ? 'OVERPAYMENT'
+        : status === 'FINALIZED'
+          ? 'PAID'
+          : 'UNSETTLED';
+    }
+    return batch;
+  });
+}
+
 function firstPeriodId(value: unknown): string {
   if (!Array.isArray(value)) return '';
   const first = value[0];
   return isRecord(first) && typeof first.id === 'string' ? first.id : '';
 }
 
-function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
+function toCanonicalLegacyPayload(
+  parsed: UnknownRecord,
+  pruneDanglingReferences: boolean
+): UnknownRecord {
+  const version = getBackupVersion(parsed);
   const rawPeriods = legacyValueOrDefault(parsed, 'donemler', []);
   const periods = Array.isArray(rawPeriods)
     ? rawPeriods.map(canonicalizeLegacyDonem)
@@ -356,20 +405,22 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
 
   const rawPayrolls = legacyValueOrDefault(parsed, 'bordrolar', []);
   const payrolls = Array.isArray(rawPayrolls)
-    ? rawPayrolls
+      ? rawPayrolls
         .filter(
           (payroll) =>
+            !pruneDanglingReferences ||
             !isRecord(payroll) ||
             ((!validPersonnelIds.size || validPersonnelIds.has(String(payroll.personelId))) &&
               (!validPeriodIds.size || validPeriodIds.has(String(payroll.donemId))))
         )
-        .map((payroll) => canonicalizeLegacyBordro(payroll, periods))
+        .map((payroll) => canonicalizeLegacyBordro(payroll, periods, version))
     : rawPayrolls;
 
   const rawPuantajlar = legacyValueOrDefault(parsed, 'puantajlar', []);
   const puantajlar = Array.isArray(rawPuantajlar)
-    ? rawPuantajlar.filter(
+      ? rawPuantajlar.filter(
         (pj) =>
+          !pruneDanglingReferences ||
           !isRecord(pj) ||
           ((!validPersonnelIds.size || validPersonnelIds.has(String(pj.personelId))) &&
             (!validPeriodIds.size || validPeriodIds.has(String(pj.donemId))))
@@ -378,8 +429,9 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
 
   const rawTaxOpenings = legacyValueOrDefault(parsed, 'taxOpenings', []);
   const taxOpenings = Array.isArray(rawTaxOpenings)
-    ? rawTaxOpenings.filter(
+      ? rawTaxOpenings.filter(
         (item) =>
+          !pruneDanglingReferences ||
           !isRecord(item) ||
           ((!validPersonnelIds.size || validPersonnelIds.has(String(item.personnelId))) &&
             (!validPeriodIds.size || validPeriodIds.has(String(item.effectiveFromPeriodId))))
@@ -388,8 +440,9 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
 
   const rawSickLeaves = legacyValueOrDefault(parsed, 'sickLeaveRecords', []);
   const sickLeaveRecords = Array.isArray(rawSickLeaves)
-    ? rawSickLeaves.filter(
+      ? rawSickLeaves.filter(
         (item) =>
+          !pruneDanglingReferences ||
           !isRecord(item) ||
           !validPersonnelIds.size ||
           validPersonnelIds.has(String(item.personnelId))
@@ -401,10 +454,23 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
     periods
   );
 
+  const compensationRevisions = legacyValueOrDefault(parsed, 'compensationRevisions', []);
+  const compensationRevisionOverrides = legacyValueOrDefault(
+    parsed,
+    'compensationRevisionOverrides',
+    []
+  );
+  const retroAllocations = legacyValueOrDefault(parsed, 'retroAllocations', []);
+  const retroBatches = canonicalizeLegacyRetroBatches(
+    legacyValueOrDefault(parsed, 'retroBatches', []),
+    retroAllocations
+  );
+
   let aktifDonemId = legacyValueOrDefault(parsed, 'aktifDonemId', firstPeriodId(periods));
   if (
-    typeof aktifDonemId !== 'string' ||
-    (validPeriodIds.size > 0 && !validPeriodIds.has(aktifDonemId))
+    pruneDanglingReferences &&
+    (typeof aktifDonemId !== 'string' ||
+      (validPeriodIds.size > 0 && !validPeriodIds.has(aktifDonemId)))
   ) {
     aktifDonemId = firstPeriodId(periods);
   }
@@ -424,6 +490,10 @@ function toCanonicalLegacyPayload(parsed: UnknownRecord): UnknownRecord {
     sickLeaveRecords,
     annualPayrollParameters,
     zamAylari: legacyValueOrDefault(parsed, 'zamAylari', []),
+    compensationRevisions,
+    compensationRevisionOverrides,
+    retroBatches,
+    retroAllocations,
   };
 }
 
@@ -433,7 +503,7 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   }
 
   // V2 was the previous exact-Decimal snapshot format. It is legacy with
-  // respect to V3's accrual metadata, but it must not pass through the V1
+  // respect to V4's accrual metadata, but it must not pass through the V1
   // numeric-repair adapter: a numeric V2 value is still an invalid Decimal.
   const version = getBackupVersion(raw);
   if (version >= 2 && (!hasOwn(raw, 'bordrolar') || !hasOwn(raw, 'personeller'))) {
@@ -448,7 +518,7 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   if (!isRecord(encodedLegacy)) {
     throw new Error('Legacy yedek canonical nesne içermiyor.');
   }
-  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(encodedLegacy));
+  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(encodedLegacy, false));
 }
 
 /**
@@ -460,7 +530,7 @@ export function repairAndCanonicalizeBackup(raw: UnknownRecord): PayrollStorageD
   if (!isRecord(converted)) {
     throw new Error('Kurtarılacak veri geçerli bir nesne değil.');
   }
-  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted));
+  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted, true));
 }
 
 /** Explicit structural/version predicate for legacy localStorage or imports. */
@@ -500,7 +570,7 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   const version = getBackupVersion(raw);
 
   if (version === BACKUP_FORMAT_VERSION) {
-    // A versioned V3 backup is current data. It must never reach the legacy
+    // A versioned V4 backup is current data. It must never reach the legacy
     // repair path, even when its malformed values resemble an older backup.
     return parseCurrentBrowserSnapshot(json);
   }

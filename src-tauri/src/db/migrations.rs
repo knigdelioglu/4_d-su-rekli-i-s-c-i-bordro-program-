@@ -1,5 +1,5 @@
 use rusqlite::{Connection, OptionalExtension};
-use rusqlite_migration::{Migrations, M};
+use rusqlite_migration::{HookError, Migrations, M};
 use std::collections::HashSet;
 
 // rusqlite_migration addresses the seventh entry in this list as
@@ -500,6 +500,157 @@ pub fn get_migrations() -> Migrations<'static> {
                     error.to_string(),
                 )))
             })?;
+            Ok(())
+        }),
+        M::up(
+            r#"
+            CREATE TABLE IF NOT EXISTS compensation_revisions (
+                id TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                title TEXT NOT NULL,
+                effective_from TEXT NOT NULL,
+                effective_to TEXT,
+                decision_date TEXT,
+                signed_at TEXT,
+                description TEXT,
+                status TEXT NOT NULL DEFAULT 'DRAFT',
+                scope TEXT NOT NULL DEFAULT 'ALL_PERSONNEL',
+                personnel_ids_json TEXT NOT NULL DEFAULT '[]',
+                personnel_group TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS compensation_revision_overrides (
+                id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL REFERENCES compensation_revisions(id) ON DELETE CASCADE,
+                parameter TEXT NOT NULL,
+                value INTEGER NOT NULL,
+                personnel_id TEXT REFERENCES personnel(id) ON DELETE RESTRICT,
+                UNIQUE(revision_id, parameter, personnel_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS retro_adjustment_batches (
+                id TEXT PRIMARY KEY,
+                revision_id TEXT NOT NULL REFERENCES compensation_revisions(id) ON DELETE RESTRICT,
+                personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE RESTRICT,
+                payment_date TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'CALCULATED',
+                settlement_status TEXT NOT NULL DEFAULT 'UNSETTLED',
+                total_gross_delta INTEGER NOT NULL,
+                description TEXT,
+                created_at TEXT,
+                calculated_at TEXT,
+                finalized_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS retro_adjustment_allocations (
+                id TEXT PRIMARY KEY,
+                batch_id TEXT NOT NULL REFERENCES retro_adjustment_batches(id) ON DELETE CASCADE,
+                personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE RESTRICT,
+                source_period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE RESTRICT,
+                earning_code TEXT NOT NULL,
+                original_recognized_amount INTEGER NOT NULL,
+                previous_retro_amount INTEGER NOT NULL DEFAULT 0,
+                target_amount INTEGER NOT NULL,
+                delta_amount INTEGER NOT NULL,
+                sgk_treatment TEXT NOT NULL,
+                income_tax_treatment TEXT NOT NULL,
+                stamp_tax_treatment TEXT NOT NULL,
+                original_pek INTEGER NOT NULL DEFAULT 0,
+                retro_pek_delta INTEGER NOT NULL DEFAULT 0,
+                adjusted_pek INTEGER NOT NULL DEFAULT 0,
+                worker_sgk_delta INTEGER NOT NULL DEFAULT 0,
+                worker_unemployment_delta INTEGER NOT NULL DEFAULT 0,
+                employer_sgk_delta INTEGER NOT NULL DEFAULT 0,
+                employer_unemployment_delta INTEGER NOT NULL DEFAULT 0,
+                metadata TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_compensation_revision_overrides_revision
+                ON compensation_revision_overrides(revision_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_compensation_revision_overrides_unique_scope
+                ON compensation_revision_overrides(revision_id, parameter, COALESCE(personnel_id, ''));
+            CREATE INDEX IF NOT EXISTS idx_retro_batches_personnel_payment
+                ON retro_adjustment_batches(personnel_id, payment_date, id);
+            -- This index is intentionally non-unique. A single revision may
+            -- receive multiple recalculated/authoritative corrections as new
+            -- source information arrives; the batch id is the idempotency key.
+            CREATE INDEX IF NOT EXISTS idx_retro_batches_revision_personnel_active
+                ON retro_adjustment_batches(revision_id, personnel_id)
+                WHERE status IN ('DRAFT', 'CALCULATED', 'FINALIZED');
+            CREATE INDEX IF NOT EXISTS idx_retro_allocations_source
+                ON retro_adjustment_allocations(personnel_id, source_period_id, earning_code);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_retro_allocations_batch_source_code
+                ON retro_adjustment_allocations(batch_id, source_period_id, earning_code);
+            "#,
+        ),
+        M::up(
+            r#"
+            -- One revision may need multiple authoritative corrections as new
+            -- source information arrives. The batch id remains the idempotency
+            -- key; revision/personnel is deliberately not unique.
+            DROP INDEX IF EXISTS idx_retro_batches_revision_personnel_active;
+            CREATE INDEX IF NOT EXISTS idx_retro_batches_revision_personnel
+                ON retro_adjustment_batches(revision_id, personnel_id, payment_date, id);
+            "#,
+        ),
+        M::up_with_hook("SELECT 1;", |tx| {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('retro_adjustment_batches') WHERE name = 'settlement_status'",
+                [],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                tx.execute(
+                    "ALTER TABLE retro_adjustment_batches ADD COLUMN settlement_status TEXT NOT NULL DEFAULT 'UNSETTLED'",
+                    [],
+                )?;
+            }
+            // Backfill the explicit state for pre-settlement rows without
+            // trusting a missing/old application to have stored it.
+            tx.execute(
+                "UPDATE retro_adjustment_batches
+                 SET settlement_status = CASE
+                     WHEN total_gross_delta < 0
+                       OR EXISTS (
+                         SELECT 1 FROM retro_adjustment_allocations allocation
+                         WHERE allocation.batch_id = retro_adjustment_batches.id
+                           AND allocation.delta_amount < 0
+                       ) THEN 'OVERPAYMENT'
+                     WHEN status = 'FINALIZED' AND EXISTS (
+                         SELECT 1 FROM payroll_records payroll
+                         WHERE payroll.accrual_id = retro_adjustment_batches.id
+                           AND payroll.accrual_type = 'RETRO_ADJUSTMENT'
+                           AND payroll.status = 'FINALIZED'
+                           AND payroll.personnel_id = retro_adjustment_batches.personnel_id
+                           AND payroll.payment_date = retro_adjustment_batches.payment_date
+                           AND payroll.gross_total = retro_adjustment_batches.total_gross_delta
+                     ) THEN 'PAID'
+                     ELSE 'UNSETTLED'
+                 END",
+                [],
+            )?;
+            let invalid_finalized: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM retro_adjustment_batches
+                     WHERE status = 'FINALIZED' AND settlement_status <> 'PAID'
+                     LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(batch_id) = invalid_finalized {
+                return Err(HookError::RusqliteError(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "FINALIZED retro batch {} için matching FINALIZED payment event bulunamadı; migration fail-closed durduruldu.",
+                            batch_id
+                        ),
+                    ),
+                ))));
+            }
             Ok(())
         }),
     ])

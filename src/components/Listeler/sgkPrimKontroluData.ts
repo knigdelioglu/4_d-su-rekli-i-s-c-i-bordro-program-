@@ -3,6 +3,8 @@ import type {
   BordroKaydi,
   DönemselKurumDegerleri,
   Personel,
+  RetroAdjustmentBatch,
+  RetroAllocation,
 } from '../../types/payroll';
 import { isAuthoritativePayroll } from './accrualListData';
 import { DEFAULT_KURUM_DEGERLERI } from '../../utils/payrollPresentation';
@@ -27,6 +29,8 @@ export interface SgkPrimKontroluRow {
   isverenIssizlikPrimi: number;
   isciSgkPrimi: number;
   isciIssizlikPrimi: number;
+  /** Source-period PEK added by authoritative retro allocations. */
+  retroPekDelta: number;
   pekAltSinirTamamlamaIsverenPrimi: number;
   dortPrimToplami: number;
   toplam: number;
@@ -240,6 +244,58 @@ interface SgkSnapshotKurus {
   pekAltSinirTamamlamaIsverenPrimi: number;
 }
 
+interface RetroLedgerKurus {
+  retroPekDelta: number;
+  isverenSgkPrimi: number;
+  isverenIssizlikPrimi: number;
+  isciSgkPrimi: number;
+  isciIssizlikPrimi: number;
+}
+
+const EMPTY_RETRO_LEDGER: RetroLedgerKurus = {
+  retroPekDelta: 0,
+  isverenSgkPrimi: 0,
+  isverenIssizlikPrimi: 0,
+  isciSgkPrimi: 0,
+  isciIssizlikPrimi: 0,
+};
+
+function getRetroLedgerKurus(
+  periodId: string,
+  personnelId: string,
+  batches: RetroAdjustmentBatch[],
+  allocations: RetroAllocation[]
+): RetroLedgerKurus {
+  const authoritativeBatchIds = new Set(
+    batches
+      .filter(
+        (batch) =>
+          batch.personnelId === personnelId &&
+          (batch.status === 'CALCULATED' || batch.status === 'FINALIZED')
+      )
+      .map((batch) => batch.id)
+  );
+  return allocations
+    .filter(
+      (allocation) =>
+        allocation.personnelId === personnelId &&
+        allocation.sourcePeriodId === periodId &&
+        authoritativeBatchIds.has(allocation.batchId)
+    )
+    .reduce(
+      (totals, allocation) => ({
+        retroPekDelta: totals.retroPekDelta + amountToKurus(allocation.retroPekDelta),
+        isverenSgkPrimi: totals.isverenSgkPrimi + amountToKurus(allocation.employerSgkDelta),
+        isverenIssizlikPrimi:
+          totals.isverenIssizlikPrimi + amountToKurus(allocation.employerUnemploymentDelta),
+        isciSgkPrimi: totals.isciSgkPrimi + amountToKurus(allocation.workerSgkDelta),
+        isciIssizlikPrimi:
+          totals.isciIssizlikPrimi + amountToKurus(allocation.workerUnemploymentDelta),
+      }),
+      { ...EMPTY_RETRO_LEDGER }
+    );
+}
+
 function getSgkSnapshotKurus(payroll: BordroKaydi): SgkSnapshotKurus | null {
   if (!hasCompleteSgkSnapshot(payroll)) return null;
 
@@ -300,7 +356,9 @@ function getRateCandidates(authoritativePayrolls: BordroKaydi[]): SgkPrimKontrol
 export function getSgkPrimKontroluRows(
   period: BordroDonemi,
   personnel: Personel[],
-  payrolls: BordroKaydi[]
+  payrolls: BordroKaydi[],
+  retroBatches: RetroAdjustmentBatch[] = [],
+  retroAllocations: RetroAllocation[] = []
 ): SgkPrimKontroluRow[] {
   const payrollsByPerson = new Map<string, BordroKaydi[]>();
 
@@ -319,18 +377,36 @@ export function getSgkPrimKontroluRows(
     const hasDraftPayroll = personPayrolls.some((payroll) => payroll.status === 'DRAFT');
     const snapshots = authoritativePayrolls.map(getSgkSnapshotKurus);
     const hasMissingSnapshot = snapshots.some((snapshot) => snapshot === null);
+    const retroLedger = getRetroLedgerKurus(
+      period.id,
+      personel.id,
+      retroBatches,
+      retroAllocations
+    );
+    const hasAuthoritativeSourcePayroll =
+      authoritativePayrolls.length > 0 && !hasMissingSnapshot;
     const status: SgkPrimKontroluRowStatus = hasStalePayroll
       ? 'stale'
       : hasMissingSnapshot
         ? 'missingSnapshot'
         : hasDraftPayroll
           ? 'draft'
-          : authoritativePayrolls.length > 0
+          : hasAuthoritativeSourcePayroll
             ? 'authoritative'
             : 'notCalculated';
+    const baseSnapshotTotals = sumSnapshotValues(
+      snapshots.filter((snapshot): snapshot is SgkSnapshotKurus => snapshot !== null)
+    );
     const snapshotTotals =
       status === 'authoritative'
-        ? sumSnapshotValues(snapshots.filter((snapshot): snapshot is SgkSnapshotKurus => snapshot !== null))
+        ? {
+            ...baseSnapshotTotals,
+            isverenSgkPrimi: baseSnapshotTotals.isverenSgkPrimi + retroLedger.isverenSgkPrimi,
+            isverenIssizlikPrimi:
+              baseSnapshotTotals.isverenIssizlikPrimi + retroLedger.isverenIssizlikPrimi,
+            isciSgkPrimi: baseSnapshotTotals.isciSgkPrimi + retroLedger.isciSgkPrimi,
+            isciIssizlikPrimi: baseSnapshotTotals.isciIssizlikPrimi + retroLedger.isciIssizlikPrimi,
+          }
         : { ...EMPTY_SNAPSHOT_TOTALS };
 
     const isverenSgkPrimi = kurusToAmount(snapshotTotals.isverenSgkPrimi);
@@ -360,6 +436,7 @@ export function getSgkPrimKontroluRows(
       isverenIssizlikPrimi,
       isciSgkPrimi,
       isciIssizlikPrimi,
+      retroPekDelta: kurusToAmount(retroLedger.retroPekDelta),
       pekAltSinirTamamlamaIsverenPrimi,
       dortPrimToplami,
       toplam: sgkMutabakatToplami,
@@ -550,6 +627,7 @@ export function buildSgkPrimKontroluExcelPayload(
     { header: rateLabels.isverenIssizlik, key: 'isverenIssizlikPrimi', width: 20 },
     { header: rateLabels.isciSgk, key: 'isciSgkPrimi', width: 18 },
     { header: rateLabels.isciIssizlik, key: 'isciIssizlikPrimi', width: 18 },
+    { header: 'Retro kaynak PEK farkı', key: 'retroPekDelta', width: 20 },
     {
       header: 'PEK Alt Sınır İşveren Tamamlama',
       key: 'pekAltSinirTamamlamaIsverenPrimi',
@@ -570,6 +648,7 @@ export function buildSgkPrimKontroluExcelPayload(
       isverenIssizlikPrimi: isReady ? row.isverenIssizlikPrimi : '',
       isciSgkPrimi: isReady ? row.isciSgkPrimi : '',
       isciIssizlikPrimi: isReady ? row.isciIssizlikPrimi : '',
+      retroPekDelta: isReady ? row.retroPekDelta : '',
       pekAltSinirTamamlamaIsverenPrimi: isReady
         ? row.pekAltSinirTamamlamaIsverenPrimi
         : '',
@@ -587,6 +666,7 @@ export function buildSgkPrimKontroluExcelPayload(
     isverenIssizlikPrimi: '',
     isciSgkPrimi: '',
     isciIssizlikPrimi: '',
+    retroPekDelta: '',
     pekAltSinirTamamlamaIsverenPrimi: '',
     toplam: '',
   });

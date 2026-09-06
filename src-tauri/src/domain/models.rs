@@ -209,6 +209,248 @@ pub enum AccrualType {
     TEDIYE,
     TIS_IKRAMIYE,
     SUPPLEMENTAL,
+    RETRO_ADJUSTMENT,
+}
+
+/// A revision changes the entitlement rules for an already served period. It
+/// is deliberately separate from an accrual/payment event: signing a
+/// collective agreement does not itself create a payment.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum CompensationRevisionReason {
+    #[serde(rename = "COLLECTIVE_AGREEMENT")]
+    COLLECTIVE_AGREEMENT,
+    #[serde(rename = "ADMINISTRATIVE_DECISION")]
+    ADMINISTRATIVE_DECISION,
+    #[serde(rename = "COURT_DECISION")]
+    COURT_DECISION,
+    #[serde(rename = "PAY_CORRECTION")]
+    PAY_CORRECTION,
+    #[serde(rename = "MISSING_ACCRUAL")]
+    MISSING_ACCRUAL,
+    #[serde(rename = "OTHER")]
+    OTHER,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum CompensationRevisionStatus {
+    #[default]
+    #[serde(rename = "DRAFT")]
+    DRAFT,
+    #[serde(rename = "CALCULATED")]
+    CALCULATED,
+    #[serde(rename = "STALE")]
+    STALE,
+    #[serde(rename = "FINALIZED")]
+    FINALIZED,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum CompensationRevisionScope {
+    #[default]
+    #[serde(rename = "ALL_PERSONNEL")]
+    ALL_PERSONNEL,
+    #[serde(rename = "SELECTED_PERSONNEL")]
+    SELECTED_PERSONNEL,
+    #[serde(rename = "PERSONNEL_GROUP")]
+    PERSONNEL_GROUP,
+}
+
+/// Settlement state is separate from the batch lifecycle. A calculated batch
+/// can legitimately be an overpayment correction and therefore must remain
+/// auditable without being mistaken for a payable event.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum RetroSettlementStatus {
+    #[default]
+    #[serde(rename = "UNSETTLED")]
+    UNSETTLED,
+    #[serde(rename = "PAID")]
+    PAID,
+    #[serde(rename = "OVERPAYMENT")]
+    OVERPAYMENT,
+}
+
+/// Only contractual/operational compensation inputs are representable here.
+/// Statutory inputs (minimum wage, SGK/GV/DV rates, PEK ceiling, tax brackets)
+/// intentionally have no variants and therefore cannot be overridden by a
+/// revision payload.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RetroParameterKey {
+    #[serde(rename = "GUNLUK_TABAN_UCRET")]
+    GUNLUK_TABAN_UCRET,
+    #[serde(rename = "GUNLUK_YEMEK")]
+    GUNLUK_YEMEK,
+    #[serde(rename = "BIRLESTIRILMIS_SOSYAL_YARDIM")]
+    BIRLESTIRILMIS_SOSYAL_YARDIM,
+    #[serde(rename = "GUNLUK_VASITA_YOL")]
+    GUNLUK_VASITA_YOL,
+    #[serde(rename = "GIYIM_YARDIMI")]
+    GIYIM_YARDIMI,
+    #[serde(rename = "HIZMET_ZAMMI_BIRIMI")]
+    HIZMET_ZAMMI_BIRIMI,
+    #[serde(rename = "IS_PRIMI_YUZDE")]
+    IS_PRIMI_YUZDE,
+    #[serde(rename = "GECE_CALISMA_PRIMI_YUZDE")]
+    GECE_CALISMA_PRIMI_YUZDE,
+    #[serde(rename = "GECE_CALISMA_TATILI_PRIMI_YUZDE")]
+    GECE_CALISMA_TATILI_PRIMI_YUZDE,
+    #[serde(rename = "EK_ODEME")]
+    EK_ODEME,
+    #[serde(rename = "DIGER_GELIR")]
+    DIGER_GELIR,
+    #[serde(rename = "TEDIYE")]
+    TEDIYE,
+    #[serde(rename = "TIS_BONUS")]
+    TIS_BONUS,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RetroEarningCode {
+    #[serde(rename = "BASE_WAGE")]
+    BASE_WAGE,
+    #[serde(rename = "NIGHT_WORK")]
+    NIGHT_WORK,
+    #[serde(rename = "NIGHT_HOLIDAY")]
+    NIGHT_HOLIDAY,
+    #[serde(rename = "WORK_PREMIUM")]
+    WORK_PREMIUM,
+    #[serde(rename = "SOCIAL_AID")]
+    SOCIAL_AID,
+    #[serde(rename = "MEAL")]
+    MEAL,
+    #[serde(rename = "TRANSPORT")]
+    TRANSPORT,
+    #[serde(rename = "CLOTHING")]
+    CLOTHING,
+    #[serde(rename = "SERVICE_INCREMENT")]
+    SERVICE_INCREMENT,
+    #[serde(rename = "TIS_BONUS")]
+    TIS_BONUS,
+    #[serde(rename = "TEDIYE")]
+    TEDIYE,
+    #[serde(rename = "SUPPLEMENTAL")]
+    SUPPLEMENTAL,
+    #[serde(rename = "OTHER")]
+    OTHER,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum RetroTaxTreatment {
+    #[serde(rename = "TAXABLE")]
+    TAXABLE,
+    #[serde(rename = "EXEMPT")]
+    EXEMPT,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum RetroSgkTreatment {
+    #[serde(rename = "WAGE_SOURCE_MONTH")]
+    WAGE_SOURCE_MONTH,
+    #[serde(rename = "NON_WAGE_PAYMENT_MONTH")]
+    NON_WAGE_PAYMENT_MONTH,
+    #[serde(rename = "NON_WAGE_CARRY")]
+    NON_WAGE_CARRY,
+    #[serde(rename = "EXEMPT")]
+    EXEMPT,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompensationRevision {
+    pub id: String,
+    pub reason: CompensationRevisionReason,
+    pub title: String,
+    pub effectiveFrom: String,
+    #[serde(default)]
+    pub effectiveTo: Option<String>,
+    #[serde(default)]
+    pub decisionDate: Option<String>,
+    #[serde(default)]
+    pub signedAt: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub status: CompensationRevisionStatus,
+    #[serde(default)]
+    pub scope: CompensationRevisionScope,
+    #[serde(default)]
+    pub personnelIds: Vec<String>,
+    #[serde(default)]
+    pub personnelGroup: Option<String>,
+    #[serde(default)]
+    pub createdAt: Option<String>,
+    #[serde(default)]
+    pub updatedAt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompensationRevisionOverride {
+    pub id: String,
+    pub revisionId: String,
+    pub parameter: RetroParameterKey,
+    pub value: Decimal,
+    #[serde(default)]
+    pub personnelId: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetroAdjustmentBatch {
+    pub id: String,
+    pub revisionId: String,
+    pub personnelId: String,
+    pub paymentDate: String,
+    #[serde(default)]
+    pub status: CompensationRevisionStatus,
+    #[serde(default)]
+    pub settlementStatus: RetroSettlementStatus,
+    pub totalGrossDelta: Decimal,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub createdAt: Option<String>,
+    #[serde(default)]
+    pub calculatedAt: Option<String>,
+    #[serde(default)]
+    pub finalizedAt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetroAllocation {
+    pub id: String,
+    pub batchId: String,
+    pub personnelId: String,
+    pub sourcePeriodId: String,
+    pub earningCode: RetroEarningCode,
+    /// Amount already recognized by the original/legacy payroll events.
+    pub originalRecognizedAmount: Decimal,
+    /// Amount recognized by earlier authoritative retro batches.
+    #[serde(default)]
+    pub previousAuthoritativeRetroAmount: Decimal,
+    pub targetAmount: Decimal,
+    pub deltaAmount: Decimal,
+    pub sgkTreatment: RetroSgkTreatment,
+    pub incomeTaxTreatment: RetroTaxTreatment,
+    pub stampTaxTreatment: RetroTaxTreatment,
+    /// Source-month PEK ledger snapshot. These are never written back to the
+    /// original payroll record.
+    #[serde(default)]
+    pub originalPek: Decimal,
+    #[serde(default)]
+    pub retroPekDelta: Decimal,
+    #[serde(default)]
+    pub adjustedPek: Decimal,
+    #[serde(default)]
+    pub workerSgkDelta: Decimal,
+    #[serde(default)]
+    pub workerUnemploymentDelta: Decimal,
+    #[serde(default)]
+    pub employerSgkDelta: Decimal,
+    #[serde(default)]
+    pub employerUnemploymentDelta: Decimal,
+    #[serde(default)]
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

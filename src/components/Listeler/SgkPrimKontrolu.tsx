@@ -1,6 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, ShieldCheck } from 'lucide-react';
-import type { BordroDonemi, BordroKaydi, DönemselKurumDegerleri, Personel } from '../../types/payroll';
+import type {
+  BordroDonemi,
+  BordroKaydi,
+  DönemselKurumDegerleri,
+  Personel,
+  RetroAdjustmentBatch,
+  RetroAllocation,
+} from '../../types/payroll';
 import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel } from '../../utils/excelExport';
 import {
@@ -18,6 +25,8 @@ interface SgkPrimKontroluProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   bordrolar: BordroKaydi[];
+  retroBatches: RetroAdjustmentBatch[];
+  retroAllocations: RetroAllocation[];
   kurumDegerleri?: DönemselKurumDegerleri;
 }
 
@@ -38,6 +47,8 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
   aktifDonem,
   personeller,
   bordrolar,
+  retroBatches,
+  retroAllocations,
   kurumDegerleri,
 }) => {
   const [sgkTutarInput, setSgkTutarInput] = useState('');
@@ -47,8 +58,8 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
   }, [aktifDonem.id]);
 
   const rows = useMemo(
-    () => getSgkPrimKontroluRows(aktifDonem, personeller, bordrolar),
-    [aktifDonem, personeller, bordrolar]
+    () => getSgkPrimKontroluRows(aktifDonem, personeller, bordrolar, retroBatches, retroAllocations),
+    [aktifDonem, personeller, bordrolar, retroBatches, retroAllocations]
   );
   const totals = useMemo(() => getSgkPrimKontroluTotals(rows), [rows]);
   const rateLabels = useMemo(
@@ -153,6 +164,7 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
                 <th scope="col" className="p-3 text-right">{rateLabels.isverenIssizlik}</th>
                 <th scope="col" className="p-3 text-right">{rateLabels.isciSgk}</th>
                 <th scope="col" className="p-3 text-right">{rateLabels.isciIssizlik}</th>
+                <th scope="col" className="p-3 text-right">Retro kaynak PEK farkı</th>
                 <th scope="col" className="p-3 text-right">PEK Alt Sınır İşveren Tamamlama</th>
                 <th scope="col" className="p-3 text-right">Toplam</th>
               </tr>
@@ -180,13 +192,14 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenIssizlikPrimi)}</td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciSgkPrimi)}</td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciIssizlikPrimi)}</td>
+                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.retroPekDelta)}</td>
                   <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.pekAltSinirTamamlamaIsverenPrimi)}</td>
                   <td className="p-3 text-right font-mono text-sm font-bold tabular-nums text-indigo-900">{displayAmount(row, row.toplam)}</td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={11} className="p-8 text-center font-sans italic text-slate-500">
+                  <td colSpan={12} className="p-8 text-center font-sans italic text-slate-500">
                     Bu dönem için kayıtlı personel bulunmamaktadır.
                   </td>
                 </tr>

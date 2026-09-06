@@ -10,7 +10,12 @@ import {
   SickLeaveRecord,
   ManualPayrollIncomeInput,
   PayrollAccrualInput,
+  CompensationRevision,
+  CompensationRevisionOverride,
+  RetroAdjustmentBatch,
+  RetroAllocation,
 } from '../types/payroll';
+import type { RetroCalculationRequest, RetroCalculationResult } from './payrollEngine/types';
 import { PayrollNotice } from '../types/payrollNotice';
 import { decodeDecimalValues, encodeDecimalValues } from './payrollEngine/decimalBoundary';
 import type { MutationImpact, PayrollMutation } from './payrollEngine/types';
@@ -209,5 +214,67 @@ export const tauriBridge = {
 
   async deleteSickLeaveRecord(id: string): Promise<void> {
     return mutateTauri<void>('delete_sick_leave_record', { id });
+  },
+
+  async getCompensationRevisions(): Promise<CompensationRevision[]> {
+    return invokeTauri<CompensationRevision[]>('get_compensation_revisions');
+  },
+
+  async getCompensationRevisionOverrides(): Promise<CompensationRevisionOverride[]> {
+    return invokeTauri<CompensationRevisionOverride[]>('get_compensation_revision_overrides');
+  },
+
+  async getRetroAdjustmentBatches(): Promise<RetroAdjustmentBatch[]> {
+    return invokeTauri<RetroAdjustmentBatch[]>('get_retro_adjustment_batches');
+  },
+
+  async getRetroAdjustmentAllocations(): Promise<RetroAllocation[]> {
+    return invokeTauri<RetroAllocation[]>('get_retro_adjustment_allocations');
+  },
+
+  async saveCompensationRevision(
+    revision: CompensationRevision,
+    overrides: CompensationRevisionOverride[]
+  ): Promise<void> {
+    return mutateTauri<void>('save_compensation_revision', {
+      revision: encodeDecimalValues(revision),
+      overrides: encodeDecimalValues(overrides),
+    });
+  },
+
+  async calculateRetroPreview(request: RetroCalculationRequest): Promise<RetroCalculationResult> {
+    return invokeTauri<RetroCalculationResult>('calculate_retro_preview', {
+      batchId: request.batchId,
+      revision: encodeDecimalValues(request.revision),
+      overrides: encodeDecimalValues(request.overrides),
+      personnelId: request.personnelId,
+      paymentDate: request.paymentDate,
+      calculatedAt: request.calculatedAt,
+      description: request.description ?? null,
+    });
+  },
+
+  async saveRetroAdjustmentBatch(
+    batch: RetroAdjustmentBatch,
+    allocations: RetroAllocation[]
+  ): Promise<void> {
+    return mutateTauri<void>('save_retro_adjustment_batch', {
+      batch: encodeDecimalValues(batch),
+      allocations: encodeDecimalValues(allocations),
+    });
+  },
+
+  async createRetroPayment(
+    batch: RetroAdjustmentBatch,
+    allocations: RetroAllocation[],
+    paymentPeriodId: string,
+    sequence: number
+  ): Promise<BordroKaydi> {
+    return mutateTauri<BordroKaydi>('create_retro_payment', {
+      batch: encodeDecimalValues(batch),
+      allocations: encodeDecimalValues(allocations),
+      paymentPeriodId,
+      sequence,
+    });
   },
 };

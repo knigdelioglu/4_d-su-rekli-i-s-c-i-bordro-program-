@@ -28,6 +28,7 @@ const accrualTypeLabels: Record<BordroKaydi['accrualType'], string> = {
   TEDIYE: 'Tediye',
   TIS_IKRAMIYE: 'TİS İkramiyesi',
   SUPPLEMENTAL: 'Ek Ödeme',
+  RETRO_ADJUSTMENT: 'Geriye Dönük Fark',
 };
 
 interface PayrollFinalizeModalProps {

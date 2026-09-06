@@ -16,6 +16,7 @@ import {
   ChevronRight,
   Clock,
   FileText,
+  FileClock,
   Gift,
   HardDrive,
   HeartPulse,
@@ -285,6 +286,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
               )}
             </div>
+
+            <button
+              type="button"
+              data-testid="nav-retro"
+              onClick={() => {
+                onTabChange('retro');
+                onClose();
+              }}
+              aria-current={activeTab === 'retro' ? 'page' : undefined}
+              className={groupButtonClass(activeTab === 'retro')}
+            >
+              <FileClock
+                aria-hidden="true"
+                className={`h-4 w-4 shrink-0 ${activeTab === 'retro' ? 'text-indigo-600' : 'text-slate-400 group-hover:text-indigo-600'}`}
+              />
+              <span>Geriye Dönük Farklar</span>
+            </button>
 
             <div className="px-3 pb-1 pt-4 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
               Listeler

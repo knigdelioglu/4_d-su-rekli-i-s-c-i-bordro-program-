@@ -296,11 +296,11 @@ export interface SickLeaveRecord {
   updatedAt?: string;
 }
 
-export const BACKUP_FORMAT_VERSION = 3;
+export const BACKUP_FORMAT_VERSION = 4;
 /** Native app_settings anahtarı: kurum genelinde zam yürürlük ayları (1-12). */
 export const ZAM_AYLARI_SETTING_KEY = 'zam_aylari';
 
-/** JSON yedek sözleşmesi. V3, SQLite'daki tüm kullanıcı verisini kapsar. */
+/** JSON yedek sözleşmesi. V4, SQLite'daki tüm kullanıcı verisini kapsar. */
 export interface BackupPayload {
   backupVersion: number;
   exportedAt: string;
@@ -315,6 +315,11 @@ export interface BackupPayload {
   annualPayrollParameters: AnnualPayrollParameters[];
   /** Kurum genelinde zam yürürlük ayları; seçilen ayın 1'i esas alınır. */
   zamAylari: number[];
+  /** V4 retro graph; V3 is adapted through the legacy compatibility path. */
+  compensationRevisions: CompensationRevision[];
+  compensationRevisionOverrides: CompensationRevisionOverride[];
+  retroBatches: RetroAdjustmentBatch[];
+  retroAllocations: RetroAllocation[];
 }
 
 export type PuantajOzeti = Record<PuantajKodu, number>;
@@ -333,7 +338,127 @@ export interface ManualPayrollIncomeInput {
   tisIkramiyesi?: number | null;
 }
 
-export type AccrualType = 'NORMAL' | 'TEDIYE' | 'TIS_IKRAMIYE' | 'SUPPLEMENTAL';
+export type AccrualType =
+  | 'NORMAL'
+  | 'TEDIYE'
+  | 'TIS_IKRAMIYE'
+  | 'SUPPLEMENTAL'
+  | 'RETRO_ADJUSTMENT';
+
+export type CompensationRevisionReason =
+  | 'COLLECTIVE_AGREEMENT'
+  | 'ADMINISTRATIVE_DECISION'
+  | 'COURT_DECISION'
+  | 'PAY_CORRECTION'
+  | 'MISSING_ACCRUAL'
+  | 'OTHER';
+
+export type CompensationRevisionStatus = 'DRAFT' | 'CALCULATED' | 'STALE' | 'FINALIZED';
+export type CompensationRevisionScope =
+  | 'ALL_PERSONNEL'
+  | 'SELECTED_PERSONNEL'
+  | 'PERSONNEL_GROUP';
+
+export type RetroParameterKey =
+  | 'GUNLUK_TABAN_UCRET'
+  | 'GUNLUK_YEMEK'
+  | 'BIRLESTIRILMIS_SOSYAL_YARDIM'
+  | 'GUNLUK_VASITA_YOL'
+  | 'GIYIM_YARDIMI'
+  | 'HIZMET_ZAMMI_BIRIMI'
+  | 'IS_PRIMI_YUZDE'
+  | 'GECE_CALISMA_PRIMI_YUZDE'
+  | 'GECE_CALISMA_TATILI_PRIMI_YUZDE'
+  | 'EK_ODEME'
+  | 'DIGER_GELIR'
+  | 'TEDIYE'
+  | 'TIS_BONUS';
+
+export type RetroEarningCode =
+  | 'BASE_WAGE'
+  | 'NIGHT_WORK'
+  | 'NIGHT_HOLIDAY'
+  | 'WORK_PREMIUM'
+  | 'SOCIAL_AID'
+  | 'MEAL'
+  | 'TRANSPORT'
+  | 'CLOTHING'
+  | 'SERVICE_INCREMENT'
+  | 'TIS_BONUS'
+  | 'TEDIYE'
+  | 'SUPPLEMENTAL'
+  | 'OTHER';
+
+export type RetroTaxTreatment = 'TAXABLE' | 'EXEMPT';
+export type RetroSettlementStatus = 'UNSETTLED' | 'PAID' | 'OVERPAYMENT';
+export type RetroSgkTreatment =
+  | 'WAGE_SOURCE_MONTH'
+  | 'NON_WAGE_PAYMENT_MONTH'
+  | 'NON_WAGE_CARRY'
+  | 'EXEMPT';
+
+export interface CompensationRevision {
+  id: string;
+  reason: CompensationRevisionReason;
+  title: string;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  decisionDate?: string | null;
+  signedAt?: string | null;
+  description?: string | null;
+  status?: CompensationRevisionStatus;
+  scope?: CompensationRevisionScope;
+  personnelIds?: string[];
+  personnelGroup?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface CompensationRevisionOverride {
+  id: string;
+  revisionId: string;
+  parameter: RetroParameterKey;
+  value: number;
+  personnelId?: string | null;
+}
+
+export interface RetroAdjustmentBatch {
+  id: string;
+  revisionId: string;
+  personnelId: string;
+  paymentDate: string;
+  status?: CompensationRevisionStatus;
+  /** Additive V4 field; missing legacy values mean UNSETTLED. */
+  settlementStatus?: RetroSettlementStatus;
+  totalGrossDelta: number;
+  description?: string | null;
+  createdAt?: string | null;
+  calculatedAt?: string | null;
+  finalizedAt?: string | null;
+}
+
+export interface RetroAllocation {
+  id: string;
+  batchId: string;
+  personnelId: string;
+  sourcePeriodId: string;
+  earningCode: RetroEarningCode;
+  originalRecognizedAmount: number;
+  previousAuthoritativeRetroAmount?: number;
+  targetAmount: number;
+  deltaAmount: number;
+  sgkTreatment: RetroSgkTreatment;
+  incomeTaxTreatment: RetroTaxTreatment;
+  stampTaxTreatment: RetroTaxTreatment;
+  originalPek?: number;
+  retroPekDelta?: number;
+  adjustedPek?: number;
+  workerSgkDelta?: number;
+  workerUnemploymentDelta?: number;
+  employerSgkDelta?: number;
+  employerUnemploymentDelta?: number;
+  metadata?: string | null;
+}
 
 export interface PayrollAccrualInput {
   accrualId: string;

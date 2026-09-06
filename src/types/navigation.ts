@@ -3,6 +3,7 @@ export type TabType =
   | 'personel'
   | 'puantaj'
   | 'bordro'
+  | 'retro'
   | 'banka'
   | 'sgkKontrol'
   | 'kesintiler'
@@ -14,6 +15,7 @@ export const TAB_TYPES: readonly TabType[] = [
   'personel',
   'puantaj',
   'bordro',
+  'retro',
   'banka',
   'sgkKontrol',
   'kesintiler',

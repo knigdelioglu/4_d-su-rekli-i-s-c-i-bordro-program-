@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { BordroKaydi } from '../../types/payroll';
 import {
+  applyBrowserRetroBatchImpact,
   applyBrowserPayrollImpact,
   assertBrowserMutationImpactAllowed,
 } from './browserPayrollPolicies';
@@ -18,6 +19,8 @@ describe('browser payroll invalidation policy', () => {
           { personnelId: 'person-1', periodId: '2026-02' },
         ],
         blockedByFinalized: [{ personnelId: 'person-1', periodId: '2026-02' }],
+        affectedRetroBatches: [],
+        blockedByFinalizedRetroBatches: [],
       }
     );
 
@@ -30,8 +33,27 @@ describe('browser payroll invalidation policy', () => {
       assertBrowserMutationImpactAllowed({
         affectedPayrolls: [{ personnelId: 'person-1', periodId: '2026-02' }],
         blockedByFinalized: [{ personnelId: 'person-1', periodId: '2026-02' }],
+        affectedRetroBatches: [],
+        blockedByFinalizedRetroBatches: [],
       })
     ).toThrow('Kesinleştirilmiş');
+  });
+
+  test('applies retro batch impact and preserves finalized ledgers', () => {
+    const result = applyBrowserRetroBatchImpact(
+      [
+        { id: 'retro-calculated', status: 'CALCULATED' },
+        { id: 'retro-finalized', status: 'FINALIZED' },
+      ],
+      {
+        affectedPayrolls: [],
+        blockedByFinalized: [],
+        affectedRetroBatches: ['retro-calculated', 'retro-finalized'],
+        blockedByFinalizedRetroBatches: ['retro-finalized'],
+      }
+    );
+
+    expect(result.map((batch) => batch.status)).toEqual(['STALE', 'FINALIZED']);
   });
 });
 
@@ -43,6 +65,8 @@ test('delete impact marks all mutable downstream events stale without changing s
   const impact = {
     affectedPayrolls: events.map((e) => ({ personnelId: e.personelId, periodId: e.donemId, accrualId: e.accrualId })),
     blockedByFinalized: [],
+    affectedRetroBatches: [],
+    blockedByFinalizedRetroBatches: [],
   };
   assertBrowserMutationImpactAllowed(impact);
   const after = applyBrowserPayrollImpact(events, impact).filter((e) => e.id !== 'tediye');

@@ -1,6 +1,7 @@
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
+use crate::repositories::retro_repo;
 use chrono::Utc;
 use payroll_core::{MutationImpact, PayrollDatasetSnapshot, PayrollMutation};
 use rusqlite::{params, Connection};
@@ -17,6 +18,8 @@ impl PayrollInvalidationRepository {
         Ok(PayrollDatasetSnapshot {
             periods: PeriodRepository::get_all(conn)?,
             payrolls: PayrollRepository::get_all(conn)?,
+            retroBatches: retro_repo::get_batches(conn)?,
+            retroAllocations: retro_repo::get_allocations(conn)?,
             ..PayrollDatasetSnapshot::default()
         })
     }
@@ -34,25 +37,38 @@ impl PayrollInvalidationRepository {
         mutation: &PayrollMutation,
     ) -> Result<MutationImpact> {
         let impact = Self::evaluate_mutation(conn, mutation)?;
-        if !impact.blockedByFinalized.is_empty() {
+        if !impact.blockedByFinalized.is_empty()
+            || !impact.blockedByFinalizedRetroBatches.is_empty()
+        {
             let keys = impact
                 .blockedByFinalized
                 .iter()
                 .map(|key| format!("{} / {} / {}", key.personnelId, key.periodId, key.accrualId))
                 .collect::<Vec<_>>()
                 .join(", ");
+            let batches = impact.blockedByFinalizedRetroBatches.join(", ");
+            let detail = [
+                (!keys.is_empty()).then_some(keys),
+                (!batches.is_empty()).then_some(format!("retro batch: {batches}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(", ");
             return Err(DomainError::PayrollFinalized(format!(
-                "Kesinleştirilmiş bordro tarihçesini etkileyen veri değiştirilemez: {}.",
-                keys
+                "Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez: {}.",
+                detail
             )));
         }
         Ok(impact)
     }
 
     pub fn apply_impact(conn: &Connection, impact: &MutationImpact) -> Result<usize> {
-        if !impact.blockedByFinalized.is_empty() {
+        if !impact.blockedByFinalized.is_empty()
+            || !impact.blockedByFinalizedRetroBatches.is_empty()
+        {
             return Err(DomainError::PayrollFinalized(
-                "Kesinleştirilmiş bordro tarihçesini etkileyen mutation uygulanamaz.".into(),
+                "Kesinleştirilmiş bordro/retro tarihçesini etkileyen mutation uygulanamaz.".into(),
             ));
         }
 
@@ -68,6 +84,17 @@ impl PayrollInvalidationRepository {
                        AND accrual_id = ?4
                        AND status IN ('CALCULATED', 'DRAFT')",
                     params![now, key.personnelId, key.periodId, key.accrualId],
+                )
+                .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+        }
+        for batch_id in &impact.affectedRetroBatches {
+            changed += conn
+                .execute(
+                    "UPDATE retro_adjustment_batches
+                     SET status = 'STALE'
+                     WHERE id = ?1
+                       AND status IN ('DRAFT', 'CALCULATED')",
+                    params![batch_id],
                 )
                 .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         }

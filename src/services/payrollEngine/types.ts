@@ -8,6 +8,10 @@ import {
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
+  CompensationRevision,
+  CompensationRevisionOverride,
+  RetroAdjustmentBatch,
+  RetroAllocation,
   SickLeaveRecord,
 } from '../../types/payroll';
 import { PayrollNotice } from '../../types/payrollNotice';
@@ -24,6 +28,10 @@ export interface PayrollDatasetSnapshotModel {
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
   zamAylari: number[];
+  compensationRevisions: CompensationRevision[];
+  compensationRevisionOverrides: CompensationRevisionOverride[];
+  retroBatches: RetroAdjustmentBatch[];
+  retroAllocations: RetroAllocation[];
 }
 
 /** Presentation-only snapshot shape; never use it for WASM or persistence. */
@@ -36,6 +44,35 @@ export type PayrollBoundaryManualIncomeInput = Exactify<ManualPayrollIncomeInput
 export type PayrollBoundaryAccrualInput = Exactify<PayrollAccrualInput>;
 export type PayrollBoundaryPersonel = Exactify<Personel>;
 export type PayrollBoundaryTaxOpening = Exactify<PersonelTaxOpening>;
+
+export interface RetroPeriodPreview {
+  sourcePeriodId: string;
+  originalRecognizedAmount: number;
+  previousAuthoritativeRetroAmount: number;
+  targetAmount: number;
+  deltaAmount: number;
+}
+
+export interface RetroCalculationResultModel {
+  batch: RetroAdjustmentBatch;
+  allocations: RetroAllocation[];
+  periods: RetroPeriodPreview[];
+}
+
+export type RetroCalculationResult = Exactify<RetroCalculationResultModel>;
+
+export interface RetroCalculationRequestModel {
+  batchId: string;
+  revision: CompensationRevision;
+  overrides: CompensationRevisionOverride[];
+  personnelId: string;
+  paymentDate: string;
+  calculatedAt: string;
+  description?: string | null;
+  dataset: PayrollDatasetSnapshotModel;
+}
+
+export type RetroCalculationRequest = Exactify<RetroCalculationRequestModel>;
 
 export interface PayrollCalculationRequest {
   personnelId: string;
@@ -76,11 +113,14 @@ export interface PayrollKey {
 export interface MutationImpact {
   affectedPayrolls: PayrollKey[];
   blockedByFinalized: PayrollKey[];
+  affectedRetroBatches: string[];
+  blockedByFinalizedRetroBatches: string[];
 }
 
 export interface PayrollEngine {
   readonly kind: 'tauri' | 'wasm';
   calculatePayroll(request: PayrollCalculationRequest): Promise<PayrollBoundaryPayroll>;
+  calculateRetroPreview(request: RetroCalculationRequest): Promise<RetroCalculationResult>;
   validatePayroll(request: PayrollCalculationRequest): Promise<void>;
   getPayrollNotices(
     periodId: string,

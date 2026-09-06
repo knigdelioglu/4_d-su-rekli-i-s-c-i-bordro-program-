@@ -1,6 +1,7 @@
 use payroll_core::{
     calculate_payroll, evaluate_payroll_invalidation, finalize_payroll, PayrollCalculationRequest,
-    PayrollDatasetSnapshot, PayrollMutation, Result as CoreResult,
+    PayrollDatasetSnapshot, PayrollMutation, RetroCalculationRequest, RetroEntitlementEngine,
+    Result as CoreResult,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -37,6 +38,26 @@ pub fn calculate_payroll_json(request_json: &str) -> Result<String, JsValue> {
     let payroll = calculate_payroll(&request).map_err(error_to_js)?;
     serde_json::to_string(&payroll)
         .map_err(|error| JsValue::from_str(&format!("Bordro sonucu serileştirilemedi: {}", error)))
+}
+
+/// Replays historical service periods and returns an auditable retro batch
+/// preview. The function is pure; browser persistence happens in TypeScript
+/// after the result crosses the explicit Decimal JSON boundary.
+#[wasm_bindgen]
+pub fn calculate_retro_preview_json(request_json: &str) -> Result<String, JsValue> {
+    let request: RetroCalculationRequest = serde_json::from_str(request_json).map_err(|error| {
+        error_to_js(payroll_core::DomainError::InvalidData(format!(
+            "WASM retro hesap isteği geçersiz JSON içeriyor: {}",
+            error
+        )))
+    })?;
+    let result = RetroEntitlementEngine::calculate(&request).map_err(error_to_js)?;
+    serde_json::to_string(&result).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Retro hesap sonucu serileştirilemedi: {}",
+            error
+        ))
+    })
 }
 
 /// Recalculates and finalizes a payroll from the supplied authoritative

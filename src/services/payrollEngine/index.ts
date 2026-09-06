@@ -13,6 +13,8 @@ import {
   PayrollDatasetSnapshot,
   PayrollEngine,
   PayrollMutation,
+  RetroCalculationRequest,
+  RetroCalculationResult,
 } from './types';
 
 const tauriEngine: PayrollEngine = {
@@ -30,6 +32,8 @@ const tauriEngine: PayrollEngine = {
         >[3]
       )
     ) as PayrollBoundaryPayroll,
+  calculateRetroPreview: async (request: RetroCalculationRequest) =>
+    toPayrollBoundaryDto(await tauriBridge.calculateRetroPreview(request)) as RetroCalculationResult,
   // Tauri's command performs the authoritative database-backed preflight.
   validatePayroll: async () => undefined,
   getPayrollNotices: (periodId) => tauriBridge.getPayrollNotices(periodId),
@@ -66,6 +70,13 @@ const wasmEngine: PayrollEngine = {
     const runtime = await getWasmRuntime();
     const json = runtime.calculate_payroll_json(serializePayrollRequestForWasm(request));
     return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(json);
+  },
+  calculateRetroPreview: async (request: RetroCalculationRequest) => {
+    const runtime = await getWasmRuntime();
+    const json = runtime.calculate_retro_preview_json(
+      serializePayrollRequestForWasm(request as unknown as PayrollCalculationRequest)
+    );
+    return parseWasmPayrollBoundaryResult<RetroCalculationResult>(json);
   },
   validatePayroll: async (request: PayrollCalculationRequest) => {
     const runtime = await getWasmRuntime();
@@ -151,4 +162,8 @@ export type {
   PayrollKey,
   PayrollMutation,
   PayrollUiModel,
+  RetroCalculationRequest,
+  RetroCalculationRequestModel,
+  RetroCalculationResult,
+  RetroCalculationResultModel,
 } from './types';

@@ -2,7 +2,7 @@ use super::{dec_to_kurus, kurus_to_dec};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
-use chrono::Utc;
+use chrono::{Datelike, NaiveDate, Utc};
 use payroll_core::PayrollMutation;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_decimal::Decimal;
@@ -27,6 +27,7 @@ impl PayrollRepository {
             AccrualType::TEDIYE => "TEDIYE",
             AccrualType::TIS_IKRAMIYE => "TIS_IKRAMIYE",
             AccrualType::SUPPLEMENTAL => "SUPPLEMENTAL",
+            AccrualType::RETRO_ADJUSTMENT => "RETRO_ADJUSTMENT",
         }
     }
 
@@ -36,6 +37,7 @@ impl PayrollRepository {
             "TEDIYE" => Ok(AccrualType::TEDIYE),
             "TIS_IKRAMIYE" => Ok(AccrualType::TIS_IKRAMIYE),
             "SUPPLEMENTAL" => Ok(AccrualType::SUPPLEMENTAL),
+            "RETRO_ADJUSTMENT" => Ok(AccrualType::RETRO_ADJUSTMENT),
             _ => Err(DomainError::InvalidData(format!(
                 "{} tahakkuk türü geçersiz: {}",
                 id, value
@@ -70,6 +72,40 @@ impl PayrollRepository {
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", b.donemId)))
     }
 
+    fn validate_payment_date_matches_period(
+        conn: &Connection,
+        bordro: &BordroKaydi,
+    ) -> Result<()> {
+        if bordro.paymentDate.trim().is_empty() {
+            // Pre-accrual legacy rows may omit the event date. New calculation
+            // paths always materialize it before persistence.
+            return Ok(());
+        }
+        let (tax_year, tax_month): (i32, i32) = conn
+            .query_row(
+                "SELECT tax_year, tax_month FROM payroll_periods WHERE id = ?1",
+                params![bordro.donemId],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?
+            .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", bordro.donemId)))?;
+        let payment_date = NaiveDate::parse_from_str(&bordro.paymentDate, "%Y-%m-%d")
+            .map_err(|error| {
+                DomainError::ValidationError(format!(
+                    "{} bordrosunun ödeme tarihi geçersiz: {}",
+                    bordro.accrualId, error
+                ))
+            })?;
+        if payment_date.year() != tax_year || payment_date.month() as i32 != tax_month {
+            return Err(DomainError::ValidationError(format!(
+                "{} bordrosunun ödeme tarihi {} dönem vergi ayı {:04}-{:02} ile eşleşmiyor.",
+                bordro.accrualId, bordro.paymentDate, tax_year, tax_month
+            )));
+        }
+        Ok(())
+    }
+
     fn status_to_str(status: BordroStatus) -> &'static str {
         match status {
             BordroStatus::DRAFT => "DRAFT",
@@ -90,6 +126,31 @@ impl PayrollRepository {
                 id, status
             ))),
         }
+    }
+
+    fn existing_identity_by_id(
+        conn: &Connection,
+        id: &str,
+    ) -> Result<Option<(String, String, String, String, String, String, i32)>> {
+        conn.query_row(
+            "SELECT personnel_id, period_id, accrual_id, accrual_type, payment_date, status, sequence
+             FROM payroll_records
+             WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, i32>(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| DomainError::DatabaseError(error.to_string()))
     }
 
     fn dependency_fingerprint(
@@ -820,11 +881,33 @@ impl PayrollRepository {
         if Self::get_status_and_created_at_for_accrual(&tx, personnel_id, period_id, accrual_id)?.is_none() {
             return Err(DomainError::NotFound("Tahakkuk bulunamadı.".into()));
         }
+        let accrual_type: String = tx
+            .query_row(
+                "SELECT accrual_type
+                 FROM payroll_records
+                 WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
+                params![personnel_id, period_id, accrual_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let impact = PayrollInvalidationRepository::assert_mutation_allowed(&tx, &PayrollMutation::AccrualDelete {
             personnelId: personnel_id.into(), periodId: period_id.into(), accrualId: accrual_id.into(),
         })?;
         tx.execute("DELETE FROM payroll_records WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
             params![personnel_id, period_id, accrual_id]).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if accrual_type == "RETRO_ADJUSTMENT" {
+            // The payment event is the settlement node, but the batch and its
+            // allocations are the recognized-entitlement ledger. Deleting an
+            // unfinalized retro event must not leave that ledger authoritative;
+            // retain it as STALE for audit and force a fresh replay.
+            tx.execute(
+                "UPDATE retro_adjustment_batches
+                 SET status = 'STALE'
+                 WHERE id = ?1 AND status IN ('DRAFT', 'CALCULATED')",
+                params![accrual_id],
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        }
         PayrollInvalidationRepository::apply_impact(&tx, &impact)?;
         tx.commit().map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
@@ -834,7 +917,41 @@ impl PayrollRepository {
             .unchecked_transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
+        // Reject a split-brain payment event before dependency invalidation or
+        // any other mutation policy can mask the authoritative date/tax-month
+        // validation error. `save_in_transaction` repeats this check for
+        // restore/import callers that intentionally bypass production policy.
+        Self::validate_payment_date_matches_period(&tx, bordro)?;
         let accrual_id = Self::effective_accrual_id(bordro);
+        let accrual_type = Self::accrual_type_to_str(bordro.accrualType);
+        let payment_date = Self::effective_payment_date(&tx, bordro)?;
+        if let Some((existing_personnel, existing_period, existing_accrual, existing_type, existing_payment_date, existing_status, existing_sequence)) =
+            Self::existing_identity_by_id(&tx, &bordro.id)?
+        {
+            if existing_status == "FINALIZED" {
+                return Err(DomainError::PayrollFinalized(
+                    "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
+                ));
+            }
+            if existing_personnel != bordro.personelId
+                || existing_period != bordro.donemId
+                || existing_accrual != accrual_id
+            {
+                return Err(DomainError::InvalidData(
+                    "Bordro primary id'si farklı bir personel/dönem/tahakkuk kaydına ait; kayıt üzerine yazılamaz."
+                    .into(),
+                ));
+            }
+            if existing_type != accrual_type
+                || existing_payment_date != payment_date
+                || existing_sequence != bordro.sequence
+            {
+                return Err(DomainError::ValidationError(
+                    "Mevcut tahakkukun türü, ödeme tarihi veya sıra numarası değiştirilemez; yeni tahakkuk oluşturun."
+                        .into(),
+                ));
+            }
+        }
         let existing_status = Self::get_status_and_created_at_for_accrual(
             &tx,
             &bordro.personelId,
@@ -884,6 +1001,7 @@ impl PayrollRepository {
     /// Bulk restore/import snapshot'ları olduğu gibi korur; production dependency
     /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
+        Self::validate_payment_date_matches_period(conn, b)?;
         let now = Utc::now().to_rfc3339();
         let calculated_at = if b.olusturulmaTarihi.trim().is_empty() {
             now.clone()
@@ -895,6 +1013,39 @@ impl PayrollRepository {
         let accrual_type = Self::accrual_type_to_str(b.accrualType);
         let payment_date = Self::effective_payment_date(conn, b)?;
         let accrual_description = b.accrualDescription.clone().or_else(|| b.notlar.clone());
+
+        // `ON CONFLICT(id) DO UPDATE` is only safe when the primary id is the
+        // same immutable accrual identity. Without this check a caller could
+        // submit a new accrual id while reusing another row's primary id and
+        // overwrite that row (including a finalized one) before the unique
+        // accrual-id or payment-sequence constraints ran.
+        if let Some((existing_personnel, existing_period, existing_accrual, existing_type, existing_payment_date, existing_status, existing_sequence)) =
+            Self::existing_identity_by_id(conn, &b.id)?
+        {
+            if existing_status == "FINALIZED" {
+                return Err(DomainError::PayrollFinalized(
+                    "Kesinleştirilmiş (FINALIZED) bordro değiştirilemez.".into(),
+                ));
+            }
+            if existing_personnel != b.personelId
+                || existing_period != b.donemId
+                || existing_accrual != accrual_id
+            {
+                return Err(DomainError::InvalidData(
+                    "Bordro primary id'si farklı bir personel/dönem/tahakkuk kaydına ait; kayıt üzerine yazılamaz."
+                    .into(),
+                ));
+            }
+            if existing_type != accrual_type
+                || existing_payment_date != payment_date
+                || existing_sequence != b.sequence
+            {
+                return Err(DomainError::ValidationError(
+                    "Mevcut tahakkukun türü, ödeme tarihi veya sıra numarası değiştirilemez; yeni tahakkuk oluşturun."
+                        .into(),
+                ));
+            }
+        }
 
         let computed_net = (b.gelirToplam - b.kesintiToplam).round_dp(2);
         if b.netOdeme < Decimal::ZERO || computed_net < Decimal::ZERO {

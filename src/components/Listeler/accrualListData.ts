@@ -7,6 +7,7 @@ export const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
   TEDIYE: 'Tediye',
   TIS_IKRAMIYE: 'TİS İkramiyesi',
   SUPPLEMENTAL: 'Ek Ödeme',
+  RETRO_ADJUSTMENT: 'Geriye Dönük Fark',
 };
 
 export const PAYROLL_STATUS_LABELS: Record<BordroKaydi['status'], string> = {

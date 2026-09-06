@@ -10,11 +10,25 @@ import type { MutationImpact, PayrollMutation } from '../payrollEngine/types';
 export type BrowserPayrollMutation = PayrollMutation;
 
 export function assertBrowserMutationImpactAllowed(impact: MutationImpact): void {
-  if (impact.blockedByFinalized.length === 0) return;
+  if (impact.blockedByFinalized.length === 0 && impact.blockedByFinalizedRetroBatches.length === 0) return;
   const keys = impact.blockedByFinalized
     .map((key) => `${key.personnelId} / ${key.periodId} / ${key.accrualId ?? ''}`)
     .join(', ');
-  throw new Error(`Kesinleştirilmiş bordro tarihçesini etkileyen veri değiştirilemez: ${keys}.`);
+  const batches = impact.blockedByFinalizedRetroBatches.join(', ');
+  const detail = [keys, batches ? `retro batch: ${batches}` : ''].filter(Boolean).join(', ');
+  throw new Error(`Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez: ${detail}.`);
+}
+
+export function applyBrowserRetroBatchImpact<T extends { id: string; status?: string }>(
+  batches: T[],
+  impact: MutationImpact
+): T[] {
+  const affected = new Set(impact.affectedRetroBatches);
+  return batches.map((batch) =>
+    affected.has(batch.id) && batch.status !== 'FINALIZED'
+      ? ({ ...batch, status: 'STALE' } as T)
+      : batch
+  );
 }
 
 export function applyBrowserPayrollImpact<T extends {

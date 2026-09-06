@@ -2,7 +2,7 @@
  * 4/D Sürekli İşçi Bordro Programı — Main App Component
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
@@ -19,6 +19,7 @@ import {
 import { PersonelList } from './components/PersonelList';
 import { PuantajGrid } from './components/PuantajGrid';
 import { BordroHesaplama } from './components/BordroHesaplama';
+import { GeriyeDonukFarklar, type RetroPreviewInput } from './components/GeriyeDonukFarklar';
 import { BankaListesi } from './components/Listeler/BankaListesi';
 import { SgkPrimKontrolu } from './components/Listeler/SgkPrimKontrolu';
 import { KesintiListesi } from './components/Listeler/KesintiListesi';
@@ -32,16 +33,23 @@ import {
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
+  CompensationRevision,
+  CompensationRevisionOverride,
+  RetroAdjustmentBatch,
+  RetroAllocation,
   SickLeaveRecord,
+  PayrollAccrualInput,
   ZAM_AYLARI_SETTING_KEY,
 } from './types/payroll';
 import { tauriBridge } from './services/tauriBridge';
 import { browserPayrollStore } from './services/storage/browserPayrollStore';
 import {
+  applyBrowserRetroBatchImpact,
   applyBrowserPayrollImpact,
   assertBrowserMutationImpactAllowed,
 } from './services/storage/browserPayrollPolicies';
 import { getPayrollEngine } from './services/payrollEngine';
+import { nextPaymentSequence } from './services/payrollEngine/paymentEventOrder';
 import type {
   MutationImpact,
   PayrollBoundaryPayroll,
@@ -49,6 +57,9 @@ import type {
   PayrollBoundaryTaxOpening,
   PayrollDatasetSnapshot,
   PayrollMutation,
+  RetroCalculationRequest,
+  RetroCalculationResult,
+  RetroCalculationResultModel,
 } from './services/payrollEngine';
 import {
   mergePayrollUiIntoBoundary,
@@ -73,7 +84,24 @@ const ACTIVE_PARAMETRE_STORAGE_KEY = '4d_bordro_active_parametre';
 const ACTIVE_PAYROLL_VIEW_STORAGE_KEY = '4d_bordro_active_payroll_view';
 
 type DatasetFields = PayrollStorageFields;
-type UiDatasetFields = Omit<BackupPayload, 'backupVersion' | 'exportedAt'>;
+type UiDatasetFields = Omit<
+  BackupPayload,
+  | 'backupVersion'
+  | 'exportedAt'
+  | 'compensationRevisions'
+  | 'compensationRevisionOverrides'
+  | 'retroBatches'
+  | 'retroAllocations'
+> &
+  Required<
+    Pick<
+      BackupPayload,
+      | 'compensationRevisions'
+      | 'compensationRevisionOverrides'
+      | 'retroBatches'
+      | 'retroAllocations'
+    >
+  >;
 
 function normalizeZamAylari(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
@@ -83,6 +111,38 @@ function normalizeZamAylari(value: unknown): number[] {
         typeof month === 'number' && Number.isInteger(month) && month >= 1 && month <= 12
     )
   )].sort((a, b) => a - b);
+}
+
+function sameRevisionDefinition(
+  left: CompensationRevision | undefined,
+  right: CompensationRevision
+): boolean {
+  return Boolean(left) &&
+    left!.id === right.id &&
+    left!.reason === right.reason &&
+    left!.title === right.title &&
+    left!.effectiveFrom === right.effectiveFrom &&
+    left!.effectiveTo === right.effectiveTo &&
+    left!.decisionDate === right.decisionDate &&
+    left!.signedAt === right.signedAt &&
+    left!.description === right.description &&
+    left!.scope === right.scope &&
+    JSON.stringify(left!.personnelIds ?? []) === JSON.stringify(right.personnelIds ?? []) &&
+    left!.personnelGroup === right.personnelGroup;
+}
+
+function sameRevisionOverrides(
+  left: CompensationRevisionOverride[],
+  right: CompensationRevisionOverride[]
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((candidate) => right.some((other) =>
+    candidate.id === other.id &&
+    candidate.revisionId === other.revisionId &&
+    candidate.parameter === other.parameter &&
+    candidate.value === other.value &&
+    candidate.personnelId === other.personnelId
+  ));
 }
 
 function parseZamAylariSetting(value: string | null): number[] {
@@ -176,6 +236,10 @@ const EMPTY_UI_DATASET: UiDatasetFields = {
   sickLeaveRecords: [],
   annualPayrollParameters: [],
   zamAylari: [],
+  compensationRevisions: [],
+  compensationRevisionOverrides: [],
+  retroBatches: [],
+  retroAllocations: [],
 };
 
 export default function App() {
@@ -193,6 +257,7 @@ export default function App() {
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const browserPersistenceRevision = useRef(0);
 
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
     string | undefined
@@ -201,7 +266,14 @@ export default function App() {
 
   const uiDataset = useMemo<UiDatasetFields>(() => {
     if (!authoritativePayload) return EMPTY_UI_DATASET;
-    return toPayrollUiModel(authoritativePayload) as unknown as UiDatasetFields;
+    const decoded = toPayrollUiModel(authoritativePayload) as unknown as BackupPayload;
+    return {
+      ...decoded,
+      compensationRevisions: decoded.compensationRevisions ?? [],
+      compensationRevisionOverrides: decoded.compensationRevisionOverrides ?? [],
+      retroBatches: decoded.retroBatches ?? [],
+      retroAllocations: decoded.retroAllocations ?? [],
+    } as UiDatasetFields;
   }, [authoritativePayload]);
 
   const {
@@ -215,6 +287,10 @@ export default function App() {
     sickLeaveRecords,
     annualPayrollParameters,
     zamAylari,
+    compensationRevisions,
+    compensationRevisionOverrides,
+    retroBatches,
+    retroAllocations,
   } = uiDataset;
 
   useEffect(() => {
@@ -280,7 +356,7 @@ export default function App() {
           }
         }
 
-        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, savedZamAylari] =
+        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, savedZamAylari, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations] =
           await Promise.all([
             tauriBridge.getPeriods(),
             tauriBridge.getPersonnelList(),
@@ -292,6 +368,10 @@ export default function App() {
             tauriBridge.getAnnualPayrollParameters(),
             tauriBridge.getAppSetting('active_period_id'),
             tauriBridge.getAppSetting(ZAM_AYLARI_SETTING_KEY),
+            tauriBridge.getCompensationRevisions(),
+            tauriBridge.getCompensationRevisionOverrides(),
+            tauriBridge.getRetroAdjustmentBatches(),
+            tauriBridge.getRetroAdjustmentAllocations(),
           ]);
 
         applyDataset(toPayrollBoundaryDto({
@@ -305,6 +385,10 @@ export default function App() {
           sickLeaveRecords: fetchedSickLeaves,
           annualPayrollParameters: fetchedAnnualParameters,
           zamAylari: parseZamAylariSetting(savedZamAylari),
+          compensationRevisions: fetchedRevisions,
+          compensationRevisionOverrides: fetchedRevisionOverrides,
+          retroBatches: fetchedRetroBatches,
+          retroAllocations: fetchedRetroAllocations,
         }));
         setIsDataLoaded(true);
         return;
@@ -328,6 +412,10 @@ export default function App() {
           sickLeaveRecords: [],
           annualPayrollParameters: [],
           zamAylari: [],
+          compensationRevisions: [],
+          compensationRevisionOverrides: [],
+          retroBatches: [],
+          retroAllocations: [],
         }));
       }
       setIsDataLoaded(true);
@@ -358,11 +446,27 @@ export default function App() {
   // real saved dataset before the first read completes.
   useEffect(() => {
     if (!isDataLoaded || tauriBridge.isTauriAvailable() || !authoritativePayload) return;
-    void browserPayrollStore.savePayload(serializePayrollStorage(authoritativePayload)).catch((err) => {
-      const browserError = formatBrowserStorageSaveError(err);
-      console.error('Tarayıcı verisi kaydedilemedi.', browserError.technicalDetail, err);
-      setLoadError(browserError.userMessage);
-    });
+    const revision = ++browserPersistenceRevision.current;
+    void browserPayrollStore
+      .savePayload(serializePayrollStorage(authoritativePayload))
+      .catch(async (err) => {
+        // React state is optimistic, but a failed IndexedDB write must not
+        // leave the UI presenting an unsaved payroll as authoritative. Ignore
+        // an older failure when a newer complete snapshot is already queued.
+        if (revision !== browserPersistenceRevision.current) return;
+        const browserError = formatBrowserStorageSaveError(err);
+        console.error('Tarayıcı verisi kaydedilemedi.', browserError.technicalDetail, err);
+        setLoadError(browserError.userMessage);
+        try {
+          const saved = await browserPayrollStore.loadPayload();
+          if (revision !== browserPersistenceRevision.current || !saved) return;
+          setAuthoritativePayload(parseImportedBackup(saved));
+        } catch (reloadError) {
+          if (revision !== browserPersistenceRevision.current) return;
+          console.error('Son başarılı tarayıcı snapshotı geri yüklenemedi.', reloadError);
+          setIsDataLoaded(false);
+        }
+      });
   }, [authoritativePayload, isDataLoaded]);
 
   const handleSelectDonem = async (id: string) => {
@@ -392,6 +496,10 @@ export default function App() {
         sickLeaveRecords: authoritativePayload.sickLeaveRecords,
         annualPayrollParameters: authoritativePayload.annualPayrollParameters,
         zamAylari: authoritativePayload.zamAylari,
+        compensationRevisions: authoritativePayload.compensationRevisions ?? [],
+        compensationRevisionOverrides: authoritativePayload.compensationRevisionOverrides ?? [],
+        retroBatches: authoritativePayload.retroBatches ?? [],
+        retroAllocations: authoritativePayload.retroAllocations ?? [],
       };
     }
     return toPayrollBoundaryDto(EMPTY_UI_DATASET) as unknown as PayrollDatasetSnapshot;
@@ -420,6 +528,8 @@ export default function App() {
     );
     const affected = new Map<string, MutationImpact['affectedPayrolls'][number]>();
     const blocked = new Map<string, MutationImpact['blockedByFinalized'][number]>();
+    const affectedRetroBatches = new Set<string>();
+    const blockedByFinalizedRetroBatches = new Set<string>();
     for (const impact of impacts) {
       for (const key of impact.affectedPayrolls) {
         affected.set(`${key.personnelId}\u0000${key.periodId}\u0000${key.accrualId ?? ''}`, key);
@@ -427,10 +537,16 @@ export default function App() {
       for (const key of impact.blockedByFinalized) {
         blocked.set(`${key.personnelId}\u0000${key.periodId}\u0000${key.accrualId ?? ''}`, key);
       }
+      for (const batchId of impact.affectedRetroBatches) affectedRetroBatches.add(batchId);
+      for (const batchId of impact.blockedByFinalizedRetroBatches) {
+        blockedByFinalizedRetroBatches.add(batchId);
+      }
     }
     const merged = {
       affectedPayrolls: [...affected.values()],
       blockedByFinalized: [...blocked.values()],
+      affectedRetroBatches: [...affectedRetroBatches],
+      blockedByFinalizedRetroBatches: [...blockedByFinalizedRetroBatches],
     } satisfies MutationImpact;
     assertBrowserMutationImpactAllowed(merged);
     return merged;
@@ -452,6 +568,10 @@ export default function App() {
       sickLeaveRecords: initialData.sickLeaveRecords || [],
       annualPayrollParameters: initialData.annualPayrollParameters || [],
       zamAylari: initialData.zamAylari || [],
+      compensationRevisions: [],
+      compensationRevisionOverrides: [],
+      retroBatches: [],
+      retroAllocations: [],
     }));
 
     try {
@@ -495,6 +615,10 @@ export default function App() {
       sickLeaveRecords: [],
       annualPayrollParameters: [],
       zamAylari: [],
+      compensationRevisions: [],
+      compensationRevisionOverrides: [],
+      retroBatches: [],
+      retroAllocations: [],
     });
     const payload = makeBackupPayload(empty);
     try {
@@ -591,6 +715,7 @@ export default function App() {
         ...current,
         personeller,
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     });
   };
@@ -605,12 +730,18 @@ export default function App() {
       kind: 'PERSON',
       personnelId: personelId,
     });
+    if (impact.affectedRetroBatches.length > 0) {
+      throw new Error(
+        'Retro batch tarihçesi bulunan personel silinemez; audit ledger korunmalıdır.'
+      );
+    }
     updateAuthoritativePayload((current) => ({
       ...current,
       personeller: current.personeller.filter((person) => person.id !== personelId),
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact).filter(
         (payroll) => payroll.personelId !== personelId
       ),
+      retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       puantajlar: current.puantajlar.filter((attendance) => attendance.personelId !== personelId),
       taxOpenings: current.taxOpenings.filter((opening) => opening.personnelId !== personelId),
       sickLeaveRecords: current.sickLeaveRecords.filter((record) => record.personnelId !== personelId),
@@ -679,6 +810,7 @@ export default function App() {
           [newDonem.id]: exactSettings,
         },
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     });
   };
@@ -703,6 +835,7 @@ export default function App() {
         ),
       },
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
     }));
   };
 
@@ -730,6 +863,7 @@ export default function App() {
         ...current,
         puantajlar,
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     });
   };
@@ -793,6 +927,7 @@ export default function App() {
         ...current,
         sickLeaveRecords,
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     });
   };
@@ -839,6 +974,7 @@ export default function App() {
       ...current,
       zamAylari: normalized,
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
     }));
   };
 
@@ -862,23 +998,28 @@ export default function App() {
       bordrolar: record
         ? applyBrowserPayrollImpact(current.bordrolar, impact!)
         : current.bordrolar,
+      retroBatches: record
+        ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact!)
+        : current.retroBatches,
     }));
   };
 
   const handleDeleteBordro = async (event: BordroKaydi) => {
+    const eventId = event.accrualId || event.id;
     if (tauriBridge.isTauriAvailable()) {
-      await tauriBridge.deletePayrollAccrual(event.personelId, event.donemId, event.accrualId || event.id);
+      await tauriBridge.deletePayrollAccrual(event.personelId, event.donemId, eventId);
       await loadData();
       return;
     }
     const impact = await evaluateBrowserMutations({
       kind: 'ACCRUAL_DELETE', personnelId: event.personelId,
-      periodId: event.donemId, accrualId: event.accrualId || event.id,
+      periodId: event.donemId, accrualId: eventId,
     });
     updateAuthoritativePayload((current) => ({
       ...current,
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact)
-        .filter((item) => (item.accrualId || item.id) !== (event.accrualId || event.id)),
+        .filter((item) => (item.accrualId || item.id) !== eventId),
+      retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
     }));
   };
 
@@ -914,10 +1055,356 @@ export default function App() {
       const index = invalidated.findIndex(
         (b) => b.id === updatedBordro.id || b.accrualId === updatedBordro.accrualId
       );
-      if (index < 0) return { ...current, bordrolar: [...invalidated, updatedBordro] };
+      if (index < 0) {
+        return {
+          ...current,
+          bordrolar: [...invalidated, updatedBordro],
+          retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
+        };
+      }
       const next = [...invalidated];
       next[index] = updatedBordro;
-      return { ...current, bordrolar: next };
+      return {
+        ...current,
+        bordrolar: next,
+        retroBatches: updatedBordro.accrualType === 'RETRO_ADJUSTMENT' && updatedBordro.status === 'FINALIZED'
+          ? (current.retroBatches ?? []).map((batch) =>
+              batch.id === updatedBordro.accrualId
+                ? {
+                    ...batch,
+                    status: 'FINALIZED' as const,
+                    settlementStatus: 'PAID' as const,
+                    finalizedAt: updatedBordro.sonGuncellemeTarihi,
+                  }
+                : batch
+            )
+          : current.retroBatches,
+      };
+    });
+  };
+
+  const handleSaveCompensationRevision = async (
+    revision: CompensationRevision,
+    overrides: CompensationRevisionOverride[]
+  ) => {
+    const existing = compensationRevisions.find((item) => item.id === revision.id);
+    const revisionDefinitionChanged = !sameRevisionDefinition(existing, revision) ||
+      !sameRevisionOverrides(
+        compensationRevisionOverrides.filter((item) => item.revisionId === revision.id),
+        overrides
+      );
+    if (existing?.status === 'FINALIZED') {
+      if (revisionDefinitionChanged) {
+        throw new Error('FINALIZED revision veya ona bağlı FINALIZED retro payment event’i değiştirilemez.');
+      }
+      // A status-only browser update must not downgrade a finalized revision.
+      // Treat an identical definition as an idempotent no-op, matching native
+      // persistence and keeping the revision state machine monotonic.
+      return;
+    }
+    if (revisionDefinitionChanged && retroBatches.some(
+      (batch) => batch.revisionId === revision.id && batch.status === 'FINALIZED'
+    )) {
+      throw new Error('FINALIZED revision veya ona bağlı FINALIZED retro payment event’i değiştirilemez.');
+    }
+    if (revision.status !== 'DRAFT') {
+      throw new Error('Yeni veya değiştirilen compensation revision yalnızca DRAFT olabilir.');
+    }
+    const overrideKeys = new Set<string>();
+    for (const override of overrides) {
+      const key = `${override.parameter}\u0000${override.personnelId ?? ''}`;
+      if (override.revisionId !== revision.id || overrideKeys.has(key)) {
+        throw new Error('Revision override kayıtlarında duplicate veya yanlış revision ilişkisi var.');
+      }
+      overrideKeys.add(key);
+    }
+
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.saveCompensationRevision(revision, overrides);
+      await loadData();
+      return;
+    }
+
+    const retroMutations: PayrollMutation[] = revisionDefinitionChanged
+      ? bordrolar
+      .filter((payroll) =>
+        payroll.accrualType === 'RETRO_ADJUSTMENT' &&
+        retroBatches.some(
+          (batch) => batch.revisionId === revision.id && batch.id === payroll.accrualId && batch.status !== 'FINALIZED'
+        )
+      )
+      .map((payroll) => ({
+        kind: 'ACCRUAL_CALCULATION' as const,
+        personnelId: payroll.personelId,
+        periodId: payroll.donemId,
+        accrualId: payroll.accrualId,
+      }))
+      : [];
+    const retroImpact = retroMutations.length
+      ? await evaluateBrowserMutations(retroMutations)
+      : null;
+
+    const exactRevision = toPayrollBoundaryDto(revision) as unknown as NonNullable<PayrollStorageDto['compensationRevisions']>[number];
+    const exactOverrides = toPayrollBoundaryDto(overrides) as unknown as NonNullable<PayrollStorageDto['compensationRevisionOverrides']>;
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      compensationRevisions: [
+        ...(current.compensationRevisions ?? []).filter((item) => item.id !== revision.id),
+        exactRevision,
+      ],
+      compensationRevisionOverrides: [
+        ...(current.compensationRevisionOverrides ?? []).filter((item) => item.revisionId !== revision.id),
+        ...exactOverrides,
+      ],
+      // Existing calculations remain in the audit store, but are no longer
+      // authoritative after their revision input changes.
+      retroBatches: revisionDefinitionChanged
+        ? (current.retroBatches ?? []).map((batch) =>
+            batch.revisionId === revision.id && batch.status !== 'FINALIZED'
+              ? { ...batch, status: 'STALE' as const }
+              : batch
+          )
+        : current.retroBatches,
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, retroImpact ?? {
+        affectedPayrolls: [],
+        blockedByFinalized: [],
+        affectedRetroBatches: [],
+        blockedByFinalizedRetroBatches: [],
+      }).map((payroll) =>
+        revisionDefinitionChanged && (current.retroBatches ?? []).some(
+          (batch) => batch.revisionId === revision.id && batch.id === payroll.accrualId && batch.status !== 'FINALIZED'
+        ) && payroll.status !== 'FINALIZED'
+          ? { ...payroll, status: 'STALE' as const }
+          : payroll
+      ),
+    }));
+  };
+
+  const handleCalculateRetroPreview = async (
+    request: RetroPreviewInput
+  ): Promise<RetroCalculationResultModel> => {
+    const datasetForPreview: PayrollDatasetSnapshot = {
+      ...payrollDataset,
+      retroBatches: payrollDataset.retroBatches.map((batch) =>
+        batch.id === request.batchId && batch.status !== 'FINALIZED'
+          ? { ...batch, status: 'STALE' as const }
+          : batch
+      ),
+    };
+    const exactRequest = toPayrollBoundaryDto({
+      ...request,
+      dataset: datasetForPreview,
+    }) as unknown as RetroCalculationRequest;
+    const result: RetroCalculationResult = await payrollEngine.calculateRetroPreview(exactRequest);
+    return toPayrollUiModel(result) as unknown as RetroCalculationResultModel;
+  };
+
+  const canonicalizeRetroResult = async (
+    result: RetroCalculationResultModel
+  ): Promise<RetroCalculationResultModel> => {
+    const submittedBatch = result.batch;
+    const existingBatch = payrollDataset.retroBatches.find(
+      (batch) => batch.id === submittedBatch.id
+    );
+    if (existingBatch && (
+      existingBatch.revisionId !== submittedBatch.revisionId ||
+      existingBatch.personnelId !== submittedBatch.personnelId ||
+      existingBatch.paymentDate !== submittedBatch.paymentDate
+    )) {
+      throw new Error(
+        'Retro batch primary id’si farklı revision/personel/ödeme olayına ait; yeniden bağlanamaz.'
+      );
+    }
+    if (existingBatch?.status === 'FINALIZED') {
+      throw new Error(
+        'FINALIZED retro batch yeniden hesaplanamaz; yeni bir correction batch’i oluşturulmalıdır.'
+      );
+    }
+    const existingPayrollWithBatchIdentity = payrollDataset.payrolls.find(
+      (payroll) => payroll.accrualId === submittedBatch.id || payroll.id === submittedBatch.id
+    );
+    if (existingPayrollWithBatchIdentity && (
+      existingPayrollWithBatchIdentity.personelId !== submittedBatch.personnelId ||
+      existingPayrollWithBatchIdentity.accrualType !== 'RETRO_ADJUSTMENT' ||
+      existingPayrollWithBatchIdentity.paymentDate !== submittedBatch.paymentDate
+    )) {
+      throw new Error(
+        'Retro batch kimliği mevcut bir farklı ödeme olayının kimliğiyle çakışıyor; yeni bir kimlik kullanın.'
+      );
+    }
+    const persistedRevision = compensationRevisions.find(
+      (revision) => revision.id === submittedBatch.revisionId
+    );
+    if (!persistedRevision) {
+      throw new Error(`Retro revision persisted dataset'te bulunamadı: ${submittedBatch.revisionId}`);
+    }
+    const replayDataset: PayrollDatasetSnapshot = {
+      ...payrollDataset,
+      retroBatches: payrollDataset.retroBatches
+        .filter((item) => item.id !== submittedBatch.id)
+        .map((item) => item),
+      retroAllocations: payrollDataset.retroAllocations.filter(
+        (item) => item.batchId !== submittedBatch.id
+      ),
+    };
+    const canonicalRequest = toPayrollBoundaryDto({
+      batchId: submittedBatch.id,
+      revision: persistedRevision,
+      overrides: compensationRevisionOverrides.filter(
+        (item) => item.revisionId === persistedRevision.id
+      ),
+      personnelId: submittedBatch.personnelId,
+      paymentDate: submittedBatch.paymentDate,
+      calculatedAt: submittedBatch.calculatedAt || submittedBatch.createdAt || new Date().toISOString(),
+      description: submittedBatch.description || null,
+      dataset: replayDataset,
+    }) as unknown as RetroCalculationRequest;
+    const canonicalResult = toPayrollUiModel(
+      await payrollEngine.calculateRetroPreview(canonicalRequest)
+    ) as unknown as RetroCalculationResultModel;
+    const sortAllocations = (allocations: RetroAllocation[]) =>
+      [...allocations].sort((left, right) => left.id.localeCompare(right.id));
+    if (
+      canonicalResult.batch.totalGrossDelta !== submittedBatch.totalGrossDelta ||
+      JSON.stringify(toPayrollBoundaryDto(sortAllocations(canonicalResult.allocations))) !==
+        JSON.stringify(toPayrollBoundaryDto(sortAllocations(result.allocations)))
+    ) {
+      throw new Error('Retro preview güncel veriyle eşleşmiyor; yeniden hesaplayın.');
+    }
+    return canonicalResult;
+  };
+
+  const handleSaveRetroBatch = async (result: RetroCalculationResultModel) => {
+    if (!result.allocations.some((allocation) => allocation.deltaAmount < 0)) {
+      throw new Error('Yalnız negatif farklar fazla tahakkuk batch’i olarak saklanabilir.');
+    }
+    const canonicalResult = await canonicalizeRetroResult(result);
+    const batch = canonicalResult.batch;
+    const activePayment = payrollDataset.payrolls.find(
+      (payroll) =>
+        payroll.accrualId === batch.id &&
+        (payroll.status === 'DRAFT' || payroll.status === 'CALCULATED' || payroll.status === 'FINALIZED')
+    );
+    if (activePayment) {
+      throw new Error(
+        `${batch.id} retro payment event'i ${activePayment.status} durumunda; event silinmeden fazla tahakkuk batch'i saklanamaz.`
+      );
+    }
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.saveRetroAdjustmentBatch(batch, canonicalResult.allocations);
+      await loadData();
+      return;
+    }
+    if (!authoritativePayload) throw new Error('Yetkili veri snapshot’ı hazır değil.');
+    const exactBatch = toPayrollBoundaryDto(batch) as unknown as NonNullable<PayrollStorageDto['retroBatches']>[number];
+    const exactAllocations = toPayrollBoundaryDto(canonicalResult.allocations) as unknown as NonNullable<PayrollStorageDto['retroAllocations']>;
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      compensationRevisions: current.compensationRevisions ?? [],
+      compensationRevisionOverrides: current.compensationRevisionOverrides ?? [],
+      retroBatches: [...(current.retroBatches ?? []).filter((item) => item.id !== batch.id), exactBatch],
+      retroAllocations: [
+        ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
+        ...exactAllocations,
+      ],
+    }));
+  };
+
+  const handleCreateRetroPayment = async (result: RetroCalculationResultModel) => {
+    const submittedBatch = result.batch;
+    if (submittedBatch.totalGrossDelta <= 0 || result.allocations.some((allocation) => allocation.deltaAmount < 0)) {
+      throw new Error('Negatif veya sıfır retro delta otomatik payment event’ine dönüştürülemez.');
+    }
+    const canonicalResult = await canonicalizeRetroResult(result);
+    const batch = canonicalResult.batch;
+    const paymentParts = batch.paymentDate.split('-').map(Number);
+    const paymentPeriod = donemler.find(
+      (period) => period.taxYear === paymentParts[0] && period.taxMonth === paymentParts[1]
+    );
+    if (!paymentPeriod) {
+      throw new Error(`${batch.paymentDate.slice(0, 7)} için payment/tax period bulunamadı.`);
+    }
+    const existingPayment = payrollDataset.payrolls.find(
+      (payroll) =>
+        payroll.personelId === batch.personnelId &&
+        payroll.donemId === paymentPeriod.id &&
+        payroll.accrualId === batch.id
+    );
+    const sequence = existingPayment?.sequence ??
+      nextPaymentSequence(payrollDataset, batch.personnelId, paymentPeriod, batch.paymentDate);
+    const accrual: PayrollAccrualInput = {
+      accrualId: batch.id,
+      accrualType: 'RETRO_ADJUSTMENT',
+      paymentDate: batch.paymentDate,
+      sequence,
+      grossAmount: batch.totalGrossDelta,
+      description: batch.description || 'Geriye dönük hakediş farkı',
+    };
+
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.createRetroPayment(
+        batch,
+        canonicalResult.allocations,
+        paymentPeriod.id,
+        sequence
+      );
+      await loadData();
+      return;
+    }
+
+    if (!authoritativePayload) throw new Error('Yetkili veri snapshot’ı hazır değil.');
+    const exactBatch = toPayrollBoundaryDto(batch) as unknown as NonNullable<PayrollStorageDto['retroBatches']>[number];
+    const exactAllocations = toPayrollBoundaryDto(canonicalResult.allocations) as unknown as NonNullable<PayrollStorageDto['retroAllocations']>;
+    const datasetWithBatch: PayrollDatasetSnapshot = {
+      ...payrollDataset,
+      retroBatches: [...payrollDataset.retroBatches.filter((item) => item.id !== batch.id), exactBatch],
+      retroAllocations: [
+        ...payrollDataset.retroAllocations.filter((item) => item.batchId !== batch.id),
+        ...exactAllocations,
+      ],
+    };
+    const mutation: PayrollMutation = existingPayment
+      ? {
+          kind: 'ACCRUAL_CALCULATION',
+          personnelId: batch.personnelId,
+          periodId: paymentPeriod.id,
+          accrualId: batch.id,
+        }
+      : {
+      kind: 'ACCRUAL_INSERT',
+      personnelId: batch.personnelId,
+      periodId: paymentPeriod.id,
+      accrualId: batch.id,
+      paymentDate: batch.paymentDate,
+      sequence,
+    };
+    const impact = await payrollEngine.evaluateMutationPolicy(mutation, datasetWithBatch);
+    assertBrowserMutationImpactAllowed(impact);
+    const calculated = await payrollEngine.calculatePayroll({
+      personnelId: batch.personnelId,
+      periodId: paymentPeriod.id,
+      calculatedAt: new Date().toISOString(),
+      manualIncome: null,
+      accrual: toPayrollBoundaryDto(accrual) as unknown as Parameters<typeof payrollEngine.calculatePayroll>[0]['accrual'],
+      dataset: datasetWithBatch,
+    });
+    updateAuthoritativePayload((current) => {
+      const invalidated = applyBrowserPayrollImpact(current.bordrolar, impact);
+      const existingPayrollIndex = invalidated.findIndex((item) => item.accrualId === batch.id || item.id === batch.id);
+      const nextPayrolls = [...invalidated];
+      if (existingPayrollIndex < 0) nextPayrolls.push(calculated);
+      else nextPayrolls[existingPayrollIndex] = calculated;
+      return {
+        ...current,
+        compensationRevisions: current.compensationRevisions ?? [],
+        compensationRevisionOverrides: current.compensationRevisionOverrides ?? [],
+        retroBatches: [...(current.retroBatches ?? []).filter((item) => item.id !== batch.id), exactBatch],
+        retroAllocations: [
+          ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
+          ...exactAllocations,
+        ],
+        bordrolar: nextPayrolls,
+      };
     });
   };
 
@@ -1098,6 +1585,22 @@ export default function App() {
                   />
                 )}
 
+                {activeTab === 'retro' && (
+                  <GeriyeDonukFarklar
+                    donemler={donemler}
+                    personeller={personeller}
+                    revisions={compensationRevisions}
+                    overrides={compensationRevisionOverrides}
+                    batches={retroBatches}
+                    allocations={retroAllocations}
+                    bordrolar={bordrolar}
+                    onSaveRevision={handleSaveCompensationRevision}
+                    onCalculatePreview={handleCalculateRetroPreview}
+                    onSaveBatch={handleSaveRetroBatch}
+                    onCreatePayment={handleCreateRetroPayment}
+                  />
+                )}
+
                 {aktifDonem && activeTab === 'puantaj' && (
                   <PuantajGrid
                     aktifDonem={aktifDonem}
@@ -1140,6 +1643,8 @@ export default function App() {
                     aktifDonem={aktifDonem}
                     personeller={personeller}
                     bordrolar={bordrolar}
+                    retroBatches={retroBatches}
+                    retroAllocations={retroAllocations}
                     kurumDegerleri={kurumDegerleriMap[aktifDonem.id]}
                   />
                 )}

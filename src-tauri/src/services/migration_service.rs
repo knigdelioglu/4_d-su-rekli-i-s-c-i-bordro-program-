@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
-pub const CURRENT_BACKUP_VERSION: u32 = 3;
+pub const CURRENT_BACKUP_VERSION: u32 = 4;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +44,14 @@ pub struct LegacyPayload {
     pub annualPayrollParameters: Option<Vec<AnnualPayrollParameters>>,
     #[serde(default)]
     pub zamAylari: Option<Vec<i32>>,
+    #[serde(default)]
+    pub compensationRevisions: Option<Vec<CompensationRevision>>,
+    #[serde(default)]
+    pub compensationRevisionOverrides: Option<Vec<CompensationRevisionOverride>>,
+    #[serde(default)]
+    pub retroBatches: Option<Vec<RetroAdjustmentBatch>>,
+    #[serde(default)]
+    pub retroAllocations: Option<Vec<RetroAllocation>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +86,90 @@ pub struct LegacyPersonel {
     pub kesintiler: Option<PersonelKesintileri>,
 }
 
+fn validate_v4_retro_payment_links(conn: &Connection) -> Result<()> {
+    let batches = crate::repositories::retro_repo::get_batches(conn)?;
+    let payrolls = PayrollRepository::get_all(conn)?;
+
+    for batch in &batches {
+        let linked = payrolls
+            .iter()
+            .filter(|payroll| payroll.accrualId == batch.id)
+            .collect::<Vec<_>>();
+        if linked.len() > 1 {
+            return Err(DomainError::InvalidData(format!(
+                "V4 restore: {} retro batch'i birden fazla payment event ile eşleşiyor.",
+                batch.id
+            )));
+        }
+        if batch.status == CompensationRevisionStatus::FINALIZED && linked.len() != 1 {
+            return Err(DomainError::InvalidData(format!(
+                "V4 restore: FINALIZED retro batch {} için payment event bulunamadı.",
+                batch.id
+            )));
+        }
+        if let Some(payroll) = linked.first().copied() {
+            let expected_status = match batch.status {
+                CompensationRevisionStatus::FINALIZED => Some(BordroStatus::FINALIZED),
+                CompensationRevisionStatus::CALCULATED => Some(BordroStatus::CALCULATED),
+                CompensationRevisionStatus::DRAFT | CompensationRevisionStatus::STALE => None,
+            };
+            if expected_status != Some(payroll.status)
+                || payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
+                || payroll.personelId != batch.personnelId
+                || payroll.paymentDate != batch.paymentDate
+                || payroll.gelirToplam != batch.totalGrossDelta
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "V4 restore: retro batch {} lifecycle durumu ile bağlı payment event durumu/kimliği/finansal snapshotı eşleşmiyor.",
+                    batch.id
+                )));
+            }
+        }
+    }
+
+    for payroll in payrolls
+        .iter()
+        .filter(|payroll| payroll.accrualType == AccrualType::RETRO_ADJUSTMENT)
+    {
+        let Some(batch) = batches.iter().find(|batch| batch.id == payroll.accrualId) else {
+            return Err(DomainError::InvalidData(format!(
+                "V4 restore: {} retro payment event'i için batch bulunamadı.",
+                payroll.accrualId
+            )));
+        };
+        if payroll.personelId != batch.personnelId || payroll.paymentDate != batch.paymentDate {
+            return Err(DomainError::InvalidData(format!(
+                "V4 restore: {} retro payment event'i batch personel/ödeme tarihiyle eşleşmiyor.",
+                payroll.accrualId
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_v4_retro_lifecycle_fields(payload_json: &str) -> Result<()> {
+    let root: serde_json::Value = serde_json::from_str(payload_json)
+        .map_err(|error| DomainError::InvalidData(format!("Geçersiz V4 yedek JSON'u: {error}")))?;
+    let Some(batches) = root.get("retroBatches").and_then(serde_json::Value::as_array) else {
+        return Ok(());
+    };
+    for (index, batch) in batches.iter().enumerate() {
+        let Some(batch) = batch.as_object() else {
+            return Err(DomainError::InvalidData(format!(
+                "V4 retroBatches[{index}] nesne olmalıdır."
+            )));
+        };
+        for field in ["status", "settlementStatus"] {
+            if !batch.contains_key(field) {
+                return Err(DomainError::InvalidData(format!(
+                    "V4 retroBatches[{index}].{field} zorunlu alan eksik."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub struct MigrationService;
 
 impl MigrationService {
@@ -104,9 +196,23 @@ impl MigrationService {
                     || payload.annualPayrollParameters.is_none())
             {
                 return Err(DomainError::InvalidData(
-                    "V2/V3 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
+                    "V2-V4 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
                         .into(),
                 ));
+            }
+            if version >= CURRENT_BACKUP_VERSION
+                && (payload.compensationRevisions.is_none()
+                    || payload.compensationRevisionOverrides.is_none()
+                    || payload.retroBatches.is_none()
+                    || payload.retroAllocations.is_none())
+            {
+                return Err(DomainError::InvalidData(
+                    "V4 yedek payload'ı retro revision, override, batch ve allocation koleksiyonlarını içermelidir."
+                        .into(),
+                ));
+            }
+            if version >= CURRENT_BACKUP_VERSION {
+                validate_v4_retro_lifecycle_fields(payload_json)?;
             }
         }
         Ok(payload)
@@ -126,8 +232,46 @@ impl MigrationService {
             sickLeaveRecords,
             annualPayrollParameters,
             zamAylari,
+            compensationRevisions,
+            compensationRevisionOverrides,
+            retroBatches,
+            retroAllocations,
         } = payload;
-        let is_pre_accrual_backup = backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION;
+        // V3 already introduced independent payment-event/accrual metadata.
+        // Only V1/V2 backups may be normalized to the single legacy NORMAL
+        // node; treating V3 as pre-accrual would erase retro/TEDIYE ordering.
+        let is_pre_accrual_backup = backupVersion.unwrap_or(1) < 3;
+
+        let revision_ids: BTreeSet<String> = compensationRevisions
+            .as_ref()
+            .map(|items| items.iter().map(|item| item.id.clone()).collect())
+            .unwrap_or_default();
+        if let Some(overrides) = compensationRevisionOverrides.as_ref() {
+            if let Some(orphan) = overrides
+                .iter()
+                .find(|item| !revision_ids.contains(&item.revisionId))
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "Retro revision override {} için revision bulunamadı: {}.",
+                    orphan.id, orphan.revisionId
+                )));
+            }
+        }
+        let batch_ids: BTreeSet<String> = retroBatches
+            .as_ref()
+            .map(|items| items.iter().map(|item| item.id.clone()).collect())
+            .unwrap_or_default();
+        if let Some(allocations) = retroAllocations.as_ref() {
+            if let Some(orphan) = allocations
+                .iter()
+                .find(|item| !batch_ids.contains(&item.batchId))
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "Retro allocation {} için batch bulunamadı: {}.",
+                    orphan.id, orphan.batchId
+                )));
+            }
+        }
 
         if let Some(periods) = donemler {
             for period in periods {
@@ -231,6 +375,12 @@ impl MigrationService {
             SettingsRepository::set_app_setting(conn, ZAM_AYLARI_SETTING_KEY, &value)?;
         }
 
+        // Fill missing yearly parameters before importing the retro graph. The
+        // normal parameter repository correctly blocks a tax-year mutation
+        // when a FINALIZED retro batch already exists; during restore that
+        // batch is part of this same transaction, so ordering the compatibility
+        // default after it would make a clean V3 restore fail against its own
+        // incoming data.
         let imported_tax_years: BTreeSet<i32> = PeriodRepository::get_all(conn)?
             .into_iter()
             .map(|period| period.taxYear)
@@ -240,6 +390,61 @@ impl MigrationService {
                 let mut defaults = AnnualPayrollParameters::default_for_2026();
                 defaults.year = year;
                 AnnualPayrollParametersRepository::save(conn, &defaults)?;
+            }
+        }
+
+        if let Some(revisions) = compensationRevisions {
+            for revision in revisions {
+                let overrides = compensationRevisionOverrides
+                    .as_ref()
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter(|item| item.revisionId == revision.id)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                crate::repositories::retro_repo::restore_revision_with_overrides_in_transaction(
+                    conn,
+                    &revision,
+                    &overrides,
+                )?;
+            }
+        }
+        if let Some(batches) = retroBatches {
+            let allocations = retroAllocations.clone().unwrap_or_default();
+            for mut batch in batches {
+                let batch_allocations = allocations
+                    .iter()
+                    .filter(|allocation| allocation.batchId == batch.id)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                // V3 did not persist settlementStatus.  Its FINALIZED state
+                // was the only available indication that the retro event had
+                // been settled, so derive the new explicit state during the
+                // versioned compatibility import.  V4 remains strict and
+                // must carry the field explicitly through the current
+                // contract/validation path.
+                if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION
+                    && batch.status == CompensationRevisionStatus::FINALIZED
+                    && batch.settlementStatus == RetroSettlementStatus::UNSETTLED
+                {
+                    batch.settlementStatus = if batch.totalGrossDelta < rust_decimal::Decimal::ZERO
+                        || batch_allocations
+                            .iter()
+                            .any(|allocation| allocation.deltaAmount < rust_decimal::Decimal::ZERO)
+                    {
+                        RetroSettlementStatus::OVERPAYMENT
+                    } else {
+                        RetroSettlementStatus::PAID
+                    };
+                }
+                crate::repositories::retro_repo::restore_batch_in_transaction(
+                    conn,
+                    &batch,
+                    &batch_allocations,
+                )?;
             }
         }
 
@@ -276,6 +481,14 @@ impl MigrationService {
                 }
                 PayrollRepository::save_in_transaction(conn, &payroll)?;
             }
+        }
+
+        // V4 is the first backup contract that declares the complete retro
+        // graph. Its FINALIZED settlement must therefore have an actual,
+        // matching RETRO_ADJUSTMENT payment event; otherwise a restore would
+        // claim a paid batch while dropping the bank/tax event linkage.
+        if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+            validate_v4_retro_payment_links(conn)?;
         }
 
         if let Some(active_id) = aktifDonemId {
@@ -324,7 +537,11 @@ impl MigrationService {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         tx.execute_batch(
-            "DELETE FROM payroll_income_items;
+            "DELETE FROM retro_adjustment_allocations;
+             DELETE FROM retro_adjustment_batches;
+             DELETE FROM compensation_revision_overrides;
+             DELETE FROM compensation_revisions;
+             DELETE FROM payroll_income_items;
              DELETE FROM payroll_deduction_items;
              DELETE FROM payroll_records;
              DELETE FROM attendance_records;

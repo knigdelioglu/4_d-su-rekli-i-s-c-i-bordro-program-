@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import type { BordroDonemi, BordroKaydi, DönemselKurumDegerleri, Personel } from '../../types/payroll';
+import type {
+  BordroDonemi,
+  BordroKaydi,
+  DönemselKurumDegerleri,
+  Personel,
+  RetroAdjustmentBatch,
+  RetroAllocation,
+} from '../../types/payroll';
 import {
   amountToKurus,
   buildSgkPrimKontroluExcelPayload,
@@ -251,6 +258,111 @@ describe('SGK prim kontrolü kuruş ve karşılaştırma sınırı', () => {
 });
 
 describe('SGK prim kontrolü güvenilirlik sınırı', () => {
+  test('kaynak bordro yokken retro ledger tek başına SGK mutabakatını authoritative yapmaz', () => {
+    const batch: RetroAdjustmentBatch = {
+      id: 'retro-batch-without-source',
+      revisionId: 'revision-1',
+      personnelId: 'p-1',
+      paymentDate: '2026-10-05',
+      status: 'CALCULATED',
+      settlementStatus: 'UNSETTLED',
+      totalGrossDelta: 100,
+    };
+    const allocation: RetroAllocation = {
+      id: 'retro-allocation-without-source',
+      batchId: batch.id,
+      personnelId: 'p-1',
+      sourcePeriodId: period.id,
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: 0,
+      previousAuthoritativeRetroAmount: 0,
+      targetAmount: 100,
+      deltaAmount: 100,
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+      originalPek: 1000,
+      retroPekDelta: 100,
+      adjustedPek: 1100,
+      workerSgkDelta: 14,
+      workerUnemploymentDelta: 1,
+      employerSgkDelta: 20,
+      employerUnemploymentDelta: 2,
+    };
+
+    const rows = getSgkPrimKontroluRows(
+      period,
+      [person1],
+      [],
+      [batch],
+      [allocation]
+    );
+
+    expect(rows[0].status).toBe('notCalculated');
+    expect(rows[0].toplam).toBe(0);
+    expect(getSgkPrimKontroluTotals(rows).reconciliationReady).toBe(false);
+  });
+
+  test('authoritative kaynak snapshot üzerine retro kaynak PEK ve prim ledgerı eklenir', () => {
+    const batch: RetroAdjustmentBatch = {
+      id: 'retro-batch-source-ledger',
+      revisionId: 'revision-1',
+      personnelId: 'p-1',
+      paymentDate: '2026-10-05',
+      status: 'FINALIZED',
+      settlementStatus: 'PAID',
+      totalGrossDelta: 100,
+    };
+    const allocation: RetroAllocation = {
+      id: 'retro-allocation-source-ledger',
+      batchId: batch.id,
+      personnelId: 'p-1',
+      sourcePeriodId: period.id,
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: 0,
+      previousAuthoritativeRetroAmount: 0,
+      targetAmount: 100,
+      deltaAmount: 100,
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+      originalPek: 1000,
+      retroPekDelta: 100,
+      adjustedPek: 1100,
+      workerSgkDelta: 14,
+      workerUnemploymentDelta: 1,
+      employerSgkDelta: 20,
+      employerUnemploymentDelta: 2,
+    };
+    const sourcePayroll = payroll('p-1', 'source-payroll', 'FINALIZED', {
+      isverenSgkPrimi: 100,
+      isverenIssizlikPrimi: 10,
+      isciSgkPrimi: 70,
+      isciIssizlikPrimi: 5,
+    });
+
+    const rows = getSgkPrimKontroluRows(
+      period,
+      [person1],
+      [sourcePayroll],
+      [batch],
+      [allocation]
+    );
+
+    expect(rows[0].status).toBe('authoritative');
+    expect({
+      retroPekDelta: rows[0].retroPekDelta,
+      isverenSgkPrimi: rows[0].isverenSgkPrimi,
+      isciSgkPrimi: rows[0].isciSgkPrimi,
+      toplam: rows[0].toplam,
+    }).toEqual({
+      retroPekDelta: 100,
+      isverenSgkPrimi: 120,
+      isciSgkPrimi: 84,
+      toplam: 222,
+    });
+  });
+
   test('FINALIZED + STALE aynı kişiyi güvenilmez yapar ve authoritative kısmı toplamaz', () => {
     const staleTediye = payroll('p-1', 'tediye-stale', 'STALE', completeAmounts);
     staleTediye.accrualType = 'TEDIYE';

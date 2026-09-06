@@ -122,6 +122,19 @@ const DECIMAL_KEY_LIST = [
   'uygulananDamgaIstisnasi',
   'kalanDamgaIstisnasi',
   'kesilenDamgaVergisi',
+  'value',
+  'totalGrossDelta',
+  'originalRecognizedAmount',
+  'previousAuthoritativeRetroAmount',
+  'targetAmount',
+  'deltaAmount',
+  'originalPek',
+  'retroPekDelta',
+  'adjustedPek',
+  'workerSgkDelta',
+  'workerUnemploymentDelta',
+  'employerSgkDelta',
+  'employerUnemploymentDelta',
 ] as const;
 
 export type DecimalKey = (typeof DECIMAL_KEY_LIST)[number];

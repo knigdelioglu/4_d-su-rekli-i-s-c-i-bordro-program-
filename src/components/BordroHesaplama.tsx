@@ -85,6 +85,7 @@ const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
   TEDIYE: 'Tediye',
   TIS_IKRAMIYE: 'TİS İkramiyesi',
   SUPPLEMENTAL: 'Ek Ödeme',
+  RETRO_ADJUSTMENT: 'Geriye Dönük Fark',
 };
 
 type SupplementaryAccrualType = Exclude<AccrualType, 'NORMAL'>;

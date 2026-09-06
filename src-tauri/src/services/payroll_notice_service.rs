@@ -60,6 +60,10 @@ impl PayrollNoticeService {
             sickLeaveRecords: SickLeaveRepository::get_all(conn)?,
             annualPayrollParameters: AnnualPayrollParametersRepository::get_all(conn)?,
             zamAylari: Self::get_zam_aylari(conn)?,
+            compensationRevisions: crate::repositories::retro_repo::get_revisions(conn)?,
+            compensationRevisionOverrides: crate::repositories::retro_repo::get_overrides(conn)?,
+            retroBatches: crate::repositories::retro_repo::get_batches(conn)?,
+            retroAllocations: crate::repositories::retro_repo::get_allocations(conn)?,
         })
     }
 

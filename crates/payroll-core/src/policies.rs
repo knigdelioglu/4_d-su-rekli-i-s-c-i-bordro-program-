@@ -5,10 +5,13 @@
 
 #![allow(non_snake_case)]
 
-use crate::models::{BordroDonemi, BordroStatus, StatutorySnapshotSource};
+use crate::models::{
+    BordroDonemi, BordroStatus, CompensationRevisionStatus, RetroAdjustmentBatch,
+    StatutorySnapshotSource,
+};
 use crate::payroll_engine::{accrual_order_for_payroll as payroll_order, PayrollDatasetSnapshot};
 use crate::{DomainError, Result};
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -84,6 +87,12 @@ pub enum PayrollMutation {
 pub struct MutationImpact {
     pub affectedPayrolls: Vec<PayrollKey>,
     pub blockedByFinalized: Vec<PayrollKey>,
+    /// Retro entitlement ledgers whose source inputs or settlement event were
+    /// invalidated by the mutation. Batch ids are globally unique.
+    #[serde(default)]
+    pub affectedRetroBatches: Vec<String>,
+    #[serde(default)]
+    pub blockedByFinalizedRetroBatches: Vec<String>,
 }
 
 fn period_for<'a>(
@@ -323,6 +332,134 @@ fn affected_by_mutation(
     }
 }
 
+fn retro_batch_source_period_matches<F>(
+    dataset: &PayrollDatasetSnapshot,
+    batch: &RetroAdjustmentBatch,
+    mut predicate: F,
+) -> Result<bool>
+where
+    F: FnMut(&BordroDonemi) -> Result<bool>,
+{
+    for allocation in dataset
+        .retroAllocations
+        .iter()
+        .filter(|allocation| allocation.batchId == batch.id)
+    {
+        if let Some(period) = dataset
+            .periods
+            .iter()
+            .find(|period| period.id == allocation.sourcePeriodId)
+        {
+            if predicate(period)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn retro_batch_payment_tax_year_matches(
+    batch: &RetroAdjustmentBatch,
+    tax_year: i32,
+) -> Result<bool> {
+    let payment_date = NaiveDate::parse_from_str(&batch.paymentDate, "%Y-%m-%d").map_err(|error| {
+        DomainError::InvalidData(format!(
+            "{} retro batch ödeme tarihi geçersiz: {} ({})",
+            batch.id, batch.paymentDate, error
+        ))
+    })?;
+    Ok(payment_date.year() == tax_year)
+}
+
+fn retro_batch_affected_by_mutation(
+    dataset: &PayrollDatasetSnapshot,
+    batch: &RetroAdjustmentBatch,
+    mutation: &PayrollMutation,
+) -> Result<bool> {
+    if batch.status == CompensationRevisionStatus::STALE {
+        return Ok(false);
+    }
+
+    let same_source_period = |period_id: &str| {
+        dataset.retroAllocations.iter().any(|allocation| {
+            allocation.batchId == batch.id && allocation.sourcePeriodId == period_id
+        })
+    };
+
+    match mutation {
+        PayrollMutation::Person { personnelId } => Ok(batch.personnelId == *personnelId),
+        PayrollMutation::PersonPeriod {
+            personnelId,
+            periodId,
+        } => Ok(batch.personnelId == *personnelId && same_source_period(periodId)),
+        PayrollMutation::PersonTaxYear {
+            personnelId,
+            taxYear,
+        } => {
+            if batch.personnelId != *personnelId {
+                return Ok(false);
+            }
+            retro_batch_payment_tax_year_matches(batch, *taxYear)
+        }
+        PayrollMutation::TaxYear { taxYear } => {
+            retro_batch_payment_tax_year_matches(batch, *taxYear)
+        }
+        PayrollMutation::Period { periodId } => Ok(same_source_period(periodId)),
+        PayrollMutation::PeriodFromPosition {
+            startDate,
+            taxYear,
+            taxMonth,
+        } => retro_batch_source_period_matches(dataset, batch, |period| {
+            Ok(is_from_position(period, startDate, *taxYear, *taxMonth))
+        }),
+        PayrollMutation::PersonFromDate {
+            personnelId,
+            effectiveFrom,
+        } => {
+            if batch.personnelId != *personnelId {
+                return Ok(false);
+            }
+            retro_batch_source_period_matches(dataset, batch, |period| {
+                is_person_from_date(period, effectiveFrom)
+            })
+        }
+        PayrollMutation::PayrollCalculation {
+            personnelId,
+            periodId,
+        } => Ok(batch.personnelId == *personnelId && same_source_period(periodId)),
+        PayrollMutation::AccrualCalculation {
+            personnelId,
+            periodId,
+            accrualId,
+        } => {
+            // Recalculating the settlement node itself must not stale the
+            // ledger that is being used to rebuild that same node. A source
+            // payroll recalculation still invalidates allocations for its
+            // service period.
+            Ok(batch.id != *accrualId
+                && batch.personnelId == *personnelId
+                && same_source_period(periodId))
+        }
+        PayrollMutation::AccrualDelete {
+            personnelId,
+            periodId,
+            accrualId,
+        } => Ok(
+            (batch.personnelId == *personnelId && batch.id == *accrualId)
+                || (batch.personnelId == *personnelId && same_source_period(periodId)),
+        ),
+        PayrollMutation::AccrualInsert {
+            personnelId,
+            periodId,
+            accrualId,
+            ..
+        } => Ok(batch.id != *accrualId
+            && batch.personnelId == *personnelId
+            && same_source_period(periodId)),
+        PayrollMutation::All => Ok(true),
+    }
+}
+
 /// Computes the deterministic invalidation impact and FINALIZED blockers for
 /// one source mutation. It performs no persistence and reads no clock.
 pub fn evaluate_payroll_invalidation(
@@ -331,6 +468,8 @@ pub fn evaluate_payroll_invalidation(
 ) -> Result<MutationImpact> {
     let mut affected = BTreeSet::new();
     let mut blocked = BTreeSet::new();
+    let mut affected_retro_batches = BTreeSet::new();
+    let mut blocked_retro_batches = BTreeSet::new();
 
     for payroll in &dataset.payrolls {
         if !affected_by_mutation(
@@ -353,9 +492,21 @@ pub fn evaluate_payroll_invalidation(
         affected.insert(key);
     }
 
+    for batch in &dataset.retroBatches {
+        if !retro_batch_affected_by_mutation(dataset, batch, mutation)? {
+            continue;
+        }
+        affected_retro_batches.insert(batch.id.clone());
+        if batch.status == CompensationRevisionStatus::FINALIZED {
+            blocked_retro_batches.insert(batch.id.clone());
+        }
+    }
+
     Ok(MutationImpact {
         affectedPayrolls: affected.into_iter().collect(),
         blockedByFinalized: blocked.into_iter().collect(),
+        affectedRetroBatches: affected_retro_batches.into_iter().collect(),
+        blockedByFinalizedRetroBatches: blocked_retro_batches.into_iter().collect(),
     })
 }
 
@@ -363,8 +514,9 @@ pub fn evaluate_payroll_invalidation(
 mod tests {
     use super::*;
     use crate::models::{
-        AccrualType, BordroKaydi, GelirKalemleri, KesintiKalemleri, PuantajOzeti,
-        ResolvedStatutorySnapshot,
+        AccrualType, BordroKaydi, CompensationRevisionStatus, GelirKalemleri, KesintiKalemleri,
+        PuantajOzeti, ResolvedStatutorySnapshot, RetroAdjustmentBatch, RetroAllocation,
+        RetroEarningCode, RetroSettlementStatus, RetroSgkTreatment, RetroTaxTreatment,
     };
     use crate::payroll_engine::PayrollDatasetSnapshot;
 
@@ -526,6 +678,82 @@ mod tests {
         }
     }
 
+    fn retro_batch(status: CompensationRevisionStatus) -> (RetroAdjustmentBatch, RetroAllocation) {
+        let batch = RetroAdjustmentBatch {
+            id: "retro-batch".into(),
+            revisionId: "revision".into(),
+            personnelId: "person-1".into(),
+            paymentDate: "2026-06-20".into(),
+            status,
+            settlementStatus: if status == CompensationRevisionStatus::FINALIZED {
+                RetroSettlementStatus::PAID
+            } else {
+                RetroSettlementStatus::UNSETTLED
+            },
+            totalGrossDelta: 10.into(),
+            description: None,
+            createdAt: None,
+            calculatedAt: None,
+            finalizedAt: None,
+        };
+        let allocation = RetroAllocation {
+            id: "retro-allocation".into(),
+            batchId: batch.id.clone(),
+            personnelId: batch.personnelId.clone(),
+            sourcePeriodId: "2026-01".into(),
+            earningCode: RetroEarningCode::BASE_WAGE,
+            originalRecognizedAmount: 0.into(),
+            previousAuthoritativeRetroAmount: 0.into(),
+            targetAmount: 10.into(),
+            deltaAmount: 10.into(),
+            sgkTreatment: RetroSgkTreatment::WAGE_SOURCE_MONTH,
+            incomeTaxTreatment: RetroTaxTreatment::TAXABLE,
+            stampTaxTreatment: RetroTaxTreatment::TAXABLE,
+            originalPek: 0.into(),
+            retroPekDelta: 0.into(),
+            adjustedPek: 0.into(),
+            workerSgkDelta: 0.into(),
+            workerUnemploymentDelta: 0.into(),
+            employerSgkDelta: 0.into(),
+            employerUnemploymentDelta: 0.into(),
+            metadata: None,
+        };
+        (batch, allocation)
+    }
+
+    #[test]
+    fn source_mutation_invalidates_retro_ledger_and_finalized_retro_is_a_blocker() {
+        let (batch, allocation) = retro_batch(CompensationRevisionStatus::CALCULATED);
+        let mut data = dataset();
+        data.retroBatches.push(batch);
+        data.retroAllocations.push(allocation);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("period must exist");
+        assert_eq!(impact.affectedRetroBatches, vec!["retro-batch"]);
+        assert!(impact.blockedByFinalizedRetroBatches.is_empty());
+
+        let (finalized_batch, finalized_allocation) =
+            retro_batch(CompensationRevisionStatus::FINALIZED);
+        data.retroBatches = vec![finalized_batch];
+        data.retroAllocations = vec![finalized_allocation];
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonPeriod {
+                personnelId: "person-1".into(),
+                periodId: "2026-01".into(),
+            },
+        )
+        .expect("period must exist");
+        assert_eq!(impact.blockedByFinalizedRetroBatches, vec!["retro-batch"]);
+    }
+
     #[test]
     fn source_mutation_returns_sorted_dependents_and_finalized_blockers() {
         let impact = evaluate_payroll_invalidation(
@@ -553,6 +781,36 @@ mod tests {
             ]
         );
         assert_eq!(impact.blockedByFinalized, impact.affectedPayrolls[1..]);
+    }
+
+    #[test]
+    fn payment_tax_year_mutation_invalidates_retro_payment_chain() {
+        let (batch, allocation) = retro_batch(CompensationRevisionStatus::CALCULATED);
+        let mut data = dataset();
+        data.retroBatches.push(batch);
+        data.retroAllocations.push(allocation);
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::TaxYear { taxYear: 2026 },
+        )
+        .expect("retro payment date must parse");
+        assert_eq!(impact.affectedRetroBatches, vec!["retro-batch"]);
+        assert!(impact.blockedByFinalizedRetroBatches.is_empty());
+
+        let (finalized_batch, finalized_allocation) =
+            retro_batch(CompensationRevisionStatus::FINALIZED);
+        data.retroBatches = vec![finalized_batch];
+        data.retroAllocations = vec![finalized_allocation];
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PersonTaxYear {
+                personnelId: "person-1".into(),
+                taxYear: 2026,
+            },
+        )
+        .expect("retro payment date must parse");
+        assert_eq!(impact.blockedByFinalizedRetroBatches, vec!["retro-batch"]);
     }
 
     #[test]

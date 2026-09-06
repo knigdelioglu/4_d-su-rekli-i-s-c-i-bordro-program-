@@ -6,6 +6,10 @@ use bordro_programi_lib::{
     db::create_in_memory_connection,
     repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository,
     repositories::personnel_repo::PersonnelRepository,
+    repositories::payroll_repo::PayrollRepository,
+    repositories::retro_repo::get_allocations,
+    repositories::retro_repo::get_batches,
+    repositories::retro_repo::get_revisions,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -84,6 +88,199 @@ fn native_legacy_migration_adds_missing_annual_parameters_for_imported_tax_years
         parameters[0].sigortaGvYillikBrutAsgariUcretTavani,
         Some(Decimal::from(396360))
     );
+}
+
+#[test]
+fn native_v3_restore_imports_retro_graph_inside_outer_transaction() {
+    let mut conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
+    let payload = json!({
+        "backupVersion": 3,
+        "donemler": [{
+            "id": "2026-03",
+            "yil": 2026,
+            "ay": 3,
+            "baslangicTarihi": "2026-03-15",
+            "bitisTarihi": "2026-04-14",
+            "donemAdi": "Mart 2026",
+            "taxYear": 2026,
+            "taxMonth": 4
+        }],
+        "personeller": [{
+            "id": "retro-person",
+            "tcNo": "10000000001",
+            "ad": "Retro",
+            "soyad": "Test",
+            "grup": "1. Grup"
+        }],
+        "taxOpenings": [],
+        "sickLeaveRecords": [],
+        "annualPayrollParameters": [],
+        "compensationRevisions": [{
+            "id": "revision-1",
+            "reason": "COLLECTIVE_AGREEMENT",
+            "title": "2026 TİS",
+            "effectiveFrom": "2026-03-15",
+            "status": "FINALIZED",
+            "scope": "SELECTED_PERSONNEL",
+            "personnelIds": ["retro-person"]
+        }],
+        "compensationRevisionOverrides": [],
+        "retroBatches": [{
+            "id": "batch-1",
+            "revisionId": "revision-1",
+            "personnelId": "retro-person",
+            "paymentDate": "2026-06-20",
+            "status": "FINALIZED",
+            "totalGrossDelta": 10
+        }],
+        "retroAllocations": [{
+            "id": "allocation-1",
+            "batchId": "batch-1",
+            "personnelId": "retro-person",
+            "sourcePeriodId": "2026-03",
+            "earningCode": "BASE_WAGE",
+            "originalRecognizedAmount": 100,
+            "targetAmount": 110,
+            "deltaAmount": 10,
+            "sgkTreatment": "WAGE_SOURCE_MONTH",
+            "incomeTaxTreatment": "TAXABLE",
+            "stampTaxTreatment": "TAXABLE"
+        }]
+    })
+    .to_string();
+
+    MigrationService::replace_backup_data(&mut conn, &payload)
+        .expect("retro graph içeren V3 yedek tek transaction ile içe aktarılmalı");
+
+    assert_eq!(get_revisions(&conn).expect("revision okunmalı").len(), 1);
+    assert_eq!(get_batches(&conn).expect("batch okunmalı").len(), 1);
+    let allocations = get_allocations(&conn).expect("allocation okunmalı");
+    assert_eq!(allocations.len(), 1);
+    assert_eq!(allocations[0].deltaAmount, Decimal::from(10));
+}
+
+#[test]
+fn native_v3_restore_preserves_multi_accrual_payment_event_identity() {
+    let mut conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
+    let mut retro_payroll = legacy_payroll_value();
+    retro_payroll["id"] = json!("payroll-v3-retro");
+    retro_payroll["accrualId"] = json!("payroll-v3-retro");
+    retro_payroll["accrualType"] = json!("RETRO_ADJUSTMENT");
+    retro_payroll["paymentDate"] = json!("2026-02-14");
+    retro_payroll["sequence"] = json!(1);
+    let payload = json!({
+        "backupVersion": 3,
+        "donemler": [{
+            "id": "2026-01",
+            "yil": 2026,
+            "ay": 1,
+            "baslangicTarihi": "2026-01-15",
+            "bitisTarihi": "2026-02-14",
+            "donemAdi": "Ocak 2026",
+            "taxYear": 2026,
+            "taxMonth": 2
+        }],
+        "personeller": [{
+            "id": "person-1",
+            "tcNo": "10000000002",
+            "ad": "V3",
+            "soyad": "Retro",
+            "grup": "1. Grup"
+        }],
+        "bordrolar": [legacy_payroll_value(), retro_payroll],
+        "taxOpenings": [],
+        "sickLeaveRecords": [],
+        "annualPayrollParameters": []
+    })
+    .to_string();
+
+    MigrationService::replace_backup_data(&mut conn, &payload)
+        .expect("V3 çoklu tahakkuk kimliği korunarak içe aktarılmalı");
+
+    let payrolls = PayrollRepository::get_all(&conn).expect("tahakkuklar okunmalı");
+    let restored = payrolls
+        .iter()
+        .find(|payroll| payroll.id == "payroll-v3-retro")
+        .expect("V3 retro payment event bulunmalı");
+    assert_eq!(restored.accrualType, bordro_programi_lib::domain::models::AccrualType::RETRO_ADJUSTMENT);
+    assert_eq!(restored.accrualId, "payroll-v3-retro");
+    assert_eq!(restored.sequence, 1);
+}
+
+#[test]
+fn native_v4_restore_rejects_retro_batch_payment_lifecycle_mismatch() {
+    let mut retro_payroll = legacy_payroll_value();
+    retro_payroll["id"] = json!("retro-payment-v4");
+    retro_payroll["accrualId"] = json!("batch-v4");
+    retro_payroll["accrualType"] = json!("RETRO_ADJUSTMENT");
+    retro_payroll["donemId"] = json!("2026-03");
+    retro_payroll["paymentDate"] = json!("2026-04-20");
+    retro_payroll["sequence"] = json!(0);
+    retro_payroll["gelirToplam"] = json!(10);
+    retro_payroll["status"] = json!("FINALIZED");
+
+    let payload = json!({
+        "backupVersion": 4,
+        "donemler": [{
+            "id": "2026-03",
+            "yil": 2026,
+            "ay": 3,
+            "baslangicTarihi": "2026-03-15",
+            "bitisTarihi": "2026-04-14",
+            "donemAdi": "Mart 2026",
+            "taxYear": 2026,
+            "taxMonth": 4
+        }],
+        "personeller": [{
+            "id": "person-1",
+            "tcNo": "10000000003",
+            "ad": "V4",
+            "soyad": "Retro",
+            "grup": "1. Grup"
+        }],
+        "bordrolar": [retro_payroll],
+        "taxOpenings": [],
+        "sickLeaveRecords": [],
+        "annualPayrollParameters": [],
+        "compensationRevisions": [{
+            "id": "revision-v4",
+            "reason": "COLLECTIVE_AGREEMENT",
+            "title": "2026 V4",
+            "effectiveFrom": "2026-03-15",
+            "status": "CALCULATED",
+            "scope": "SELECTED_PERSONNEL",
+            "personnelIds": ["person-1"]
+        }],
+        "compensationRevisionOverrides": [],
+        "retroBatches": [{
+            "id": "batch-v4",
+            "revisionId": "revision-v4",
+            "personnelId": "person-1",
+            "paymentDate": "2026-04-20",
+            "status": "CALCULATED",
+            "settlementStatus": "UNSETTLED",
+            "totalGrossDelta": 10
+        }],
+        "retroAllocations": [{
+            "id": "allocation-v4",
+            "batchId": "batch-v4",
+            "personnelId": "person-1",
+            "sourcePeriodId": "2026-03",
+            "earningCode": "BASE_WAGE",
+            "originalRecognizedAmount": 0,
+            "targetAmount": 10,
+            "deltaAmount": 10,
+            "sgkTreatment": "WAGE_SOURCE_MONTH",
+            "incomeTaxTreatment": "TAXABLE",
+            "stampTaxTreatment": "TAXABLE"
+        }]
+    })
+    .to_string();
+
+    let mut conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
+    let error = MigrationService::replace_backup_data(&mut conn, &payload)
+        .expect_err("CALCULATED batch FINALIZED payment event ile restore edilmemeli");
+    assert!(error.to_string().contains("lifecycle"));
 }
 
 #[test]

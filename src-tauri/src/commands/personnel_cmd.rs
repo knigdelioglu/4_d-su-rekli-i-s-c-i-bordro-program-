@@ -54,6 +54,14 @@ pub fn delete_personnel(db: State<'_, DbState>, id: String) -> Result<()> {
     } else {
         None
     };
+    if let Some(impact) = impact.as_ref() {
+        if !impact.affectedRetroBatches.is_empty() {
+            return Err(DomainError::ValidationError(
+                "Retro batch tarihçesi bulunan personel silinemez; audit ledger korunmalıdır."
+                    .into(),
+            ));
+        }
+    }
     PersonnelRepository::delete(&conn, &id)?;
     if let Some(impact) = impact {
         PayrollInvalidationRepository::apply_impact(&conn, &impact)?;

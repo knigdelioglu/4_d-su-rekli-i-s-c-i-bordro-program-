@@ -8,6 +8,7 @@
 
 use crate::calculations::*;
 use crate::models::*;
+use crate::retro::retro_payment_income;
 use crate::{DomainError, Result};
 use chrono::{Datelike, Duration, NaiveDate};
 use rust_decimal::Decimal;
@@ -28,6 +29,14 @@ pub struct PayrollDatasetSnapshot {
     pub annualPayrollParameters: Vec<AnnualPayrollParameters>,
     #[serde(default)]
     pub zamAylari: Vec<i32>,
+    #[serde(default)]
+    pub compensationRevisions: Vec<CompensationRevision>,
+    #[serde(default)]
+    pub compensationRevisionOverrides: Vec<CompensationRevisionOverride>,
+    #[serde(default)]
+    pub retroBatches: Vec<RetroAdjustmentBatch>,
+    #[serde(default)]
+    pub retroAllocations: Vec<RetroAllocation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -181,7 +190,7 @@ fn validate_period(period: &BordroDonemi) -> Result<()> {
     Ok(())
 }
 
-fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
+pub(crate) fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
     validate_period(period)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
@@ -461,7 +470,7 @@ fn resolve_statutory_snapshot_internal(
     })
 }
 
-fn calculate_paid_sick_dates_from_records(
+pub fn calculate_paid_sick_dates_from_records(
     records: &[SickLeaveRecord],
     period: &BordroDonemi,
 ) -> Vec<NaiveDate> {
@@ -792,9 +801,14 @@ pub fn payment_event_order(
     sequence: i32,
     accrual_id: &str,
 ) -> Result<AccrualOrder> {
+    let parsed_payment_date =
+        parse_period_date(payment_date, &period.id, "ödeme/tahakkuk")?;
     Ok(AccrualOrder {
-        tax_ordinal: tax_ordinal(period.taxYear, period.taxMonth),
-        payment_date: parse_period_date(payment_date, &period.id, "ödeme/tahakkuk")?,
+        // Payment date is the event-level source of truth for new records.
+        // Legacy records retain their period-compatible date and therefore
+        // produce the same ordinal as before.
+        tax_ordinal: tax_ordinal(parsed_payment_date.year(), parsed_payment_date.month() as i32),
+        payment_date: parsed_payment_date,
         sequence,
         accrual_id: accrual_id.into(),
     })
@@ -848,6 +862,13 @@ fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
 }
 
 pub fn is_provisional_supplementary_payroll(payroll: &BordroKaydi) -> bool {
+    if payroll.accrualType == AccrualType::RETRO_ADJUSTMENT {
+        // A retro event carries source-month SGK snapshots in its allocations;
+        // its payment-month statutory snapshot is used only for GV/DV and any
+        // explicitly payment-month non-wage PEK. It is not a provisional
+        // supplementary event.
+        return false;
+    }
     payroll.accrualType != AccrualType::NORMAL
         && !matches!(
             payroll.statutorySnapshot.as_ref().map(|snapshot| snapshot.source),
@@ -935,6 +956,20 @@ fn resolve_accrual_input(
         return Err(DomainError::ValidationError(
             "Tahakkuk sıra numarası negatif olamaz.".into(),
         ));
+    }
+    if input.accrualType == AccrualType::RETRO_ADJUSTMENT && input.grossAmount.is_none() {
+        let batch = request
+            .dataset
+            .retroBatches
+            .iter()
+            .find(|batch| batch.id == input.accrualId)
+            .ok_or_else(|| {
+                DomainError::NotFound(format!(
+                    "Retro adjustment batch bulunamadı: {}",
+                    input.accrualId
+                ))
+            })?;
+        input.grossAmount = Some(batch.totalGrossDelta);
     }
     let payment_date = parse_period_date(&input.paymentDate, &period.id, "ödeme/tahakkuk")?;
     if payment_date.year() != period.taxYear || payment_date.month() as i32 != period.taxMonth {
@@ -1056,6 +1091,12 @@ fn resolve_prior_accrual_state<'a>(
     ordered_prior_payment_events(dataset, personnel_id, &current_order)?
         .into_iter()
         .filter(|(order, _)| order.tax_ordinal == current_order.tax_ordinal)
+        // DRAFT/STALE rows are retained for audit, but they are not payment
+        // events in the authoritative tax/PEK chain. Counting one here would
+        // consume the same-month GV/DV/PEK state without a valid entitlement.
+        .filter(|(_, payroll)| {
+            matches!(payroll.status, BordroStatus::CALCULATED | BordroStatus::FINALIZED)
+        })
         .map(|(_, payroll)| {
             ensure_authoritative_payment_event(payroll)?;
             Ok(payroll)
@@ -1901,16 +1942,27 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
             accrualId: accrual.accrualId.clone(),
         },
     )?;
-    if !impact.blockedByFinalized.is_empty() {
+    if !impact.blockedByFinalized.is_empty()
+        || !impact.blockedByFinalizedRetroBatches.is_empty()
+    {
         let keys = impact
             .blockedByFinalized
             .iter()
             .map(|key| format!("{} / {}", key.personnelId, key.periodId))
             .collect::<Vec<_>>()
             .join(", ");
+        let retro_batches = impact.blockedByFinalizedRetroBatches.join(", ");
+        let detail = [
+            (!keys.is_empty()).then_some(keys),
+            (!retro_batches.is_empty()).then_some(format!("retro batch: {retro_batches}")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
         return Err(DomainError::PayrollFinalized(format!(
-            "Kesinleştirme, downstream FINALIZED bordroları etkilediği için yapılamaz: {}.",
-            keys
+            "Kesinleştirme, downstream FINALIZED bordro/retro tarihçesini etkilediği için yapılamaz: {}.",
+            detail
         )));
     }
 
@@ -1957,6 +2009,36 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     }
 
     let is_normal_accrual = accrual.accrualType == AccrualType::NORMAL;
+    let is_retro_accrual = accrual.accrualType == AccrualType::RETRO_ADJUSTMENT;
+    let retro_payment = if is_retro_accrual {
+        Some(retro_payment_income(dataset, &accrual.accrualId)?)
+    } else {
+        None
+    };
+    let (retro_income_tax_exempt, retro_stamp_tax_exempt) = retro_payment
+        .as_ref()
+        .map(|(_, allocations, _, _)| {
+            allocations.iter().fold(
+                (Decimal::ZERO, Decimal::ZERO),
+                |(income_tax_exempt, stamp_tax_exempt), allocation| {
+                    (
+                        income_tax_exempt
+                            + if allocation.incomeTaxTreatment == RetroTaxTreatment::EXEMPT {
+                                allocation.deltaAmount
+                            } else {
+                                Decimal::ZERO
+                            },
+                        stamp_tax_exempt
+                            + if allocation.stampTaxTreatment == RetroTaxTreatment::EXEMPT {
+                                allocation.deltaAmount
+                            } else {
+                                Decimal::ZERO
+                            },
+                    )
+                },
+            )
+        })
+        .unwrap_or((Decimal::ZERO, Decimal::ZERO));
     let attendance = if is_normal_accrual {
         Some(normal_attendance(dataset, &request.personnelId, &request.periodId)?)
     } else {
@@ -2070,6 +2152,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     } else {
         (PuantajOzeti::default(), PuantajOzeti::default(), None)
     };
+    let mut retro_payment_pek_income = GelirKalemleri::default();
     let (mut income, mut is_primi_detail) = if is_normal_accrual {
         let (mut income, is_primi_detail) = auto_fill_gelirler_from_puantaj(
             &summary,
@@ -2079,6 +2162,9 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         )?;
         apply_manual_payroll_income(&mut income, request.manualIncome.as_ref())?;
         (income, Some(is_primi_detail))
+    } else if let Some((_, _, retro_income, payment_month_pek_income)) = retro_payment.as_ref() {
+        retro_payment_pek_income = payment_month_pek_income.clone();
+        (retro_income.clone(), None)
     } else {
         let amount = accrual.grossAmount.unwrap_or_default();
         let mut income = GelirKalemleri::default();
@@ -2086,6 +2172,11 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
             AccrualType::TEDIYE => income.tediye = Some(amount),
             AccrualType::TIS_IKRAMIYE => income.tisIkramiyesi = Some(amount),
             AccrualType::SUPPLEMENTAL => income.ekOdeme = Some(amount),
+            AccrualType::RETRO_ADJUSTMENT => {
+                // The actual earning-code breakdown is resolved from the
+                // authoritative RetroAdjustmentBatch below.
+                income.ekOdeme = Some(amount);
+            }
             AccrualType::NORMAL => unreachable!(),
         }
         // Supplementary accruals deliberately do not copy attendance-derived
@@ -2203,6 +2294,60 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
                 apply_lower_bound: true,
             },
         )?
+    } else if is_retro_accrual {
+        let (_, allocations, _, _) = retro_payment.as_ref().ok_or_else(|| {
+            DomainError::InvalidData("Retro payment allocation state çözülemedi.".into())
+        })?;
+        let (pek_detail, next_devreden) =
+            calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+                &retro_payment_pek_income,
+                None,
+                Some(&effective_settings),
+                incoming_devreden,
+                Some(&statutory_snapshot),
+                month_to_date_pek,
+                PekCalculationOptions {
+                    tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
+                    apply_lower_bound: false,
+                },
+            )?;
+        let source_worker_sgk = allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
+            sum + allocation.workerSgkDelta
+        });
+        let source_worker_unemployment =
+            allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
+                sum + allocation.workerUnemploymentDelta
+            });
+        let sgk_rate = effective_settings
+            .sgkIsciOraniYuzde
+            .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
+            / dec!(100);
+        let unemployment_rate = effective_settings
+            .issizlikIsciOraniYuzde
+            .ok_or_else(|| DomainError::InvalidData("İşsizlik işçi oranı eksik.".into()))?
+            / dec!(100);
+        let payment_month_worker_pek = pek_detail.primMatrahi;
+        (
+            KesintiKalemleri {
+                isciSgkPrimi: Some(
+                    (source_worker_sgk + payment_month_worker_pek * sgk_rate)
+                        .round_dp_with_strategy(
+                            2,
+                            rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                        ),
+                ),
+                isciIssizlikPrimi: Some(
+                    (source_worker_unemployment + payment_month_worker_pek * unemployment_rate)
+                        .round_dp_with_strategy(
+                            2,
+                            rust_decimal::RoundingStrategy::MidpointAwayFromZero,
+                        ),
+                ),
+                ..KesintiKalemleri::default()
+            },
+            pek_detail,
+            next_devreden,
+        )
     } else {
         let (pek_detail, next_devreden) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
             &income,
@@ -2277,7 +2422,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     let monthly_minimum = round2(statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30));
     let same_month_stamp_used = same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?;
     let stamp_detail = calculate_monthly_stamp_tax_state(
-        income_total,
+        (income_total - retro_stamp_tax_exempt).max(Decimal::ZERO),
         monthly_minimum,
         stamp_rate,
         same_month_stamp_used,
@@ -2344,6 +2489,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         insurance_used,
     );
     let gv_base = (income_total
+        - retro_income_tax_exempt
         - deductions.isciSgkPrimi.unwrap_or_default()
         - deductions.isciIssizlikPrimi.unwrap_or_default()
         - income

@@ -43,6 +43,14 @@ pub fn run() {
             commands::get_sick_leave_records,
             commands::save_sick_leave_record,
             commands::delete_sick_leave_record,
+            commands::get_compensation_revisions,
+            commands::get_compensation_revision_overrides,
+            commands::get_retro_adjustment_batches,
+            commands::get_retro_adjustment_allocations,
+            commands::save_compensation_revision,
+            commands::calculate_retro_preview,
+            commands::save_retro_adjustment_batch,
+            commands::create_retro_payment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
