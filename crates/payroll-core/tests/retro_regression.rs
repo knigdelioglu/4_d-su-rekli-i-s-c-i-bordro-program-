@@ -1,12 +1,14 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
-    calculate_payroll, AccrualType, AnnualPayrollParameters, BordroDonemi, BordroKaydi,
-    BordroStatus, CompensationRevision, CompensationRevisionOverride, CompensationRevisionReason,
+    calculate_payroll, canonical_sgk_earning_class, retro_earning_policy,
+    retro_payable_settlement_amount, retro_payment_income, round_sgk_amount, AccrualType,
+    AnnualPayrollParameters, BordroDonemi, BordroKaydi, BordroStatus, CanonicalSgkEarningClass,
+    CompensationRevision, CompensationRevisionOverride, CompensationRevisionReason,
     CompensationRevisionScope, CompensationRevisionStatus, DonemselKurumDegerleri,
     PayrollAccrualInput, PayrollCalculationRequest, PayrollDatasetSnapshot, Personel,
     PersonelPuantaj, RetroAdjustmentBatch, RetroAllocation, RetroEarningCode,
-    RetroEntitlementEngine, RetroParameterKey, RetroSgkTreatment, RetroTaxTreatment,
-    RetroSettlementStatus, SickLeaveRecord,
+    RetroEntitlementEngine, RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment,
+    RetroTaxTreatment, SickLeaveRecord,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -200,6 +202,34 @@ fn retro_request(
     }
 }
 
+fn wage_retro_result(
+    dataset: PayrollDatasetSnapshot,
+    batch_id: &str,
+    revision_id: &str,
+    daily_wage: Decimal,
+) -> payroll_core::RetroCalculationResult {
+    RetroEntitlementEngine::calculate(&retro_request(
+        dataset,
+        batch_id,
+        revision(revision_id, "2026-02-15"),
+        vec![wage_override(
+            &format!("{batch_id}-override"),
+            revision_id,
+            daily_wage,
+        )],
+        "2026-06-20",
+    ))
+    .expect("wage retro fixture should calculate")
+}
+
+fn append_retro_result(
+    dataset: &mut PayrollDatasetSnapshot,
+    result: payroll_core::RetroCalculationResult,
+) {
+    dataset.retroBatches.push(result.batch);
+    dataset.retroAllocations.extend(result.allocations);
+}
+
 #[test]
 fn retro_batch_primary_id_cannot_be_rebound_to_another_revision() {
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
@@ -212,6 +242,11 @@ fn retro_batch_primary_id_cannot_be_rebound_to_another_revision() {
         status: CompensationRevisionStatus::CALCULATED,
         settlementStatus: RetroSettlementStatus::UNSETTLED,
         totalGrossDelta: Decimal::ZERO,
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
+        outstandingReceivable: Decimal::ZERO,
         description: None,
         createdAt: None,
         calculatedAt: None,
@@ -222,7 +257,11 @@ fn retro_batch_primary_id_cannot_be_rebound_to_another_revision() {
         source,
         "shared-batch-id",
         revision("current-revision", "2026-02-15"),
-        vec![wage_override("current-override", "current-revision", dec!(120))],
+        vec![wage_override(
+            "current-override",
+            "current-revision",
+            dec!(120),
+        )],
         "2026-06-20",
     ))
     .expect_err("an existing batch id must not be rebound");
@@ -402,7 +441,10 @@ fn same_revision_second_correction_is_delta_only() {
 
     assert_eq!(second.batch.totalGrossDelta, dec!(280));
     assert_eq!(second.allocations.len(), 1);
-    assert_eq!(second.allocations[0].previousAuthoritativeRetroAmount, dec!(560));
+    assert_eq!(
+        second.allocations[0].previousAuthoritativeRetroAmount,
+        dec!(560)
+    );
     assert_eq!(second.allocations[0].targetAmount, dec!(3640));
     assert_eq!(second.allocations[0].deltaAmount, dec!(280));
 }
@@ -418,7 +460,11 @@ fn later_authoritative_retro_on_same_source_period_blocks_earlier_payment() {
         source.clone(),
         "retro-later-payment",
         revision("rev-later-payment", "2026-02-15"),
-        vec![wage_override("ov-later-payment", "rev-later-payment", dec!(120))],
+        vec![wage_override(
+            "ov-later-payment",
+            "rev-later-payment",
+            dec!(120),
+        )],
         "2026-06-20",
     ))
     .expect("later authoritative retro should calculate");
@@ -451,11 +497,7 @@ fn same_day_authoritative_retro_is_recognized_as_an_earlier_appended_event() {
         source.clone(),
         "retro-same-day-1",
         revision("rev-same-day-1", "2026-02-15"),
-        vec![wage_override(
-            "ov-same-day-1",
-            "rev-same-day-1",
-            dec!(120),
-        )],
+        vec![wage_override("ov-same-day-1", "rev-same-day-1", dec!(120))],
         "2026-06-20",
     ))
     .expect("first same-day retro should calculate");
@@ -466,16 +508,15 @@ fn same_day_authoritative_retro_is_recognized_as_an_earlier_appended_event() {
         source,
         "retro-same-day-2",
         revision("rev-same-day-2", "2026-02-15"),
-        vec![wage_override(
-            "ov-same-day-2",
-            "rev-same-day-2",
-            dec!(125),
-        )],
+        vec![wage_override("ov-same-day-2", "rev-same-day-2", dec!(125))],
         "2026-06-20",
     ))
     .expect("a new same-day retro event is appended after existing authoritative events");
 
-    assert_eq!(second.allocations[0].previousAuthoritativeRetroAmount, dec!(560));
+    assert_eq!(
+        second.allocations[0].previousAuthoritativeRetroAmount,
+        dec!(560)
+    );
     assert_eq!(second.allocations[0].deltaAmount, dec!(140));
 }
 
@@ -511,7 +552,9 @@ fn draft_and_stale_retro_batches_are_not_recognized() {
     stale_allocation.id = "allocation-stale".into();
     stale_allocation.batchId = stale_batch.id.clone();
     source.retroBatches.extend([draft_batch, stale_batch]);
-    source.retroAllocations.extend([draft_allocation, stale_allocation]);
+    source
+        .retroAllocations
+        .extend([draft_allocation, stale_allocation]);
 
     let result = RetroEntitlementEngine::calculate(&retro_request(
         source,
@@ -526,7 +569,10 @@ fn draft_and_stale_retro_batches_are_not_recognized() {
     ))
     .expect("draft/stale rows must not block a new calculation");
     assert_eq!(result.batch.totalGrossDelta, dec!(560));
-    assert_eq!(result.allocations[0].previousAuthoritativeRetroAmount, Decimal::ZERO);
+    assert_eq!(
+        result.allocations[0].previousAuthoritativeRetroAmount,
+        Decimal::ZERO
+    );
 }
 
 #[test]
@@ -543,7 +589,11 @@ fn open_service_period_after_payment_date_is_not_replayed() {
         source,
         "retro-closed-only",
         revision("rev-closed-only", "2026-02-15"),
-        vec![wage_override("ov-closed-only", "rev-closed-only", dec!(120))],
+        vec![wage_override(
+            "ov-closed-only",
+            "rev-closed-only",
+            dec!(120),
+        )],
         "2026-06-20",
     ))
     .expect("closed source period should calculate");
@@ -797,7 +847,12 @@ fn negative_retro_delta_is_explicit_and_not_clamped_to_zero() {
     assert_eq!(result.allocations[0].deltaAmount, dec!(-280));
     assert_eq!(result.allocations[0].retroPekDelta, dec!(-280));
     assert!(result.allocations[0].workerSgkDelta < Decimal::ZERO);
-    assert!(result.allocations[0].employerSgkDelta < Decimal::ZERO);
+    // Worker PEK falls, but the canonical final employer PEK remains at the
+    // lower bound.  The employer burden therefore moves through completion,
+    // not through a shortcut of current worker PEK × employer rate.
+    assert_eq!(result.allocations[0].employerSgkDelta, Decimal::ZERO);
+    assert!(result.allocations[0].employerLowerBoundDelta > Decimal::ZERO);
+    assert!(result.allocations[0].employerLowerBoundPremiumDelta > Decimal::ZERO);
 }
 
 #[test]
@@ -835,10 +890,232 @@ fn signed_overpayment_ledger_can_be_reconciled_by_a_later_authoritative_revision
     ))
     .expect("later authoritative revision should reconcile signed ledger");
 
-    assert_eq!(recovery.allocations[0].previousAuthoritativeRetroAmount, dec!(-280));
+    assert_eq!(
+        recovery.allocations[0].previousAuthoritativeRetroAmount,
+        dec!(-280)
+    );
     assert_eq!(recovery.allocations[0].targetAmount, dec!(2660));
     assert_eq!(recovery.allocations[0].deltaAmount, dec!(140));
     assert_eq!(recovery.allocations[0].retroPekDelta, dec!(140));
+    assert_eq!(recovery.batch.offsetSettlementAmount, dec!(140));
+    assert_eq!(recovery.batch.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(recovery.batch.outstandingReceivable, dec!(140));
+    assert_eq!(
+        recovery.batch.settlementStatus,
+        RetroSettlementStatus::SETTLED_BY_OFFSET
+    );
+}
+
+#[test]
+fn open_overpayment_does_not_create_duplicate_cash_payment() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let overpayment = wage_retro_result(
+        source.clone(),
+        "retro-open-overpayment",
+        "rev-open-overpayment",
+        dec!(90),
+    );
+    assert_eq!(overpayment.batch.totalGrossDelta, dec!(-280));
+    assert_eq!(overpayment.batch.recoverableAmount, dec!(280));
+    assert_eq!(overpayment.batch.outstandingReceivable, dec!(280));
+    append_retro_result(&mut source, overpayment);
+
+    let later = wage_retro_result(
+        source.clone(),
+        "retro-open-overpayment-later",
+        "rev-open-overpayment-later",
+        dec!(100),
+    );
+    assert_eq!(later.batch.totalGrossDelta, dec!(280));
+    assert_eq!(later.batch.offsetSettlementAmount, dec!(280));
+    assert_eq!(later.batch.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(later.batch.outstandingReceivable, Decimal::ZERO);
+    assert_eq!(
+        later.batch.settlementStatus,
+        RetroSettlementStatus::SETTLED_BY_OFFSET
+    );
+    assert_eq!(retro_payable_settlement_amount(&later.batch), Decimal::ZERO);
+
+    let mut with_later = source;
+    append_retro_result(&mut with_later, later.clone());
+    assert!(retro_payment_income(&with_later, &later.batch.id).is_err());
+}
+
+#[test]
+fn partial_overpayment_offset_leaves_only_the_payable_remainder() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+    let overpayment = wage_retro_result(
+        source.clone(),
+        "retro-partial-overpayment",
+        "rev-partial-overpayment",
+        dec!(96.428571428571428571),
+    );
+    assert_eq!(overpayment.batch.totalGrossDelta, dec!(-100));
+    append_retro_result(&mut source, overpayment);
+
+    let later = wage_retro_result(
+        source,
+        "retro-partial-overpayment-later",
+        "rev-partial-overpayment-later",
+        dec!(101.785714285714285714),
+    );
+    assert_eq!(later.batch.totalGrossDelta, dec!(150));
+    assert_eq!(later.batch.offsetSettlementAmount, dec!(100));
+    assert_eq!(later.batch.payableSettlementAmount, dec!(50));
+    assert_eq!(later.batch.outstandingReceivable, Decimal::ZERO);
+    assert_eq!(later.allocations[0].offsetSettlementAmount, dec!(100));
+    assert_eq!(later.allocations[0].payableSettlementAmount, dec!(50));
+}
+
+#[test]
+fn larger_overpayment_than_new_entitlement_remains_outstanding() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+    let overpayment = wage_retro_result(
+        source.clone(),
+        "retro-large-overpayment",
+        "rev-large-overpayment",
+        dec!(94.642857142857142857),
+    );
+    assert_eq!(overpayment.batch.totalGrossDelta, dec!(-150));
+    append_retro_result(&mut source, overpayment);
+
+    let later = wage_retro_result(
+        source,
+        "retro-large-overpayment-later",
+        "rev-large-overpayment-later",
+        dec!(98.214285714285714286),
+    );
+    assert_eq!(later.batch.totalGrossDelta, dec!(100));
+    assert_eq!(later.batch.offsetSettlementAmount, dec!(100));
+    assert_eq!(later.batch.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(later.batch.outstandingReceivable, dec!(50));
+    assert_eq!(
+        later.batch.settlementStatus,
+        RetroSettlementStatus::SETTLED_BY_OFFSET
+    );
+}
+
+#[test]
+fn retro_earning_policy_matches_canonical_normal_pek_buckets() {
+    for code in [
+        RetroEarningCode::WORK_PREMIUM,
+        RetroEarningCode::TIS_BONUS,
+        RetroEarningCode::TEDIYE,
+        RetroEarningCode::SUPPLEMENTAL,
+    ] {
+        assert_eq!(
+            canonical_sgk_earning_class(code),
+            CanonicalSgkEarningClass::NonWage
+        );
+        assert_eq!(
+            retro_earning_policy(code).sgkTreatment,
+            RetroSgkTreatment::NON_WAGE_PAYMENT_MONTH
+        );
+    }
+    for code in [
+        RetroEarningCode::BASE_WAGE,
+        RetroEarningCode::NIGHT_WORK,
+        RetroEarningCode::NIGHT_HOLIDAY,
+        RetroEarningCode::SOCIAL_AID,
+        RetroEarningCode::MEAL,
+        RetroEarningCode::TRANSPORT,
+        RetroEarningCode::CLOTHING,
+        RetroEarningCode::SERVICE_INCREMENT,
+        RetroEarningCode::OTHER,
+    ] {
+        assert_eq!(
+            canonical_sgk_earning_class(code),
+            CanonicalSgkEarningClass::Wage
+        );
+        assert_eq!(
+            retro_earning_policy(code).sgkTreatment,
+            RetroSgkTreatment::WAGE_SOURCE_MONTH
+        );
+    }
+}
+
+#[test]
+fn sgk_rounding_is_midpoint_away_from_zero_for_worker_and_employer_components() {
+    assert_eq!(round_sgk_amount(dec!(0.005)), dec!(0.01));
+    assert_eq!(round_sgk_amount(dec!(-0.005)), dec!(-0.01));
+    assert_eq!(round_sgk_amount(dec!(0.025)), dec!(0.03));
+    assert_eq!(round_sgk_amount(dec!(-0.025)), dec!(-0.03));
+}
+
+#[test]
+fn multi_allocation_sgk_residual_matches_canonical_source_total() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(1), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-multi-allocation-rounding",
+        revision("rev-multi-allocation-rounding", "2026-02-15"),
+        vec![
+            wage_override(
+                "ov-multi-allocation-wage",
+                "rev-multi-allocation-rounding",
+                dec!(1.0089285714285714),
+            ),
+            CompensationRevisionOverride {
+                id: "ov-multi-allocation-clothing".into(),
+                revisionId: "rev-multi-allocation-rounding".into(),
+                parameter: RetroParameterKey::GIYIM_YARDIMI,
+                value: dec!(0.25),
+                personnelId: None,
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect("multi-allocation rounding fixture should calculate");
+
+    let source_allocations = result
+        .allocations
+        .iter()
+        .filter(|allocation| allocation.sgkTreatment == RetroSgkTreatment::WAGE_SOURCE_MONTH)
+        .collect::<Vec<_>>();
+    assert_eq!(source_allocations.len(), 2);
+    assert_eq!(
+        source_allocations
+            .iter()
+            .map(|allocation| allocation.retroPekDelta)
+            .sum::<Decimal>(),
+        dec!(0.50)
+    );
+    assert_eq!(
+        source_allocations
+            .iter()
+            .map(|allocation| allocation.workerSgkDelta)
+            .sum::<Decimal>(),
+        round_sgk_amount(dec!(0.50) * dec!(0.14))
+    );
+    assert_eq!(
+        source_allocations
+            .iter()
+            .map(|allocation| allocation.workerUnemploymentDelta)
+            .sum::<Decimal>(),
+        round_sgk_amount(dec!(0.50) * dec!(0.01))
+    );
+    // Independently rounding both 0.25 allocations would produce 0.04 +
+    // 0.04 = 0.08 for worker SGK; the canonical source total is 0.07 and
+    // the deterministic residual-cent allocation carries that correction.
+    assert_eq!(source_allocations[0].workerSgkDelta, dec!(0.04));
+    assert_eq!(source_allocations[1].workerSgkDelta, dec!(0.03));
 }
 
 #[test]
@@ -861,6 +1138,92 @@ fn source_month_pek_ceiling_limits_incremental_retro_pek_once() {
     assert_eq!(allocation.originalPek, dec!(2520));
     assert_eq!(allocation.retroPekDelta, dec!(480));
     assert_eq!(allocation.adjustedPek, dec!(3000));
+}
+
+#[test]
+fn negative_retro_keeps_source_pek_at_ceiling_when_revised_gross_stays_above_it() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(1000), dec!(1));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = wage_retro_result(
+        source,
+        "retro-negative-cap-flat",
+        "rev-negative-cap-flat",
+        dec!(900),
+    );
+    let allocation = &result.allocations[0];
+    assert_eq!(allocation.originalPek, dec!(3000));
+    assert_eq!(allocation.targetAmount, dec!(25200));
+    assert_eq!(allocation.retroPekDelta, Decimal::ZERO);
+    assert_eq!(allocation.adjustedPek, dec!(3000));
+}
+
+#[test]
+fn negative_retro_crossing_source_pek_ceiling_reconciles_only_the_lost_capacity() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(1000), dec!(1));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = wage_retro_result(
+        source,
+        "retro-negative-cap-cross",
+        "rev-negative-cap-cross",
+        dec!(90),
+    );
+    let allocation = &result.allocations[0];
+    assert_eq!(allocation.originalPek, dec!(3000));
+    assert_eq!(allocation.targetAmount, dec!(2520));
+    assert_eq!(allocation.retroPekDelta, dec!(-480));
+    assert_eq!(allocation.adjustedPek, dec!(2520));
+}
+
+#[test]
+fn positive_retro_reconciles_decreased_employer_lower_bound_completion() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(20), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = wage_retro_result(
+        source,
+        "retro-lower-bound-down",
+        "rev-lower-bound-down",
+        dec!(25),
+    );
+    let allocation = &result.allocations[0];
+    assert_eq!(allocation.originalEmployerLowerBound, dec!(2440));
+    assert_eq!(allocation.targetEmployerLowerBound, dec!(2300));
+    assert_eq!(allocation.employerLowerBoundDelta, dec!(-140));
+    assert!(allocation.employerLowerBoundPremiumDelta < Decimal::ZERO);
+    assert_eq!(allocation.employerSgkDelta, Decimal::ZERO);
+}
+
+#[test]
+fn negative_retro_reconciles_increased_employer_lower_bound_completion() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(25), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = wage_retro_result(
+        source,
+        "retro-lower-bound-up",
+        "rev-lower-bound-up",
+        dec!(20),
+    );
+    let allocation = &result.allocations[0];
+    assert_eq!(allocation.originalEmployerLowerBound, dec!(2300));
+    assert_eq!(allocation.targetEmployerLowerBound, dec!(2440));
+    assert_eq!(allocation.employerLowerBoundDelta, dec!(140));
+    assert!(allocation.employerLowerBoundPremiumDelta > Decimal::ZERO);
+    assert_eq!(allocation.employerSgkDelta, Decimal::ZERO);
 }
 
 #[test]
@@ -972,6 +1335,9 @@ fn separate_authoritative_payment_event_consumes_source_month_pek_ceiling() {
     assert_eq!(allocation.originalPek, dec!(3000));
     assert_eq!(allocation.retroPekDelta, dec!(0));
     assert_eq!(allocation.adjustedPek, dec!(3000));
+    assert!(allocation.originalSourceCarry.is_some());
+    assert!(allocation.targetSourceCarry.is_some());
+    assert_ne!(allocation.originalSourceCarry, allocation.targetSourceCarry);
 }
 
 #[test]
@@ -995,6 +1361,33 @@ fn missing_original_accrual_uses_historical_attendance_and_statutory_snapshot() 
 }
 
 #[test]
+fn missing_original_accrual_counts_paid_sick_r_day_in_source_statutory_snapshot() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source.attendances[0]
+        .gunler
+        .insert("2026-02-20".into(), "R".into());
+    source.sickLeaveRecords.push(SickLeaveRecord {
+        id: "paid-sick-source".into(),
+        personnelId: "p1".into(),
+        startDate: "2026-02-20".into(),
+        endDate: "2026-02-20".into(),
+        createdAt: None,
+        updatedAt: None,
+    });
+
+    let result = wage_retro_result(
+        source,
+        "retro-missing-paid-sick",
+        "rev-missing-paid-sick",
+        dec!(120),
+    );
+    let allocation = &result.allocations[0];
+    assert_eq!(allocation.targetAmount, dec!(3360));
+    assert_eq!(allocation.retroPekDelta, dec!(3360));
+}
+
+#[test]
 fn one_retro_payment_shares_gv_dv_exemption_and_july_starts_fresh() {
     let periods = vec![
         period("2026-04", "2026-04-15", "2026-05-14", 5),
@@ -1014,6 +1407,11 @@ fn one_retro_payment_shares_gv_dv_exemption_and_july_starts_fresh() {
         status: CompensationRevisionStatus::CALCULATED,
         settlementStatus: RetroSettlementStatus::UNSETTLED,
         totalGrossDelta: dec!(100),
+        payableSettlementAmount: dec!(100),
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
+        outstandingReceivable: Decimal::ZERO,
         description: Some("Haziran retro".into()),
         createdAt: None,
         calculatedAt: None,
@@ -1039,6 +1437,15 @@ fn one_retro_payment_shares_gv_dv_exemption_and_july_starts_fresh() {
         workerUnemploymentDelta: Decimal::ZERO,
         employerSgkDelta: Decimal::ZERO,
         employerUnemploymentDelta: Decimal::ZERO,
+        originalEmployerLowerBound: Decimal::ZERO,
+        targetEmployerLowerBound: Decimal::ZERO,
+        employerLowerBoundDelta: Decimal::ZERO,
+        employerLowerBoundPremiumDelta: Decimal::ZERO,
+        originalSourceCarry: None,
+        targetSourceCarry: None,
+        payableSettlementAmount: dec!(100),
+        offsetSettlementAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
         metadata: None,
     };
     source.retroBatches.push(batch);

@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 
-pub const CURRENT_BACKUP_VERSION: u32 = 4;
+pub const CURRENT_BACKUP_VERSION: u32 = 5;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,7 +86,95 @@ pub struct LegacyPersonel {
     pub kesintiler: Option<PersonelKesintileri>,
 }
 
-fn validate_v4_retro_payment_links(conn: &Connection) -> Result<()> {
+/// V3/V4 persisted the signed entitlement ledger but had no explicit settlement
+/// flow.  Upgrade that ledger once, in deterministic order, without changing
+/// any historical payroll snapshot.  A positive legacy delta remains payable;
+/// a negative delta becomes an open receivable.  Mixed allocation signs are
+/// allocated against the batch net amount, matching the core settlement
+/// reconciliation rather than treating every negative allocation as a new
+/// receivable.
+fn normalize_legacy_retro_settlement(
+    batches: &mut [RetroAdjustmentBatch],
+    allocations: &mut [RetroAllocation],
+) {
+    let mut order = (0..batches.len()).collect::<Vec<_>>();
+    order.sort_by(|left, right| {
+        batches[*left]
+            .personnelId
+            .cmp(&batches[*right].personnelId)
+            .then_with(|| batches[*left].paymentDate.cmp(&batches[*right].paymentDate))
+            .then_with(|| batches[*left].id.cmp(&batches[*right].id))
+    });
+
+    let mut outstanding_by_personnel = HashMap::<String, rust_decimal::Decimal>::new();
+    for batch_index in order {
+        let batch = &mut batches[batch_index];
+        let authoritative = matches!(
+            batch.status,
+            CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+        );
+        let total = batch.totalGrossDelta.round_dp(2);
+        let payable = total.max(rust_decimal::Decimal::ZERO);
+        let recoverable = (-total).max(rust_decimal::Decimal::ZERO);
+        let personnel_id = batch.personnelId.clone();
+
+        batch.payableSettlementAmount = payable;
+        batch.offsetSettlementAmount = rust_decimal::Decimal::ZERO;
+        batch.recoveredAmount = rust_decimal::Decimal::ZERO;
+        batch.recoverableAmount = recoverable;
+        batch.outstandingReceivable = outstanding_by_personnel
+            .get(&personnel_id)
+            .copied()
+            .unwrap_or_default()
+            + recoverable;
+        batch.settlementStatus = if recoverable > rust_decimal::Decimal::ZERO {
+            RetroSettlementStatus::OVERPAYMENT
+        } else if batch.status == CompensationRevisionStatus::FINALIZED
+            && payable > rust_decimal::Decimal::ZERO
+        {
+            RetroSettlementStatus::PAID
+        } else {
+            RetroSettlementStatus::UNSETTLED
+        };
+
+        let mut allocation_order = allocations
+            .iter()
+            .enumerate()
+            .filter(|(_, allocation)| allocation.batchId == batch.id)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        allocation_order.sort_by(|left, right| {
+            allocations[*left]
+                .sourcePeriodId
+                .cmp(&allocations[*right].sourcePeriodId)
+                .then_with(|| {
+                    allocations[*left]
+                        .earningCode
+                        .cmp(&allocations[*right].earningCode)
+                })
+                .then_with(|| allocations[*left].id.cmp(&allocations[*right].id))
+        });
+        let mut remaining_payable = payable;
+        let mut remaining_recoverable = recoverable;
+        for allocation_index in allocation_order {
+            let allocation = &mut allocations[allocation_index];
+            let positive = allocation.deltaAmount.max(rust_decimal::Decimal::ZERO);
+            let negative = (-allocation.deltaAmount).max(rust_decimal::Decimal::ZERO);
+            allocation.payableSettlementAmount = positive.min(remaining_payable);
+            allocation.offsetSettlementAmount = rust_decimal::Decimal::ZERO;
+            allocation.recoverableAmount = negative.min(remaining_recoverable);
+            remaining_payable =
+                (remaining_payable - allocation.payableSettlementAmount).round_dp(2);
+            remaining_recoverable =
+                (remaining_recoverable - allocation.recoverableAmount).round_dp(2);
+        }
+        if authoritative {
+            outstanding_by_personnel.insert(personnel_id, batch.outstandingReceivable);
+        }
+    }
+}
+
+fn validate_retro_payment_links(conn: &Connection, backup_label: &str) -> Result<()> {
     let batches = crate::repositories::retro_repo::get_batches(conn)?;
     let payrolls = PayrollRepository::get_all(conn)?;
 
@@ -97,13 +185,22 @@ fn validate_v4_retro_payment_links(conn: &Connection) -> Result<()> {
             .collect::<Vec<_>>();
         if linked.len() > 1 {
             return Err(DomainError::InvalidData(format!(
-                "V4 restore: {} retro batch'i birden fazla payment event ile eşleşiyor.",
+                "{backup_label} restore: {} retro batch'i birden fazla payment event ile eşleşiyor.",
                 batch.id
             )));
         }
         if batch.status == CompensationRevisionStatus::FINALIZED && linked.len() != 1 {
             return Err(DomainError::InvalidData(format!(
-                "V4 restore: FINALIZED retro batch {} için payment event bulunamadı.",
+                "{backup_label} restore: FINALIZED retro batch {} için payment event bulunamadı.",
+                batch.id
+            )));
+        }
+        let payable = payroll_core::retro_payable_settlement_amount(batch);
+        if batch.status == CompensationRevisionStatus::FINALIZED
+            && payable <= rust_decimal::Decimal::ZERO
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{backup_label} restore: payable settlement olmayan retro batch {} FINALIZED olamaz.",
                 batch.id
             )));
         }
@@ -117,10 +214,11 @@ fn validate_v4_retro_payment_links(conn: &Connection) -> Result<()> {
                 || payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
                 || payroll.personelId != batch.personnelId
                 || payroll.paymentDate != batch.paymentDate
-                || payroll.gelirToplam != batch.totalGrossDelta
+                || payable <= rust_decimal::Decimal::ZERO
+                || payroll.gelirToplam != payable
             {
                 return Err(DomainError::InvalidData(format!(
-                    "V4 restore: retro batch {} lifecycle durumu ile bağlı payment event durumu/kimliği/finansal snapshotı eşleşmiyor.",
+                    "{backup_label} restore: retro batch {} lifecycle durumu ile bağlı payment event durumu/kimliği/finansal snapshotı eşleşmiyor.",
                     batch.id
                 )));
             }
@@ -133,13 +231,13 @@ fn validate_v4_retro_payment_links(conn: &Connection) -> Result<()> {
     {
         let Some(batch) = batches.iter().find(|batch| batch.id == payroll.accrualId) else {
             return Err(DomainError::InvalidData(format!(
-                "V4 restore: {} retro payment event'i için batch bulunamadı.",
+                "{backup_label} restore: {} retro payment event'i için batch bulunamadı.",
                 payroll.accrualId
             )));
         };
         if payroll.personelId != batch.personnelId || payroll.paymentDate != batch.paymentDate {
             return Err(DomainError::InvalidData(format!(
-                "V4 restore: {} retro payment event'i batch personel/ödeme tarihiyle eşleşmiyor.",
+                "{backup_label} restore: {} retro payment event'i batch personel/ödeme tarihiyle eşleşmiyor.",
                 payroll.accrualId
             )));
         }
@@ -147,23 +245,61 @@ fn validate_v4_retro_payment_links(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn validate_v4_retro_lifecycle_fields(payload_json: &str) -> Result<()> {
+fn validate_v5_retro_lifecycle_fields(payload_json: &str) -> Result<()> {
     let root: serde_json::Value = serde_json::from_str(payload_json)
-        .map_err(|error| DomainError::InvalidData(format!("Geçersiz V4 yedek JSON'u: {error}")))?;
-    let Some(batches) = root.get("retroBatches").and_then(serde_json::Value::as_array) else {
+        .map_err(|error| DomainError::InvalidData(format!("Geçersiz V5 yedek JSON'u: {error}")))?;
+    let Some(batches) = root
+        .get("retroBatches")
+        .and_then(serde_json::Value::as_array)
+    else {
         return Ok(());
     };
     for (index, batch) in batches.iter().enumerate() {
         let Some(batch) = batch.as_object() else {
             return Err(DomainError::InvalidData(format!(
-                "V4 retroBatches[{index}] nesne olmalıdır."
+                "V5 retroBatches[{index}] nesne olmalıdır."
             )));
         };
-        for field in ["status", "settlementStatus"] {
+        for field in [
+            "status",
+            "settlementStatus",
+            "payableSettlementAmount",
+            "offsetSettlementAmount",
+            "recoveredAmount",
+            "recoverableAmount",
+            "outstandingReceivable",
+        ] {
             if !batch.contains_key(field) {
                 return Err(DomainError::InvalidData(format!(
-                    "V4 retroBatches[{index}].{field} zorunlu alan eksik."
+                    "V5 retroBatches[{index}].{field} zorunlu alan eksik."
                 )));
+            }
+        }
+    }
+    if let Some(allocations) = root
+        .get("retroAllocations")
+        .and_then(serde_json::Value::as_array)
+    {
+        for (index, allocation) in allocations.iter().enumerate() {
+            let Some(allocation) = allocation.as_object() else {
+                return Err(DomainError::InvalidData(format!(
+                    "V5 retroAllocations[{index}] nesne olmalıdır."
+                )));
+            };
+            for field in [
+                "originalEmployerLowerBound",
+                "targetEmployerLowerBound",
+                "employerLowerBoundDelta",
+                "employerLowerBoundPremiumDelta",
+                "payableSettlementAmount",
+                "offsetSettlementAmount",
+                "recoverableAmount",
+            ] {
+                if !allocation.contains_key(field) {
+                    return Err(DomainError::InvalidData(format!(
+                        "V5 retroAllocations[{index}].{field} zorunlu alan eksik."
+                    )));
+                }
             }
         }
     }
@@ -196,7 +332,7 @@ impl MigrationService {
                     || payload.annualPayrollParameters.is_none())
             {
                 return Err(DomainError::InvalidData(
-                    "V2-V4 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
+                    "V2-V5 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
                         .into(),
                 ));
             }
@@ -207,12 +343,12 @@ impl MigrationService {
                     || payload.retroAllocations.is_none())
             {
                 return Err(DomainError::InvalidData(
-                    "V4 yedek payload'ı retro revision, override, batch ve allocation koleksiyonlarını içermelidir."
+                    "V5 yedek payload'ı retro revision, override, batch ve allocation koleksiyonlarını içermelidir."
                         .into(),
                 ));
             }
             if version >= CURRENT_BACKUP_VERSION {
-                validate_v4_retro_lifecycle_fields(payload_json)?;
+                validate_v5_retro_lifecycle_fields(payload_json)?;
             }
         }
         Ok(payload)
@@ -241,6 +377,12 @@ impl MigrationService {
         // Only V1/V2 backups may be normalized to the single legacy NORMAL
         // node; treating V3 as pre-accrual would erase retro/TEDIYE ordering.
         let is_pre_accrual_backup = backupVersion.unwrap_or(1) < 3;
+        let had_retro_batches = retroBatches.is_some();
+        let mut retro_batches = retroBatches.unwrap_or_default();
+        let mut retro_allocations = retroAllocations.unwrap_or_default();
+        if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION {
+            normalize_legacy_retro_settlement(&mut retro_batches, &mut retro_allocations);
+        }
 
         let revision_ids: BTreeSet<String> = compensationRevisions
             .as_ref()
@@ -257,12 +399,10 @@ impl MigrationService {
                 )));
             }
         }
-        let batch_ids: BTreeSet<String> = retroBatches
-            .as_ref()
-            .map(|items| items.iter().map(|item| item.id.clone()).collect())
-            .unwrap_or_default();
-        if let Some(allocations) = retroAllocations.as_ref() {
-            if let Some(orphan) = allocations
+        let batch_ids: BTreeSet<String> =
+            retro_batches.iter().map(|item| item.id.clone()).collect();
+        if !retro_allocations.is_empty() {
+            if let Some(orphan) = retro_allocations
                 .iter()
                 .find(|item| !batch_ids.contains(&item.batchId))
             {
@@ -379,7 +519,7 @@ impl MigrationService {
         // normal parameter repository correctly blocks a tax-year mutation
         // when a FINALIZED retro batch already exists; during restore that
         // batch is part of this same transaction, so ordering the compatibility
-        // default after it would make a clean V3 restore fail against its own
+        // default after it would make a clean V3/V4 restore fail against its own
         // incoming data.
         let imported_tax_years: BTreeSet<i32> = PeriodRepository::get_all(conn)?
             .into_iter()
@@ -406,21 +546,19 @@ impl MigrationService {
                     })
                     .unwrap_or_default();
                 crate::repositories::retro_repo::restore_revision_with_overrides_in_transaction(
-                    conn,
-                    &revision,
-                    &overrides,
+                    conn, &revision, &overrides,
                 )?;
             }
         }
-        if let Some(batches) = retroBatches {
-            let allocations = retroAllocations.clone().unwrap_or_default();
-            for mut batch in batches {
+        if had_retro_batches {
+            let allocations = retro_allocations.clone();
+            for mut batch in retro_batches {
                 let batch_allocations = allocations
                     .iter()
                     .filter(|allocation| allocation.batchId == batch.id)
                     .cloned()
                     .collect::<Vec<_>>();
-                // V3 did not persist settlementStatus, and some V3 payloads
+                // V3/V4 did not persist settlementStatus, and some V3/V4 payloads
                 // contain the retro graph without the corresponding payment
                 // event.  Do not upgrade such a dangling FINALIZED batch to
                 // PAID: retain the graph for audit, but make it STALE so it
@@ -430,26 +568,28 @@ impl MigrationService {
                 if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION
                     && batch.status == CompensationRevisionStatus::FINALIZED
                 {
-                    let has_matching_finalized_payment = bordrolar.as_ref().is_some_and(|payrolls| {
-                        payrolls.iter().any(|payroll| {
-                            payroll.accrualId == batch.id
-                                && payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
-                                && payroll.personelId == batch.personnelId
-                                && payroll.paymentDate == batch.paymentDate
-                                && payroll.status == BordroStatus::FINALIZED
-                        })
-                    });
-                    if !has_matching_finalized_payment {
-                        let linked_finalized_mismatch = bordrolar.as_ref().is_some_and(|payrolls| {
+                    let has_matching_finalized_payment =
+                        bordrolar.as_ref().is_some_and(|payrolls| {
                             payrolls.iter().any(|payroll| {
                                 payroll.accrualId == batch.id
                                     && payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
+                                    && payroll.personelId == batch.personnelId
+                                    && payroll.paymentDate == batch.paymentDate
                                     && payroll.status == BordroStatus::FINALIZED
                             })
                         });
+                    if !has_matching_finalized_payment {
+                        let linked_finalized_mismatch =
+                            bordrolar.as_ref().is_some_and(|payrolls| {
+                                payrolls.iter().any(|payroll| {
+                                    payroll.accrualId == batch.id
+                                        && payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
+                                        && payroll.status == BordroStatus::FINALIZED
+                                })
+                            });
                         if linked_finalized_mismatch {
                             return Err(DomainError::InvalidData(format!(
-                                "V3 FINALIZED retro batch {} için bağlı FINALIZED payment event personel veya ödeme tarihiyle eşleşmiyor.",
+                                "V3/V4 FINALIZED retro batch {} için bağlı FINALIZED payment event personel veya ödeme tarihiyle eşleşmiyor.",
                                 batch.id
                             )));
                         }
@@ -465,12 +605,15 @@ impl MigrationService {
                             }
                         }
                         batch.status = CompensationRevisionStatus::STALE;
-                        batch.settlementStatus = RetroSettlementStatus::UNSETTLED;
+                        batch.settlementStatus =
+                            if batch.totalGrossDelta < rust_decimal::Decimal::ZERO {
+                                RetroSettlementStatus::OVERPAYMENT
+                            } else {
+                                RetroSettlementStatus::UNSETTLED
+                            };
                     } else if batch.settlementStatus == RetroSettlementStatus::UNSETTLED {
-                        batch.settlementStatus = if batch.totalGrossDelta < rust_decimal::Decimal::ZERO
-                            || batch_allocations.iter().any(|allocation| {
-                                allocation.deltaAmount < rust_decimal::Decimal::ZERO
-                            })
+                        batch.settlementStatus = if batch.totalGrossDelta
+                            < rust_decimal::Decimal::ZERO
                         {
                             RetroSettlementStatus::OVERPAYMENT
                         } else {
@@ -521,12 +664,16 @@ impl MigrationService {
             }
         }
 
-        // V4 is the first backup contract that declares the complete retro
+        // V5 is the first backup contract that declares the complete retro
         // graph. Its FINALIZED settlement must therefore have an actual,
         // matching RETRO_ADJUSTMENT payment event; otherwise a restore would
         // claim a paid batch while dropping the bank/tax event linkage.
-        if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
-            validate_v4_retro_payment_links(conn)?;
+        match backupVersion.unwrap_or(1) {
+            4 => validate_retro_payment_links(conn, "V4")?,
+            version if version >= CURRENT_BACKUP_VERSION => {
+                validate_retro_payment_links(conn, "V5")?
+            }
+            _ => {}
         }
 
         if let Some(active_id) = aktifDonemId {

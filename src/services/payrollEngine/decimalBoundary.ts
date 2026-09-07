@@ -135,6 +135,15 @@ const DECIMAL_KEY_LIST = [
   'workerUnemploymentDelta',
   'employerSgkDelta',
   'employerUnemploymentDelta',
+  'originalEmployerLowerBound',
+  'targetEmployerLowerBound',
+  'employerLowerBoundDelta',
+  'employerLowerBoundPremiumDelta',
+  'payableSettlementAmount',
+  'offsetSettlementAmount',
+  'recoveredAmount',
+  'recoverableAmount',
+  'outstandingReceivable',
 ] as const;
 
 export type DecimalKey = (typeof DECIMAL_KEY_LIST)[number];

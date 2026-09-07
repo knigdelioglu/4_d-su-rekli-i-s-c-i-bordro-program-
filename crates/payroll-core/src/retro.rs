@@ -7,11 +7,17 @@
 
 #![allow(non_snake_case)]
 
-use crate::calculations::calculate_gunluk_gelirler_from_puantaj;
+use crate::calculations::{
+    calculate_gunluk_gelirler_from_puantaj,
+    calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state, canonical_sgk_earning_class,
+    round_sgk_amount, CanonicalSgkEarningClass, PekCalculationOptions,
+};
 use crate::models::*;
 use crate::payroll_engine::{
-    calculate_paid_sick_dates_from_records, resolve_statutory_snapshot_for_period,
-    validate_tax_month_overlap, PayrollDatasetSnapshot,
+    accrual_order_for_payroll, calculate_paid_sick_dates_from_records,
+    ensure_authoritative_payment_event, incoming_devreden_pek_for_replay,
+    resolve_statutory_snapshot_for_period_with_paid_sick_dates, validate_tax_month_overlap,
+    PayrollDatasetSnapshot,
 };
 use crate::{DomainError, Result};
 use chrono::{Duration, NaiveDate};
@@ -67,33 +73,31 @@ pub fn retro_earning_policy(code: RetroEarningCode) -> RetroEarningPolicy {
         stampTaxTreatment: RetroTaxTreatment::TAXABLE,
         sgkTreatment: RetroSgkTreatment::WAGE_SOURCE_MONTH,
     };
-    match code {
-        // Normal payroll PEK treats clothing as wage and meal as wage only
-        // above the source-month statutory meal exemption.  Both therefore
-        // need the historical source-month ledger; marking either code as a
-        // blanket EXEMPT would understate source PEK and worker/employer
-        // premiums for a retro meal/clothing correction.
-        RetroEarningCode::CLOTHING | RetroEarningCode::MEAL => wage_source,
-        RetroEarningCode::TIS_BONUS
-        | RetroEarningCode::TEDIYE
-        | RetroEarningCode::SUPPLEMENTAL
-        | RetroEarningCode::OTHER => RetroEarningPolicy {
+    match canonical_sgk_earning_class(code) {
+        CanonicalSgkEarningClass::Wage => wage_source,
+        CanonicalSgkEarningClass::NonWage => RetroEarningPolicy {
             incomeTaxTreatment: RetroTaxTreatment::TAXABLE,
             stampTaxTreatment: RetroTaxTreatment::TAXABLE,
             sgkTreatment: RetroSgkTreatment::NON_WAGE_PAYMENT_MONTH,
         },
-        RetroEarningCode::BASE_WAGE
-        | RetroEarningCode::NIGHT_WORK
-        | RetroEarningCode::NIGHT_HOLIDAY
-        | RetroEarningCode::WORK_PREMIUM
-        | RetroEarningCode::SOCIAL_AID
-        | RetroEarningCode::TRANSPORT
-        | RetroEarningCode::SERVICE_INCREMENT => wage_source,
     }
 }
 
 fn round2(value: Decimal) -> Decimal {
     value.round_dp(2)
+}
+
+fn validate_retro_carry_snapshot(records: &[DevredenPekKaydi], field: &str) -> Result<()> {
+    if records
+        .iter()
+        .any(|record| record.tutar < Decimal::ZERO || record.kalanAySayisi < 0)
+    {
+        return Err(DomainError::InvalidData(format!(
+            "{} negatif tutar veya negatif kalan ay içeriyor.",
+            field
+        )));
+    }
+    Ok(())
 }
 
 /// A revision value is an absolute target for the affected compensation
@@ -284,7 +288,10 @@ fn selected_override<'a>(
 }
 
 fn validate_override_value(key: RetroParameterKey, value: Decimal) -> Result<()> {
-    if matches!(key, RetroParameterKey::TEDIYE | RetroParameterKey::TIS_BONUS) {
+    if matches!(
+        key,
+        RetroParameterKey::TEDIYE | RetroParameterKey::TIS_BONUS
+    ) {
         return Err(DomainError::ValidationError(format!(
             "{:?} revision override'ı event tarihini ve kısmi dönem geometrisini belirtmeden güvenli şekilde replay edilemez; ayrı ödeme event'i olarak tanımlanmalıdır.",
             key
@@ -390,10 +397,7 @@ fn scope_matches_person(revision: &CompensationRevision, personnel: &Personel) -
     }
 }
 
-fn revision_has_authoritative_batch(
-    dataset: &PayrollDatasetSnapshot,
-    revision_id: &str,
-) -> bool {
+fn revision_has_authoritative_batch(dataset: &PayrollDatasetSnapshot, revision_id: &str) -> bool {
     dataset.retroBatches.iter().any(|batch| {
         batch.revisionId == revision_id
             && matches!(
@@ -611,7 +615,7 @@ fn target_income_for_period(
                 "{} dönemi tarihsel kurum ayarları bulunamadı.",
                 period.id
             ))
-    })?
+        })?
         .clone();
     crate::calculations::validate_kurum_degerleri_for_payroll(&historical_settings)?;
     let mut segments: Vec<ReplaySegment> = Vec::new();
@@ -641,12 +645,8 @@ fn target_income_for_period(
         {
             index
         } else {
-            let settings = settings_for_replay_date(
-                &historical_settings,
-                personnel,
-                current,
-                applications,
-            )?;
+            let settings =
+                settings_for_replay_date(&historical_settings, personnel, current, applications)?;
             segments.push(ReplaySegment {
                 key: active_revision_ids,
                 settings,
@@ -750,6 +750,70 @@ fn original_recognized_by_period_and_code(
     Ok(result)
 }
 
+/// V4 rows predate the explicit settlement-flow columns.  A zeroed flow is
+/// therefore interpreted as legacy only for compatibility; newly calculated
+/// batches always write all five batch flow fields explicitly.
+fn has_legacy_settlement_flow(batch: &RetroAdjustmentBatch) -> bool {
+    batch.payableSettlementAmount == Decimal::ZERO
+        && batch.offsetSettlementAmount == Decimal::ZERO
+        && batch.recoveredAmount == Decimal::ZERO
+        && batch.recoverableAmount == Decimal::ZERO
+        && batch.outstandingReceivable == Decimal::ZERO
+        && batch.settlementStatus != RetroSettlementStatus::SETTLED_BY_OFFSET
+}
+
+/// Returns the gross amount that is actually eligible for a cash payment
+/// event.  The legacy fallback is intentionally isolated here so an old V4
+/// positive PAID/UNSETTLED batch remains importable without making a new
+/// offset-only batch payable by accident.
+pub fn retro_payable_settlement_amount(batch: &RetroAdjustmentBatch) -> Decimal {
+    if batch.payableSettlementAmount > Decimal::ZERO {
+        batch.payableSettlementAmount
+    } else if has_legacy_settlement_flow(batch)
+        && batch.totalGrossDelta > Decimal::ZERO
+        && batch.settlementStatus != RetroSettlementStatus::OVERPAYMENT
+    {
+        batch.totalGrossDelta
+    } else {
+        Decimal::ZERO
+    }
+}
+
+fn negative_entitlement_amount(batch: &RetroAdjustmentBatch) -> Decimal {
+    // Legacy V4 rows have no settlement snapshot.  Their receivable is the
+    // batch's signed net entitlement, not the sum of negative allocations:
+    // mixed-sign allocations are one net correction and must not invent a
+    // second receivable beside the payable side.
+    (-batch.totalGrossDelta).max(Decimal::ZERO)
+}
+
+fn effective_allocation_payable(
+    batch: &RetroAdjustmentBatch,
+    allocation: &RetroAllocation,
+) -> Decimal {
+    if !has_legacy_settlement_flow(batch) {
+        allocation.payableSettlementAmount
+    } else {
+        allocation.deltaAmount.max(Decimal::ZERO)
+    }
+}
+
+pub fn retro_payable_allocation_amount(
+    batch: &RetroAdjustmentBatch,
+    allocation: &RetroAllocation,
+) -> Decimal {
+    if has_legacy_settlement_flow(batch) {
+        // `retro_payment_income` materializes the deterministic legacy flow on
+        // its local allocation snapshot before this helper is consumed by GV
+        // and DV calculations.  An un-normalized V4 allocation deliberately
+        // returns zero here rather than risking a cash overstatement; callers
+        // must enter through `retro_payment_income`.
+        allocation.payableSettlementAmount
+    } else {
+        effective_allocation_payable(batch, allocation)
+    }
+}
+
 fn validate_batch_ledger(
     dataset: &PayrollDatasetSnapshot,
     batch: &RetroAdjustmentBatch,
@@ -775,10 +839,7 @@ fn validate_batch_ledger(
             batch.id
         )));
     }
-    let has_negative_delta = batch.totalGrossDelta < Decimal::ZERO
-        || allocations
-            .iter()
-            .any(|allocation| allocation.deltaAmount < Decimal::ZERO);
+    let has_negative_delta = batch.totalGrossDelta < Decimal::ZERO;
     if has_negative_delta && batch.status == CompensationRevisionStatus::FINALIZED {
         return Err(DomainError::InvalidData(format!(
             "{} negatif retro batch'i FINALIZED olamaz; OVERPAYMENT settlement'ı açık kalmalıdır.",
@@ -789,6 +850,11 @@ fn validate_batch_ledger(
         RetroSettlementStatus::OVERPAYMENT
     } else if batch.status == CompensationRevisionStatus::FINALIZED {
         RetroSettlementStatus::PAID
+    } else if batch.settlementStatus == RetroSettlementStatus::SETTLED_BY_OFFSET
+        && batch.offsetSettlementAmount > Decimal::ZERO
+        && retro_payable_settlement_amount(batch) == Decimal::ZERO
+    {
+        RetroSettlementStatus::SETTLED_BY_OFFSET
     } else {
         RetroSettlementStatus::UNSETTLED
     };
@@ -858,14 +924,216 @@ fn validate_batch_ledger(
             || allocation.targetAmount < Decimal::ZERO
             || allocation.originalPek < Decimal::ZERO
             || allocation.adjustedPek < Decimal::ZERO
+            || allocation.originalEmployerLowerBound < Decimal::ZERO
+            || allocation.targetEmployerLowerBound < Decimal::ZERO
+            || allocation.payableSettlementAmount < Decimal::ZERO
+            || allocation.offsetSettlementAmount < Decimal::ZERO
+            || allocation.recoverableAmount < Decimal::ZERO
         {
             return Err(DomainError::InvalidData(format!(
                 "{} allocation'ında negatif authoritative ledger alanı bulundu.",
                 allocation.id
             )));
         }
+        if let Some(carry) = &allocation.originalSourceCarry {
+            validate_retro_carry_snapshot(
+                carry,
+                &format!("{} original source carry", allocation.id),
+            )?;
+        }
+        if let Some(carry) = &allocation.targetSourceCarry {
+            validate_retro_carry_snapshot(
+                carry,
+                &format!("{} target source carry", allocation.id),
+            )?;
+        }
+        if !has_legacy_settlement_flow(batch) {
+            let positive_delta = allocation.deltaAmount.max(Decimal::ZERO);
+            let negative_delta = (-allocation.deltaAmount).max(Decimal::ZERO);
+            if round2(
+                allocation.payableSettlementAmount + allocation.offsetSettlementAmount,
+            ) > round2(positive_delta)
+                || round2(allocation.recoverableAmount) > round2(negative_delta)
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "{} allocation settlement akışı signed entitlement delta sınırını aşamaz.",
+                    allocation.id
+                )));
+            }
+        }
+    }
+
+    if !has_legacy_settlement_flow(batch) {
+        let allocation_payable = allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
+            sum + allocation.payableSettlementAmount
+        });
+        let allocation_offset = allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
+            sum + allocation.offsetSettlementAmount
+        });
+        let allocation_recoverable = allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
+            sum + allocation.recoverableAmount
+        });
+        if round2(allocation_payable) != round2(batch.payableSettlementAmount)
+            || round2(allocation_offset) != round2(batch.offsetSettlementAmount)
+            || round2(allocation_recoverable) != round2(batch.recoverableAmount)
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{} settlement allocation toplamı batch settlement akışlarıyla eşleşmiyor.",
+                batch.id
+            )));
+        }
+        if batch.totalGrossDelta >= Decimal::ZERO
+            && round2(batch.payableSettlementAmount + batch.offsetSettlementAmount)
+                != round2(batch.totalGrossDelta)
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{} pozitif entitlement delta'sı payable/offset settlement toplamıyla eşleşmiyor.",
+                batch.id
+            )));
+        }
+        if batch.totalGrossDelta >= Decimal::ZERO
+            && batch.recoverableAmount != Decimal::ZERO
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{} pozitif entitlement delta'sı recoverable settlement üretemez.",
+                batch.id
+            )));
+        }
+        if batch.totalGrossDelta < Decimal::ZERO
+            && round2(batch.recoverableAmount) != round2(-batch.totalGrossDelta)
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{} negatif entitlement delta'sı recoverable settlement ile eşleşmiyor.",
+                batch.id
+            )));
+        }
+        if batch.totalGrossDelta < Decimal::ZERO
+            && (batch.payableSettlementAmount != Decimal::ZERO
+                || batch.offsetSettlementAmount != Decimal::ZERO)
+        {
+            return Err(DomainError::InvalidData(format!(
+                "{} negatif entitlement delta'sı payable veya offset settlement üretemez.",
+                batch.id
+            )));
+        }
+        if batch.outstandingReceivable < Decimal::ZERO || batch.recoveredAmount < Decimal::ZERO {
+            return Err(DomainError::InvalidData(format!(
+                "{} settlement bakiyesi negatif olamaz.",
+                batch.id
+            )));
+        }
+    }
+    if batch.status == CompensationRevisionStatus::FINALIZED
+        && retro_payable_settlement_amount(batch) <= Decimal::ZERO
+    {
+        return Err(DomainError::InvalidData(format!(
+            "{} payable settlement olmadan FINALIZED olamaz.",
+            batch.id
+        )));
     }
     Ok(allocations)
+}
+
+fn outstanding_receivable_before_current(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    payment_date: NaiveDate,
+    current_batch_id: &str,
+) -> Result<Decimal> {
+    let mut batches = dataset
+        .retroBatches
+        .iter()
+        .filter(|batch| {
+            batch.personnelId == personnel_id
+                && batch.id != current_batch_id
+                && matches!(
+                    batch.status,
+                    CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| {
+        left.paymentDate
+            .cmp(&right.paymentDate)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut outstanding = Decimal::ZERO;
+    for batch in batches {
+        let batch_payment_date = parse_date(&batch.paymentDate, "önceki retro ödeme")?;
+        if batch_payment_date > payment_date {
+            continue;
+        }
+        validate_batch_ledger(dataset, &batch)?;
+        let legacy = has_legacy_settlement_flow(&batch);
+        let recoverable = if legacy {
+            negative_entitlement_amount(&batch)
+        } else {
+            batch.recoverableAmount
+        };
+        let offset = if legacy {
+            Decimal::ZERO
+        } else {
+            batch.offsetSettlementAmount
+        };
+        let recovered = if legacy {
+            Decimal::ZERO
+        } else {
+            batch.recoveredAmount
+        };
+        let available = outstanding + recoverable;
+        if offset + recovered > available {
+            return Err(DomainError::InvalidData(format!(
+                "{} settlement mahsup/tahsil akışı açık receivable bakiyesini aşıyor.",
+                batch.id
+            )));
+        }
+        outstanding = round2(available - offset - recovered);
+        if !legacy && round2(batch.outstandingReceivable) != round2(outstanding) {
+            return Err(DomainError::InvalidData(format!(
+                "{} outstanding receivable snapshot'ı kronolojik settlement replay ile eşleşmiyor.",
+                batch.id
+            )));
+        }
+    }
+    Ok(outstanding)
+}
+
+fn assign_current_settlement_allocations(
+    allocations: &mut [RetroAllocation],
+    payable: Decimal,
+    offset: Decimal,
+    recoverable: Decimal,
+) {
+    let mut indices = (0..allocations.len()).collect::<Vec<_>>();
+    indices.sort_by_key(|index| {
+        (
+            allocations[*index].sourcePeriodId.clone(),
+            allocations[*index].earningCode,
+            allocations[*index].id.clone(),
+        )
+    });
+
+    let mut remaining_payable = payable;
+    let mut remaining_offset = offset;
+    for index in &indices {
+        let amount = allocations[*index].deltaAmount.max(Decimal::ZERO);
+        let applied_offset = amount.min(remaining_offset);
+        remaining_offset = round2(remaining_offset - applied_offset);
+        let applied_payable = (amount - applied_offset).min(remaining_payable);
+        remaining_payable = round2(remaining_payable - applied_payable);
+        allocations[*index].offsetSettlementAmount = round2(applied_offset);
+        allocations[*index].payableSettlementAmount = round2(applied_payable);
+    }
+
+    let mut remaining_recoverable = recoverable;
+    for index in &indices {
+        let amount = (-allocations[*index].deltaAmount).max(Decimal::ZERO);
+        let applied = amount.min(remaining_recoverable);
+        remaining_recoverable = round2(remaining_recoverable - applied);
+        allocations[*index].recoverableAmount = round2(applied);
+    }
 }
 
 fn previous_authoritative_retro_by_period_and_code(
@@ -879,11 +1147,18 @@ fn previous_authoritative_retro_by_period_and_code(
 )> {
     let mut previous = HashMap::new();
     let mut previous_pek = HashMap::new();
-    for batch in dataset
+    let mut batches = dataset
         .retroBatches
         .iter()
         .filter(|batch| batch.personnelId == personnel_id && batch.id != current_batch_id)
-    {
+        .cloned()
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| {
+        left.paymentDate
+            .cmp(&right.paymentDate)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    for batch in batches {
         if matches!(
             batch.status,
             CompensationRevisionStatus::DRAFT | CompensationRevisionStatus::STALE
@@ -896,7 +1171,7 @@ fn previous_authoritative_retro_by_period_and_code(
         if batch_payment_date > payment_date {
             continue;
         }
-        for allocation in validate_batch_ledger(dataset, batch)? {
+        for allocation in validate_batch_ledger(dataset, &batch)? {
             let key = (allocation.sourcePeriodId.clone(), allocation.earningCode);
             let entry = previous.entry(key.clone()).or_default();
             *entry = round2(*entry + allocation.deltaAmount);
@@ -948,53 +1223,30 @@ fn reject_later_authoritative_retro_for_same_source_period(
     Ok(())
 }
 
-fn source_original_pek(
+#[derive(Debug, Clone, Default)]
+struct SourcePekState {
+    worker_pek: Decimal,
+    worker_sgk: Decimal,
+    worker_unemployment: Decimal,
+    employer_sgk: Decimal,
+    employer_unemployment: Decimal,
+    employer_lower_bound: Decimal,
+    employer_lower_bound_premium: Decimal,
+    upper: Decimal,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SourcePekReplay {
+    state: SourcePekState,
+    /// Carry after the final authoritative source-period payment event.
+    outgoing_carry: Vec<DevredenPekKaydi>,
+}
+
+fn source_statutory_snapshot(
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
-) -> Result<(Decimal, Decimal)> {
-    let mut original_pek = Decimal::ZERO;
-    let mut upper: Option<Decimal> = None;
-    for payroll in dataset.payrolls.iter().filter(|payroll| {
-        payroll.personelId == personnel_id
-            && payroll.donemId == period.id
-            && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
-    }) {
-        match payroll.status {
-            BordroStatus::CALCULATED | BordroStatus::FINALIZED => {
-                let detail = payroll.pekDetay.as_ref().ok_or_else(|| {
-                    DomainError::InvalidData(format!(
-                        "{} tahakkukunda historical PEK snapshot'ı eksik.",
-                        payroll.accrualId
-                    ))
-                })?;
-                original_pek = round2(original_pek + detail.primMatrahi);
-                if let Some(value) = upper {
-                    if round2(value) != round2(detail.pekUstSinir) {
-                        return Err(DomainError::InvalidData(format!(
-                            "{} source period PEK tavan snapshot'ları çelişkili.",
-                            period.id
-                        )));
-                    }
-                } else {
-                    upper = Some(detail.pekUstSinir);
-                }
-            }
-            BordroStatus::DRAFT | BordroStatus::STALE => {
-                return Err(DomainError::ValidationError(format!(
-                    "{} source period PEK state'i {} tahakkuku nedeniyle authoritative değil.",
-                    period.id, payroll.accrualId
-                )))
-            }
-        }
-    }
-    if let Some(upper) = upper {
-        return Ok((original_pek, upper));
-    }
-
-    // Missing-accrual corrections can legitimately have no original payroll
-    // event. Resolve the source-month ceiling from the same historical
-    // attendance/settings snapshot instead of borrowing payment-month state.
+) -> Result<ResolvedStatutorySnapshot> {
     let attendance = historical_attendance(dataset, personnel_id, &period.id)?;
     let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
         DomainError::InvalidData(format!(
@@ -1002,18 +1254,511 @@ fn source_original_pek(
             period.id
         ))
     })?;
-    let statutory = resolve_statutory_snapshot_for_period(attendance, period, settings)?;
-    Ok((Decimal::ZERO, statutory.pekUstSinir))
+    let sick_records = dataset
+        .sickLeaveRecords
+        .iter()
+        .filter(|record| record.personnelId == personnel_id)
+        .cloned()
+        .collect::<Vec<_>>();
+    let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period);
+    // A missing original payroll must use the same R-day rule as a normal
+    // payroll. In particular, an attendance-backed R day is not automatically
+    // a prim-bearing day; only the resolved paid sick dates are.
+    resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+        attendance,
+        period,
+        settings,
+        &paid_sick_dates,
+    )
+}
+
+fn source_period_events(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+) -> Result<Vec<BordroKaydi>> {
+    let mut events = dataset
+        .payrolls
+        .iter()
+        .filter(|payroll| {
+            payroll.personelId == personnel_id
+                && payroll.donemId == period.id
+                && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for event in &events {
+        ensure_authoritative_payment_event(event)?;
+    }
+    events.sort_by(|left, right| {
+        accrual_order_for_payroll(dataset, left)
+            .and_then(|left_order| {
+                accrual_order_for_payroll(dataset, right)
+                    .map(|right_order| left_order.cmp(&right_order))
+            })
+            .unwrap_or_else(|_| left.accrualId.cmp(&right.accrualId))
+    });
+    Ok(events)
+}
+
+fn attendance_summary_for_source(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+) -> Result<PuantajOzeti> {
+    let attendance = historical_attendance(dataset, personnel_id, &period.id)?;
+    let mut summary = PuantajOzeti::default();
+    for code in attendance.gunler.values() {
+        add_summary(&mut summary, code, &period.id)?;
+    }
+    Ok(summary)
+}
+
+fn source_income_target(
+    original_normal_income: &GelirKalemleri,
+    target_normal_income: &GelirKalemleri,
+) -> GelirKalemleri {
+    let mut result = original_normal_income.clone();
+    for code in [
+        RetroEarningCode::BASE_WAGE,
+        RetroEarningCode::NIGHT_WORK,
+        RetroEarningCode::NIGHT_HOLIDAY,
+        RetroEarningCode::WORK_PREMIUM,
+        RetroEarningCode::SOCIAL_AID,
+        RetroEarningCode::MEAL,
+        RetroEarningCode::TRANSPORT,
+        RetroEarningCode::CLOTHING,
+        RetroEarningCode::SERVICE_INCREMENT,
+        RetroEarningCode::TIS_BONUS,
+        RetroEarningCode::TEDIYE,
+        RetroEarningCode::SUPPLEMENTAL,
+        RetroEarningCode::OTHER,
+    ] {
+        if canonical_sgk_earning_class(code) == CanonicalSgkEarningClass::Wage {
+            set_code(&mut result, code, code_value(target_normal_income, code));
+        }
+    }
+    result
+}
+
+fn source_original_state(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+    events: &[BordroKaydi],
+) -> Result<SourcePekReplay> {
+    let mut state = SourcePekState::default();
+    for payroll in events {
+        let detail = payroll.pekDetay.as_ref().ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} tahakkukunda historical PEK snapshot'ı eksik.",
+                payroll.accrualId
+            ))
+        })?;
+        state.worker_pek = round2(state.worker_pek + detail.primMatrahi);
+        state.employer_sgk =
+            round_sgk_amount(state.employer_sgk + detail.isverenSgkPrimi.unwrap_or_default());
+        state.employer_unemployment = round_sgk_amount(
+            state.employer_unemployment + detail.isverenIssizlikPrimi.unwrap_or_default(),
+        );
+        state.employer_lower_bound =
+            round2(state.employer_lower_bound + detail.altSinirTamamlamaFarki);
+        state.employer_lower_bound_premium = round_sgk_amount(
+            state.employer_lower_bound_premium
+                + detail.pekAltSinirTamamlamaIsverenPrimi.unwrap_or_default(),
+        );
+        if state.upper != Decimal::ZERO && round2(state.upper) != round2(detail.pekUstSinir) {
+            return Err(DomainError::InvalidData(format!(
+                "{} source period PEK tavan snapshot'ları çelişkili.",
+                period.id
+            )));
+        }
+        state.upper = detail.pekUstSinir;
+    }
+    let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} source settings eksik.",
+            period.id
+        ))
+    })?;
+    let (employer_sgk, employer_unemployment, employer_lower_bound_premium) =
+        canonical_source_employer_premiums(
+            state.worker_pek,
+            state.employer_lower_bound,
+            settings,
+        )?;
+    state.employer_sgk = employer_sgk;
+    state.employer_unemployment = employer_unemployment;
+    state.employer_lower_bound_premium = employer_lower_bound_premium;
+    if state.upper == Decimal::ZERO {
+        state.upper = source_statutory_snapshot(dataset, personnel_id, period)?.pekUstSinir;
+    }
+    Ok(SourcePekReplay {
+        state,
+        outgoing_carry: events
+            .last()
+            .and_then(|event| event.sonrakiDevredenPek.clone())
+            .unwrap_or_default(),
+    })
+}
+
+fn canonical_source_employer_premiums(
+    worker_pek: Decimal,
+    employer_lower_bound: Decimal,
+    settings: &DonemselKurumDegerleri,
+) -> Result<(Decimal, Decimal, Decimal)> {
+    let employer_sgk_rate = settings
+        .sgkIsverenOraniYuzde
+        .ok_or_else(|| DomainError::InvalidData("Historical SGK işveren oranı eksik.".into()))?
+        / dec!(100);
+    let employer_unemployment_rate = settings
+        .issizlikIsverenOraniYuzde
+        .ok_or_else(|| DomainError::InvalidData("Historical işveren işsizlik oranı eksik.".into()))?
+        / dec!(100);
+    let worker_sgk_rate = settings
+        .sgkIsciOraniYuzde
+        .ok_or_else(|| DomainError::InvalidData("Historical SGK işçi oranı eksik.".into()))?
+        / dec!(100);
+    let worker_unemployment_rate = settings
+        .issizlikIsciOraniYuzde
+        .ok_or_else(|| DomainError::InvalidData("Historical işsizlik işçi oranı eksik.".into()))?
+        / dec!(100);
+    let final_pek = round2((worker_pek + employer_lower_bound).max(Decimal::ZERO));
+    let employer_sgk = round_sgk_amount(final_pek * employer_sgk_rate);
+    let employer_unemployment = round_sgk_amount(final_pek * employer_unemployment_rate);
+    let lower_bound_sgk = round_sgk_amount(
+        employer_lower_bound.max(Decimal::ZERO) * worker_sgk_rate,
+    );
+    let lower_bound_unemployment = round_sgk_amount(
+        employer_lower_bound.max(Decimal::ZERO) * worker_unemployment_rate,
+    );
+    Ok((
+        employer_sgk,
+        employer_unemployment,
+        lower_bound_sgk + lower_bound_unemployment,
+    ))
+}
+
+fn source_target_state(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+    events: &[BordroKaydi],
+    target_normal_income: &GelirKalemleri,
+) -> Result<SourcePekReplay> {
+    let settings = dataset
+        .institutionSettings
+        .get(&period.id)
+        .ok_or_else(|| DomainError::InvalidData(format!("{} source settings eksik.", period.id)))?;
+    let statutory_fallback = source_statutory_snapshot(dataset, personnel_id, period)?;
+    let mut ordered_events = events.to_vec();
+    let original_normal_income = events
+        .iter()
+        .find(|event| event.accrualType == AccrualType::NORMAL)
+        .map(|event| event.gelirler.clone())
+        .unwrap_or_default();
+    if ordered_events
+        .iter()
+        .all(|event| event.accrualType != AccrualType::NORMAL)
+    {
+        // Missing original accrual: replay a synthetic NORMAL event using the
+        // source attendance/statutory snapshot. This is also where paid sick
+        // R-days enter the source PEK capacity.
+        let synthetic_summary = attendance_summary_for_source(dataset, personnel_id, period)?;
+        ordered_events.push(BordroKaydi {
+            id: format!("{}_retro_source_normal", period.id),
+            personelId: personnel_id.to_string(),
+            donemId: period.id.clone(),
+            accrualId: format!("{}_retro_source_normal", period.id),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: period.bitisTarihi.clone(),
+            sequence: -1,
+            accrualDescription: None,
+            puantajOzeti: synthetic_summary,
+            gelirler: GelirKalemleri::default(),
+            gelirToplam: Decimal::ZERO,
+            kesintiler: KesintiKalemleri::default(),
+            kesintiToplam: Decimal::ZERO,
+            netOdeme: Decimal::ZERO,
+            status: BordroStatus::CALCULATED,
+            olusturulmaTarihi: String::new(),
+            sonGuncellemeTarihi: String::new(),
+            notlar: None,
+            oncekiKumulatifGvMatrahi: None,
+            oncekiKumulatifAsgariGvMatrahi: None,
+            manuelKumulatifGvMatrahi: None,
+            devredenPekGelen: None,
+            sonrakiDevredenPek: None,
+            pekDetay: None,
+            isPrimiDetay: None,
+            gvDetay: None,
+            damgaDetay: None,
+            statutorySnapshot: Some(statutory_fallback.clone()),
+            odenenRaporluGun: None,
+            raporluGun: None,
+        });
+        ordered_events.sort_by_key(|event| (event.sequence, event.accrualId.clone()));
+    }
+
+    let first_event = ordered_events.first().ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} source period replay'i için payment event bulunamadı.",
+            period.id
+        ))
+    })?;
+    let (canonical_incoming, canonical_incoming_available) =
+        incoming_devreden_pek_for_replay(dataset, personnel_id, period, first_event)?;
+    let first_carry = if canonical_incoming_available {
+        canonical_incoming.records
+    } else {
+        first_event.devredenPekGelen.clone().unwrap_or_default()
+    };
+    let mut carry = first_carry;
+    let mut month_to_date = Decimal::ZERO;
+    let mut tax_months_elapsed = if canonical_incoming_available {
+        canonical_incoming.tax_months_elapsed
+    } else if carry.is_empty() {
+        0
+    } else {
+        1
+    };
+    let mut state = SourcePekState {
+        upper: statutory_fallback.pekUstSinir,
+        ..SourcePekState::default()
+    };
+    let target_normal_income = source_income_target(&original_normal_income, target_normal_income);
+
+    for event in ordered_events {
+        let is_normal = event.accrualType == AccrualType::NORMAL;
+        let income = if is_normal {
+            &target_normal_income
+        } else {
+            &event.gelirler
+        };
+        let statutory = event
+            .statutorySnapshot
+            .clone()
+            .unwrap_or_else(|| statutory_fallback.clone());
+        let (detail, next_carry) =
+            calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+                income,
+                Some(&event.puantajOzeti),
+                Some(settings),
+                &carry,
+                Some(&statutory),
+                month_to_date,
+                PekCalculationOptions {
+                    tax_months_elapsed,
+                    apply_lower_bound: is_normal,
+                },
+            )?;
+        state.worker_pek = round2(state.worker_pek + detail.primMatrahi);
+        state.employer_sgk =
+            round_sgk_amount(state.employer_sgk + detail.isverenSgkPrimi.unwrap_or_default());
+        state.employer_unemployment = round_sgk_amount(
+            state.employer_unemployment + detail.isverenIssizlikPrimi.unwrap_or_default(),
+        );
+        state.employer_lower_bound =
+            round2(state.employer_lower_bound + detail.altSinirTamamlamaFarki);
+        state.employer_lower_bound_premium = round_sgk_amount(
+            state.employer_lower_bound_premium
+                + detail.pekAltSinirTamamlamaIsverenPrimi.unwrap_or_default(),
+        );
+        state.upper = detail.pekUstSinir;
+        month_to_date = round2(month_to_date + detail.primMatrahi);
+        carry = next_carry;
+        tax_months_elapsed = 0;
+    }
+    let (employer_sgk, employer_unemployment, employer_lower_bound_premium) =
+        canonical_source_employer_premiums(
+            state.worker_pek,
+            state.employer_lower_bound,
+            settings,
+        )?;
+    state.employer_sgk = employer_sgk;
+    state.employer_unemployment = employer_unemployment;
+    state.employer_lower_bound_premium = employer_lower_bound_premium;
+    Ok(SourcePekReplay {
+        state,
+        outgoing_carry: carry,
+    })
+}
+
+fn previous_source_retro_state(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    payment_date: NaiveDate,
+    current_batch_id: &str,
+    source_period_id: &str,
+) -> Result<SourcePekState> {
+    let mut batches = dataset
+        .retroBatches
+        .iter()
+        .filter(|batch| {
+            batch.personnelId == personnel_id
+                && batch.id != current_batch_id
+                && matches!(
+                    batch.status,
+                    CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+                )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| {
+        left.paymentDate
+            .cmp(&right.paymentDate)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+
+    let mut state = SourcePekState::default();
+    for batch in batches {
+        if parse_date(&batch.paymentDate, "önceki retro ödeme")? > payment_date {
+            continue;
+        }
+        for allocation in validate_batch_ledger(dataset, &batch)? {
+            if allocation.sourcePeriodId != source_period_id
+                || allocation.sgkTreatment != RetroSgkTreatment::WAGE_SOURCE_MONTH
+            {
+                continue;
+            }
+            state.worker_pek = round2(state.worker_pek + allocation.retroPekDelta);
+            state.worker_sgk =
+                round_sgk_amount(state.worker_sgk + allocation.workerSgkDelta);
+            state.worker_unemployment = round_sgk_amount(
+                state.worker_unemployment + allocation.workerUnemploymentDelta,
+            );
+            state.employer_sgk =
+                round_sgk_amount(state.employer_sgk + allocation.employerSgkDelta);
+            state.employer_unemployment = round_sgk_amount(
+                state.employer_unemployment + allocation.employerUnemploymentDelta,
+            );
+            state.employer_lower_bound =
+                round2(state.employer_lower_bound + allocation.employerLowerBoundDelta);
+            state.employer_lower_bound_premium = round_sgk_amount(
+                state.employer_lower_bound_premium + allocation.employerLowerBoundPremiumDelta,
+            );
+        }
+    }
+    Ok(state)
+}
+
+fn source_eligible_delta(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+    settings: &DonemselKurumDegerleri,
+    allocation: &RetroAllocation,
+) -> Result<Decimal> {
+    if allocation.earningCode != RetroEarningCode::MEAL {
+        return Ok(allocation.deltaAmount);
+    }
+    let statutory = source_statutory_snapshot(dataset, personnel_id, period)?;
+    let exempt = statutory.sgkYemekIstisnasiToplam;
+    let recognized_before =
+        allocation.originalRecognizedAmount + allocation.previousAuthoritativeRetroAmount;
+    let subject_before = (recognized_before - exempt).max(Decimal::ZERO);
+    let subject_after = (allocation.targetAmount - exempt).max(Decimal::ZERO);
+    let _ = settings;
+    Ok(round2(subject_after - subject_before))
+}
+
+fn distribute_signed_delta(target: Decimal, desired: &[Decimal]) -> Vec<Decimal> {
+    let positive_weight = desired
+        .iter()
+        .map(|value| (*value).max(Decimal::ZERO))
+        .fold(Decimal::ZERO, |sum, value| sum + value);
+    let negative_weight = desired
+        .iter()
+        .map(|value| (-*value).max(Decimal::ZERO))
+        .fold(Decimal::ZERO, |sum, value| sum + value);
+    let use_positive = target >= Decimal::ZERO;
+    let weight = if use_positive {
+        positive_weight
+    } else {
+        negative_weight
+    };
+    let target_abs = target.abs();
+    let mut result = vec![Decimal::ZERO; desired.len()];
+    let mut assigned = Decimal::ZERO;
+    let candidates = desired
+        .iter()
+        .enumerate()
+        .filter(|(_, value)| {
+            if use_positive {
+                **value > Decimal::ZERO
+            } else {
+                **value < Decimal::ZERO
+            }
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    for (position, index) in candidates.iter().enumerate() {
+        let is_last = position + 1 == candidates.len();
+        let amount = if is_last {
+            target_abs - assigned
+        } else if weight > Decimal::ZERO {
+            round2(
+                target_abs
+                    * (if use_positive {
+                        desired[*index]
+                    } else {
+                        -desired[*index]
+                    })
+                    / weight,
+            )
+        } else {
+            Decimal::ZERO
+        };
+        result[*index] = if use_positive { amount } else { -amount };
+        assigned = round2(assigned + amount);
+    }
+    if candidates.is_empty() && target != Decimal::ZERO && !result.is_empty() {
+        result[0] = round2(target);
+    }
+    result
+}
+
+fn rebalance_sgk_component_to_total(
+    allocations: &mut [RetroAllocation],
+    indices: &[usize],
+    total: Decimal,
+    read: fn(&RetroAllocation) -> Decimal,
+    write: fn(&mut RetroAllocation, Decimal),
+) {
+    let Some(last_index) = indices.last().copied() else {
+        return;
+    };
+    let assigned = indices
+        .iter()
+        .fold(Decimal::ZERO, |sum, index| sum + read(&allocations[*index]));
+    let adjustment = round_sgk_amount(total - assigned);
+    if adjustment != Decimal::ZERO {
+        let corrected = round_sgk_amount(read(&allocations[last_index]) + adjustment);
+        write(&mut allocations[last_index], corrected);
+    }
 }
 
 fn apply_source_month_sgk(
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
+    target_normal_income: &GelirKalemleri,
     allocations: &mut [RetroAllocation],
-    previous_source_pek: &HashMap<String, Decimal>,
+    payment_date: NaiveDate,
+    current_batch_id: &str,
 ) -> Result<()> {
-    let (original_pek, pek_upper) = source_original_pek(dataset, personnel_id, period)?;
+    let events = source_period_events(dataset, personnel_id, period)?;
+    let original_replay = source_original_state(dataset, personnel_id, period, &events)?;
+    let target_replay = source_target_state(dataset, personnel_id, period, &events, target_normal_income)?;
+    let original = original_replay.state;
+    let target = target_replay.state;
+    let previous = previous_source_retro_state(
+        dataset,
+        personnel_id,
+        payment_date,
+        current_batch_id,
+        &period.id,
+    )?;
     let settings = dataset
         .institutionSettings
         .get(&period.id)
@@ -1026,6 +1771,75 @@ fn apply_source_month_sgk(
         .issizlikIsciOraniYuzde
         .ok_or_else(|| DomainError::InvalidData("Historical işsizlik işçi oranı eksik.".into()))?
         / dec!(100);
+
+    let recognized_worker_pek = round2(original.worker_pek + previous.worker_pek);
+    let target_worker_sgk = round_sgk_amount(target.worker_pek * worker_sgk_rate);
+    let original_worker_sgk = round_sgk_amount(original.worker_pek * worker_sgk_rate);
+    let target_worker_unemployment = round_sgk_amount(target.worker_pek * worker_unemployment_rate);
+    let original_worker_unemployment =
+        round_sgk_amount(original.worker_pek * worker_unemployment_rate);
+
+    let source_allocations = allocations
+        .iter()
+        .enumerate()
+        .filter(|(_, allocation)| {
+            allocation.sourcePeriodId == period.id
+                && allocation.sgkTreatment == RetroSgkTreatment::WAGE_SOURCE_MONTH
+        })
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if source_allocations.is_empty() {
+        if target.worker_pek != recognized_worker_pek {
+            return Err(DomainError::InvalidData(format!(
+                "{} source PEK replay delta'sı allocation olmadan kaldı.",
+                period.id
+            )));
+        }
+        return Ok(());
+    }
+    let mut source_allocations = source_allocations;
+    source_allocations.sort_by_key(|index| {
+        (
+            allocations[*index].earningCode,
+            allocations[*index].id.clone(),
+        )
+    });
+
+    let desired = source_allocations
+        .iter()
+        .map(|index| {
+            source_eligible_delta(
+                dataset,
+                personnel_id,
+                period,
+                settings,
+                &allocations[*index],
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let worker_pek_total = round2(target.worker_pek - recognized_worker_pek);
+    let pek_parts = distribute_signed_delta(worker_pek_total, &desired);
+    let target_employer_sgk = target.employer_sgk;
+    let original_employer_sgk = original.employer_sgk;
+
+    for (position, index) in source_allocations.iter().enumerate() {
+        let cumulative_pek = pek_parts
+            .iter()
+            .take(position + 1)
+            .fold(Decimal::ZERO, |sum, value| sum + *value);
+        let allocation = &mut allocations[*index];
+        allocation.originalPek = round2(original.worker_pek);
+        allocation.retroPekDelta = pek_parts[position];
+        allocation.adjustedPek = round2(recognized_worker_pek + cumulative_pek);
+        allocation.workerSgkDelta = round_sgk_amount(pek_parts[position] * worker_sgk_rate);
+        allocation.workerUnemploymentDelta =
+            round_sgk_amount(pek_parts[position] * worker_unemployment_rate);
+        allocation.employerSgkDelta = Decimal::ZERO;
+        allocation.employerUnemploymentDelta = Decimal::ZERO;
+        allocation.employerLowerBoundDelta = Decimal::ZERO;
+        allocation.employerLowerBoundPremiumDelta = Decimal::ZERO;
+    }
+
     let employer_sgk_rate = settings
         .sgkIsverenOraniYuzde
         .ok_or_else(|| DomainError::InvalidData("Historical SGK işveren oranı eksik.".into()))?
@@ -1033,130 +1847,78 @@ fn apply_source_month_sgk(
     let employer_unemployment_rate = settings.issizlikIsverenOraniYuzde.ok_or_else(|| {
         DomainError::InvalidData("Historical işveren işsizlik oranı eksik.".into())
     })? / dec!(100);
-
-    let prior = previous_source_pek
-        .get(&period.id)
-        .copied()
-        .unwrap_or_default();
-    let mut current_pek = round2((original_pek + prior).max(Decimal::ZERO));
-    let mut by_code: Vec<&mut RetroAllocation> = allocations
-        .iter_mut()
-        .filter(|allocation| {
-            allocation.sourcePeriodId == period.id
-                && allocation.sgkTreatment == RetroSgkTreatment::WAGE_SOURCE_MONTH
-        })
-        .collect();
-    by_code.sort_by_key(|allocation| allocation.earningCode);
-    for allocation in by_code {
-        allocation.originalPek = round2(original_pek);
-        // Positive corrections consume unused source-month ceiling; negative
-        // corrections reverse only the PEK already declared for that source
-        // month. Both directions are retained in the audit ledger so a
-        // negative correction is not silently stripped of its SGK effect.
-        let eligible_delta = if allocation.earningCode == RetroEarningCode::MEAL {
-            // Meal is only SGK-subject above the historical source-month meal
-            // exemption.  Compare the revised target with the amount already
-            // recognized before this allocation, so a second correction does
-            // not reopen the same exempt slice.
-            let attendance = historical_attendance(dataset, personnel_id, &period.id)?;
-            let statutory = resolve_statutory_snapshot_for_period(attendance, period, settings)?;
-            let exempt = statutory.sgkYemekIstisnasiToplam;
-            let recognized_before = allocation.originalRecognizedAmount
-                + allocation.previousAuthoritativeRetroAmount;
-            let subject_before = (recognized_before - exempt).max(Decimal::ZERO);
-            let subject_after = (allocation.targetAmount - exempt).max(Decimal::ZERO);
-            round2(subject_after - subject_before)
-        } else {
-            allocation.deltaAmount
-        };
-        let incremental = if eligible_delta >= Decimal::ZERO {
-            let remaining = (pek_upper - current_pek).max(Decimal::ZERO);
-            round2(eligible_delta.min(remaining))
-        } else {
-            let reversible = current_pek.max(Decimal::ZERO);
-            -round2((-eligible_delta).min(reversible))
-        };
-        allocation.retroPekDelta = incremental;
-        allocation.adjustedPek = round2(current_pek + incremental);
-        allocation.workerSgkDelta = round2(incremental * worker_sgk_rate);
-        allocation.workerUnemploymentDelta = round2(incremental * worker_unemployment_rate);
-        allocation.employerSgkDelta = round2(incremental * employer_sgk_rate);
-        allocation.employerUnemploymentDelta = round2(incremental * employer_unemployment_rate);
-        current_pek = allocation.adjustedPek;
-    }
-
-    // Statutory payroll calculates each premium from the source month's
-    // aggregate PEK.  The allocation rows are kept per earning code for
-    // auditability, but independently rounding every row can create a
-    // different total (for example, two 0.05 PEK rows at 14% become 0.02
-    // instead of the aggregate 0.01).  Reconcile the deterministic last row
-    // so the ledger and the payment calculation use the same aggregate rule.
-    rebalance_source_sgk_component(
+    // The target/original states above are canonical aggregate snapshots. The
+    // following residual allocations intentionally use those state deltas,
+    // rather than independently rounded earning-code shortcuts.
+    let canonical_employer_sgk_total =
+        round_sgk_amount(target_employer_sgk - original_employer_sgk - previous.employer_sgk);
+    let canonical_employer_unemployment_total = round_sgk_amount(
+        target.employer_unemployment
+            - original.employer_unemployment
+            - previous.employer_unemployment,
+    );
+    let canonical_lower_bound_total = round2(
+        target.employer_lower_bound - original.employer_lower_bound - previous.employer_lower_bound,
+    );
+    let canonical_lower_bound_premium_total = round_sgk_amount(
+        target.employer_lower_bound_premium
+            - original.employer_lower_bound_premium
+            - previous.employer_lower_bound_premium,
+    );
+    let canonical_worker_sgk_total =
+        round_sgk_amount(target_worker_sgk - original_worker_sgk - previous.worker_sgk);
+    let canonical_worker_unemployment_total = round_sgk_amount(
+        target_worker_unemployment - original_worker_unemployment - previous.worker_unemployment,
+    );
+    rebalance_sgk_component_to_total(
         allocations,
-        &period.id,
-        worker_sgk_rate,
+        &source_allocations,
+        canonical_worker_sgk_total,
         |allocation| allocation.workerSgkDelta,
         |allocation, value| allocation.workerSgkDelta = value,
     );
-    rebalance_source_sgk_component(
+    rebalance_sgk_component_to_total(
         allocations,
-        &period.id,
-        worker_unemployment_rate,
+        &source_allocations,
+        canonical_worker_unemployment_total,
         |allocation| allocation.workerUnemploymentDelta,
         |allocation, value| allocation.workerUnemploymentDelta = value,
     );
-    rebalance_source_sgk_component(
+    for (position, index) in source_allocations.iter().enumerate() {
+        allocations[*index].employerSgkDelta =
+            round_sgk_amount(pek_parts[position] * employer_sgk_rate);
+        allocations[*index].employerUnemploymentDelta =
+            round_sgk_amount(pek_parts[position] * employer_unemployment_rate);
+    }
+    rebalance_sgk_component_to_total(
         allocations,
-        &period.id,
-        employer_sgk_rate,
+        &source_allocations,
+        canonical_employer_sgk_total,
         |allocation| allocation.employerSgkDelta,
         |allocation, value| allocation.employerSgkDelta = value,
     );
-    rebalance_source_sgk_component(
+    rebalance_sgk_component_to_total(
         allocations,
-        &period.id,
-        employer_unemployment_rate,
+        &source_allocations,
+        canonical_employer_unemployment_total,
         |allocation| allocation.employerUnemploymentDelta,
         |allocation, value| allocation.employerUnemploymentDelta = value,
     );
+
+    if let Some(last_index) = source_allocations.last().copied() {
+        allocations[last_index].originalEmployerLowerBound = round2(original.employer_lower_bound);
+        allocations[last_index].targetEmployerLowerBound = round2(target.employer_lower_bound);
+        allocations[last_index].employerLowerBoundDelta = canonical_lower_bound_total;
+        allocations[last_index].employerLowerBoundPremiumDelta =
+            canonical_lower_bound_premium_total;
+        allocations[last_index].originalSourceCarry = Some(original_replay.outgoing_carry);
+        allocations[last_index].targetSourceCarry = Some(target_replay.outgoing_carry);
+    }
     Ok(())
 }
 
-fn rebalance_source_sgk_component(
-    allocations: &mut [RetroAllocation],
-    source_period_id: &str,
-    rate: Decimal,
-    read: fn(&RetroAllocation) -> Decimal,
-    write: fn(&mut RetroAllocation, Decimal),
-) {
-    let indices = allocations
-        .iter()
-        .enumerate()
-        .filter_map(|(index, allocation)| {
-            (allocation.sourcePeriodId == source_period_id
-                && allocation.sgkTreatment == RetroSgkTreatment::WAGE_SOURCE_MONTH)
-                .then_some(index)
-        })
-        .collect::<Vec<_>>();
-    let Some(last_index) = indices.last().copied() else {
-        return;
-    };
-
-    let total_pek_delta = indices.iter().fold(Decimal::ZERO, |sum, index| {
-        sum + allocations[*index].retroPekDelta
-    });
-    let expected_total = round2(total_pek_delta * rate);
-    let assigned_total = indices.iter().fold(Decimal::ZERO, |sum, index| {
-        sum + read(&allocations[*index])
-    });
-    let adjustment = round2(expected_total - assigned_total);
-    if adjustment != Decimal::ZERO {
-        let corrected = round2(read(&allocations[last_index]) + adjustment);
-        write(&mut allocations[last_index], corrected);
-    }
-}
-
 fn policy_map_for_income(
+    batch: &RetroAdjustmentBatch,
     allocations: &[RetroAllocation],
     include_payment_month_sgk: bool,
 ) -> GelirKalemleri {
@@ -1170,10 +1932,11 @@ fn policy_map_for_income(
         };
         if should_include {
             let current = code_value(&income, allocation.earningCode);
+            let payable_amount = retro_payable_allocation_amount(batch, allocation);
             set_code(
                 &mut income,
                 allocation.earningCode,
-                current + allocation.deltaAmount,
+                current + payable_amount,
             );
         }
     }
@@ -1207,28 +1970,31 @@ pub fn retro_payment_income(
             batch.id
         )));
     }
-    if batch.totalGrossDelta <= Decimal::ZERO {
+    if retro_payable_settlement_amount(&batch) <= Decimal::ZERO {
         return Err(DomainError::ValidationError(
-            "Negatif veya sıfır retro delta için ödeme event'i oluşturulamaz; sonuç fazla tahakkuk olarak incelenmelidir."
+            "Payable settlement sıfır olan retro batch için ödeme event'i oluşturulamaz; entitlement/receivable ledger'ı ayrı tutulmalıdır."
                 .into(),
         ));
     }
-    let allocations = validate_batch_ledger(dataset, &batch)?;
-    if allocations
-        .iter()
-        .any(|allocation| allocation.deltaAmount < Decimal::ZERO)
-    {
-        return Err(DomainError::ValidationError(
-            "Batch içinde negatif allocation bulundu; otomatik personel borcu/mahsup akışı olmadan ödeme event'i oluşturulamaz."
-                .into(),
-        ));
+    let mut allocations = validate_batch_ledger(dataset, &batch)?;
+    if has_legacy_settlement_flow(&batch) {
+        // V4 had no per-allocation settlement flow.  Materialize the batch-net
+        // payable allocation locally so a mixed-sign legacy batch cannot turn
+        // every positive allocation into a separate cash payment.
+        assign_current_settlement_allocations(
+            &mut allocations,
+            retro_payable_settlement_amount(&batch),
+            Decimal::ZERO,
+            negative_entitlement_amount(&batch),
+        );
     }
     let mut income = GelirKalemleri::default();
     for allocation in &allocations {
-        let next = code_value(&income, allocation.earningCode) + allocation.deltaAmount;
+        let next = code_value(&income, allocation.earningCode)
+            + retro_payable_allocation_amount(&batch, allocation);
         set_code(&mut income, allocation.earningCode, next);
     }
-    let payment_month_pek_income = policy_map_for_income(&allocations, true);
+    let payment_month_pek_income = policy_map_for_income(&batch, &allocations, true);
     Ok((batch, allocations, income, payment_month_pek_income))
 }
 
@@ -1324,17 +2090,15 @@ impl RetroEntitlementEngine {
             .filter(|period| {
                 let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").ok();
                 let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").ok();
-                start
-                    .zip(end)
-                    .is_some_and(|(start, end)| {
-                        end >= earliest_effective_from
+                start.zip(end).is_some_and(|(start, end)| {
+                    end >= earliest_effective_from
                             // A retro calculation may only use a closed
                             // service period. The payment month is an event
                             // month, not permission to replay an open 15-14
                             // period through the payment day.
                             && end <= payment_date
                             && start <= payment_date
-                    })
+                })
             })
             .cloned()
             .collect();
@@ -1364,7 +2128,7 @@ impl RetroEntitlementEngine {
             &source_period_ids,
         )?;
 
-        let (previous_retro, previous_pek) = previous_authoritative_retro_by_period_and_code(
+        let (previous_retro, _previous_pek) = previous_authoritative_retro_by_period_and_code(
             &request.dataset,
             &request.personnelId,
             payment_date,
@@ -1373,6 +2137,7 @@ impl RetroEntitlementEngine {
 
         let mut allocations = Vec::new();
         let mut previews = Vec::new();
+        let mut target_income_by_period = HashMap::new();
         for period in &periods {
             let target_income = target_income_for_period(
                 &request.dataset,
@@ -1381,6 +2146,7 @@ impl RetroEntitlementEngine {
                 payment_date,
                 &applications,
             )?;
+            target_income_by_period.insert(period.id.clone(), target_income.clone());
             let original = original_recognized_by_period_and_code(
                 &request.dataset,
                 &request.personnelId,
@@ -1492,6 +2258,15 @@ impl RetroEntitlementEngine {
                     workerUnemploymentDelta: Decimal::ZERO,
                     employerSgkDelta: Decimal::ZERO,
                     employerUnemploymentDelta: Decimal::ZERO,
+                    originalEmployerLowerBound: Decimal::ZERO,
+                    targetEmployerLowerBound: Decimal::ZERO,
+                    employerLowerBoundDelta: Decimal::ZERO,
+                    employerLowerBoundPremiumDelta: Decimal::ZERO,
+                    originalSourceCarry: None,
+                    targetSourceCarry: None,
+                    payableSettlementAmount: Decimal::ZERO,
+                    offsetSettlementAmount: Decimal::ZERO,
+                    recoverableAmount: Decimal::ZERO,
                     metadata: Some(
                         serde_json::json!({
                             "revisionId": request.revision.id,
@@ -1513,49 +2288,65 @@ impl RetroEntitlementEngine {
             .collect();
         source_period_ids.sort();
         source_period_ids.dedup();
-        let mut previous_source_pek = HashMap::new();
         for period_id in &source_period_ids {
-            previous_source_pek.insert(
-                period_id.clone(),
-                previous_pek
-                    .iter()
-                    .filter(|((source_id, _), _)| source_id == period_id)
-                    .fold(Decimal::ZERO, |sum, (_, value)| sum + *value),
-            );
             let period = periods
                 .iter()
                 .find(|period| &period.id == period_id)
                 .ok_or_else(|| {
                     DomainError::NotFound(format!("{} source period bulunamadı.", period_id))
                 })?;
+            let target_normal_income = target_income_by_period.get(period_id).ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} retro target income snapshot'ı eksik.",
+                    period_id
+                ))
+            })?;
             apply_source_month_sgk(
                 &request.dataset,
                 &request.personnelId,
                 period,
+                target_normal_income,
                 &mut allocations,
-                &previous_source_pek,
+                payment_date,
+                &request.batchId,
             )?;
         }
 
         let total = round2(allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
             sum + allocation.deltaAmount
         }));
-        let is_overpayment = total < Decimal::ZERO
-            || allocations
-                .iter()
-                .any(|allocation| allocation.deltaAmount < Decimal::ZERO);
+        let prior_outstanding = outstanding_receivable_before_current(
+            &request.dataset,
+            &request.personnelId,
+            payment_date,
+            &request.batchId,
+        )?;
+        let positive_entitlement = total.max(Decimal::ZERO);
+        let recoverable = (-total).max(Decimal::ZERO);
+        let offset = positive_entitlement.min(prior_outstanding);
+        let payable = round2(positive_entitlement - offset);
+        let outstanding = round2(prior_outstanding - offset + recoverable);
+        assign_current_settlement_allocations(&mut allocations, payable, offset, recoverable);
+        let settlement_status = if recoverable > Decimal::ZERO {
+            RetroSettlementStatus::OVERPAYMENT
+        } else if positive_entitlement > Decimal::ZERO && payable == Decimal::ZERO {
+            RetroSettlementStatus::SETTLED_BY_OFFSET
+        } else {
+            RetroSettlementStatus::UNSETTLED
+        };
         let batch = RetroAdjustmentBatch {
             id: request.batchId.clone(),
             revisionId: request.revision.id.clone(),
             personnelId: request.personnelId.clone(),
             paymentDate: request.paymentDate.clone(),
             status: CompensationRevisionStatus::CALCULATED,
-            settlementStatus: if is_overpayment {
-                RetroSettlementStatus::OVERPAYMENT
-            } else {
-                RetroSettlementStatus::UNSETTLED
-            },
+            settlementStatus: settlement_status,
             totalGrossDelta: total,
+            payableSettlementAmount: payable,
+            offsetSettlementAmount: offset,
+            recoveredAmount: Decimal::ZERO,
+            recoverableAmount: recoverable,
+            outstandingReceivable: outstanding,
             description: request
                 .description
                 .clone()
@@ -1603,10 +2394,10 @@ pub fn retro_sgk_ledger_totals(
         entry.0 = entry.0.max(round2(allocation.originalPek));
         entry.1 = round2(entry.1 + allocation.retroPekDelta);
         entry.2 = entry.2.max(round2(allocation.adjustedPek));
-        entry.3 = round2(entry.3 + allocation.workerSgkDelta);
-        entry.4 = round2(entry.4 + allocation.workerUnemploymentDelta);
-        entry.5 = round2(entry.5 + allocation.employerSgkDelta);
-        entry.6 = round2(entry.6 + allocation.employerUnemploymentDelta);
+        entry.3 = round_sgk_amount(entry.3 + allocation.workerSgkDelta);
+        entry.4 = round_sgk_amount(entry.4 + allocation.workerUnemploymentDelta);
+        entry.5 = round_sgk_amount(entry.5 + allocation.employerSgkDelta);
+        entry.6 = round_sgk_amount(entry.6 + allocation.employerUnemploymentDelta);
         entry.7 = round2(entry.7 + allocation.deltaAmount);
     }
     result
@@ -1637,6 +2428,11 @@ mod tests {
             status: CompensationRevisionStatus::CALCULATED,
             settlementStatus: RetroSettlementStatus::UNSETTLED,
             totalGrossDelta: Decimal::ZERO,
+            payableSettlementAmount: Decimal::ZERO,
+            offsetSettlementAmount: Decimal::ZERO,
+            recoveredAmount: Decimal::ZERO,
+            recoverableAmount: Decimal::ZERO,
+            outstandingReceivable: Decimal::ZERO,
             description: None,
             createdAt: None,
             calculatedAt: None,
@@ -1662,6 +2458,15 @@ mod tests {
             workerUnemploymentDelta: Decimal::ZERO,
             employerSgkDelta: Decimal::ZERO,
             employerUnemploymentDelta: Decimal::ZERO,
+            originalEmployerLowerBound: Decimal::ZERO,
+            targetEmployerLowerBound: Decimal::ZERO,
+            employerLowerBoundDelta: Decimal::ZERO,
+            employerLowerBoundPremiumDelta: Decimal::ZERO,
+            originalSourceCarry: None,
+            targetSourceCarry: None,
+            payableSettlementAmount: Decimal::ZERO,
+            offsetSettlementAmount: Decimal::ZERO,
+            recoverableAmount: Decimal::ZERO,
             metadata: None,
         };
         let dataset = PayrollDatasetSnapshot {

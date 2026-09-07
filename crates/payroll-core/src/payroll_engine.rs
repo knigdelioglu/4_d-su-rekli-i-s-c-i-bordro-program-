@@ -8,7 +8,9 @@
 
 use crate::calculations::*;
 use crate::models::*;
-use crate::retro::retro_payment_income;
+use crate::retro::{
+    retro_payable_allocation_amount, retro_payable_settlement_amount, retro_payment_income,
+};
 use crate::{DomainError, Result};
 use chrono::{Datelike, Duration, NaiveDate};
 use rust_decimal::Decimal;
@@ -330,12 +332,14 @@ fn resolve_statutory_snapshot_internal(
         .transpose()?
         .unwrap_or(false);
     let full_calendar_has_non_prim_day = if full_calendar_coverage {
-        attendance.is_some_and(|attendance| attendance.gunler.iter().any(|(date_text, code)| {
-            let Ok(date) = NaiveDate::parse_from_str(date_text, "%Y-%m-%d") else {
-                return true;
-            };
-            !is_prim_bearing_code(code, date, paid_sick_dates)
-        }))
+        attendance.is_some_and(|attendance| {
+            attendance.gunler.iter().any(|(date_text, code)| {
+                let Ok(date) = NaiveDate::parse_from_str(date_text, "%Y-%m-%d") else {
+                    return true;
+                };
+                !is_prim_bearing_code(code, date, paid_sick_dates)
+            })
+        })
     } else {
         false
     };
@@ -405,7 +409,8 @@ fn resolve_statutory_snapshot_internal(
                     continue;
                 }
                 if is_prim_bearing_code(code, date, paid_sick_dates) {
-                    segment_sgk_days += if full_calendar_coverage && !full_calendar_has_non_prim_day {
+                    segment_sgk_days += if full_calendar_coverage && !full_calendar_has_non_prim_day
+                    {
                         full_period_sgk_day_weight(date, start)?
                     } else {
                         1
@@ -713,9 +718,7 @@ fn attendance_missing_calendar_days(
         }
         current = current
             .checked_add_signed(Duration::days(1))
-            .ok_or_else(|| {
-                DomainError::InvalidData("Puantaj tarih aralığı çözülemedi.".into())
-            })?;
+            .ok_or_else(|| DomainError::InvalidData("Puantaj tarih aralığı çözülemedi.".into()))?;
     }
     Ok(missing)
 }
@@ -726,8 +729,10 @@ fn attendance_has_full_calendar_coverage(
 ) -> Result<bool> {
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
-    Ok(attendance.gunler.len() as i64 == (end - start).num_days() + 1
-        && attendance_missing_calendar_days(attendance, period)?.is_empty())
+    Ok(
+        attendance.gunler.len() as i64 == (end - start).num_days() + 1
+            && attendance_missing_calendar_days(attendance, period)?.is_empty(),
+    )
 }
 
 fn existing_payroll<'a>(
@@ -783,9 +788,153 @@ pub struct AccrualOrder {
 }
 
 #[derive(Debug, Clone)]
-struct IncomingDevredenPekState {
-    records: Vec<DevredenPekKaydi>,
-    tax_months_elapsed: i32,
+pub(crate) struct IncomingDevredenPekState {
+    pub(crate) records: Vec<DevredenPekKaydi>,
+    pub(crate) tax_months_elapsed: i32,
+}
+
+#[derive(Debug, Clone)]
+struct RetroSourceCarryOverride {
+    batch_id: String,
+    source_period_id: String,
+    source_tax_ordinal: i64,
+    original_carry: Vec<DevredenPekKaydi>,
+    target_carry: Vec<DevredenPekKaydi>,
+    payment_date: NaiveDate,
+}
+
+fn retro_source_carry_overrides_for_event(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    current_order: &AccrualOrder,
+) -> Result<Vec<RetroSourceCarryOverride>> {
+    let mut by_source = BTreeMap::<String, RetroSourceCarryOverride>::new();
+    for batch in dataset.retroBatches.iter().filter(|batch| {
+        batch.personnelId == personnel_id
+            && matches!(
+                batch.status,
+                CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+            )
+    }) {
+        let payment_date = parse_period_date(
+            &batch.paymentDate,
+            &batch.id,
+            "retro ödeme",
+        )?;
+        if payment_date > current_order.payment_date {
+            continue;
+        }
+        for allocation in dataset
+            .retroAllocations
+            .iter()
+            .filter(|allocation| allocation.batchId == batch.id)
+        {
+            let Some(target_carry) = allocation.targetSourceCarry.clone() else {
+                continue;
+            };
+            let period = period_by_id(dataset, &allocation.sourcePeriodId)?;
+            let source_tax_ordinal = tax_ordinal(period.taxYear, period.taxMonth);
+            if source_tax_ordinal > current_order.tax_ordinal {
+                continue;
+            }
+            let candidate = RetroSourceCarryOverride {
+                batch_id: batch.id.clone(),
+                source_period_id: allocation.sourcePeriodId.clone(),
+                source_tax_ordinal,
+                original_carry: allocation.originalSourceCarry.clone().unwrap_or_default(),
+                target_carry,
+                payment_date,
+            };
+            validate_retro_source_carry(
+                &candidate.original_carry,
+                &format!("{} original source carry", allocation.id),
+            )?;
+            validate_retro_source_carry(
+                &candidate.target_carry,
+                &format!("{} target source carry", allocation.id),
+            )?;
+            if let Some(existing) = by_source.get(&candidate.source_period_id) {
+                if existing.batch_id == candidate.batch_id {
+                    return Err(DomainError::InvalidData(format!(
+                        "{} batch'inde aynı source period için birden fazla carry snapshot'ı var.",
+                        candidate.batch_id
+                    )));
+                }
+                if (candidate.payment_date, candidate.batch_id.clone())
+                    <= (existing.payment_date, existing.batch_id.clone())
+                {
+                    continue;
+                }
+            }
+            by_source.insert(candidate.source_period_id.clone(), candidate);
+        }
+    }
+    let mut overrides = by_source.into_values().collect::<Vec<_>>();
+    overrides.sort_by(|left, right| {
+        left.source_tax_ordinal
+            .cmp(&right.source_tax_ordinal)
+            .then_with(|| left.source_period_id.cmp(&right.source_period_id))
+            .then_with(|| left.payment_date.cmp(&right.payment_date))
+            .then_with(|| left.batch_id.cmp(&right.batch_id))
+    });
+    Ok(overrides)
+}
+
+fn carry_override_changed(override_state: &RetroSourceCarryOverride) -> bool {
+    override_state.original_carry != override_state.target_carry
+}
+
+fn validate_retro_source_carry(
+    records: &[DevredenPekKaydi],
+    field: &str,
+) -> Result<()> {
+    if records
+        .iter()
+        .any(|record| record.tutar < Decimal::ZERO || record.kalanAySayisi < 0)
+    {
+        return Err(DomainError::InvalidData(format!(
+            "{} negatif tutar veya negatif kalan ay içeriyor.",
+            field
+        )));
+    }
+    Ok(())
+}
+
+fn carry_override_for_source_period<'a>(
+    overrides: &'a [RetroSourceCarryOverride],
+    source_period_id: &str,
+) -> Option<&'a RetroSourceCarryOverride> {
+    overrides.iter().find(|item| {
+        item.source_period_id == source_period_id && carry_override_changed(item)
+    })
+}
+
+fn incoming_from_retro_source_carry(
+    override_state: &RetroSourceCarryOverride,
+    current_order: &AccrualOrder,
+) -> Result<IncomingDevredenPekState> {
+    let tax_months_elapsed = tax_month_distance(
+        current_order.tax_ordinal,
+        override_state.source_tax_ordinal,
+    )?;
+    if tax_months_elapsed < 0 {
+        return Err(DomainError::InvalidData(
+            "Retro source carry mevcut vergi ayından ileri olamaz.".into(),
+        ));
+    }
+    Ok(IncomingDevredenPekState {
+        records: override_state.target_carry.clone(),
+        tax_months_elapsed,
+    })
+}
+
+fn retro_event_contains_carry_override(
+    overrides: &[RetroSourceCarryOverride],
+    accrual_id: &str,
+) -> bool {
+    overrides
+        .iter()
+        .any(|item| item.batch_id == accrual_id && carry_override_changed(item))
 }
 
 pub(crate) fn accrual_order_for_input(
@@ -801,13 +950,15 @@ pub fn payment_event_order(
     sequence: i32,
     accrual_id: &str,
 ) -> Result<AccrualOrder> {
-    let parsed_payment_date =
-        parse_period_date(payment_date, &period.id, "ödeme/tahakkuk")?;
+    let parsed_payment_date = parse_period_date(payment_date, &period.id, "ödeme/tahakkuk")?;
     Ok(AccrualOrder {
         // Payment date is the event-level source of truth for new records.
         // Legacy records retain their period-compatible date and therefore
         // produce the same ordinal as before.
-        tax_ordinal: tax_ordinal(parsed_payment_date.year(), parsed_payment_date.month() as i32),
+        tax_ordinal: tax_ordinal(
+            parsed_payment_date.year(),
+            parsed_payment_date.month() as i32,
+        ),
         payment_date: parsed_payment_date,
         sequence,
         accrual_id: accrual_id.into(),
@@ -819,7 +970,12 @@ pub fn accrual_order_for_payroll(
     payroll: &BordroKaydi,
 ) -> Result<AccrualOrder> {
     let period = period_by_id(dataset, &payroll.donemId)?;
-    payment_event_order(period, &effective_payment_date(payroll, period), payroll.sequence, &effective_accrual_id(payroll))
+    payment_event_order(
+        period,
+        &effective_payment_date(payroll, period),
+        payroll.sequence,
+        &effective_accrual_id(payroll),
+    )
 }
 
 fn ordered_prior_payment_events<'a>(
@@ -838,10 +994,8 @@ fn ordered_prior_payment_events<'a>(
     Ok(events)
 }
 
-fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
-    if payroll.status == BordroStatus::FINALIZED
-        && is_provisional_supplementary_payroll(payroll)
-    {
+pub(crate) fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
+    if payroll.status == BordroStatus::FINALIZED && is_provisional_supplementary_payroll(payroll) {
         return Err(DomainError::InvalidData(format!(
             "{} tahakkuku FINALIZED durumda ancak geçici/legacy statutory snapshot taşıyor; kayıt sessizce değiştirilemez. Migration veya veri kalitesi incelemesi gerekir.",
             effective_accrual_id(payroll)
@@ -871,7 +1025,10 @@ pub fn is_provisional_supplementary_payroll(payroll: &BordroKaydi) -> bool {
     }
     payroll.accrualType != AccrualType::NORMAL
         && !matches!(
-            payroll.statutorySnapshot.as_ref().map(|snapshot| snapshot.source),
+            payroll
+                .statutorySnapshot
+                .as_ref()
+                .map(|snapshot| snapshot.source),
             Some(StatutorySnapshotSource::AttendanceBacked)
         )
 }
@@ -927,13 +1084,28 @@ fn resolve_accrual_input(
             accrualId: format!("{}_{}", request.personnelId, request.periodId),
             accrualType: AccrualType::NORMAL,
             paymentDate: default_payment_date(period),
-            sequence: request.dataset.payrolls.iter()
+            sequence: request
+                .dataset
+                .payrolls
+                .iter()
                 .filter(|event| event.personelId == request.personnelId)
-                .filter(|event| request.dataset.periods.iter().any(|owner|
-                    owner.id == event.donemId && owner.taxYear == period.taxYear && owner.taxMonth == period.taxMonth
-                    && effective_payment_date(event, owner) == default_payment_date(period)))
-                .map(|event| event.sequence.checked_add(1).ok_or_else(|| DomainError::InvalidData("Tahakkuk sıra numarası taştı.".into())))
-                .collect::<Result<Vec<_>>>()?.into_iter().max().unwrap_or(0),
+                .filter(|event| {
+                    request.dataset.periods.iter().any(|owner| {
+                        owner.id == event.donemId
+                            && owner.taxYear == period.taxYear
+                            && owner.taxMonth == period.taxMonth
+                            && effective_payment_date(event, owner) == default_payment_date(period)
+                    })
+                })
+                .map(|event| {
+                    event.sequence.checked_add(1).ok_or_else(|| {
+                        DomainError::InvalidData("Tahakkuk sıra numarası taştı.".into())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+                .into_iter()
+                .max()
+                .unwrap_or(0),
             grossAmount: None,
             description: None,
         }
@@ -969,7 +1141,7 @@ fn resolve_accrual_input(
                     input.accrualId
                 ))
             })?;
-        input.grossAmount = Some(batch.totalGrossDelta);
+        input.grossAmount = Some(retro_payable_settlement_amount(batch));
     }
     let payment_date = parse_period_date(&input.paymentDate, &period.id, "ödeme/tahakkuk")?;
     if payment_date.year() != period.taxYear || payment_date.month() as i32 != period.taxMonth {
@@ -1095,7 +1267,10 @@ fn resolve_prior_accrual_state<'a>(
         // events in the authoritative tax/PEK chain. Counting one here would
         // consume the same-month GV/DV/PEK state without a valid entitlement.
         .filter(|(_, payroll)| {
-            matches!(payroll.status, BordroStatus::CALCULATED | BordroStatus::FINALIZED)
+            matches!(
+                payroll.status,
+                BordroStatus::CALCULATED | BordroStatus::FINALIZED
+            )
         })
         .map(|(_, payroll)| {
             ensure_authoritative_payment_event(payroll)?;
@@ -1251,6 +1426,12 @@ fn incoming_devreden_pek(
 ) -> Result<IncomingDevredenPekState> {
     let current_order = accrual_order_for_input(active_period, current)?;
     let ordered_prior = ordered_prior_payment_events(dataset, personnel_id, &current_order)?;
+    let retro_carry_overrides =
+        retro_source_carry_overrides_for_event(dataset, personnel_id, &current_order)?;
+    let changed_overrides = retro_carry_overrides
+        .iter()
+        .filter(|item| carry_override_changed(item))
+        .collect::<Vec<_>>();
     let prior_same_month: Vec<&BordroKaydi> = ordered_prior
         .iter()
         .filter(|(order, _)| order.tax_ordinal == current_order.tax_ordinal)
@@ -1260,6 +1441,23 @@ fn incoming_devreden_pek(
         ensure_authoritative_payment_event(payroll)?;
     }
     if let Some(previous_accrual) = prior_same_month.last() {
+        if let Some(override_state) =
+            carry_override_for_source_period(&retro_carry_overrides, &previous_accrual.donemId)
+        {
+            return incoming_from_retro_source_carry(override_state, &current_order);
+        }
+        if changed_overrides.iter().any(|override_state| {
+            override_state.source_tax_ordinal <= current_order.tax_ordinal
+                && !retro_event_contains_carry_override(
+                    &retro_carry_overrides,
+                    &effective_accrual_id(previous_accrual),
+                )
+        }) {
+            return Err(DomainError::ValidationError(
+                "Retro source carry downstream aynı vergi ayındaki mevcut payment-event zinciriyle çakışıyor; tarihçe sessizce yeniden yazılamaz, downstream replay gerekir."
+                    .into(),
+            ));
+        }
         return Ok(IncomingDevredenPekState {
             records: previous_accrual
                 .sonrakiDevredenPek
@@ -1274,6 +1472,9 @@ fn incoming_devreden_pek(
         .map(|(order, _)| order.tax_ordinal)
         .max()
     else {
+        if let Some(override_state) = changed_overrides.last() {
+            return incoming_from_retro_source_carry(override_state, &current_order);
+        }
         return Ok(IncomingDevredenPekState {
             records: Vec::new(),
             tax_months_elapsed: 0,
@@ -1288,19 +1489,40 @@ fn incoming_devreden_pek(
         ensure_authoritative_payment_event(previous_payroll)?;
     }
     let Some((previous_order, previous_payroll)) = previous_month.last() else {
+        if let Some(override_state) = changed_overrides.last() {
+            return incoming_from_retro_source_carry(override_state, &current_order);
+        }
         return Ok(IncomingDevredenPekState {
             records: Vec::new(),
             tax_months_elapsed: 0,
         });
     };
-    let tax_months_elapsed = tax_month_distance(
-        current_order.tax_ordinal,
-        previous_order.tax_ordinal,
-    )?;
+    let tax_months_elapsed =
+        tax_month_distance(current_order.tax_ordinal, previous_order.tax_ordinal)?;
     if tax_months_elapsed <= 0 {
         return Err(DomainError::InvalidData(
             "Devreden PEK kaynağı mevcut vergi ayından ileri veya aynı ayda çözümlenemedi.".into(),
         ));
+    }
+    if let Some(override_state) = carry_override_for_source_period(
+        &retro_carry_overrides,
+        &previous_payroll.donemId,
+    ) {
+        return incoming_from_retro_source_carry(override_state, &current_order);
+    }
+    if let Some(override_state) = changed_overrides.last() {
+        if override_state.source_tax_ordinal > previous_order.tax_ordinal {
+            return incoming_from_retro_source_carry(override_state, &current_order);
+        }
+        if !retro_event_contains_carry_override(
+            &retro_carry_overrides,
+            &effective_accrual_id(previous_payroll),
+        ) {
+            return Err(DomainError::ValidationError(
+                "Retro source carry downstream payment-event zincirini etkiliyor; historical event sessizce değiştirilmeden önce downstream replay yapılmalıdır."
+                    .into(),
+            ));
+        }
     }
     Ok(IncomingDevredenPekState {
         records: previous_payroll
@@ -1309,6 +1531,45 @@ fn incoming_devreden_pek(
             .unwrap_or_default(),
         tax_months_elapsed,
     })
+}
+
+/// Replays the incoming carry for a historical payment event while retaining
+/// the legacy opening-carry case where no earlier event exists.  The boolean
+/// is true when the canonical chain (or a retro carry override) is authoritative
+/// for this event; false means the persisted opening carry is the only input.
+pub(crate) fn incoming_devreden_pek_for_replay(
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+    payroll: &BordroKaydi,
+) -> Result<(IncomingDevredenPekState, bool)> {
+    let current_order = accrual_order_for_payroll(dataset, payroll)?;
+    let has_prior_events = !ordered_prior_payment_events(dataset, personnel_id, &current_order)?
+        .is_empty();
+    let has_retro_carry_override = retro_source_carry_overrides_for_event(
+        dataset,
+        personnel_id,
+        &current_order,
+    )?
+    .iter()
+    .any(carry_override_changed);
+    let state = incoming_devreden_pek(
+        dataset,
+        personnel_id,
+        period,
+        &PayrollAccrualInput {
+            accrualId: effective_accrual_id(payroll),
+            accrualType: payroll.accrualType,
+            paymentDate: effective_payment_date(payroll, period),
+            sequence: payroll.sequence,
+            grossAmount: None,
+            description: payroll.accrualDescription.clone(),
+        },
+    )?;
+    Ok((
+        state,
+        has_prior_events || has_retro_carry_override,
+    ))
 }
 
 fn payroll_gv_base(payroll: &BordroKaydi) -> Result<Decimal> {
@@ -1343,9 +1604,8 @@ fn tax_month_distance(current_tax_ordinal: i64, source_tax_ordinal: i64) -> Resu
             "Vergi ayı kaynağı mevcut vergi ayından ileri olamaz.".into(),
         ));
     }
-    i32::try_from(distance).map_err(|_| {
-        DomainError::InvalidData("Vergi ayı farkı desteklenen aralığı aşıyor.".into())
-    })
+    i32::try_from(distance)
+        .map_err(|_| DomainError::InvalidData("Vergi ayı farkı desteklenen aralığı aşıyor.".into()))
 }
 
 fn previous_gv(
@@ -1522,7 +1782,7 @@ fn previous_asgari_gv(
             .ok_or_else(|| DomainError::ValidationError("İşsizlik işçi oranı eksik.".into()))?
             / dec!(100);
         let monthly_gross = round2(daily_minimum * dec!(30));
-        let monthly_sgk = round2(monthly_gross * (sgk_rate + unemployment_rate));
+        let monthly_sgk = round_sgk_amount(monthly_gross * (sgk_rate + unemployment_rate));
         cumulative += (monthly_gross - monthly_sgk).max(Decimal::ZERO);
     }
     Ok(round2(cumulative))
@@ -1743,6 +2003,12 @@ fn validate_devreden_pek_gap(
 ) -> Result<()> {
     let current_order = accrual_order_for_input(active_period, current)?;
     let ordered_prior = ordered_prior_payment_events(dataset, personnel_id, &current_order)?;
+    let retro_carry_overrides =
+        retro_source_carry_overrides_for_event(dataset, personnel_id, &current_order)?;
+    let changed_overrides = retro_carry_overrides
+        .iter()
+        .filter(|item| carry_override_changed(item))
+        .collect::<Vec<_>>();
     let prior_same_month: Vec<&BordroKaydi> = ordered_prior
         .iter()
         .filter(|(order, _)| order.tax_ordinal == current_order.tax_ordinal)
@@ -1751,7 +2017,24 @@ fn validate_devreden_pek_gap(
     for payroll in &prior_same_month {
         ensure_authoritative_payment_event(payroll)?;
     }
-    if !prior_same_month.is_empty() {
+    if let Some(previous_accrual) = prior_same_month.last() {
+        if carry_override_for_source_period(&retro_carry_overrides, &previous_accrual.donemId)
+            .is_some()
+        {
+            return Ok(());
+        }
+        if changed_overrides.iter().any(|override_state| {
+            override_state.source_tax_ordinal <= current_order.tax_ordinal
+                && !retro_event_contains_carry_override(
+                    &retro_carry_overrides,
+                    &effective_accrual_id(previous_accrual),
+                )
+        }) {
+            return Err(DomainError::ValidationError(
+                "Retro source carry downstream aynı vergi ayındaki mevcut payment-event zinciriyle çakışıyor; downstream replay gerekir."
+                    .into(),
+            ));
+        }
         return Ok(());
     }
 
@@ -1773,14 +2056,31 @@ fn validate_devreden_pek_gap(
     let Some((previous_order, previous_payroll)) = previous_month.last() else {
         return Ok(());
     };
-    let tax_months_elapsed = tax_month_distance(
-        current_order.tax_ordinal,
-        previous_order.tax_ordinal,
-    )?;
+    let tax_months_elapsed =
+        tax_month_distance(current_order.tax_ordinal, previous_order.tax_ordinal)?;
     if tax_months_elapsed <= 0 {
         return Err(DomainError::InvalidData(
             "Devreden PEK vergi ayı kronolojisi geçersiz.".into(),
         ));
+    }
+    if carry_override_for_source_period(&retro_carry_overrides, &previous_payroll.donemId)
+        .is_some()
+    {
+        return Ok(());
+    }
+    if let Some(override_state) = changed_overrides.last() {
+        if override_state.source_tax_ordinal > previous_order.tax_ordinal {
+            return Ok(());
+        }
+        if !retro_event_contains_carry_override(
+            &retro_carry_overrides,
+            &effective_accrual_id(previous_payroll),
+        ) {
+            return Err(DomainError::ValidationError(
+                "Retro source carry downstream payment-event zincirini etkiliyor; downstream replay gerekir."
+                    .into(),
+            ));
+        }
     }
     let positive: Vec<&DevredenPekKaydi> = previous_payroll
         .sonrakiDevredenPek
@@ -1796,9 +2096,10 @@ fn validate_devreden_pek_gap(
     // A direct source-to-current tax-month distance is deterministic. If every
     // carry record expires by the current event, no artificial intermediate
     // period/event is required and no PEK is silently retained.
-    if !positive.iter().any(|item| {
-        i64::from(item.kalanAySayisi) > i64::from(tax_months_elapsed)
-    }) {
+    if !positive
+        .iter()
+        .any(|item| i64::from(item.kalanAySayisi) > i64::from(tax_months_elapsed))
+    {
         return Ok(());
     }
 
@@ -1916,11 +2217,8 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
     validate_prior_accruals_finalized(&request.dataset, &request.personnelId, period, &accrual)?;
 
     if accrual.accrualType == AccrualType::NORMAL {
-        let attendance = normal_attendance(
-            &request.dataset,
-            &request.personnelId,
-            &request.periodId,
-        )?;
+        let attendance =
+            normal_attendance(&request.dataset, &request.personnelId, &request.periodId)?;
         let missing_dates = attendance_missing_calendar_days(attendance, period)?;
         if !missing_dates.is_empty() {
             return Err(DomainError::ValidationError(format!(
@@ -1942,9 +2240,7 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
             accrualId: accrual.accrualId.clone(),
         },
     )?;
-    if !impact.blockedByFinalized.is_empty()
-        || !impact.blockedByFinalizedRetroBatches.is_empty()
-    {
+    if !impact.blockedByFinalized.is_empty() || !impact.blockedByFinalizedRetroBatches.is_empty() {
         let keys = impact
             .blockedByFinalized
             .iter()
@@ -2017,20 +2313,20 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     };
     let (retro_income_tax_exempt, retro_stamp_tax_exempt) = retro_payment
         .as_ref()
-        .map(|(_, allocations, _, _)| {
+        .map(|(batch, allocations, _, _)| {
             allocations.iter().fold(
                 (Decimal::ZERO, Decimal::ZERO),
                 |(income_tax_exempt, stamp_tax_exempt), allocation| {
                     (
                         income_tax_exempt
                             + if allocation.incomeTaxTreatment == RetroTaxTreatment::EXEMPT {
-                                allocation.deltaAmount
+                                retro_payable_allocation_amount(batch, allocation)
                             } else {
                                 Decimal::ZERO
                             },
                         stamp_tax_exempt
                             + if allocation.stampTaxTreatment == RetroTaxTreatment::EXEMPT {
-                                allocation.deltaAmount
+                                retro_payable_allocation_amount(batch, allocation)
                             } else {
                                 Decimal::ZERO
                             },
@@ -2040,7 +2336,11 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         })
         .unwrap_or((Decimal::ZERO, Decimal::ZERO));
     let attendance = if is_normal_accrual {
-        Some(normal_attendance(dataset, &request.personnelId, &request.periodId)?)
+        Some(normal_attendance(
+            dataset,
+            &request.personnelId,
+            &request.periodId,
+        )?)
     } else {
         None
     };
@@ -2048,8 +2348,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         None
     } else {
         dataset.attendances.iter().find(|candidate| {
-            candidate.personelId == request.personnelId
-                && candidate.donemId == request.periodId
+            candidate.personelId == request.personnelId && candidate.donemId == request.periodId
         })
     };
     let attendance_for_snapshot = if is_normal_accrual {
@@ -2109,7 +2408,8 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     let incoming_devreden_state = incoming_devreden_pek(dataset, &person.id, &period, &accrual)?;
     let statutory_snapshot = if is_normal_accrual {
         resolve_statutory_snapshot_for_period_with_paid_sick_dates(
-            attendance.ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
+            attendance
+                .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
             &period,
             &settings,
             &paid_sick_dates,
@@ -2330,18 +2630,12 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         (
             KesintiKalemleri {
                 isciSgkPrimi: Some(
-                    (source_worker_sgk + payment_month_worker_pek * sgk_rate)
-                        .round_dp_with_strategy(
-                            2,
-                            rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                        ),
+                    round_sgk_amount(source_worker_sgk + payment_month_worker_pek * sgk_rate),
                 ),
                 isciIssizlikPrimi: Some(
-                    (source_worker_unemployment + payment_month_worker_pek * unemployment_rate)
-                        .round_dp_with_strategy(
-                            2,
-                            rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                        ),
+                    round_sgk_amount(
+                        source_worker_unemployment + payment_month_worker_pek * unemployment_rate,
+                    ),
                 ),
                 ..KesintiKalemleri::default()
             },
@@ -2349,18 +2643,19 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
             next_devreden,
         )
     } else {
-        let (pek_detail, next_devreden) = calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
-            &income,
-            None,
-            Some(&effective_settings),
-            incoming_devreden,
-            Some(&statutory_snapshot),
-            month_to_date_pek,
-            PekCalculationOptions {
-                tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
-                apply_lower_bound: false,
-            },
-        )?;
+        let (pek_detail, next_devreden) =
+            calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
+                &income,
+                None,
+                Some(&effective_settings),
+                incoming_devreden,
+                Some(&statutory_snapshot),
+                month_to_date_pek,
+                PekCalculationOptions {
+                    tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
+                    apply_lower_bound: false,
+                },
+            )?;
         let sgk_rate = effective_settings
             .sgkIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
@@ -2398,14 +2693,8 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         };
         (
             KesintiKalemleri {
-                isciSgkPrimi: Some((worker_pek * sgk_rate).round_dp_with_strategy(
-                    2,
-                    rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                )),
-                isciIssizlikPrimi: Some((worker_pek * unemployment_rate).round_dp_with_strategy(
-                    2,
-                    rust_decimal::RoundingStrategy::MidpointAwayFromZero,
-                )),
+                isciSgkPrimi: Some(round_sgk_amount(worker_pek * sgk_rate)),
+                isciIssizlikPrimi: Some(round_sgk_amount(worker_pek * unemployment_rate)),
                 bes,
                 ..KesintiKalemleri::default()
             },

@@ -60,7 +60,7 @@ const RETRO_EARNING_CODE_VALUES = [
   'OTHER',
 ] as const;
 const RETRO_TAX_TREATMENT_VALUES = ['TAXABLE', 'EXEMPT'] as const;
-const RETRO_SETTLEMENT_STATUS_VALUES = ['UNSETTLED', 'PAID', 'OVERPAYMENT'] as const;
+const RETRO_SETTLEMENT_STATUS_VALUES = ['UNSETTLED', 'PAID', 'OVERPAYMENT', 'SETTLED_BY_OFFSET'] as const;
 const RETRO_SGK_TREATMENT_VALUES = [
   'WAGE_SOURCE_MONTH',
   'NON_WAGE_PAYMENT_MONTH',
@@ -74,7 +74,7 @@ const RETRO_POLICY_BY_EARNING_CODE: Record<
   BASE_WAGE: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
   NIGHT_WORK: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
   NIGHT_HOLIDAY: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
-  WORK_PREMIUM: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
+  WORK_PREMIUM: { sgkTreatment: 'NON_WAGE_PAYMENT_MONTH', taxTreatment: 'TAXABLE' },
   SOCIAL_AID: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
   MEAL: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
   TRANSPORT: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
@@ -83,7 +83,7 @@ const RETRO_POLICY_BY_EARNING_CODE: Record<
   TIS_BONUS: { sgkTreatment: 'NON_WAGE_PAYMENT_MONTH', taxTreatment: 'TAXABLE' },
   TEDIYE: { sgkTreatment: 'NON_WAGE_PAYMENT_MONTH', taxTreatment: 'TAXABLE' },
   SUPPLEMENTAL: { sgkTreatment: 'NON_WAGE_PAYMENT_MONTH', taxTreatment: 'TAXABLE' },
-  OTHER: { sgkTreatment: 'NON_WAGE_PAYMENT_MONTH', taxTreatment: 'TAXABLE' },
+  OTHER: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
 };
 const STATUTORY_SNAPSHOT_SOURCE_VALUES = [
   'ATTENDANCE_BACKED',
@@ -707,6 +707,10 @@ function validateRetroBatch(value: unknown, path: string): void {
   requiredEnum(value, 'status', COMPENSATION_REVISION_STATUS_VALUES, path);
   requiredEnum(value, 'settlementStatus', RETRO_SETTLEMENT_STATUS_VALUES, path);
   requiredDecimal(value, 'totalGrossDelta', path);
+  ['payableSettlementAmount', 'offsetSettlementAmount', 'recoveredAmount',
+    'recoverableAmount', 'outstandingReceivable'].forEach((key) =>
+    requiredDecimal(value, key, path)
+  );
   optionalNullableString(value, 'description', path);
   optionalNullableString(value, 'createdAt', path);
   optionalNullableString(value, 'calculatedAt', path);
@@ -721,12 +725,17 @@ function validateRetroAllocation(value: unknown, path: string): void {
     requiredDecimal(value, key, path)
   );
   ['previousAuthoritativeRetroAmount', 'originalPek', 'retroPekDelta', 'adjustedPek', 'workerSgkDelta',
-    'workerUnemploymentDelta', 'employerSgkDelta', 'employerUnemploymentDelta'].forEach((key) =>
-    optionalDecimal(value, key, path)
+    'workerUnemploymentDelta', 'employerSgkDelta', 'employerUnemploymentDelta',
+    'originalEmployerLowerBound', 'targetEmployerLowerBound', 'employerLowerBoundDelta',
+    'employerLowerBoundPremiumDelta', 'payableSettlementAmount', 'offsetSettlementAmount',
+    'recoverableAmount'].forEach((key) =>
+    requiredDecimal(value, key, path)
   );
   requiredEnum(value, 'sgkTreatment', RETRO_SGK_TREATMENT_VALUES, path);
   requiredEnum(value, 'incomeTaxTreatment', RETRO_TAX_TREATMENT_VALUES, path);
   requiredEnum(value, 'stampTaxTreatment', RETRO_TAX_TREATMENT_VALUES, path);
+  optionalNullableArray(value, 'originalSourceCarry', path, validateDevredenPekKaydi);
+  optionalNullableArray(value, 'targetSourceCarry', path, validateDevredenPekKaydi);
   optionalNullableString(value, 'metadata', path);
 }
 
@@ -889,12 +898,20 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
       ['workerUnemploymentDelta', allocation.workerUnemploymentDelta],
       ['employerSgkDelta', allocation.employerSgkDelta],
       ['employerUnemploymentDelta', allocation.employerUnemploymentDelta],
+      ['originalEmployerLowerBound', allocation.originalEmployerLowerBound],
+      ['targetEmployerLowerBound', allocation.targetEmployerLowerBound],
+      ['employerLowerBoundDelta', allocation.employerLowerBoundDelta],
+      ['employerLowerBoundPremiumDelta', allocation.employerLowerBoundPremiumDelta],
+      ['payableSettlementAmount', allocation.payableSettlementAmount],
+      ['offsetSettlementAmount', allocation.offsetSettlementAmount],
+      ['recoverableAmount', allocation.recoverableAmount],
     ] as const;
     amounts.forEach(([key, value]) => {
       if (value !== undefined && value !== null) {
         const cents = retroCents(value, `$.retroAllocations[${index}].${key}`);
         if (
-          ['originalRecognizedAmount', 'targetAmount', 'originalPek', 'adjustedPek'].includes(key)
+          ['originalRecognizedAmount', 'targetAmount', 'originalPek', 'adjustedPek',
+            'originalEmployerLowerBound', 'targetEmployerLowerBound'].includes(key)
           && cents < 0n
         ) {
           fail(
@@ -945,20 +962,91 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
         `allocation delta toplamı batch toplamıyla eşleşmiyor: ${allocationTotal.toString()} kuruş.`
       );
     }
-    const status = batch.status ?? 'DRAFT';
-    const hasNegativeDelta = total < 0n || allocations.some((item) =>
-      retroCents(item.allocation.deltaAmount, `$.retroAllocations[${item.index}].deltaAmount`) < 0n
+    const payable = retroCents(batch.payableSettlementAmount, `$.retroBatches[${index}].payableSettlementAmount`);
+    const offset = retroCents(batch.offsetSettlementAmount, `$.retroBatches[${index}].offsetSettlementAmount`);
+    const recovered = retroCents(batch.recoveredAmount, `$.retroBatches[${index}].recoveredAmount`);
+    const recoverable = retroCents(batch.recoverableAmount, `$.retroBatches[${index}].recoverableAmount`);
+    const outstanding = retroCents(batch.outstandingReceivable, `$.retroBatches[${index}].outstandingReceivable`);
+    const allocationPayable = allocations.reduce(
+      (sum, item) => sum + retroCents(item.allocation.payableSettlementAmount!, `$.retroAllocations[${item.index}].payableSettlementAmount`),
+      0n
     );
+    const allocationOffset = allocations.reduce(
+      (sum, item) => sum + retroCents(item.allocation.offsetSettlementAmount!, `$.retroAllocations[${item.index}].offsetSettlementAmount`),
+      0n
+    );
+    const allocationRecoverable = allocations.reduce(
+      (sum, item) => sum + retroCents(item.allocation.recoverableAmount!, `$.retroAllocations[${item.index}].recoverableAmount`),
+      0n
+    );
+    if (payable < 0n || offset < 0n || recovered < 0n || recoverable < 0n || outstanding < 0n) {
+      fail(`$.retroBatches[${index}]`, 'settlement akışları negatif olamaz.');
+    }
+    if (allocationPayable !== payable || allocationOffset !== offset || allocationRecoverable !== recoverable) {
+      fail(`$.retroBatches[${index}]`, 'settlement allocation toplamı batch settlement akışlarıyla eşleşmiyor.');
+    }
+    allocations.forEach((item) => {
+      const allocationPath = '$.retroAllocations[' + item.index + ']';
+      const delta = retroCents(item.allocation.deltaAmount, allocationPath + '.deltaAmount');
+      const itemPayable = retroCents(
+        item.allocation.payableSettlementAmount!,
+        allocationPath + '.payableSettlementAmount'
+      );
+      const itemOffset = retroCents(
+        item.allocation.offsetSettlementAmount!,
+        allocationPath + '.offsetSettlementAmount'
+      );
+      const itemRecoverable = retroCents(
+        item.allocation.recoverableAmount!,
+        allocationPath + '.recoverableAmount'
+      );
+      const positiveDelta = delta > 0n ? delta : 0n;
+      const negativeDelta = delta < 0n ? -delta : 0n;
+      if (itemPayable + itemOffset > positiveDelta || itemRecoverable > negativeDelta) {
+        fail(
+          allocationPath,
+          'allocation settlement akışı signed entitlement delta sınırını aşamaz.'
+        );
+      }
+    });
+    if (total >= 0n && payable + offset !== total) {
+      fail(`$.retroBatches[${index}]`, 'payable + offset pozitif entitlement delta ile eşleşmiyor.');
+    }
+    if (total >= 0n && recoverable !== 0n) {
+      fail(
+        '$.retroBatches[' + index + ']',
+        'pozitif entitlement delta recoverable settlement üretemez.'
+      );
+    }
+    if (total < 0n && recoverable !== -total) {
+      fail(`$.retroBatches[${index}]`, 'recoverable settlement negatif entitlement delta ile eşleşmiyor.');
+    }
+    if (total < 0n && (payable !== 0n || offset !== 0n)) {
+      fail(
+        '$.retroBatches[' + index + ']',
+        'negatif entitlement delta payable veya offset settlement üretemez.'
+      );
+    }
+    const status = batch.status ?? 'DRAFT';
+    const hasNegativeDelta = total < 0n;
     if (hasNegativeDelta && status === 'FINALIZED') {
       fail(
         `$.retroBatches[${index}]`,
         'Negatif retro fark FINALIZED ödeme batch’i olamaz; OVERPAYMENT olarak açık settlement kaydı tutulmalıdır.'
       );
     }
+    if (status === 'FINALIZED' && payable === 0n) {
+      fail(
+        `$.retroBatches[${index}]`,
+        'Payable settlement olmayan retro batch payment event ile FINALIZED olamaz.'
+      );
+    }
     const expectedSettlement = hasNegativeDelta
       ? 'OVERPAYMENT'
       : status === 'FINALIZED'
         ? 'PAID'
+        : batch.settlementStatus === 'SETTLED_BY_OFFSET' && payable === 0n && offset > 0n
+          ? 'SETTLED_BY_OFFSET'
         : 'UNSETTLED';
     if (batch.settlementStatus !== undefined && batch.settlementStatus !== expectedSettlement) {
       fail(
@@ -966,6 +1054,32 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
         `batch durumu/tutarı ile settlement statusı tutarsız; beklenen ${expectedSettlement}.`
       );
     }
+  });
+
+  const orderedBatches = [...payload.retroBatches].sort((left, right) =>
+    left.personnelId.localeCompare(right.personnelId) ||
+    left.paymentDate.localeCompare(right.paymentDate) ||
+    left.id.localeCompare(right.id)
+  );
+  const outstandingByPersonnel = new Map<string, bigint>();
+  orderedBatches.forEach((batch) => {
+    if (batch.status !== 'CALCULATED' && batch.status !== 'FINALIZED') {
+      return;
+    }
+    const prior = outstandingByPersonnel.get(batch.personnelId) ?? 0n;
+    const recoverable = retroCents(batch.recoverableAmount, '$.retroBatches.recoverableAmount');
+    const offset = retroCents(batch.offsetSettlementAmount, '$.retroBatches.offsetSettlementAmount');
+    const recovered = retroCents(batch.recoveredAmount, '$.retroBatches.recoveredAmount');
+    const available = prior + recoverable;
+    if (offset + recovered > available) {
+      fail('$.retroBatches', `settlement mahsup/tahsil akışı açık receivable bakiyesini aşıyor: ${batch.id}.`);
+    }
+    const expected = available - offset - recovered;
+    const actual = retroCents(batch.outstandingReceivable, '$.retroBatches.outstandingReceivable');
+    if (actual !== expected) {
+      fail('$.retroBatches', `outstanding receivable replay sonucu ile eşleşmiyor: ${batch.id}.`);
+    }
+    outstandingByPersonnel.set(batch.personnelId, actual);
   });
 }
 
@@ -1072,6 +1186,16 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
         'FINALIZED retro batch tam olarak bir payment event ile eşleşmelidir.'
       );
     }
+    const payable = retroCents(
+      batch.payableSettlementAmount,
+      `$.retroBatches[${index}].payableSettlementAmount`
+    );
+    if (linked.length === 1 && payable === 0n) {
+      fail(
+        `$.retroBatches[${index}]`,
+        'Payable settlement olmayan retro batch payment event ile eşleşemez.'
+      );
+    }
     if (linked.length === 1) {
       const payment = linked[0];
       const expectedPaymentStatus = status === 'FINALIZED' ? 'FINALIZED' : status === 'CALCULATED' ? 'CALCULATED' : null;
@@ -1081,7 +1205,7 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
         payment.paymentDate === batch.paymentDate &&
         payment.status === expectedPaymentStatus &&
         retroCents(payment.gelirToplam, `$.bordrolar[${payload.bordrolar.indexOf(payment)}].gelirToplam`) ===
-          retroCents(batch.totalGrossDelta, `$.retroBatches[${index}].totalGrossDelta`);
+          payable;
       if (!linkedStateIsValid) {
         fail(
           `$.retroBatches[${index}]`,
@@ -1163,7 +1287,7 @@ function validateTopLevelArrays(value: UnknownRecord): void {
   });
 }
 
-/** Full current V4 runtime schema. Unknown fields are intentionally ignored. */
+/** Full current V5 runtime schema. Unknown fields are intentionally ignored. */
 export function validateCurrentPayrollPayload(
   value: unknown
 ): asserts value is PayrollStorageDto {

@@ -16,10 +16,13 @@ fn validate_settlement_status(
     batch: &RetroAdjustmentBatch,
     allocations: &[RetroAllocation],
 ) -> Result<()> {
-    let has_negative_delta = batch.totalGrossDelta < rust_decimal::Decimal::ZERO
-        || allocations
-            .iter()
-            .any(|allocation| allocation.deltaAmount < rust_decimal::Decimal::ZERO);
+    let legacy_flow = batch.payableSettlementAmount == rust_decimal::Decimal::ZERO
+        && batch.offsetSettlementAmount == rust_decimal::Decimal::ZERO
+        && batch.recoveredAmount == rust_decimal::Decimal::ZERO
+        && batch.recoverableAmount == rust_decimal::Decimal::ZERO
+        && batch.outstandingReceivable == rust_decimal::Decimal::ZERO
+        && batch.settlementStatus != RetroSettlementStatus::SETTLED_BY_OFFSET;
+    let has_negative_delta = batch.totalGrossDelta < rust_decimal::Decimal::ZERO;
     if has_negative_delta && batch.status == CompensationRevisionStatus::FINALIZED {
         return Err(DomainError::ValidationError(
             "Negatif retro fark FINALIZED ödeme batch'i olamaz; OVERPAYMENT olarak açık settlement kaydı tutulmalıdır."
@@ -30,6 +33,11 @@ fn validate_settlement_status(
         RetroSettlementStatus::OVERPAYMENT
     } else if batch.status == CompensationRevisionStatus::FINALIZED {
         RetroSettlementStatus::PAID
+    } else if batch.settlementStatus == RetroSettlementStatus::SETTLED_BY_OFFSET
+        && batch.offsetSettlementAmount > rust_decimal::Decimal::ZERO
+        && batch.payableSettlementAmount == rust_decimal::Decimal::ZERO
+    {
+        RetroSettlementStatus::SETTLED_BY_OFFSET
     } else {
         RetroSettlementStatus::UNSETTLED
     };
@@ -38,6 +46,101 @@ fn validate_settlement_status(
             "Retro batch settlement statusı tutarsız: {:?} durumu için {:?} bekleniyordu, {:?} geldi.",
             batch.status, expected, batch.settlementStatus
         )));
+    }
+    if !legacy_flow {
+        if batch.payableSettlementAmount < rust_decimal::Decimal::ZERO
+            || batch.offsetSettlementAmount < rust_decimal::Decimal::ZERO
+            || batch.recoveredAmount < rust_decimal::Decimal::ZERO
+            || batch.recoverableAmount < rust_decimal::Decimal::ZERO
+            || batch.outstandingReceivable < rust_decimal::Decimal::ZERO
+        {
+            return Err(DomainError::InvalidData(
+                "Retro settlement akışları negatif olamaz.".into(),
+            ));
+        }
+        let allocation_payable = allocations
+            .iter()
+            .fold(rust_decimal::Decimal::ZERO, |sum, allocation| {
+                sum + allocation.payableSettlementAmount
+            });
+        let allocation_offset = allocations
+            .iter()
+            .fold(rust_decimal::Decimal::ZERO, |sum, allocation| {
+                sum + allocation.offsetSettlementAmount
+            });
+        let allocation_recoverable = allocations
+            .iter()
+            .fold(rust_decimal::Decimal::ZERO, |sum, allocation| {
+                sum + allocation.recoverableAmount
+            });
+        if round2(allocation_payable) != round2(batch.payableSettlementAmount)
+            || round2(allocation_offset) != round2(batch.offsetSettlementAmount)
+            || round2(allocation_recoverable) != round2(batch.recoverableAmount)
+        {
+            return Err(DomainError::InvalidData(
+                "Retro settlement allocation toplamı batch akışlarıyla eşleşmiyor.".into(),
+            ));
+        }
+        for allocation in allocations {
+            let positive_delta = allocation.deltaAmount.max(rust_decimal::Decimal::ZERO);
+            let negative_delta = (-allocation.deltaAmount).max(rust_decimal::Decimal::ZERO);
+            if round2(
+                allocation.payableSettlementAmount + allocation.offsetSettlementAmount,
+            ) > round2(positive_delta)
+                || round2(allocation.recoverableAmount) > round2(negative_delta)
+            {
+                return Err(DomainError::InvalidData(
+                    "Retro allocation settlement akışı signed entitlement delta sınırını aşamaz."
+                        .into(),
+                ));
+            }
+        }
+        if batch.totalGrossDelta >= rust_decimal::Decimal::ZERO
+            && round2(batch.payableSettlementAmount + batch.offsetSettlementAmount)
+                != round2(batch.totalGrossDelta)
+        {
+            return Err(DomainError::InvalidData(
+                "Retro payable/offset toplamı entitlement delta ile eşleşmiyor.".into(),
+            ));
+        }
+        if batch.totalGrossDelta >= rust_decimal::Decimal::ZERO
+            && batch.recoverableAmount != rust_decimal::Decimal::ZERO
+        {
+            return Err(DomainError::InvalidData(
+                "Pozitif retro entitlement delta'sı recoverable settlement üretemez.".into(),
+            ));
+        }
+        if batch.totalGrossDelta < rust_decimal::Decimal::ZERO
+            && round2(batch.recoverableAmount) != round2(-batch.totalGrossDelta)
+        {
+            return Err(DomainError::InvalidData(
+                "Retro recoverable toplamı negatif entitlement delta ile eşleşmiyor.".into(),
+            ));
+        }
+        if batch.totalGrossDelta < rust_decimal::Decimal::ZERO
+            && (batch.payableSettlementAmount != rust_decimal::Decimal::ZERO
+                || batch.offsetSettlementAmount != rust_decimal::Decimal::ZERO)
+        {
+            return Err(DomainError::InvalidData(
+                "Negatif retro entitlement delta'sı payable veya offset settlement üretemez."
+                    .into(),
+            ));
+        }
+    }
+    let effective_payable = if legacy_flow
+        && batch.totalGrossDelta > rust_decimal::Decimal::ZERO
+        && batch.settlementStatus != RetroSettlementStatus::OVERPAYMENT
+    {
+        batch.totalGrossDelta
+    } else {
+        batch.payableSettlementAmount
+    };
+    if batch.status == CompensationRevisionStatus::FINALIZED
+        && effective_payable <= rust_decimal::Decimal::ZERO
+    {
+        return Err(DomainError::InvalidData(
+            "Payable settlement olmayan retro batch FINALIZED olamaz.".into(),
+        ));
     }
     Ok(())
 }
@@ -166,8 +269,10 @@ pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
     let mut statement = conn
         .prepare(
             "SELECT id, revision_id, personnel_id, payment_date, status,
-                    settlement_status, total_gross_delta, description, created_at,
-                    calculated_at, finalized_at
+                    settlement_status, total_gross_delta,
+                    payable_settlement_amount, offset_settlement_amount,
+                    recovered_amount, recoverable_amount, outstanding_receivable,
+                    description, created_at, calculated_at, finalized_at
              FROM retro_adjustment_batches
              ORDER BY payment_date, id",
         )
@@ -182,10 +287,15 @@ pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
                 row.get::<_, String>(4)?,
                 row.get::<_, String>(5)?,
                 row.get::<_, i64>(6)?,
-                row.get::<_, Option<String>>(7)?,
-                row.get::<_, Option<String>>(8)?,
-                row.get::<_, Option<String>>(9)?,
-                row.get::<_, Option<String>>(10)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+                row.get::<_, i64>(10)?,
+                row.get::<_, i64>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+                row.get::<_, Option<String>>(15)?,
             ))
         })
         .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
@@ -199,6 +309,11 @@ pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
             status,
             settlement_status,
             total_gross_delta,
+            payable_settlement_amount,
+            offset_settlement_amount,
+            recovered_amount,
+            recoverable_amount,
+            outstanding_receivable,
             description,
             created_at,
             calculated_at,
@@ -212,6 +327,11 @@ pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
             status: parse_enum(&status, "retro batch durumu")?,
             settlementStatus: parse_enum(&settlement_status, "retro settlement durumu")?,
             totalGrossDelta: kurus_to_dec(total_gross_delta),
+            payableSettlementAmount: kurus_to_dec(payable_settlement_amount),
+            offsetSettlementAmount: kurus_to_dec(offset_settlement_amount),
+            recoveredAmount: kurus_to_dec(recovered_amount),
+            recoverableAmount: kurus_to_dec(recoverable_amount),
+            outstandingReceivable: kurus_to_dec(outstanding_receivable),
             description,
             createdAt: created_at,
             calculatedAt: calculated_at,
@@ -229,7 +349,12 @@ pub fn get_allocations(conn: &Connection) -> Result<Vec<RetroAllocation>> {
                     delta_amount, sgk_treatment, income_tax_treatment, stamp_tax_treatment,
                     original_pek, retro_pek_delta, adjusted_pek, worker_sgk_delta,
                     worker_unemployment_delta, employer_sgk_delta,
-                    employer_unemployment_delta, metadata
+                    employer_unemployment_delta,
+                    original_employer_lower_bound, target_employer_lower_bound,
+                    employer_lower_bound_delta, employer_lower_bound_premium_delta,
+                    original_source_carry_json, target_source_carry_json,
+                    payable_settlement_amount, offset_settlement_amount,
+                    recoverable_amount, metadata
              FROM retro_adjustment_allocations
              ORDER BY source_period_id, earning_code, id",
         )
@@ -256,7 +381,16 @@ pub fn get_allocations(conn: &Connection) -> Result<Vec<RetroAllocation>> {
                 row.get::<_, i64>(16)?,
                 row.get::<_, i64>(17)?,
                 row.get::<_, i64>(18)?,
-                row.get::<_, Option<String>>(19)?,
+                row.get::<_, i64>(19)?,
+                row.get::<_, i64>(20)?,
+                row.get::<_, i64>(21)?,
+                row.get::<_, i64>(22)?,
+                row.get::<_, Option<String>>(23)?,
+                row.get::<_, Option<String>>(24)?,
+                row.get::<_, i64>(25)?,
+                row.get::<_, i64>(26)?,
+                row.get::<_, i64>(27)?,
+                row.get::<_, Option<String>>(28)?,
             ))
         })
         .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
@@ -282,6 +416,15 @@ pub fn get_allocations(conn: &Connection) -> Result<Vec<RetroAllocation>> {
             worker_unemployment_delta,
             employer_sgk_delta,
             employer_unemployment_delta,
+            original_employer_lower_bound,
+            target_employer_lower_bound,
+            employer_lower_bound_delta,
+            employer_lower_bound_premium_delta,
+            original_source_carry_json,
+            target_source_carry_json,
+            payable_settlement_amount,
+            offset_settlement_amount,
+            recoverable_amount,
             metadata,
         ) = row.map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         result.push(RetroAllocation {
@@ -304,6 +447,19 @@ pub fn get_allocations(conn: &Connection) -> Result<Vec<RetroAllocation>> {
             workerUnemploymentDelta: kurus_to_dec(worker_unemployment_delta),
             employerSgkDelta: kurus_to_dec(employer_sgk_delta),
             employerUnemploymentDelta: kurus_to_dec(employer_unemployment_delta),
+            originalEmployerLowerBound: kurus_to_dec(original_employer_lower_bound),
+            targetEmployerLowerBound: kurus_to_dec(target_employer_lower_bound),
+            employerLowerBoundDelta: kurus_to_dec(employer_lower_bound_delta),
+            employerLowerBoundPremiumDelta: kurus_to_dec(employer_lower_bound_premium_delta),
+            originalSourceCarry: original_source_carry_json
+                .map(|value| decode(&value, "original source carry"))
+                .transpose()?,
+            targetSourceCarry: target_source_carry_json
+                .map(|value| decode(&value, "target source carry"))
+                .transpose()?,
+            payableSettlementAmount: kurus_to_dec(payable_settlement_amount),
+            offsetSettlementAmount: kurus_to_dec(offset_settlement_amount),
+            recoverableAmount: kurus_to_dec(recoverable_amount),
             metadata,
         });
     }
@@ -325,10 +481,7 @@ fn existing_revision_status(
     .transpose()
 }
 
-fn same_revision_definition(
-    left: &CompensationRevision,
-    right: &CompensationRevision,
-) -> bool {
+fn same_revision_definition(left: &CompensationRevision, right: &CompensationRevision) -> bool {
     left.id == right.id
         && left.reason == right.reason
         && left.title == right.title
@@ -686,18 +839,23 @@ fn save_batch_in_transaction_impl(
                     || allocation.stampTaxTreatment != policy.stampTaxTreatment
                 {
                     return Err(DomainError::InvalidData(
-                        "Retro allocation earning policy snapshot'ı canonical registry ile eşleşmiyor."
-                            .into(),
-                    ));
+                    "Retro allocation earning policy snapshot'ı canonical registry ile eşleşmiyor."
+                        .into(),
+                ));
                 }
                 if allocation.originalRecognizedAmount < rust_decimal::Decimal::ZERO
                     || allocation.targetAmount < rust_decimal::Decimal::ZERO
                     || allocation.originalPek < rust_decimal::Decimal::ZERO
                     || allocation.adjustedPek < rust_decimal::Decimal::ZERO
+                    || allocation.originalEmployerLowerBound < rust_decimal::Decimal::ZERO
+                    || allocation.targetEmployerLowerBound < rust_decimal::Decimal::ZERO
+                    || allocation.payableSettlementAmount < rust_decimal::Decimal::ZERO
+                    || allocation.offsetSettlementAmount < rust_decimal::Decimal::ZERO
+                    || allocation.recoverableAmount < rust_decimal::Decimal::ZERO
                 {
                     return Err(DomainError::InvalidData(
                         "Retro allocation authoritative entitlement/PEK tabanı negatif olamaz."
-                        .into(),
+                            .into(),
                     ));
                 }
                 if round2(
@@ -707,8 +865,7 @@ fn save_batch_in_transaction_impl(
                 ) != round2(allocation.deltaAmount)
                 {
                     return Err(DomainError::ValidationError(
-                        "Retro allocation target - recognized ledger hesabıyla eşleşmiyor."
-                            .into(),
+                        "Retro allocation target - recognized ledger hesabıyla eşleşmiyor.".into(),
                     ));
                 }
                 Ok(total + allocation.deltaAmount)
@@ -778,13 +935,21 @@ fn save_batch_in_transaction_impl(
     conn.execute(
         "INSERT INTO retro_adjustment_batches
             (id, revision_id, personnel_id, payment_date, status, settlement_status,
-             total_gross_delta, description, created_at, calculated_at, finalized_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             total_gross_delta, payable_settlement_amount, offset_settlement_amount,
+             recovered_amount, recoverable_amount, outstanding_receivable,
+             description, created_at, calculated_at, finalized_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(id) DO UPDATE SET
             revision_id = excluded.revision_id, personnel_id = excluded.personnel_id,
             payment_date = excluded.payment_date, status = excluded.status,
             settlement_status = excluded.settlement_status,
-            total_gross_delta = excluded.total_gross_delta, description = excluded.description,
+            total_gross_delta = excluded.total_gross_delta,
+            payable_settlement_amount = excluded.payable_settlement_amount,
+            offset_settlement_amount = excluded.offset_settlement_amount,
+            recovered_amount = excluded.recovered_amount,
+            recoverable_amount = excluded.recoverable_amount,
+            outstanding_receivable = excluded.outstanding_receivable,
+            description = excluded.description,
             calculated_at = excluded.calculated_at, finalized_at = excluded.finalized_at",
         params![
             batch.id,
@@ -794,6 +959,11 @@ fn save_batch_in_transaction_impl(
             enum_json(&batch.status)?,
             enum_json(&batch.settlementStatus)?,
             dec_to_kurus(Some(batch.totalGrossDelta))?,
+            dec_to_kurus(Some(batch.payableSettlementAmount))?,
+            dec_to_kurus(Some(batch.offsetSettlementAmount))?,
+            dec_to_kurus(Some(batch.recoveredAmount))?,
+            dec_to_kurus(Some(batch.recoverableAmount))?,
+            dec_to_kurus(Some(batch.outstandingReceivable))?,
             batch.description,
             batch.createdAt,
             batch.calculatedAt,
@@ -813,8 +983,13 @@ fn save_batch_in_transaction_impl(
                  original_recognized_amount, previous_retro_amount, target_amount, delta_amount,
                  sgk_treatment, income_tax_treatment, stamp_tax_treatment, original_pek,
                  retro_pek_delta, adjusted_pek, worker_sgk_delta, worker_unemployment_delta,
-                 employer_sgk_delta, employer_unemployment_delta, metadata)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+                 employer_sgk_delta, employer_unemployment_delta,
+                 original_employer_lower_bound, target_employer_lower_bound,
+                 employer_lower_bound_delta, employer_lower_bound_premium_delta,
+                 original_source_carry_json, target_source_carry_json,
+                 payable_settlement_amount, offset_settlement_amount,
+                 recoverable_amount, metadata)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
             params![
                 item.id,
                 item.batchId,
@@ -835,6 +1010,15 @@ fn save_batch_in_transaction_impl(
                 dec_to_kurus(Some(item.workerUnemploymentDelta))?,
                 dec_to_kurus(Some(item.employerSgkDelta))?,
                 dec_to_kurus(Some(item.employerUnemploymentDelta))?,
+                dec_to_kurus(Some(item.originalEmployerLowerBound))?,
+                dec_to_kurus(Some(item.targetEmployerLowerBound))?,
+                dec_to_kurus(Some(item.employerLowerBoundDelta))?,
+                dec_to_kurus(Some(item.employerLowerBoundPremiumDelta))?,
+                item.originalSourceCarry.as_ref().map(encode).transpose()?,
+                item.targetSourceCarry.as_ref().map(encode).transpose()?,
+                dec_to_kurus(Some(item.payableSettlementAmount))?,
+                dec_to_kurus(Some(item.offsetSettlementAmount))?,
+                dec_to_kurus(Some(item.recoverableAmount))?,
                 item.metadata,
             ],
         )

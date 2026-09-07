@@ -151,6 +151,8 @@ function settlementLabel(batch: RetroAdjustmentBatch): string {
       return 'Ödendi';
     case 'OVERPAYMENT':
       return 'Fazla tahakkuk';
+    case 'SETTLED_BY_OFFSET':
+      return 'Mahsupla kapandı';
     default:
       return 'Ödeme bekliyor';
   }
@@ -206,8 +208,17 @@ export function GeriyeDonukFarklar({
     [revisionId, savedOverrides]
   );
   const previewTotal = preview?.batch.totalGrossDelta ?? 0;
-  const hasNegativeAllocation = Boolean(
-    preview?.allocations.some((allocation) => allocation.deltaAmount < 0)
+  const previewPayable = preview?.batch.payableSettlementAmount ?? Math.max(previewTotal, 0);
+  const previewOffset = preview?.batch.offsetSettlementAmount ?? 0;
+  const previewOutstanding = preview?.batch.outstandingReceivable ?? 0;
+  const hasRecoverableSettlement = Boolean(
+    preview && (preview.batch.recoverableAmount ?? 0) > 0
+  );
+  const canSaveSettlement = Boolean(
+    preview &&
+      previewPayable === 0 &&
+      (preview.batch.settlementStatus === 'OVERPAYMENT' ||
+        preview.batch.settlementStatus === 'SETTLED_BY_OFFSET')
   );
   const previewRetroPek = preview?.allocations.reduce(
     (total, allocation) => total + (allocation.retroPekDelta ?? 0),
@@ -303,8 +314,8 @@ export function GeriyeDonukFarklar({
     setFeedback(null);
     setIsBusy(true);
     try {
-      if (previewTotal <= 0 || hasNegativeAllocation) {
-        throw new Error('Negatif veya sıfır delta otomatik ödeme event’ine dönüştürülemez; fazla tahakkuk olarak incelenmelidir.');
+      if (previewPayable <= 0) {
+        throw new Error('Payable settlement sıfır; yalnız entitlement/receivable settlement kaydı saklanabilir.');
       }
       await onCreatePayment(preview);
       setFeedback({ kind: 'success', text: 'RETRO_ADJUSTMENT payment event’i oluşturuldu ve gerçek ödeme ayının vergi zincirine bağlandı.' });
@@ -322,8 +333,8 @@ export function GeriyeDonukFarklar({
     setFeedback(null);
     setIsBusy(true);
     try {
-      if (!hasNegativeAllocation) {
-        throw new Error('Yalnız negatif farklar fazla tahakkuk kaydı olarak saklanabilir.');
+      if (!canSaveSettlement) {
+        throw new Error('Payment event olmadan yalnız açık fazla tahakkuk veya mahsupla kapanan settlement kaydı saklanabilir.');
       }
       await onSaveBatch(preview);
       setFeedback({ kind: 'success', text: 'Fazla tahakkuk batch’i kaydedildi; ödeme event’i oluşturulmadı.' });
@@ -501,14 +512,18 @@ export function GeriyeDonukFarklar({
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-xs leading-relaxed text-slate-500">Revision ve en az bir tarihsel kapsam tanımladıktan sonra hesap önizlemesi burada görünür.</div>
           ) : (
             <>
-              <div className="grid gap-2 sm:grid-cols-4">
+              <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Toplam brüt fark</div><div className={`mt-1 font-mono text-lg font-black ${amountClass(previewTotal)}`}>{formatTL(previewTotal)}</div></div>
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-emerald-700">Payable settlement</div><div className="mt-1 font-mono text-lg font-black text-emerald-800">{formatTL(previewPayable)}</div></div>
+                <div className="rounded-xl border border-amber-100 bg-amber-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Mahsup</div><div className="mt-1 font-mono text-lg font-black text-amber-800">{formatTL(previewOffset)}</div></div>
+                <div className="rounded-xl border border-rose-100 bg-rose-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-rose-700">Açık receivable</div><div className="mt-1 font-mono text-lg font-black text-rose-800">{formatTL(previewOutstanding)}</div></div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Kaynak dönem</div><div className="mt-1 text-lg font-black text-slate-900">{preview.periods.length}</div></div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">SGK PEK farkı</div><div className="mt-1 font-mono text-lg font-black text-slate-900">{formatTL(previewRetroPek)}</div></div>
                 <div className="rounded-xl border border-slate-100 bg-slate-50 p-3"><div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Ödeme ayı</div><div className="mt-1 text-lg font-black text-slate-900">{preview.batch.paymentDate.slice(0, 7)}</div></div>
               </div>
 
-              {hasNegativeAllocation && <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900"><AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />Negatif allocation bulundu. Bu sonuç ödeme değildir; fazla tahakkuk kaydı olarak saklanıp ayrıca incelenmelidir.</div>}
+              {hasRecoverableSettlement && <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs font-semibold text-amber-900"><AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />Negatif entitlement bulundu. Bu sonuç çalışan alacağı/receivable olarak saklanır; tahsil edilmiş sayılmaz.</div>}
+              {previewOffset > 0 && <div className="flex items-start gap-2 rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-xs font-semibold text-indigo-900"><WalletCards aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />Açık receivable, pozitif entitlement’tan mahsup edildi. Kalan payable tutar için ayrı payment event oluşturulur.</div>}
 
               <div className="overflow-x-auto rounded-xl border border-slate-200">
                 <table className="min-w-full text-left text-xs">
@@ -536,11 +551,11 @@ export function GeriyeDonukFarklar({
                 <span className="font-black">Audit:</span> kaynak dönem PEK/SGK farkı allocation üzerinde saklanır; GV ve DV payment month ({preview.batch.paymentDate.slice(0, 7)}) üzerinden canonical payment order’a girer.
               </div>
 
-              <button type="button" onClick={() => void handleCreatePayment()} disabled={isBusy || previewTotal <= 0 || hasNegativeAllocation} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" onClick={() => void handleCreatePayment()} disabled={isBusy || previewPayable <= 0} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 text-xs font-black text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50">
                 <Save aria-hidden="true" className="h-4 w-4" /> Geriye Dönük Fark Tahakkuku Oluştur
               </button>
-              {hasNegativeAllocation && <button type="button" onClick={() => void handleSaveBatch()} disabled={isBusy} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 text-xs font-black text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
-                <Save aria-hidden="true" className="h-4 w-4" /> Fazla Tahakkuk Kaydını Sakla
+              {canSaveSettlement && <button type="button" onClick={() => void handleSaveBatch()} disabled={isBusy} className="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 text-xs font-black text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50">
+                <Save aria-hidden="true" className="h-4 w-4" /> Settlement kaydını sakla
               </button>}
             </>
           )}

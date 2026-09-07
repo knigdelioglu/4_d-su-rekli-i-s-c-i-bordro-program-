@@ -23,8 +23,84 @@ pub(crate) fn round_gv_amount(val: Decimal) -> Decimal {
 /// SGK'nın resmî örneklerine uygun olarak midpoint değerler sıfırdan uzağa yuvarlanır
 /// (banker's rounding değil): 33.030 × %21,75 = 7.184,025 → 7.184,03.
 /// Genel round2()'dan (MidpointNearestEven) farklıdır ve yalnız SGK prim kalemlerinde kullanılır.
-fn round_sgk_amount(val: Decimal) -> Decimal {
+pub fn round_sgk_amount(val: Decimal) -> Decimal {
     val.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+}
+
+/// Canonical SGK treatment class used by both normal PEK and retro PEK
+/// reconciliation.  The class follows the actual normal-engine income
+/// buckets, not the name of the UI earning label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonicalSgkEarningClass {
+    Wage,
+    NonWage,
+}
+
+pub fn canonical_sgk_earning_class(code: RetroEarningCode) -> CanonicalSgkEarningClass {
+    match code {
+        // `isPrimi` is part of the normal engine's ücret dışı ödemeler bucket.
+        RetroEarningCode::WORK_PREMIUM
+        | RetroEarningCode::TIS_BONUS
+        | RetroEarningCode::TEDIYE
+        | RetroEarningCode::SUPPLEMENTAL => CanonicalSgkEarningClass::NonWage,
+        // `digerGelir` is part of the normal engine's ücretler bucket.
+        RetroEarningCode::BASE_WAGE
+        | RetroEarningCode::NIGHT_WORK
+        | RetroEarningCode::NIGHT_HOLIDAY
+        | RetroEarningCode::SOCIAL_AID
+        | RetroEarningCode::MEAL
+        | RetroEarningCode::TRANSPORT
+        | RetroEarningCode::CLOTHING
+        | RetroEarningCode::SERVICE_INCREMENT
+        | RetroEarningCode::OTHER => CanonicalSgkEarningClass::Wage,
+    }
+}
+
+/// Splits normal income using the same canonical buckets that feed the PEK
+/// engine. Meal is passed in already net of its statutory SGK exemption.
+pub fn canonical_sgk_income_components(
+    gelirler: &GelirKalemleri,
+    sgk_tabi_yemek: Decimal,
+) -> (Decimal, Decimal) {
+    let value = |code: RetroEarningCode| match code {
+        RetroEarningCode::BASE_WAGE => gelirler.tabanBrutAylik.unwrap_or_default(),
+        RetroEarningCode::NIGHT_WORK => gelirler.geceCalismasiUcreti.unwrap_or_default(),
+        RetroEarningCode::NIGHT_HOLIDAY => gelirler.geceCalismasiTatiliUcreti.unwrap_or_default(),
+        RetroEarningCode::WORK_PREMIUM => gelirler.isPrimi.unwrap_or_default(),
+        RetroEarningCode::SOCIAL_AID => gelirler.birlestirilmisSosyalYardim.unwrap_or_default(),
+        RetroEarningCode::MEAL => sgk_tabi_yemek,
+        RetroEarningCode::TRANSPORT => gelirler.vasitaYol.unwrap_or_default(),
+        RetroEarningCode::CLOTHING => gelirler.giyimYardimi.unwrap_or_default(),
+        RetroEarningCode::SERVICE_INCREMENT => gelirler.hizmetZammi.unwrap_or_default(),
+        RetroEarningCode::TIS_BONUS => gelirler.tisIkramiyesi.unwrap_or_default(),
+        RetroEarningCode::TEDIYE => gelirler.tediye.unwrap_or_default(),
+        RetroEarningCode::SUPPLEMENTAL => gelirler.ekOdeme.unwrap_or_default(),
+        RetroEarningCode::OTHER => gelirler.digerGelir.unwrap_or_default(),
+    };
+
+    [
+        RetroEarningCode::BASE_WAGE,
+        RetroEarningCode::NIGHT_WORK,
+        RetroEarningCode::NIGHT_HOLIDAY,
+        RetroEarningCode::WORK_PREMIUM,
+        RetroEarningCode::SOCIAL_AID,
+        RetroEarningCode::MEAL,
+        RetroEarningCode::TRANSPORT,
+        RetroEarningCode::CLOTHING,
+        RetroEarningCode::SERVICE_INCREMENT,
+        RetroEarningCode::TIS_BONUS,
+        RetroEarningCode::TEDIYE,
+        RetroEarningCode::SUPPLEMENTAL,
+        RetroEarningCode::OTHER,
+    ]
+    .into_iter()
+    .fold((Decimal::ZERO, Decimal::ZERO), |(wage, non_wage), code| {
+        let amount = value(code);
+        match canonical_sgk_earning_class(code) {
+            CanonicalSgkEarningClass::Wage => (wage + amount, non_wage),
+            CanonicalSgkEarningClass::NonWage => (wage, non_wage + amount),
+        }
+    })
 }
 
 fn floor_dec(val: Decimal) -> Decimal {
@@ -144,7 +220,8 @@ pub fn calculate_aylik_asgari_ucret_gv_matrahi(
     issizlik_isci_orani: Decimal,
 ) -> Decimal {
     let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
-    let aylik_asgari_sgk = round2(aylik_brut_asgari * (sgk_isci_orani + issizlik_isci_orani));
+    let aylik_asgari_sgk =
+        round_sgk_amount(aylik_brut_asgari * (sgk_isci_orani + issizlik_isci_orani));
     (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0))
 }
 
@@ -912,30 +989,7 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     };
     let sgk_tabi_yemek = (brut_yemek - yemek_istisnasi_tutar).max(dec!(0));
 
-    let vasita_yol = gelirler.vasitaYol.unwrap_or(dec!(0));
-    let taban_brut = gelirler.tabanBrutAylik.unwrap_or(dec!(0));
-    let tediye = gelirler.tediye.unwrap_or(dec!(0));
-    let tis_ikramiyesi = gelirler.tisIkramiyesi.unwrap_or(dec!(0));
-    let ek_odeme = gelirler.ekOdeme.unwrap_or(dec!(0));
-    let birlestirilmis_sosyal_yardim = gelirler.birlestirilmisSosyalYardim.unwrap_or(dec!(0));
-    let giyim_yardimi = gelirler.giyimYardimi.unwrap_or(dec!(0));
-    let is_primi = gelirler.isPrimi.unwrap_or(dec!(0));
-    let gece_calismasi = gelirler.geceCalismasiUcreti.unwrap_or(dec!(0));
-    let gece_calismasi_tatili = gelirler.geceCalismasiTatiliUcreti.unwrap_or(dec!(0));
-    let hizmet_zammi = gelirler.hizmetZammi.unwrap_or(dec!(0));
-    let diger_gelir = gelirler.digerGelir.unwrap_or(dec!(0));
-
-    let ucretler = taban_brut
-        + sgk_tabi_yemek
-        + vasita_yol
-        + birlestirilmis_sosyal_yardim
-        + giyim_yardimi
-        + hizmet_zammi
-        + diger_gelir
-        + gece_calismasi
-        + gece_calismasi_tatili;
-
-    let ucret_disi_odemeler = tediye + tis_ikramiyesi + ek_odeme + is_primi;
+    let (ucretler, ucret_disi_odemeler) = canonical_sgk_income_components(gelirler, sgk_tabi_yemek);
     let ham_pek = ucretler + ucret_disi_odemeler;
 
     let (pek_alt_sinir, pek_ust_sinir) = if let Some(snapshot) = statutory_snapshot {
@@ -978,8 +1032,7 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
 
         let kalan_tutar = round2(item.tutar - eklenecek);
         if kalan_tutar > dec!(0) {
-            let Some(kalan_ay_sayisi) = item.kalanAySayisi.checked_sub(tax_months_elapsed)
-            else {
+            let Some(kalan_ay_sayisi) = item.kalanAySayisi.checked_sub(tax_months_elapsed) else {
                 continue;
             };
             if kalan_ay_sayisi > 0 {
@@ -1187,7 +1240,8 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
 
     let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
     let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
-    let aylik_asgari_sgk = round2(aylik_brut_asgari * (sgk_rate + issizlik_rate));
+    let aylik_asgari_sgk =
+        round_sgk_amount(aylik_brut_asgari * (sgk_rate + issizlik_rate));
     let asgari_ucret_gv_matrah = (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0));
 
     let gv_detay = calculate_gv_hesap_detayi_with_brackets(

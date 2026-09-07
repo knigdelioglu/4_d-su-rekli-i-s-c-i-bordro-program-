@@ -1,6 +1,6 @@
 use rusqlite::{Connection, OptionalExtension};
 use rusqlite_migration::{HookError, Migrations, M};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 // rusqlite_migration addresses the seventh entry in this list as
 // user_version = 6 -> 7.  Keep the marker at 7 when that entry is repaired
@@ -8,6 +8,12 @@ use std::collections::HashSet;
 const DEVIR_MIGRATION_VERSION: u32 = 7;
 const NOTLAR_MIGRATION_VERSION: u32 = 8;
 const DEVIR_MIGRATION_PREVIOUS_VERSION: u32 = 5;
+
+fn migration_invalid_data(message: impl Into<String>) -> HookError {
+    HookError::RusqliteError(rusqlite::Error::ToSqlConversionFailure(Box::new(
+        std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()),
+    )))
+}
 
 const DEVIR_COLUMNS: [(&str, &str); 5] = [
     ("devir_kumulatif_gv_matrahi", "INTEGER DEFAULT 0"),
@@ -538,6 +544,11 @@ pub fn get_migrations() -> Migrations<'static> {
                 status TEXT NOT NULL DEFAULT 'CALCULATED',
                 settlement_status TEXT NOT NULL DEFAULT 'UNSETTLED',
                 total_gross_delta INTEGER NOT NULL,
+                payable_settlement_amount INTEGER NOT NULL DEFAULT 0,
+                offset_settlement_amount INTEGER NOT NULL DEFAULT 0,
+                recovered_amount INTEGER NOT NULL DEFAULT 0,
+                recoverable_amount INTEGER NOT NULL DEFAULT 0,
+                outstanding_receivable INTEGER NOT NULL DEFAULT 0,
                 description TEXT,
                 created_at TEXT,
                 calculated_at TEXT,
@@ -564,6 +575,15 @@ pub fn get_migrations() -> Migrations<'static> {
                 worker_unemployment_delta INTEGER NOT NULL DEFAULT 0,
                 employer_sgk_delta INTEGER NOT NULL DEFAULT 0,
                 employer_unemployment_delta INTEGER NOT NULL DEFAULT 0,
+                original_employer_lower_bound INTEGER NOT NULL DEFAULT 0,
+                target_employer_lower_bound INTEGER NOT NULL DEFAULT 0,
+                employer_lower_bound_delta INTEGER NOT NULL DEFAULT 0,
+                employer_lower_bound_premium_delta INTEGER NOT NULL DEFAULT 0,
+                original_source_carry_json TEXT,
+                target_source_carry_json TEXT,
+                payable_settlement_amount INTEGER NOT NULL DEFAULT 0,
+                offset_settlement_amount INTEGER NOT NULL DEFAULT 0,
+                recoverable_amount INTEGER NOT NULL DEFAULT 0,
                 metadata TEXT
             );
 
@@ -612,12 +632,7 @@ pub fn get_migrations() -> Migrations<'static> {
             tx.execute(
                 "UPDATE retro_adjustment_batches
                  SET settlement_status = CASE
-                     WHEN total_gross_delta < 0
-                       OR EXISTS (
-                         SELECT 1 FROM retro_adjustment_allocations allocation
-                         WHERE allocation.batch_id = retro_adjustment_batches.id
-                           AND allocation.delta_amount < 0
-                       ) THEN 'OVERPAYMENT'
+                     WHEN total_gross_delta < 0 THEN 'OVERPAYMENT'
                      WHEN status = 'FINALIZED' AND EXISTS (
                          SELECT 1 FROM payroll_records payroll
                          WHERE payroll.accrual_id = retro_adjustment_batches.id
@@ -653,6 +668,222 @@ pub fn get_migrations() -> Migrations<'static> {
             }
             Ok(())
         }),
+        // Settlement reconciliation is additive. V4 databases have only a
+        // signed entitlement total/status; this migration derives the new
+        // explicit settlement flows without touching any payroll snapshot.
+        M::up_with_hook("SELECT 1;", |tx| {
+            let mut batch_columns = {
+                let mut statement = tx.prepare("PRAGMA table_info(retro_adjustment_batches)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<std::result::Result<HashSet<_>, _>>()?
+            };
+            let mut allocation_columns = {
+                let mut statement =
+                    tx.prepare("PRAGMA table_info(retro_adjustment_allocations)")?;
+                let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+                rows.collect::<std::result::Result<HashSet<_>, _>>()?
+            };
+            for (column, definition) in [
+                ("payable_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+                ("offset_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+                ("recovered_amount", "INTEGER NOT NULL DEFAULT 0"),
+                ("recoverable_amount", "INTEGER NOT NULL DEFAULT 0"),
+                ("outstanding_receivable", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                if batch_columns.insert(column.to_string()) {
+                    tx.execute(
+                        &format!(
+                            "ALTER TABLE retro_adjustment_batches ADD COLUMN {column} {definition}"
+                        ),
+                        [],
+                    )?;
+                }
+            }
+            for (column, definition) in [
+                (
+                    "original_employer_lower_bound",
+                    "INTEGER NOT NULL DEFAULT 0",
+                ),
+                ("target_employer_lower_bound", "INTEGER NOT NULL DEFAULT 0"),
+                ("employer_lower_bound_delta", "INTEGER NOT NULL DEFAULT 0"),
+                (
+                    "employer_lower_bound_premium_delta",
+                    "INTEGER NOT NULL DEFAULT 0",
+                ),
+                ("original_source_carry_json", "TEXT"),
+                ("target_source_carry_json", "TEXT"),
+                ("payable_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+                ("offset_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+                ("recoverable_amount", "INTEGER NOT NULL DEFAULT 0"),
+            ] {
+                if allocation_columns.insert(column.to_string()) {
+                    tx.execute(
+                        &format!(
+                            "ALTER TABLE retro_adjustment_allocations ADD COLUMN {column} {definition}"
+                        ),
+                        [],
+                    )?;
+                }
+            }
+
+            let batch_rows = {
+                let mut statement = tx.prepare(
+                    "SELECT id, personnel_id, payment_date, status, settlement_status,
+                            total_gross_delta, payable_settlement_amount,
+                            offset_settlement_amount, recovered_amount,
+                            recoverable_amount, outstanding_receivable
+                     FROM retro_adjustment_batches
+                     ORDER BY personnel_id, payment_date, id",
+                )?;
+                let rows = statement.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                    ))
+                })?;
+                rows.collect::<std::result::Result<Vec<_>, _>>()?
+            };
+            let mut outstanding_by_person = HashMap::<String, i64>::new();
+            for (
+                id,
+                personnel_id,
+                _payment_date,
+                status,
+                _settlement_status,
+                total,
+                payable,
+                offset,
+                recovered,
+                recoverable,
+                outstanding,
+            ) in batch_rows
+            {
+                let legacy = payable == 0
+                    && offset == 0
+                    && recovered == 0
+                    && recoverable == 0
+                    && outstanding == 0;
+                let (next_payable, next_offset, next_recovered, next_recoverable, next_outstanding) =
+                    if legacy {
+                        let derived_recoverable = if total < 0 {
+                            total.checked_neg().ok_or_else(|| {
+                                migration_invalid_data(format!(
+                                    "{} retro toplamı INTEGER sınırını aşıyor.",
+                                    id
+                                ))
+                            })?
+                        } else {
+                            0
+                        };
+                        let derived_payable = total.max(0);
+                        let previous = *outstanding_by_person.get(&personnel_id).unwrap_or(&0);
+                        (
+                            derived_payable,
+                            0,
+                            0,
+                            derived_recoverable,
+                            previous + derived_recoverable,
+                        )
+                    } else {
+                        let previous = *outstanding_by_person.get(&personnel_id).unwrap_or(&0);
+                        let available = previous + recoverable;
+                        if offset + recovered > available {
+                            return Err(migration_invalid_data(format!(
+                                "{} settlement akışı açık receivable bakiyesini aşıyor.",
+                                id
+                            )));
+                        }
+                        let expected_outstanding = available - offset - recovered;
+                        if outstanding != expected_outstanding {
+                            return Err(migration_invalid_data(format!(
+                                "{} outstanding receivable snapshot'ı migration replay ile eşleşmiyor.",
+                                id
+                            )));
+                        }
+                        (payable, offset, recovered, recoverable, outstanding)
+                    };
+                let authoritative = matches!(
+                    status.as_str(),
+                    "CALCULATED" | "FINALIZED"
+                );
+                if authoritative {
+                    outstanding_by_person.insert(personnel_id, next_outstanding);
+                }
+                if legacy {
+                    tx.execute(
+                        "UPDATE retro_adjustment_batches
+                         SET payable_settlement_amount = ?2,
+                             offset_settlement_amount = ?3,
+                             recovered_amount = ?4,
+                             recoverable_amount = ?5,
+                             outstanding_receivable = ?6
+                         WHERE id = ?1",
+                        rusqlite::params![
+                            id,
+                            next_payable,
+                            next_offset,
+                            next_recovered,
+                            next_recoverable,
+                            next_outstanding
+                        ],
+                    )?;
+                    // Allocate the signed net entitlement, not every raw
+                    // positive/negative allocation independently. A mixed-sign
+                    // legacy batch whose net is zero must have zero settlement
+                    // flows on both the batch and its allocations.
+                    let allocation_rows = {
+                        let mut statement = tx.prepare(
+                            "SELECT id, delta_amount
+                             FROM retro_adjustment_allocations
+                             WHERE batch_id = ?1
+                             ORDER BY source_period_id, earning_code, id",
+                        )?;
+                        let rows = statement.query_map([&id], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                        })?;
+                        rows.collect::<std::result::Result<Vec<_>, _>>()?
+                    };
+                    let mut remaining_payable = next_payable;
+                    let mut remaining_recoverable = next_recoverable;
+                    for (allocation_id, delta) in allocation_rows {
+                        let positive = delta.max(0);
+                        let allocation_payable = positive.min(remaining_payable);
+                        remaining_payable -= allocation_payable;
+                        let negative = delta
+                            .checked_neg()
+                            .ok_or_else(|| migration_invalid_data(format!(
+                                "{} allocation delta'sı INTEGER sınırını aşıyor.",
+                                allocation_id
+                            )))?
+                            .max(0);
+                        let allocation_recoverable = negative.min(remaining_recoverable);
+                        remaining_recoverable -= allocation_recoverable;
+                        tx.execute(
+                            "UPDATE retro_adjustment_allocations
+                             SET payable_settlement_amount = ?2,
+                                 offset_settlement_amount = 0,
+                                 recoverable_amount = ?3
+                             WHERE id = ?1",
+                            rusqlite::params![
+                                allocation_id,
+                                allocation_payable,
+                                allocation_recoverable
+                            ],
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        }),
     ])
 }
 
@@ -664,6 +895,8 @@ fn table_columns(
         "personnel" => "PRAGMA table_info(personnel)",
         "payroll_periods" => "PRAGMA table_info(payroll_periods)",
         "payroll_records" => "PRAGMA table_info(payroll_records)",
+        "retro_adjustment_batches" => "PRAGMA table_info(retro_adjustment_batches)",
+        "retro_adjustment_allocations" => "PRAGMA table_info(retro_adjustment_allocations)",
         _ => return Err(format!("Desteklenmeyen migration tablosu: {table}").into()),
     };
     let mut stmt = conn.prepare(pragma)?;
@@ -798,6 +1031,49 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
          UPDATE payroll_periods SET tax_month = COALESCE(tax_month, 1);
          UPDATE payroll_periods SET tax_year = COALESCE(tax_year, yil);",
     )?;
+
+    let mut retro_batch_columns = table_columns(&tx, "retro_adjustment_batches")?;
+    for (column, definition) in [
+        ("payable_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("offset_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("recovered_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("recoverable_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("outstanding_receivable", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        add_column_if_missing(
+            &tx,
+            "retro_adjustment_batches",
+            &mut retro_batch_columns,
+            column,
+            definition,
+        )?;
+    }
+    let mut retro_allocation_columns = table_columns(&tx, "retro_adjustment_allocations")?;
+    for (column, definition) in [
+        (
+            "original_employer_lower_bound",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("target_employer_lower_bound", "INTEGER NOT NULL DEFAULT 0"),
+        ("employer_lower_bound_delta", "INTEGER NOT NULL DEFAULT 0"),
+        (
+            "employer_lower_bound_premium_delta",
+            "INTEGER NOT NULL DEFAULT 0",
+        ),
+        ("original_source_carry_json", "TEXT"),
+        ("target_source_carry_json", "TEXT"),
+        ("payable_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("offset_settlement_amount", "INTEGER NOT NULL DEFAULT 0"),
+        ("recoverable_amount", "INTEGER NOT NULL DEFAULT 0"),
+    ] {
+        add_column_if_missing(
+            &tx,
+            "retro_adjustment_allocations",
+            &mut retro_allocation_columns,
+            column,
+            definition,
+        )?;
+    }
 
     ensure_unique_tax_year_month(&tx)?;
     ensure_multi_accrual_schema(&tx)?;

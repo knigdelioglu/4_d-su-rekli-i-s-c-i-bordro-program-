@@ -222,7 +222,7 @@ function makeRealisticSnapshot(): PayrollStorageDto {
   };
 
   return {
-    backupVersion: 4,
+    backupVersion: 5,
     exportedAt: '2026-02-14T10:00:00.000Z',
     donemler: [period],
     aktifDonemId: period.id,
@@ -337,6 +337,38 @@ function retroDeductions(base: unknown): TestRecord {
   };
 }
 
+function retroBatchSettlement(total: string): TestRecord {
+  const negative = total.startsWith('-');
+  return {
+    payableSettlementAmount: negative ? '0.00' : total,
+    offsetSettlementAmount: '0.00',
+    recoveredAmount: '0.00',
+    recoverableAmount: negative ? total.slice(1) : '0.00',
+    outstandingReceivable: negative ? total.slice(1) : '0.00',
+  };
+}
+
+function retroAllocationSettlement(delta: string): TestRecord {
+  const negative = delta.startsWith('-');
+  return {
+    previousAuthoritativeRetroAmount: '0.00',
+    originalPek: '0.00',
+    retroPekDelta: '0.00',
+    adjustedPek: '0.00',
+    workerSgkDelta: '0.00',
+    workerUnemploymentDelta: '0.00',
+    employerSgkDelta: '0.00',
+    employerUnemploymentDelta: '0.00',
+    originalEmployerLowerBound: '0.00',
+    targetEmployerLowerBound: '0.00',
+    employerLowerBoundDelta: '0.00',
+    employerLowerBoundPremiumDelta: '0.00',
+    payableSettlementAmount: negative ? '0.00' : delta,
+    offsetSettlementAmount: '0.00',
+    recoverableAmount: negative ? delta.slice(1) : '0.00',
+  };
+}
+
 function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
   const legacy = parseTestSnapshot(makeV2Snapshot(netOdeme));
   legacy.backupVersion = 1;
@@ -418,7 +450,7 @@ describe('BrowserPayrollStore', () => {
     const canonical = canonicalizeLegacyBackupPayload(JSON.stringify(legacy));
     const canonicalPayload = parseTestSnapshot(canonical);
     expect(firstRecord(canonicalPayload, 'bordrolar').netOdeme).toBe('0.15');
-    expect(canonicalPayload.backupVersion).toBe(4);
+    expect(canonicalPayload.backupVersion).toBe(5);
     expect(firstRecord(canonicalPayload, 'personeller').sgkSicilNo).toBe('');
     expect(firstRecord(canonicalPayload, 'personeller').iban).toBe('');
     expect(firstRecord(canonicalPayload, 'personeller').hizmetYili).toBe(1);
@@ -431,10 +463,10 @@ describe('BrowserPayrollStore', () => {
     );
   });
 
-  test('accepts an exact, realistic current V4 snapshot', () => {
+  test('accepts an exact, realistic current V5 snapshot', () => {
     const parsed = parseCurrentBrowserSnapshot(makeV2Snapshot());
 
-    expect(parsed.backupVersion).toBe(4);
+    expect(parsed.backupVersion).toBe(5);
     expect(parsed.donemler.length).toBe(1);
     expect(parsed.personeller.length).toBe(1);
     expect(parsed.puantajlar.length).toBe(1);
@@ -444,7 +476,7 @@ describe('BrowserPayrollStore', () => {
     expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
   });
 
-  test('upgrades V3 retro payloads without dropping the retro graph and rejects incomplete V4', () => {
+  test('upgrades V3 retro payloads without dropping the retro graph and rejects incomplete V5', () => {
     const legacy = parseTestSnapshot(makeV2Snapshot());
     legacy.backupVersion = 3;
     const normal = firstRecord(legacy, 'bordrolar');
@@ -476,7 +508,7 @@ describe('BrowserPayrollStore', () => {
       revisionId: 'revision-v3',
       personnelId: 'person-1',
       // Keep the legacy fixture internally consistent with its cloned
-      // payment event; V4 cross-record validation must not accept a dangling
+      // payment event; V5 cross-record validation must not accept a dangling
       // person/payment-date relationship during upgrade.
       paymentDate: '2026-02-14',
       status: 'CALCULATED',
@@ -498,16 +530,18 @@ describe('BrowserPayrollStore', () => {
     }];
 
     const upgraded = parseImportedBackup(JSON.stringify(legacy));
-    expect(upgraded.backupVersion).toBe(4);
+    expect(upgraded.backupVersion).toBe(5);
     expect(upgraded.compensationRevisions[0].id).toBe('revision-v3');
     expect(upgraded.retroBatches[0].id).toBe('batch-v3');
     expect(upgraded.retroAllocations[0].deltaAmount).toBe('10.00');
+    expect(upgraded.retroBatches[0].payableSettlementAmount).toBe('10.00');
+    expect(upgraded.retroAllocations[0].payableSettlementAmount).toBe('10.00');
     expect(upgraded.bordrolar.length).toBe(2);
     expect(upgraded.bordrolar[1].accrualType).toBe('RETRO_ADJUSTMENT');
     expect(upgraded.bordrolar[1].sequence).toBe(1);
 
     const incompleteCurrent = parseTestSnapshot(makeV2Snapshot());
-    incompleteCurrent.backupVersion = 4;
+    incompleteCurrent.backupVersion = 5;
     delete incompleteCurrent.retroAllocations;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(incompleteCurrent))).toThrow(
       '$.retroAllocations zorunlu alan eksik'
@@ -533,6 +567,7 @@ describe('BrowserPayrollStore', () => {
       status: 'CALCULATED',
       settlementStatus: 'UNSETTLED',
       totalGrossDelta: '11.00',
+      ...retroBatchSettlement('11.00'),
     }];
     mismatched.retroAllocations = [{
       id: 'allocation-ledger',
@@ -546,6 +581,7 @@ describe('BrowserPayrollStore', () => {
       sgkTreatment: 'WAGE_SOURCE_MONTH',
       incomeTaxTreatment: 'TAXABLE',
       stampTaxTreatment: 'TAXABLE',
+      ...retroAllocationSettlement('10.00'),
     }];
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(mismatched))).toThrow(
       '$.retroBatches[0].totalGrossDelta allocation delta toplamı'
@@ -557,6 +593,7 @@ describe('BrowserPayrollStore', () => {
       ...(mismatched.retroBatches as TestRecord[])[0],
       totalGrossDelta: '-10.00',
       settlementStatus: 'OVERPAYMENT',
+      ...retroBatchSettlement('-10.00'),
     }];
     overpayment.retroAllocations = [{
       ...(mismatched.retroAllocations as TestRecord[])[0],
@@ -569,6 +606,7 @@ describe('BrowserPayrollStore', () => {
       workerUnemploymentDelta: '-0.10',
       employerSgkDelta: '-2.18',
       employerUnemploymentDelta: '-0.20',
+      ...retroAllocationSettlement('-10.00'),
     }];
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(overpayment))).not.toThrow();
 
@@ -578,12 +616,14 @@ describe('BrowserPayrollStore', () => {
       ...(mismatched.retroBatches as TestRecord[])[0],
       totalGrossDelta: '10.00',
       settlementStatus: 'PAID',
+      ...retroBatchSettlement('10.00'),
     }];
     inconsistentSettlement.retroAllocations = [{
       ...(mismatched.retroAllocations as TestRecord[])[0],
       originalRecognizedAmount: '0.00',
       targetAmount: '10.00',
       deltaAmount: '10.00',
+      ...retroAllocationSettlement('10.00'),
     }];
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(inconsistentSettlement))).toThrow(
       'settlement statusı tutarsız'
@@ -596,6 +636,7 @@ describe('BrowserPayrollStore', () => {
       status: 'FINALIZED',
       settlementStatus: 'PAID',
       totalGrossDelta: '10.00',
+      ...retroBatchSettlement('10.00'),
     }];
     finalizedWithoutPayment.retroAllocations = inconsistentSettlement.retroAllocations;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(finalizedWithoutPayment))).toThrow(
@@ -639,6 +680,7 @@ describe('BrowserPayrollStore', () => {
       status: 'CALCULATED',
       settlementStatus: 'UNSETTLED',
       totalGrossDelta: '10.00',
+      ...retroBatchSettlement('10.00'),
     }];
     valid.retroAllocations = [{
       id: 'allocation-lifecycle',
@@ -649,6 +691,7 @@ describe('BrowserPayrollStore', () => {
       originalRecognizedAmount: '0.00',
       targetAmount: '10.00',
       deltaAmount: '10.00',
+      ...retroAllocationSettlement('10.00'),
       sgkTreatment: 'WAGE_SOURCE_MONTH',
       incomeTaxTreatment: 'TAXABLE',
       stampTaxTreatment: 'TAXABLE',
@@ -681,6 +724,93 @@ describe('BrowserPayrollStore', () => {
     const downgraded = parseImportedBackup(JSON.stringify(legacyFinalizedWithoutPayment));
     expect(downgraded.retroBatches[0].status).toBe('STALE');
     expect(downgraded.retroBatches[0].settlementStatus).toBe('UNSETTLED');
+  });
+
+  test('accepts offset-only retro settlement without creating a payment event', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    payload.compensationRevisions = [{
+      id: 'revision-offset-only',
+      reason: 'COLLECTIVE_AGREEMENT',
+      title: 'Offset only',
+      effectiveFrom: '2026-01-15',
+      status: 'CALCULATED',
+      scope: 'SELECTED_PERSONNEL',
+      personnelIds: ['person-1'],
+    }];
+    const openBatch = {
+      id: 'batch-a-open-before-offset',
+      revisionId: 'revision-offset-only',
+      personnelId: 'person-1',
+      paymentDate: '2026-02-14',
+      status: 'CALCULATED',
+      settlementStatus: 'OVERPAYMENT',
+      totalGrossDelta: '-10.00',
+      ...retroBatchSettlement('-10.00'),
+    };
+    const openAllocation = {
+      id: 'allocation-a-open-before-offset',
+      batchId: 'batch-a-open-before-offset',
+      personnelId: 'person-1',
+      sourcePeriodId: '2026-01',
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: '10.00',
+      targetAmount: '0.00',
+      deltaAmount: '-10.00',
+      ...retroAllocationSettlement('-10.00'),
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+    };
+    payload.retroBatches = [openBatch, {
+      id: 'batch-z-offset-only',
+      revisionId: 'revision-offset-only',
+      personnelId: 'person-1',
+      paymentDate: '2026-02-14',
+      status: 'CALCULATED',
+      settlementStatus: 'SETTLED_BY_OFFSET',
+      totalGrossDelta: '10.00',
+      ...retroBatchSettlement('10.00'),
+      payableSettlementAmount: '0.00',
+      offsetSettlementAmount: '10.00',
+    }];
+    payload.retroAllocations = [openAllocation, {
+      id: 'allocation-z-offset-only',
+      batchId: 'batch-z-offset-only',
+      personnelId: 'person-1',
+      sourcePeriodId: '2026-01',
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: '0.00',
+      targetAmount: '10.00',
+      deltaAmount: '10.00',
+      ...retroAllocationSettlement('10.00'),
+      payableSettlementAmount: '0.00',
+      offsetSettlementAmount: '10.00',
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+    }];
+
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
+
+    const withFakePayment = JSON.parse(JSON.stringify(payload)) as TestRecord;
+    const normal = firstRecord(withFakePayment, 'bordrolar');
+    (withFakePayment.bordrolar as TestRecord[]).push({
+      ...normal,
+      id: 'fake-offset-payment',
+      accrualId: 'batch-z-offset-only',
+      accrualType: 'RETRO_ADJUSTMENT',
+      sequence: 1,
+      paymentDate: '2026-02-14',
+      gelirler: retroIncome(normal.gelirler),
+      gelirToplam: '10.00',
+      kesintiler: retroDeductions(normal.kesintiler),
+      kesintiToplam: '0.00',
+      netOdeme: '10.00',
+      status: 'CALCULATED',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(withFakePayment))).toThrow(
+      'Payable settlement olmayan retro batch payment event ile eşleşemez'
+    );
   });
 
   test('round-trips a finalized retro graph without changing identity or settlement state', () => {
@@ -719,6 +849,7 @@ describe('BrowserPayrollStore', () => {
       status: 'FINALIZED',
       settlementStatus: 'PAID',
       totalGrossDelta: '10.00',
+      ...retroBatchSettlement('10.00'),
     }];
     payload.retroAllocations = [{
       id: 'allocation-roundtrip',
@@ -729,6 +860,7 @@ describe('BrowserPayrollStore', () => {
       originalRecognizedAmount: '0.00',
       targetAmount: '10.00',
       deltaAmount: '10.00',
+      ...retroAllocationSettlement('10.00'),
       sgkTreatment: 'WAGE_SOURCE_MONTH',
       incomeTaxTreatment: 'TAXABLE',
       stampTaxTreatment: 'TAXABLE',
@@ -755,7 +887,7 @@ describe('BrowserPayrollStore', () => {
   test('normalizes a pre-accrual V2 backup to one NORMAL accrual', () => {
     const parsed = parseImportedBackup(makeLegacyV2Snapshot());
     const payroll = parsed.bordrolar[0];
-    expect(parsed.backupVersion).toBe(4);
+    expect(parsed.backupVersion).toBe(5);
     expect(payroll.accrualId).toBe(payroll.id);
     expect(payroll.accrualType).toBe('NORMAL');
     expect(payroll.paymentDate).toBe('2026-02-14');
@@ -763,7 +895,7 @@ describe('BrowserPayrollStore', () => {
     expect(payroll.netOdeme).toBe('64179.78');
   });
 
-  test('requires every current V4 top-level field and preserves unknown fields', () => {
+  test('requires every current V5 top-level field and preserves unknown fields', () => {
     const missingCollection = parseTestSnapshot(makeV2Snapshot());
     delete missingCollection.taxOpenings;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(missingCollection))).toThrow(
@@ -961,7 +1093,7 @@ describe('BrowserPayrollStore', () => {
     delete firstRecord(rawWithNumbers, 'donemler').taxMonth;
 
     const repaired = repairAndCanonicalizeBackup(rawWithNumbers);
-    expect(repaired.backupVersion).toBe(4);
+    expect(repaired.backupVersion).toBe(5);
     expect(typeof repaired.bordrolar[0].netOdeme).toBe('string');
     expect(repaired.bordrolar[0].netOdeme).toBe('64179.78');
     expect(repaired.bordrolar[0].accrualType).toBe('NORMAL');

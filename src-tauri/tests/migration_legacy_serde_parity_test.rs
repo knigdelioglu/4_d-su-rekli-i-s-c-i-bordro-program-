@@ -5,11 +5,9 @@ use bordro_programi_lib::services::migration_service::{LegacyPayload, MigrationS
 use bordro_programi_lib::{
     db::create_in_memory_connection,
     repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository,
-    repositories::personnel_repo::PersonnelRepository,
     repositories::payroll_repo::PayrollRepository,
-    repositories::retro_repo::get_allocations,
-    repositories::retro_repo::get_batches,
-    repositories::retro_repo::get_revisions,
+    repositories::personnel_repo::PersonnelRepository, repositories::retro_repo::get_allocations,
+    repositories::retro_repo::get_batches, repositories::retro_repo::get_revisions,
 };
 use rust_decimal::Decimal;
 use serde_json::{json, Value};
@@ -166,6 +164,13 @@ fn native_v3_restore_imports_retro_graph_inside_outer_transaction() {
     let allocations = get_allocations(&conn).expect("allocation okunmalı");
     assert_eq!(allocations.len(), 1);
     assert_eq!(allocations[0].deltaAmount, Decimal::from(10));
+    assert_eq!(restored_batch.payableSettlementAmount, Decimal::from(10));
+    assert_eq!(restored_batch.offsetSettlementAmount, Decimal::ZERO);
+    assert_eq!(restored_batch.recoverableAmount, Decimal::ZERO);
+    assert_eq!(restored_batch.outstandingReceivable, Decimal::ZERO);
+    assert_eq!(allocations[0].payableSettlementAmount, Decimal::from(10));
+    assert_eq!(allocations[0].offsetSettlementAmount, Decimal::ZERO);
+    assert_eq!(allocations[0].recoverableAmount, Decimal::ZERO);
 }
 
 #[test]
@@ -298,7 +303,10 @@ fn native_v3_restore_preserves_multi_accrual_payment_event_identity() {
         .iter()
         .find(|payroll| payroll.id == "payroll-v3-retro")
         .expect("V3 retro payment event bulunmalı");
-    assert_eq!(restored.accrualType, bordro_programi_lib::domain::models::AccrualType::RETRO_ADJUSTMENT);
+    assert_eq!(
+        restored.accrualType,
+        bordro_programi_lib::domain::models::AccrualType::RETRO_ADJUSTMENT
+    );
     assert_eq!(restored.accrualId, "payroll-v3-retro");
     assert_eq!(restored.sequence, 1);
 }

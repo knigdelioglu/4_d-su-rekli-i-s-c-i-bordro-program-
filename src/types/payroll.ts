@@ -296,11 +296,11 @@ export interface SickLeaveRecord {
   updatedAt?: string;
 }
 
-export const BACKUP_FORMAT_VERSION = 4;
+export const BACKUP_FORMAT_VERSION = 5;
 /** Native app_settings anahtarı: kurum genelinde zam yürürlük ayları (1-12). */
 export const ZAM_AYLARI_SETTING_KEY = 'zam_aylari';
 
-/** JSON yedek sözleşmesi. V4, SQLite'daki tüm kullanıcı verisini kapsar. */
+/** JSON yedek sözleşmesi. V5, settlement-flow snapshot'larını da kapsar. */
 export interface BackupPayload {
   backupVersion: number;
   exportedAt: string;
@@ -315,7 +315,7 @@ export interface BackupPayload {
   annualPayrollParameters: AnnualPayrollParameters[];
   /** Kurum genelinde zam yürürlük ayları; seçilen ayın 1'i esas alınır. */
   zamAylari: number[];
-  /** V4 retro graph; V3 is adapted through the legacy compatibility path. */
+  /** V5 retro graph; V4 and earlier are adapted through the compatibility path. */
   compensationRevisions: CompensationRevision[];
   compensationRevisionOverrides: CompensationRevisionOverride[];
   retroBatches: RetroAdjustmentBatch[];
@@ -390,7 +390,7 @@ export type RetroEarningCode =
   | 'OTHER';
 
 export type RetroTaxTreatment = 'TAXABLE' | 'EXEMPT';
-export type RetroSettlementStatus = 'UNSETTLED' | 'PAID' | 'OVERPAYMENT';
+export type RetroSettlementStatus = 'UNSETTLED' | 'PAID' | 'OVERPAYMENT' | 'SETTLED_BY_OFFSET';
 export type RetroSgkTreatment =
   | 'WAGE_SOURCE_MONTH'
   | 'NON_WAGE_PAYMENT_MONTH'
@@ -428,9 +428,14 @@ export interface RetroAdjustmentBatch {
   personnelId: string;
   paymentDate: string;
   status?: CompensationRevisionStatus;
-  /** Additive V4 field; missing legacy values mean UNSETTLED. */
+  /** Additive V5 field; missing legacy values are filled during V4 migration. */
   settlementStatus?: RetroSettlementStatus;
   totalGrossDelta: number;
+  payableSettlementAmount?: number;
+  offsetSettlementAmount?: number;
+  recoveredAmount?: number;
+  recoverableAmount?: number;
+  outstandingReceivable?: number;
   description?: string | null;
   createdAt?: string | null;
   calculatedAt?: string | null;
@@ -457,6 +462,16 @@ export interface RetroAllocation {
   workerUnemploymentDelta?: number;
   employerSgkDelta?: number;
   employerUnemploymentDelta?: number;
+  originalEmployerLowerBound?: number;
+  targetEmployerLowerBound?: number;
+  employerLowerBoundDelta?: number;
+  employerLowerBoundPremiumDelta?: number;
+  /** Canonical source-period outgoing carry snapshots used for audit/replay. */
+  originalSourceCarry?: DevredenPekKaydi[] | null;
+  targetSourceCarry?: DevredenPekKaydi[] | null;
+  payableSettlementAmount?: number;
+  offsetSettlementAmount?: number;
+  recoverableAmount?: number;
   metadata?: string | null;
 }
 

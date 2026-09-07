@@ -2,10 +2,10 @@ use bordro_programi_lib::db::create_in_memory_connection;
 use bordro_programi_lib::domain::models::*;
 use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
-use bordro_programi_lib::repositories::period_repo::PeriodRepository;
-use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
+use bordro_programi_lib::repositories::period_repo::PeriodRepository;
+use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::retro_repo::{
     get_batches, save_batch, save_revision_with_overrides,
 };
@@ -79,6 +79,11 @@ fn batch() -> RetroAdjustmentBatch {
         status: CompensationRevisionStatus::CALCULATED,
         settlementStatus: RetroSettlementStatus::UNSETTLED,
         totalGrossDelta: dec!(10),
+        payableSettlementAmount: dec!(10),
+        offsetSettlementAmount: dec!(0),
+        recoveredAmount: dec!(0),
+        recoverableAmount: dec!(0),
+        outstandingReceivable: dec!(0),
         description: Some("Atomic test".into()),
         createdAt: Some("2026-06-20T00:00:00Z".into()),
         calculatedAt: Some("2026-06-20T00:00:00Z".into()),
@@ -107,6 +112,15 @@ fn allocation() -> RetroAllocation {
         workerUnemploymentDelta: dec!(0),
         employerSgkDelta: dec!(0),
         employerUnemploymentDelta: dec!(0),
+        originalEmployerLowerBound: dec!(0),
+        targetEmployerLowerBound: dec!(0),
+        employerLowerBoundDelta: dec!(0),
+        employerLowerBoundPremiumDelta: dec!(0),
+        originalSourceCarry: None,
+        targetSourceCarry: None,
+        payableSettlementAmount: dec!(10),
+        offsetSettlementAmount: dec!(0),
+        recoverableAmount: dec!(0),
         metadata: None,
     }
 }
@@ -185,11 +199,8 @@ fn setup_full_retro_database() -> (
         AttendanceRepository::save(&conn, &complete_attendance(current_period, &person.id))
             .expect("puantaj kaydedilmeli");
     }
-    AnnualPayrollParametersRepository::save(
-        &conn,
-        &AnnualPayrollParameters::default_for_2026(),
-    )
-    .expect("yıllık parametre kaydedilmeli");
+    AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
+        .expect("yıllık parametre kaydedilmeli");
     let revision = CompensationRevision {
         id: "revision-native-canonical".into(),
         reason: CompensationRevisionReason::COLLECTIVE_AGREEMENT,
@@ -321,8 +332,8 @@ fn native_source_mutation_marks_retro_batch_stale() {
 fn native_positive_retro_batch_cannot_be_saved_without_payment_event() {
     let (conn, _source_period, _payment_period, revision) = setup_full_retro_database();
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");
-    let result = payroll_core::RetroEntitlementEngine::calculate(
-        &payroll_core::RetroCalculationRequest {
+    let result =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
             batchId: "batch-without-payment".into(),
             revision,
             overrides: vec![CompensationRevisionOverride {
@@ -337,22 +348,27 @@ fn native_positive_retro_batch_cannot_be_saved_without_payment_event() {
             calculatedAt: "2026-06-20T00:00:00Z".into(),
             description: Some("Positive batch without payment".into()),
             dataset,
-        },
-    )
-    .expect("canonical preview hesaplanmalı");
+        })
+        .expect("canonical preview hesaplanmalı");
 
-    let error = PayrollService::save_retro_adjustment_batch(&conn, &result.batch, &result.allocations)
-        .expect_err("pozitif batch payment event olmadan saklanmamalı");
-    assert!(error.to_string().contains("payment event"));
-    assert!(get_batches(&conn).expect("batch listesi okunmalı").is_empty());
+    let error =
+        PayrollService::save_retro_adjustment_batch(&conn, &result.batch, &result.allocations)
+            .expect_err("pozitif batch payment event olmadan saklanmamalı");
+    assert!(
+        error.to_string().to_lowercase().contains("payment event"),
+        "unexpected save error: {error}"
+    );
+    assert!(get_batches(&conn)
+        .expect("batch listesi okunmalı")
+        .is_empty());
 }
 
 #[test]
 fn native_deleting_unfinalized_retro_payment_stales_its_ledger() {
     let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");
-    let result = payroll_core::RetroEntitlementEngine::calculate(
-        &payroll_core::RetroCalculationRequest {
+    let result =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
             batchId: "batch-delete-retro".into(),
             revision,
             overrides: vec![CompensationRevisionOverride {
@@ -367,9 +383,8 @@ fn native_deleting_unfinalized_retro_payment_stales_its_ledger() {
             calculatedAt: "2026-06-20T00:00:00Z".into(),
             description: Some("Delete retro".into()),
             dataset,
-        },
-    )
-    .expect("canonical preview hesaplanmalı");
+        })
+        .expect("canonical preview hesaplanmalı");
     PayrollService::create_retro_payment(
         &conn,
         &result.batch,
@@ -396,8 +411,8 @@ fn native_deleting_unfinalized_retro_payment_stales_its_ledger() {
 fn native_retro_payment_rejects_forged_preview_before_any_write() {
     let (conn, source_period, payment_period, revision) = setup_full_retro_database();
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");
-    let result = payroll_core::RetroEntitlementEngine::calculate(
-        &payroll_core::RetroCalculationRequest {
+    let result =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
             batchId: "batch-native-forged".into(),
             revision,
             overrides: vec![CompensationRevisionOverride {
@@ -412,9 +427,8 @@ fn native_retro_payment_rejects_forged_preview_before_any_write() {
             calculatedAt: "2026-06-20T00:00:00Z".into(),
             description: Some("Forged preview".into()),
             dataset,
-        },
-    )
-    .expect("canonical preview hesaplanmalı");
+        })
+        .expect("canonical preview hesaplanmalı");
     assert!(!result.allocations.is_empty());
     let mut forged_allocations = result.allocations.clone();
     forged_allocations[0].deltaAmount += dec!(1);
@@ -430,7 +444,9 @@ fn native_retro_payment_rejects_forged_preview_before_any_write() {
         error.to_string().contains("eşleşmiyor"),
         "beklenen stale/forged preview hatası, alınan: {error}"
     );
-    assert!(get_batches(&conn).expect("batch listesi okunmalı").is_empty());
+    assert!(get_batches(&conn)
+        .expect("batch listesi okunmalı")
+        .is_empty());
     assert_eq!(
         bordro_programi_lib::repositories::payroll_repo::PayrollRepository::get_all(&conn)
             .expect("bordrolar okunmalı")
@@ -460,8 +476,8 @@ fn native_negative_retro_batch_is_persisted_as_overpayment_without_payment_event
     )
     .expect("negative revision kaydedilmeli");
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");
-    let result = payroll_core::RetroEntitlementEngine::calculate(
-        &payroll_core::RetroCalculationRequest {
+    let result =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
             batchId: "batch-native-overpayment".into(),
             revision,
             overrides: vec![CompensationRevisionOverride {
@@ -476,19 +492,23 @@ fn native_negative_retro_batch_is_persisted_as_overpayment_without_payment_event
             calculatedAt: "2026-06-20T00:00:00Z".into(),
             description: Some("Overpayment".into()),
             dataset,
-        },
-    )
-    .expect("negative preview hesaplanmalı");
+        })
+        .expect("negative preview hesaplanmalı");
     assert!(result.batch.totalGrossDelta < Decimal::ZERO);
     PayrollService::save_retro_adjustment_batch(&conn, &result.batch, &result.allocations)
         .expect("negative batch ödeme olmadan saklanmalı");
     let saved = get_batches(&conn).expect("batch listesi okunmalı");
     assert_eq!(saved.len(), 1);
-    assert_eq!(saved[0].settlementStatus, RetroSettlementStatus::OVERPAYMENT);
-    assert!(bordro_programi_lib::repositories::payroll_repo::PayrollRepository::get_all(&conn)
-        .expect("bordrolar okunmalı")
-        .iter()
-        .all(|record| record.accrualType != AccrualType::RETRO_ADJUSTMENT));
+    assert_eq!(
+        saved[0].settlementStatus,
+        RetroSettlementStatus::OVERPAYMENT
+    );
+    assert!(
+        bordro_programi_lib::repositories::payroll_repo::PayrollRepository::get_all(&conn)
+            .expect("bordrolar okunmalı")
+            .iter()
+            .all(|record| record.accrualType != AccrualType::RETRO_ADJUSTMENT)
+    );
 }
 
 #[test]

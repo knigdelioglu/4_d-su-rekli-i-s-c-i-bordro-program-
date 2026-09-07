@@ -102,6 +102,12 @@ export type PayrollMutation =
       paymentDate: string;
       sequence: number;
     }
+  | {
+      kind: 'RETRO_BATCH_SAVE';
+      personnelId: string;
+      batchId: string;
+      paymentDate: string;
+    }
   | { kind: 'ALL' };
 
 export interface PayrollKey {

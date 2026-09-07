@@ -106,16 +106,6 @@ impl PayrollService {
                 "Yalnız CALCULATED retro batch payment event'e dönüştürülebilir.".into(),
             ));
         }
-        if batch.totalGrossDelta <= rust_decimal::Decimal::ZERO
-            || allocations
-                .iter()
-                .any(|allocation| allocation.deltaAmount < rust_decimal::Decimal::ZERO)
-        {
-            return Err(DomainError::ValidationError(
-                "Negatif veya sıfır retro delta otomatik payment event'e dönüştürülemez."
-                    .into(),
-            ));
-        }
         let tx = conn
             .unchecked_transaction()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
@@ -125,30 +115,44 @@ impl PayrollService {
         // not allow a caller to reuse it for a different person, period, or
         // accrual type; a composite person+period uniqueness rule alone would
         // otherwise permit a second payment node with the same batch id.
-        let existing_batch_identity = PayrollRepository::get_all(&tx)?
-            .into_iter()
-            .find(|record| record.id == canonical_batch.id || record.accrualId == canonical_batch.id);
+        let existing_batch_identity = PayrollRepository::get_all(&tx)?.into_iter().find(|record| {
+            record.id == canonical_batch.id || record.accrualId == canonical_batch.id
+        });
         if let Some(existing) = existing_batch_identity {
             if existing.personelId != canonical_batch.personnelId
                 || existing.accrualType != AccrualType::RETRO_ADJUSTMENT
                 || existing.paymentDate != canonical_batch.paymentDate
             {
                 return Err(DomainError::InvalidData(
-                    "Retro batch kimliği farklı bir ödeme olayına ait; yeniden bağlanamaz."
-                        .into(),
+                    "Retro batch kimliği farklı bir ödeme olayına ait; yeniden bağlanamaz.".into(),
                 ));
             }
         }
-        if canonical_batch.settlementStatus == crate::domain::models::RetroSettlementStatus::OVERPAYMENT
+        if payroll_core::retro_payable_settlement_amount(&canonical_batch)
+            <= rust_decimal::Decimal::ZERO
         {
             return Err(DomainError::ValidationError(
-                "Fazla tahakkuk batch'i payment event'e dönüştürülemez.".into(),
+                "Payable settlement sıfır olan retro batch payment event'e dönüştürülemez; offset/receivable settlement ayrı lifecycle olarak saklanmalıdır.".into(),
             ));
         }
         crate::repositories::retro_repo::save_batch_in_transaction(
             &tx,
             &canonical_batch,
             &canonical_allocations,
+        )?;
+        let retro_batch_impact =
+            crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
+                assert_mutation_allowed(
+                    &tx,
+                    &payroll_core::PayrollMutation::RetroBatchSave {
+                        personnelId: canonical_batch.personnelId.clone(),
+                        batchId: canonical_batch.id.clone(),
+                        paymentDate: canonical_batch.paymentDate.clone(),
+                    },
+                )?;
+        crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
+            &tx,
+            &retro_batch_impact,
         )?;
 
         let payrolls = PayrollRepository::get_all(&tx)?;
@@ -176,7 +180,9 @@ impl PayrollService {
             // sequence is only a UI hint and must not be able to reorder an
             // existing event or collide with a concurrent double click.
             sequence: effective_sequence,
-            grossAmount: Some(canonical_batch.totalGrossDelta),
+            grossAmount: Some(payroll_core::retro_payable_settlement_amount(
+                &canonical_batch,
+            )),
             description: canonical_batch
                 .description
                 .clone()
@@ -240,11 +246,16 @@ impl PayrollService {
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         let (canonical_batch, canonical_allocations) =
             Self::validate_retro_batch_input(&tx, batch, allocations)?;
-        if canonical_batch.settlementStatus
-            != crate::domain::models::RetroSettlementStatus::OVERPAYMENT
+        if canonical_batch.payableSettlementAmount > rust_decimal::Decimal::ZERO
+            || (canonical_batch.payableSettlementAmount == rust_decimal::Decimal::ZERO
+                && !matches!(
+                    canonical_batch.settlementStatus,
+                    crate::domain::models::RetroSettlementStatus::OVERPAYMENT
+                        | crate::domain::models::RetroSettlementStatus::SETTLED_BY_OFFSET
+                ))
         {
             return Err(DomainError::ValidationError(
-                "Yalnız açıkça OVERPAYMENT olarak çözülen retro batch payment event olmadan saklanabilir."
+                "Payment event olmadan yalnız OVERPAYMENT veya SETTLED_BY_OFFSET settlement batch'i saklanabilir."
                     .into(),
             ));
         }
@@ -277,6 +288,18 @@ impl PayrollService {
             &tx,
             &canonical_batch,
             &canonical_allocations,
+        )?;
+        let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
+            assert_mutation_allowed(
+                &tx,
+                &payroll_core::PayrollMutation::RetroBatchSave {
+                    personnelId: canonical_batch.personnelId.clone(),
+                    batchId: canonical_batch.id.clone(),
+                    paymentDate: canonical_batch.paymentDate.clone(),
+                },
+            )?;
+        crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
+            &tx, &impact,
         )?;
         tx.commit()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))
@@ -336,10 +359,14 @@ impl PayrollService {
             || batch.personnelId != canonical.batch.personnelId
             || batch.paymentDate != canonical.batch.paymentDate
             || batch.totalGrossDelta != canonical.batch.totalGrossDelta
+            || batch.payableSettlementAmount != canonical.batch.payableSettlementAmount
+            || batch.offsetSettlementAmount != canonical.batch.offsetSettlementAmount
+            || batch.recoveredAmount != canonical.batch.recoveredAmount
+            || batch.recoverableAmount != canonical.batch.recoverableAmount
+            || batch.outstandingReceivable != canonical.batch.outstandingReceivable
         {
             return Err(DomainError::ValidationError(
-                "Retro preview güncel persisted revision ile eşleşmiyor; ödeme reddedildi."
-                    .into(),
+                "Retro preview güncel persisted revision ile eşleşmiyor; ödeme reddedildi.".into(),
             ));
         }
 
@@ -402,6 +429,21 @@ impl PayrollService {
                 }
             })
             .ok_or_else(|| DomainError::NotFound("Bordro tahakkuku bulunamadı.".into()))?;
+        let retro_batch = if saved.accrualType == AccrualType::RETRO_ADJUSTMENT {
+            Some(
+                crate::repositories::retro_repo::get_batches(&tx)?
+                    .into_iter()
+                    .find(|batch| batch.id == saved.accrualId)
+                    .ok_or_else(|| {
+                        DomainError::NotFound(format!(
+                            "{} retro batch'i bulunamadı.",
+                            saved.accrualId
+                        ))
+                    })?,
+            )
+        } else {
+            None
+        };
         let accrual = PayrollAccrualInput {
             accrualId: if saved.accrualId.trim().is_empty() {
                 saved.id.clone()
@@ -421,7 +463,11 @@ impl PayrollService {
                 AccrualType::TEDIYE => saved.gelirler.tediye,
                 AccrualType::TIS_IKRAMIYE => saved.gelirler.tisIkramiyesi,
                 AccrualType::SUPPLEMENTAL => saved.gelirler.ekOdeme,
-                AccrualType::RETRO_ADJUSTMENT => Some(saved.gelirToplam),
+                AccrualType::RETRO_ADJUSTMENT => Some(
+                    payroll_core::retro_payable_settlement_amount(
+                        retro_batch.as_ref().expect("retro batch resolved"),
+                    ),
+                ),
                 AccrualType::NORMAL => None,
             },
             description: saved.accrualDescription.clone(),
@@ -494,7 +540,9 @@ impl PayrollService {
         })
     }
 
-    pub fn build_dataset_snapshot(conn: &Connection) -> Result<payroll_core::PayrollDatasetSnapshot> {
+    pub fn build_dataset_snapshot(
+        conn: &Connection,
+    ) -> Result<payroll_core::PayrollDatasetSnapshot> {
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: PersonnelRepository::get_all(conn)?,
             periods: PeriodRepository::get_all(conn)?,

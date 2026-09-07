@@ -78,6 +78,16 @@ pub enum PayrollMutation {
         paymentDate: String,
         sequence: i32,
     },
+    /// Saving a source-period retro ledger can revise the outgoing PEK carry
+    /// seen by later payment events. The adapter persists the batch first in
+    /// its transaction, then asks this policy which downstream events must be
+    /// invalidated or whether a FINALIZED event makes the save impossible.
+    #[serde(rename = "RETRO_BATCH_SAVE")]
+    RetroBatchSave {
+        personnelId: String,
+        batchId: String,
+        paymentDate: String,
+    },
     #[serde(rename = "ALL")]
     All,
 }
@@ -170,8 +180,7 @@ fn is_attendance_dependency_root(payroll: &crate::models::BordroKaydi) -> bool {
 fn is_sick_leave_dependency_root(payroll: &crate::models::BordroKaydi) -> bool {
     payroll.accrualType == crate::models::AccrualType::NORMAL
         || (payroll.accrualType != crate::models::AccrualType::NORMAL
-            && statutory_snapshot_source(payroll)
-                == StatutorySnapshotSource::AttendanceBacked)
+            && statutory_snapshot_source(payroll) == StatutorySnapshotSource::AttendanceBacked)
 }
 
 fn affected_after_dependency_roots(
@@ -183,15 +192,13 @@ fn affected_after_dependency_roots(
         return Ok(false);
     }
     let candidate_order = payroll_order(dataset, payroll)?;
-    dependency_roots
-        .iter()
-        .try_fold(false, |affected, root| {
-            if affected {
-                Ok(true)
-            } else {
-                Ok(candidate_order >= payroll_order(dataset, root)?)
-            }
-        })
+    dependency_roots.iter().try_fold(false, |affected, root| {
+        if affected {
+            Ok(true)
+        } else {
+            Ok(candidate_order >= payroll_order(dataset, root)?)
+        }
+    })
 }
 
 fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
@@ -210,8 +217,75 @@ fn input_order(
     accrual_id: &str,
 ) -> Result<crate::payroll_engine::AccrualOrder> {
     crate::payroll_engine::payment_event_order(
-        require_period(dataset, period_id)?, payment_date, sequence, accrual_id,
+        require_period(dataset, period_id)?,
+        payment_date,
+        sequence,
+        accrual_id,
     )
+}
+
+fn payroll_effective_payment_date(
+    dataset: &PayrollDatasetSnapshot,
+    payroll: &crate::models::BordroKaydi,
+) -> Result<NaiveDate> {
+    let period = require_period(dataset, &payroll.donemId)?;
+    let payment_date = if payroll.paymentDate.trim().is_empty() {
+        crate::payroll_engine::default_payment_date(period)
+    } else {
+        payroll.paymentDate.clone()
+    };
+    NaiveDate::parse_from_str(&payment_date, "%Y-%m-%d").map_err(|error| {
+        DomainError::InvalidData(format!(
+            "{} bordro ödeme tarihi geçersiz: {} ({})",
+            payroll.id, payment_date, error
+        ))
+    })
+}
+
+fn retro_batch_requires_source_carry_replay(
+    dataset: &PayrollDatasetSnapshot,
+    batch_id: &str,
+) -> bool {
+    dataset
+        .retroAllocations
+        .iter()
+        .filter(|allocation| {
+            allocation.batchId == batch_id
+                && allocation.sgkTreatment
+                    == crate::models::RetroSgkTreatment::WAGE_SOURCE_MONTH
+        })
+        .any(|allocation| {
+            let Some(target) = allocation.targetSourceCarry.as_ref() else {
+                // A newly calculated source-month allocation should always
+                // carry a canonical target snapshot. Missing provenance is
+                // unsafe: force downstream revalidation instead of silently
+                // retaining a stale carry chain.
+                return true;
+            };
+            allocation
+                .originalSourceCarry
+                .as_ref()
+                .map(Vec::as_slice)
+                != Some(target.as_slice())
+        })
+}
+
+fn retro_batch_payment_date(
+    batch: &RetroAdjustmentBatch,
+    mutation_payment_date: &str,
+) -> Result<NaiveDate> {
+    if batch.paymentDate != mutation_payment_date {
+        return Err(DomainError::InvalidData(format!(
+            "{} retro batch ödeme tarihi mutation snapshot'ı ile eşleşmiyor.",
+            batch.id
+        )));
+    }
+    NaiveDate::parse_from_str(mutation_payment_date, "%Y-%m-%d").map_err(|error| {
+        DomainError::InvalidData(format!(
+            "{} retro batch ödeme tarihi geçersiz: {} ({})",
+            batch.id, mutation_payment_date, error
+        ))
+    })
 }
 
 fn affected_by_mutation(
@@ -273,8 +347,7 @@ fn affected_by_mutation(
             }
             let mut dependency_roots = Vec::new();
             for root in dataset.payrolls.iter().filter(|root| {
-                root.personelId == *personnelId
-                    && is_sick_leave_dependency_root(root)
+                root.personelId == *personnelId && is_sick_leave_dependency_root(root)
             }) {
                 let Some(root_period) = period_for(dataset, &root.donemId) else {
                     continue;
@@ -299,7 +372,12 @@ fn affected_by_mutation(
             personnelId,
             periodId,
             accrualId,
-        } | PayrollMutation::AccrualDelete { personnelId, periodId, accrualId } => {
+        }
+        | PayrollMutation::AccrualDelete {
+            personnelId,
+            periodId,
+            accrualId,
+        } => {
             let source = dataset
                 .payrolls
                 .iter()
@@ -328,6 +406,35 @@ fn affected_by_mutation(
         } => Ok(payroll_personnel_id == personnelId
             && payroll_order(dataset, payroll)?
                 > input_order(dataset, periodId, paymentDate, *sequence, accrualId)?),
+        PayrollMutation::RetroBatchSave {
+            personnelId,
+            batchId,
+            paymentDate,
+        } => {
+            if payroll_personnel_id != personnelId
+                || !retro_batch_requires_source_carry_replay(dataset, batchId)
+            {
+                return Ok(false);
+            }
+            let batch = dataset
+                .retroBatches
+                .iter()
+                .find(|batch| batch.id == *batchId)
+                .ok_or_else(|| {
+                    DomainError::ValidationError(format!(
+                        "Retro carry mutation batch'i bulunamadı: {}.",
+                        batchId
+                    ))
+                })?;
+            if batch.personnelId != *personnelId {
+                return Err(DomainError::InvalidData(format!(
+                    "{} retro batch personel kimliği mutation ile eşleşmiyor.",
+                    batchId
+                )));
+            }
+            let retro_date = retro_batch_payment_date(batch, paymentDate)?;
+            Ok(payroll_effective_payment_date(dataset, payroll)? >= retro_date)
+        }
         PayrollMutation::All => Ok(true),
     }
 }
@@ -362,12 +469,13 @@ fn retro_batch_payment_tax_year_matches(
     batch: &RetroAdjustmentBatch,
     tax_year: i32,
 ) -> Result<bool> {
-    let payment_date = NaiveDate::parse_from_str(&batch.paymentDate, "%Y-%m-%d").map_err(|error| {
-        DomainError::InvalidData(format!(
-            "{} retro batch ödeme tarihi geçersiz: {} ({})",
-            batch.id, batch.paymentDate, error
-        ))
-    })?;
+    let payment_date =
+        NaiveDate::parse_from_str(&batch.paymentDate, "%Y-%m-%d").map_err(|error| {
+            DomainError::InvalidData(format!(
+                "{} retro batch ödeme tarihi geçersiz: {} ({})",
+                batch.id, batch.paymentDate, error
+            ))
+        })?;
     Ok(payment_date.year() == tax_year)
 }
 
@@ -456,6 +564,10 @@ fn retro_batch_affected_by_mutation(
         } => Ok(batch.id != *accrualId
             && batch.personnelId == *personnelId
             && same_source_period(periodId)),
+        // The saved batch is already the mutation's new authoritative node.
+        // Only downstream payroll events are invalidated by its carry replay;
+        // another retro ledger is not implicitly rewritten.
+        PayrollMutation::RetroBatchSave { .. } => Ok(false),
         PayrollMutation::All => Ok(true),
     }
 }
@@ -515,8 +627,9 @@ mod tests {
     use super::*;
     use crate::models::{
         AccrualType, BordroKaydi, CompensationRevisionStatus, GelirKalemleri, KesintiKalemleri,
-        PuantajOzeti, ResolvedStatutorySnapshot, RetroAdjustmentBatch, RetroAllocation,
-        RetroEarningCode, RetroSettlementStatus, RetroSgkTreatment, RetroTaxTreatment,
+        DevredenPekKaydi, PuantajOzeti, ResolvedStatutorySnapshot, RetroAdjustmentBatch,
+        RetroAllocation, RetroEarningCode, RetroSettlementStatus, RetroSgkTreatment,
+        RetroTaxTreatment,
     };
     use crate::payroll_engine::PayrollDatasetSnapshot;
 
@@ -691,6 +804,11 @@ mod tests {
                 RetroSettlementStatus::UNSETTLED
             },
             totalGrossDelta: 10.into(),
+            payableSettlementAmount: 10.into(),
+            offsetSettlementAmount: 0.into(),
+            recoveredAmount: 0.into(),
+            recoverableAmount: 0.into(),
+            outstandingReceivable: 0.into(),
             description: None,
             createdAt: None,
             calculatedAt: None,
@@ -716,9 +834,61 @@ mod tests {
             workerUnemploymentDelta: 0.into(),
             employerSgkDelta: 0.into(),
             employerUnemploymentDelta: 0.into(),
+            originalEmployerLowerBound: 0.into(),
+            targetEmployerLowerBound: 0.into(),
+            employerLowerBoundDelta: 0.into(),
+            employerLowerBoundPremiumDelta: 0.into(),
+            originalSourceCarry: None,
+            targetSourceCarry: None,
+            payableSettlementAmount: 10.into(),
+            offsetSettlementAmount: 0.into(),
+            recoverableAmount: 0.into(),
             metadata: None,
         };
         (batch, allocation)
+    }
+
+    #[test]
+    fn retro_source_carry_save_invalidates_downstream_and_blocks_finalized_history() {
+        let (batch, mut allocation) = retro_batch(CompensationRevisionStatus::CALCULATED);
+        allocation.originalSourceCarry = Some(Vec::new());
+        allocation.targetSourceCarry = Some(vec![DevredenPekKaydi {
+            tutar: 10.into(),
+            kalanAySayisi: 1,
+            kaynakDonemId: Some("2026-01".into()),
+        }]);
+        let downstream = supplementary(
+            "downstream-payment",
+            "2026-03",
+            BordroStatus::CALCULATED,
+            StatutorySnapshotSource::ProvisionalPaymentMonth,
+            "2026-06-21",
+            0,
+            AccrualType::SUPPLEMENTAL,
+        );
+        let mut data = dataset();
+        data.payrolls.push(downstream);
+        data.retroBatches.push(batch);
+        data.retroAllocations.push(allocation);
+
+        let mutation = PayrollMutation::RetroBatchSave {
+            personnelId: "person-1".into(),
+            batchId: "retro-batch".into(),
+            paymentDate: "2026-06-20".into(),
+        };
+        let impact = evaluate_payroll_invalidation(&data, &mutation)
+            .expect("carry save mutation should evaluate");
+        assert!(has_accrual(&impact, "downstream-payment"));
+        assert!(!has_blocked_accrual(&impact, "downstream-payment"));
+
+        data.payrolls
+            .iter_mut()
+            .find(|payroll| payroll.accrualId == "downstream-payment")
+            .expect("downstream payroll")
+            .status = BordroStatus::FINALIZED;
+        let impact = evaluate_payroll_invalidation(&data, &mutation)
+            .expect("carry save mutation should evaluate");
+        assert!(has_blocked_accrual(&impact, "downstream-payment"));
     }
 
     #[test]
@@ -790,11 +960,9 @@ mod tests {
         data.retroBatches.push(batch);
         data.retroAllocations.push(allocation);
 
-        let impact = evaluate_payroll_invalidation(
-            &data,
-            &PayrollMutation::TaxYear { taxYear: 2026 },
-        )
-        .expect("retro payment date must parse");
+        let impact =
+            evaluate_payroll_invalidation(&data, &PayrollMutation::TaxYear { taxYear: 2026 })
+                .expect("retro payment date must parse");
         assert_eq!(impact.affectedRetroBatches, vec!["retro-batch"]);
         assert!(impact.blockedByFinalizedRetroBatches.is_empty());
 

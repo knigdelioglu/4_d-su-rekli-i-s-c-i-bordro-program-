@@ -339,9 +339,57 @@ function canonicalizeLegacyPersonel(value: unknown): unknown {
   return personel;
 }
 
-function legacyAmountIsNegative(value: unknown): boolean {
-  return (typeof value === 'string' && value.trim().startsWith('-')) ||
-    (typeof value === 'number' && value < 0);
+function legacyCents(value: unknown): bigint {
+  const text = typeof value === 'string' ? value : String(value ?? '0');
+  const negative = text.trim().startsWith('-');
+  const unsigned = negative ? text.trim().slice(1) : text.trim();
+  const [whole, fraction = ''] = unsigned.split('.');
+  const cents = BigInt(`${whole || '0'}${fraction.padEnd(2, '0').slice(0, 2)}`);
+  return negative ? -cents : cents;
+}
+
+function legacyCentsText(value: bigint): string {
+  const negative = value < 0n;
+  const absolute = negative ? -value : value;
+  const whole = absolute / 100n;
+  const fraction = String(absolute % 100n).padStart(2, '0');
+  return `${negative ? '-' : ''}${whole}.${fraction}`;
+}
+
+function nonNegativeLegacyCents(value: bigint): bigint {
+  return value > 0n ? value : 0n;
+}
+
+function minLegacyCents(left: bigint, right: bigint): bigint {
+  return left < right ? left : right;
+}
+
+function canonicalizeLegacyRetroAllocations(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => {
+    if (!isRecord(item)) return item;
+    const allocation = { ...item };
+    [
+      'previousAuthoritativeRetroAmount',
+      'originalPek',
+      'retroPekDelta',
+      'adjustedPek',
+      'workerSgkDelta',
+      'workerUnemploymentDelta',
+      'employerSgkDelta',
+      'employerUnemploymentDelta',
+      'originalEmployerLowerBound',
+      'targetEmployerLowerBound',
+      'employerLowerBoundDelta',
+      'employerLowerBoundPremiumDelta',
+      'payableSettlementAmount',
+      'offsetSettlementAmount',
+      'recoverableAmount',
+    ].forEach((key) => {
+      if (!hasOwn(allocation, key) || allocation[key] === null) allocation[key] = '0.00';
+    });
+    return allocation;
+  });
 }
 
 function canonicalizeLegacyRetroBatches(
@@ -350,13 +398,13 @@ function canonicalizeLegacyRetroBatches(
   payrolls: unknown
 ): unknown {
   if (!Array.isArray(value)) return value;
-  return value.map((item) => {
+  const batches = value.map((item) => {
     if (!isRecord(item)) return item;
     const batch = { ...item };
-    const status = batch.status ?? 'DRAFT';
-    if (!hasOwn(batch, 'status') || batch.status === null) batch.status = status;
+    const initialStatus = batch.status ?? 'DRAFT';
+    if (!hasOwn(batch, 'status') || batch.status === null) batch.status = initialStatus;
 
-    if (status === 'FINALIZED') {
+    if (initialStatus === 'FINALIZED') {
       const hasMatchingFinalizedPayment = Array.isArray(payrolls) && payrolls.some((payroll) =>
         isRecord(payroll) &&
         payroll.accrualId === batch.id &&
@@ -374,24 +422,91 @@ function canonicalizeLegacyRetroBatches(
       }
     }
 
-    if (!hasOwn(batch, 'settlementStatus') || batch.settlementStatus === null) {
-      const batchAllocations = Array.isArray(allocations)
-        ? allocations.filter((allocation) =>
-            isRecord(allocation) && allocation.batchId === batch.id
-          )
-        : [];
-      const hasNegativeDelta = legacyAmountIsNegative(batch.totalGrossDelta) ||
-        batchAllocations.some((allocation) =>
-          isRecord(allocation) && legacyAmountIsNegative(allocation.deltaAmount)
-        );
-      batch.settlementStatus = hasNegativeDelta
-        ? 'OVERPAYMENT'
-        : batch.status === 'FINALIZED'
-          ? 'PAID'
-          : 'UNSETTLED';
-    }
+    const totalCents = legacyCents(batch.totalGrossDelta);
+    batch.settlementStatus = totalCents < 0n
+      ? 'OVERPAYMENT'
+      : batch.status === 'FINALIZED'
+        ? 'PAID'
+        : 'UNSETTLED';
     return batch;
   });
+
+  // V4 has a signed entitlement ledger but no settlement-flow snapshot. Build
+  // the historical open receivable in deterministic payment-date/id order;
+  // this is an additive compatibility conversion and never changes a payroll
+  // payment event or a finalized financial snapshot.
+  const openByPersonnel = new Map<string, bigint>();
+  [...batches]
+    .sort((left, right) =>
+      String(left.personnelId ?? '').localeCompare(String(right.personnelId ?? '')) ||
+      String(left.paymentDate ?? '').localeCompare(String(right.paymentDate ?? '')) ||
+      String(left.id ?? '').localeCompare(String(right.id ?? ''))
+    )
+    .forEach((batch) => {
+      if (!isRecord(batch)) return;
+      const isAuthoritative = batch.status === 'CALCULATED' || batch.status === 'FINALIZED';
+      const allBatchFlowFields = [
+        'payableSettlementAmount',
+        'offsetSettlementAmount',
+        'recoveredAmount',
+        'recoverableAmount',
+        'outstandingReceivable',
+      ];
+      const hadCompleteFlow = allBatchFlowFields.every(
+        (key) => hasOwn(batch, key) && batch[key] !== null
+      );
+      if (!hadCompleteFlow) {
+        const batchAllocations = Array.isArray(allocations)
+          ? allocations.filter((allocation) =>
+              isRecord(allocation) && allocation.batchId === batch.id
+            )
+          : [];
+        const totalCents = legacyCents(batch.totalGrossDelta);
+        const recoverableCents = nonNegativeLegacyCents(-totalCents);
+        const payableCents = nonNegativeLegacyCents(totalCents);
+        const personnelId = String(batch.personnelId ?? '');
+        const outstandingCents =
+          (openByPersonnel.get(personnelId) ?? 0n) + recoverableCents;
+        batch.payableSettlementAmount = legacyCentsText(payableCents);
+        batch.offsetSettlementAmount = '0.00';
+        batch.recoveredAmount = '0.00';
+        batch.recoverableAmount = legacyCentsText(recoverableCents);
+        batch.outstandingReceivable = legacyCentsText(outstandingCents);
+        const orderedAllocations = batchAllocations
+          .filter(isRecord)
+          .sort((left, right) =>
+            String(left.sourcePeriodId ?? '').localeCompare(String(right.sourcePeriodId ?? '')) ||
+            String(left.earningCode ?? '').localeCompare(String(right.earningCode ?? '')) ||
+            String(left.id ?? '').localeCompare(String(right.id ?? ''))
+          );
+        let remainingPayable = payableCents;
+        let remainingRecoverable = recoverableCents;
+        orderedAllocations.forEach((allocation) => {
+          const deltaCents = legacyCents(allocation.deltaAmount);
+          const positive = nonNegativeLegacyCents(deltaCents);
+          const negative = nonNegativeLegacyCents(-deltaCents);
+          const allocationPayable = minLegacyCents(positive, remainingPayable);
+          const allocationRecoverable = minLegacyCents(negative, remainingRecoverable);
+          remainingPayable -= allocationPayable;
+          remainingRecoverable -= allocationRecoverable;
+          if (!isRecord(allocation)) return;
+          allocation.payableSettlementAmount = legacyCentsText(allocationPayable);
+          allocation.offsetSettlementAmount = '0.00';
+          allocation.recoverableAmount = legacyCentsText(allocationRecoverable);
+        });
+        if (isAuthoritative) openByPersonnel.set(personnelId, outstandingCents);
+      } else {
+        if (!isAuthoritative) return;
+        const personnelId = String(batch.personnelId ?? '');
+        const prior = openByPersonnel.get(personnelId) ?? 0n;
+        const available = prior + nonNegativeLegacyCents(legacyCents(batch.recoverableAmount));
+        const next = available
+          - nonNegativeLegacyCents(legacyCents(batch.offsetSettlementAmount))
+          - nonNegativeLegacyCents(legacyCents(batch.recoveredAmount));
+        openByPersonnel.set(personnelId, next);
+      }
+    });
+  return batches;
 }
 
 function firstPeriodId(value: unknown): string {
@@ -483,7 +598,9 @@ function toCanonicalLegacyPayload(
     'compensationRevisionOverrides',
     []
   );
-  const retroAllocations = legacyValueOrDefault(parsed, 'retroAllocations', []);
+  const retroAllocations = canonicalizeLegacyRetroAllocations(
+    legacyValueOrDefault(parsed, 'retroAllocations', [])
+  );
   const retroBatches = canonicalizeLegacyRetroBatches(
     legacyValueOrDefault(parsed, 'retroBatches', []),
     retroAllocations,
@@ -527,7 +644,7 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   }
 
   // V2 was the previous exact-Decimal snapshot format. It is legacy with
-  // respect to V4's accrual metadata, but it must not pass through the V1
+  // respect to V3/V4's accrual metadata, but it must not pass through the V1
   // numeric-repair adapter: a numeric V2 value is still an invalid Decimal.
   const version = getBackupVersion(raw);
   if (version >= 2 && (!hasOwn(raw, 'bordrolar') || !hasOwn(raw, 'personeller'))) {
@@ -594,7 +711,7 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   const version = getBackupVersion(raw);
 
   if (version === BACKUP_FORMAT_VERSION) {
-    // A versioned V4 backup is current data. It must never reach the legacy
+    // A versioned V5 backup is current data. It must never reach the legacy
     // repair path, even when its malformed values resemble an older backup.
     return parseCurrentBrowserSnapshot(json);
   }

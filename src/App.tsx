@@ -520,11 +520,12 @@ export default function App() {
    * both an old and a new source position (for example an edited period).
    */
   const evaluateBrowserMutations = async (
-    mutation: PayrollMutation | PayrollMutation[]
+    mutation: PayrollMutation | PayrollMutation[],
+    dataset: PayrollDatasetSnapshot = payrollDataset
   ): Promise<MutationImpact> => {
     const mutations = Array.isArray(mutation) ? mutation : [mutation];
     const impacts = await Promise.all(
-      mutations.map((item) => payrollEngine.evaluateMutationPolicy(item, payrollDataset))
+      mutations.map((item) => payrollEngine.evaluateMutationPolicy(item, dataset))
     );
     const affected = new Map<string, MutationImpact['affectedPayrolls'][number]>();
     const blocked = new Map<string, MutationImpact['blockedByFinalized'][number]>();
@@ -1264,8 +1265,18 @@ export default function App() {
     ) as unknown as RetroCalculationResultModel;
     const sortAllocations = (allocations: RetroAllocation[]) =>
       [...allocations].sort((left, right) => left.id.localeCompare(right.id));
+    const batchFinancialSnapshot = (batch: RetroAdjustmentBatch) => [
+      batch.totalGrossDelta,
+      batch.payableSettlementAmount ?? 0,
+      batch.offsetSettlementAmount ?? 0,
+      batch.recoveredAmount ?? 0,
+      batch.recoverableAmount ?? 0,
+      batch.outstandingReceivable ?? 0,
+      batch.settlementStatus ?? null,
+    ];
     if (
-      canonicalResult.batch.totalGrossDelta !== submittedBatch.totalGrossDelta ||
+      JSON.stringify(batchFinancialSnapshot(canonicalResult.batch)) !==
+        JSON.stringify(batchFinancialSnapshot(submittedBatch)) ||
       JSON.stringify(toPayrollBoundaryDto(sortAllocations(canonicalResult.allocations))) !==
         JSON.stringify(toPayrollBoundaryDto(sortAllocations(result.allocations)))
     ) {
@@ -1275,11 +1286,14 @@ export default function App() {
   };
 
   const handleSaveRetroBatch = async (result: RetroCalculationResultModel) => {
-    if (!result.allocations.some((allocation) => allocation.deltaAmount < 0)) {
-      throw new Error('Yalnız negatif farklar fazla tahakkuk batch’i olarak saklanabilir.');
-    }
     const canonicalResult = await canonicalizeRetroResult(result);
     const batch = canonicalResult.batch;
+    if (
+      batch.payableSettlementAmount !== 0 ||
+      !['OVERPAYMENT', 'SETTLED_BY_OFFSET'].includes(batch.settlementStatus ?? '')
+    ) {
+      throw new Error('Payment event olmadan yalnız açık fazla tahakkuk veya mahsupla kapanan settlement batch’i saklanabilir.');
+    }
     const activePayment = payrollDataset.payrolls.find(
       (payroll) =>
         payroll.accrualId === batch.id &&
@@ -1298,6 +1312,26 @@ export default function App() {
     if (!authoritativePayload) throw new Error('Yetkili veri snapshot’ı hazır değil.');
     const exactBatch = toPayrollBoundaryDto(batch) as unknown as NonNullable<PayrollStorageDto['retroBatches']>[number];
     const exactAllocations = toPayrollBoundaryDto(canonicalResult.allocations) as unknown as NonNullable<PayrollStorageDto['retroAllocations']>;
+    const datasetWithBatch: PayrollDatasetSnapshot = {
+      ...payrollDataset,
+      retroBatches: [
+        ...payrollDataset.retroBatches.filter((item) => item.id !== batch.id),
+        exactBatch,
+      ],
+      retroAllocations: [
+        ...payrollDataset.retroAllocations.filter((item) => item.batchId !== batch.id),
+        ...exactAllocations,
+      ],
+    };
+    const impact = await evaluateBrowserMutations(
+      {
+        kind: 'RETRO_BATCH_SAVE',
+        personnelId: batch.personnelId,
+        batchId: batch.id,
+        paymentDate: batch.paymentDate,
+      },
+      datasetWithBatch
+    );
     updateAuthoritativePayload((current) => ({
       ...current,
       compensationRevisions: current.compensationRevisions ?? [],
@@ -1307,16 +1341,16 @@ export default function App() {
         ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
         ...exactAllocations,
       ],
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
     }));
   };
 
   const handleCreateRetroPayment = async (result: RetroCalculationResultModel) => {
-    const submittedBatch = result.batch;
-    if (submittedBatch.totalGrossDelta <= 0 || result.allocations.some((allocation) => allocation.deltaAmount < 0)) {
-      throw new Error('Negatif veya sıfır retro delta otomatik payment event’ine dönüştürülemez.');
-    }
     const canonicalResult = await canonicalizeRetroResult(result);
     const batch = canonicalResult.batch;
+    if (batch.payableSettlementAmount <= 0) {
+      throw new Error('Payable settlement sıfır; entitlement yalnız settlement ledger’ında kalır ve payment event oluşturulmaz.');
+    }
     const paymentParts = batch.paymentDate.split('-').map(Number);
     const paymentPeriod = donemler.find(
       (period) => period.taxYear === paymentParts[0] && period.taxMonth === paymentParts[1]
@@ -1337,7 +1371,7 @@ export default function App() {
       accrualType: 'RETRO_ADJUSTMENT',
       paymentDate: batch.paymentDate,
       sequence,
-      grossAmount: batch.totalGrossDelta,
+      grossAmount: batch.payableSettlementAmount,
       description: batch.description || 'Geriye dönük hakediş farkı',
     };
 
@@ -1378,8 +1412,18 @@ export default function App() {
       paymentDate: batch.paymentDate,
       sequence,
     };
-    const impact = await payrollEngine.evaluateMutationPolicy(mutation, datasetWithBatch);
-    assertBrowserMutationImpactAllowed(impact);
+    const impact = await evaluateBrowserMutations(
+      [
+        {
+          kind: 'RETRO_BATCH_SAVE',
+          personnelId: batch.personnelId,
+          batchId: batch.id,
+          paymentDate: batch.paymentDate,
+        },
+        mutation,
+      ],
+      datasetWithBatch
+    );
     const paymentRequest = {
       personnelId: batch.personnelId,
       periodId: paymentPeriod.id,
