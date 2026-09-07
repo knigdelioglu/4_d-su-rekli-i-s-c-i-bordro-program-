@@ -1,5 +1,6 @@
 use payroll_core::{
-    calculate_payroll, evaluate_payroll_invalidation, finalize_payroll, PayrollCalculationRequest,
+    calculate_payroll_checked, evaluate_payroll_invalidation, finalize_payroll,
+    PayrollCalculationRequest,
     PayrollDatasetSnapshot, PayrollMutation, RetroCalculationRequest, RetroEntitlementEngine,
     Result as CoreResult,
 };
@@ -34,8 +35,7 @@ fn error_to_js(error: payroll_core::DomainError) -> JsValue {
 #[wasm_bindgen]
 pub fn calculate_payroll_json(request_json: &str) -> Result<String, JsValue> {
     let request = parse_request(request_json).map_err(error_to_js)?;
-    payroll_core::validate_payroll_request(&request).map_err(error_to_js)?;
-    let payroll = calculate_payroll(&request).map_err(error_to_js)?;
+    let payroll = calculate_payroll_checked(&request).map_err(error_to_js)?;
     serde_json::to_string(&payroll)
         .map_err(|error| JsValue::from_str(&format!("Bordro sonucu serileştirilemedi: {}", error)))
 }

@@ -18,6 +18,27 @@ export interface BrowserPayrollSnapshot {
   revision: number;
 }
 
+export interface BrowserRemoteSnapshotDecisionInput {
+  currentRevision: number;
+  remoteRevision: number;
+  localDirty: boolean;
+  pendingWrite: boolean;
+}
+
+/**
+ * A remote snapshot is safe to adopt only when this tab has no local work in
+ * flight. The revision comparison remains explicit so stale broadcasts never
+ * move the local CAS baseline backwards.
+ */
+export function shouldAdoptRemoteSnapshot({
+  currentRevision,
+  remoteRevision,
+  localDirty,
+  pendingWrite,
+}: BrowserRemoteSnapshotDecisionInput): boolean {
+  return remoteRevision > currentRevision && !localDirty && !pendingWrite;
+}
+
 export class BrowserSnapshotConflictError extends Error {
   readonly expectedRevision: number;
   readonly actualRevision: number;

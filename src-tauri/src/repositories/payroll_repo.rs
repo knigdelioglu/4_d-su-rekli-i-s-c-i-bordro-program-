@@ -752,6 +752,18 @@ impl PayrollRepository {
     }
 
     pub fn get_all(conn: &Connection) -> Result<Vec<BordroKaydi>> {
+        Self::get_filtered(conn, None)
+    }
+
+    /// Loads only one person's payment-event history while preserving the
+    /// exact row decoding and explicit accrual ordering used by `get_all`.
+    /// The optional predicate is SQL-side so scoped calculation snapshots do
+    /// not materialize unrelated personnel or their income/deduction items.
+    pub fn get_for_personnel(conn: &Connection, personnel_id: &str) -> Result<Vec<BordroKaydi>> {
+        Self::get_filtered(conn, Some(personnel_id))
+    }
+
+    fn get_filtered(conn: &Connection, personnel_id: Option<&str>) -> Result<Vec<BordroKaydi>> {
         let mut stmt = conn
             .prepare(
                 "SELECT id, personnel_id, period_id, accrual_id, accrual_type, payment_date,
@@ -761,12 +773,13 @@ impl PayrollRepository {
                         calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
                         is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json,
                         damga_snapshot_json, notlar
-                 FROM payroll_records",
+                 FROM payroll_records
+                 WHERE (?1 IS NULL OR personnel_id = ?1)",
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(params![personnel_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -805,16 +818,28 @@ impl PayrollRepository {
 
         // Kalemler iki toplu sorgu ile okunur; her bordro için ayrı SELECT yapılmaz.
         let mut income_stmt = conn
-            .prepare("SELECT payroll_id, item_type, amount FROM payroll_income_items ORDER BY payroll_id, item_type")
+            .prepare("SELECT payroll_id, item_type, amount
+                      FROM payroll_income_items
+                      WHERE payroll_id IN (
+                          SELECT id FROM payroll_records
+                          WHERE (?1 IS NULL OR personnel_id = ?1)
+                      )
+                      ORDER BY payroll_id, item_type")
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let mut deduction_stmt = conn
-            .prepare("SELECT payroll_id, item_type, amount FROM payroll_deduction_items ORDER BY payroll_id, item_type")
+            .prepare("SELECT payroll_id, item_type, amount
+                      FROM payroll_deduction_items
+                      WHERE payroll_id IN (
+                          SELECT id FROM payroll_records
+                          WHERE (?1 IS NULL OR personnel_id = ?1)
+                      )
+                      ORDER BY payroll_id, item_type")
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let mut income_by_payroll: std::collections::HashMap<String, GelirKalemleri> =
             std::collections::HashMap::new();
         let income_rows = income_stmt
-            .query_map([], |row| {
+            .query_map(params![personnel_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -832,7 +857,7 @@ impl PayrollRepository {
         let mut deductions_by_payroll: std::collections::HashMap<String, KesintiKalemleri> =
             std::collections::HashMap::new();
         let deduction_rows = deduction_stmt
-            .query_map([], |row| {
+            .query_map(params![personnel_id], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -954,8 +979,13 @@ impl PayrollRepository {
             periods: crate::repositories::period_repo::PeriodRepository::get_all(conn)?,
             ..Default::default()
         };
+        let index = payroll_core::PayrollDatasetIndex::build(&dataset);
         let mut ordered = result.into_iter().map(|record| {
-            let order = payroll_core::payroll_engine::accrual_order_for_payroll(&dataset, &record)?;
+            let order = payroll_core::payroll_engine::accrual_order_for_payroll_with_index(
+                &dataset,
+                &index,
+                &record,
+            )?;
             Ok((order, record))
         }).collect::<Result<Vec<_>>>()?;
         ordered.sort_by(|left, right| left.0.cmp(&right.0));

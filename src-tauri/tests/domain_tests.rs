@@ -3418,6 +3418,65 @@ mod tests {
     // (personnel_id, period_id) anahtarını kullanmalıdır.
     // ==========================================
 
+    #[test]
+    fn test_calculation_snapshot_is_scoped_to_requested_personnel(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+
+        let person = setup_test_person("test-scope-a");
+        let mut unrelated_person = setup_test_person("test-scope-b");
+        unrelated_person.tcNo = "22222222222".into();
+        PersonnelRepository::save(&conn, &person)?;
+        PersonnelRepository::save(&conn, &unrelated_person)?;
+
+        let period = BordroDonemi {
+            id: "2026-05".into(),
+            yil: 2026,
+            ay: 5,
+            baslangicTarihi: "2026-05-15".into(),
+            bitisTarihi: "2026-06-14".into(),
+            donemAdi: "Mayıs 2026".into(),
+            taxYear: 2026,
+            taxMonth: 6,
+        };
+        PeriodRepository::save(&conn, &period)?;
+        for (personel_id, attendance_id) in [
+            ("test-scope-a", "test-scope-a_2026-05"),
+            ("test-scope-b", "test-scope-b_2026-05"),
+        ] {
+            AttendanceRepository::save(
+                &conn,
+                &PersonelPuantaj {
+                    id: attendance_id.into(),
+                    personelId: personel_id.into(),
+                    donemId: period.id.clone(),
+                    gunler: thirty_work_days(&period),
+                },
+            )?;
+        }
+
+        let snapshot = PayrollService::build_calculation_snapshot_for(
+            &conn,
+            "test-scope-a",
+            &period.id,
+        )?;
+
+        assert_eq!(snapshot.personnel.len(), 1);
+        assert_eq!(snapshot.personnel[0].id, "test-scope-a");
+        assert_eq!(snapshot.attendances.len(), 1);
+        assert_eq!(snapshot.attendances[0].personelId, "test-scope-a");
+        assert!(snapshot
+            .payrolls
+            .iter()
+            .all(|payroll| payroll.personelId == "test-scope-a"));
+        assert!(snapshot
+            .sickLeaveRecords
+            .iter()
+            .all(|record| record.personnelId == "test-scope-a"));
+
+        Ok(())
+    }
+
     // Test A — save -> calculate: yeni personel + dönem oluştur, puantaj kaydet,
     // aynı personnel_id + period_id ile hesapla -> attendance bulunur, hesaplama başlar.
     #[test]

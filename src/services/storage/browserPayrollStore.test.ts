@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
   browserPayrollStore,
+  BrowserSnapshotConflictError,
   canonicalizeLegacyBackupPayload,
   isMigratableBackupPayload,
   SerializedWriteQueue,
+  shouldAdoptRemoteSnapshot,
 } from './browserPayrollStore';
 import {
   isSupportedLegacyBackupPayload,
@@ -1039,7 +1041,7 @@ describe('BrowserPayrollStore', () => {
 
     const currentV2WithNumber = parseTestSnapshot(makeV2Snapshot(64179.78));
     expect(() => parseImportedBackup(JSON.stringify(currentV2WithNumber))).toThrow(
-      '$.bordrolar[0].netOdeme Decimal değeri string olmalıdır'
+      '$.bordrolar[0].gelirler.tabanBrutAylik Decimal değeri string olmalıdır'
     );
     expect(isSupportedLegacyBackupPayload(JSON.stringify(currentV2WithNumber))).toBe(false);
 
@@ -1156,6 +1158,38 @@ describe('BrowserPayrollStore', () => {
     });
     expect(persisted).toBe(true);
   });
+
+  test('reconciles clean/dirty/pending browser tabs without silent last-write-wins', () => {
+    expect(shouldAdoptRemoteSnapshot({
+      currentRevision: 4,
+      remoteRevision: 5,
+      localDirty: false,
+      pendingWrite: false,
+    })).toBe(true);
+
+    // A local edit or an async write in flight protects the local state. The
+    // caller records the remote snapshot as a conflict and keeps the old CAS
+    // baseline until the user explicitly reloads it.
+    expect(shouldAdoptRemoteSnapshot({
+      currentRevision: 4,
+      remoteRevision: 5,
+      localDirty: true,
+      pendingWrite: false,
+    })).toBe(false);
+    expect(shouldAdoptRemoteSnapshot({
+      currentRevision: 4,
+      remoteRevision: 5,
+      localDirty: false,
+      pendingWrite: true,
+    })).toBe(false);
+  });
+
+  test('keeps CAS conflicts explicit for a stale dirty tab', () => {
+    const conflict = new BrowserSnapshotConflictError(4, 5);
+    expect(conflict.expectedRevision).toBe(4);
+    expect(conflict.actualRevision).toBe(5);
+    expect(conflict.name).toBe('BrowserSnapshotConflictError');
+  });
 });
 
 describe('SQLite persistence invariant parity', () => {
@@ -1220,6 +1254,8 @@ describe('SQLite persistence invariant parity', () => {
       paymentDate: '2026-02-14',
       sequence: 1,
       gelirler: { ...(normal.gelirler as TestRecord), tabanBrutAylik: '0.00', tediye: '100.00' },
+      gelirToplam: '100.00',
+      netOdeme: '100.00',
     });
     (payload.bordrolar as TestRecord[]).push({
       ...normal,
@@ -1229,6 +1265,8 @@ describe('SQLite persistence invariant parity', () => {
       paymentDate: '2026-02-14',
       sequence: 2,
       gelirler: { ...(normal.gelirler as TestRecord), tabanBrutAylik: '0.00', tisIkramiyesi: '100.00' },
+      gelirToplam: '100.00',
+      netOdeme: '100.00',
     });
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
 

@@ -2,6 +2,8 @@
  * 4/D Sürekli İşçi Bordro Programı - Types
  */
 
+import { RUST_ENUM_VALUES } from '../services/payrollEngine/generated/payrollContract';
+
 export type PuantajKodu = 'Ç' | 'T' | 'G' | 'İ' | 'GÇ' | 'GÇT' | 'R';
 
 export interface PuantajKoduBilgi {
@@ -233,10 +235,7 @@ export interface ResolvedStatutorySegmentSnapshot {
   gunlukYemekIstisnasiGV: number;
 }
 
-export type StatutorySnapshotSource =
-  | 'ATTENDANCE_BACKED'
-  | 'PROVISIONAL_PAYMENT_MONTH'
-  | 'LEGACY_UNKNOWN';
+export type StatutorySnapshotSource = (typeof RUST_ENUM_VALUES.StatutorySnapshotSource)[number];
 
 export interface ResolvedStatutorySnapshot {
   /** Optional for legacy persisted snapshots created before provenance existed. */
@@ -338,64 +337,19 @@ export interface ManualPayrollIncomeInput {
   tisIkramiyesi?: number | null;
 }
 
-export type AccrualType =
-  | 'NORMAL'
-  | 'TEDIYE'
-  | 'TIS_IKRAMIYE'
-  | 'SUPPLEMENTAL'
-  | 'RETRO_ADJUSTMENT';
-
+export type AccrualType = (typeof RUST_ENUM_VALUES.AccrualType)[number];
 export type CompensationRevisionReason =
-  | 'COLLECTIVE_AGREEMENT'
-  | 'ADMINISTRATIVE_DECISION'
-  | 'COURT_DECISION'
-  | 'PAY_CORRECTION'
-  | 'MISSING_ACCRUAL'
-  | 'OTHER';
-
-export type CompensationRevisionStatus = 'DRAFT' | 'CALCULATED' | 'STALE' | 'FINALIZED';
+  (typeof RUST_ENUM_VALUES.CompensationRevisionReason)[number];
+export type CompensationRevisionStatus =
+  (typeof RUST_ENUM_VALUES.CompensationRevisionStatus)[number];
 export type CompensationRevisionScope =
-  | 'ALL_PERSONNEL'
-  | 'SELECTED_PERSONNEL'
-  | 'PERSONNEL_GROUP';
-
-export type RetroParameterKey =
-  | 'GUNLUK_TABAN_UCRET'
-  | 'GUNLUK_YEMEK'
-  | 'BIRLESTIRILMIS_SOSYAL_YARDIM'
-  | 'GUNLUK_VASITA_YOL'
-  | 'GIYIM_YARDIMI'
-  | 'HIZMET_ZAMMI_BIRIMI'
-  | 'IS_PRIMI_YUZDE'
-  | 'GECE_CALISMA_PRIMI_YUZDE'
-  | 'GECE_CALISMA_TATILI_PRIMI_YUZDE'
-  | 'EK_ODEME'
-  | 'DIGER_GELIR'
-  | 'TEDIYE'
-  | 'TIS_BONUS';
-
-export type RetroEarningCode =
-  | 'BASE_WAGE'
-  | 'NIGHT_WORK'
-  | 'NIGHT_HOLIDAY'
-  | 'WORK_PREMIUM'
-  | 'SOCIAL_AID'
-  | 'MEAL'
-  | 'TRANSPORT'
-  | 'CLOTHING'
-  | 'SERVICE_INCREMENT'
-  | 'TIS_BONUS'
-  | 'TEDIYE'
-  | 'SUPPLEMENTAL'
-  | 'OTHER';
-
-export type RetroTaxTreatment = 'TAXABLE' | 'EXEMPT';
-export type RetroSettlementStatus = 'UNSETTLED' | 'PAID' | 'OVERPAYMENT' | 'SETTLED_BY_OFFSET';
-export type RetroSgkTreatment =
-  | 'WAGE_SOURCE_MONTH'
-  | 'NON_WAGE_PAYMENT_MONTH'
-  | 'NON_WAGE_CARRY'
-  | 'EXEMPT';
+  (typeof RUST_ENUM_VALUES.CompensationRevisionScope)[number];
+export type RetroParameterKey = (typeof RUST_ENUM_VALUES.RetroParameterKey)[number];
+export type RetroEarningCode = (typeof RUST_ENUM_VALUES.RetroEarningCode)[number];
+export type RetroTaxTreatment = (typeof RUST_ENUM_VALUES.RetroTaxTreatment)[number];
+export type RetroSettlementStatus =
+  (typeof RUST_ENUM_VALUES.RetroSettlementStatus)[number];
+export type RetroSgkTreatment = (typeof RUST_ENUM_VALUES.RetroSgkTreatment)[number];
 
 export interface CompensationRevision {
   id: string;
@@ -543,7 +497,7 @@ export interface PekDetayi {
   isverenIssizlikOraniYuzde?: number;
 }
 
-export const BORDRO_STATUS_VALUES = ['DRAFT', 'CALCULATED', 'STALE', 'FINALIZED'] as const;
+export const BORDRO_STATUS_VALUES = RUST_ENUM_VALUES.BordroStatus;
 export type BordroStatus = (typeof BORDRO_STATUS_VALUES)[number];
 
 export interface BordroKaydi {

@@ -25,13 +25,7 @@ pub fn calculate_payroll(
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    PayrollService::validate_payroll_request_for_accrual(
-        &conn,
-        &personnel_id,
-        &period_id,
-        accrual.as_ref(),
-    )?;
-    PayrollService::calculate_payroll_for_accrual(
+    PayrollService::calculate_payroll_for_accrual_checked(
         &conn,
         &personnel_id,
         &period_id,

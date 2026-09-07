@@ -1,4 +1,5 @@
 use crate::models::{BordroStatus, SickLeaveRecord};
+use crate::index::PayrollDatasetIndex;
 use crate::payroll_engine::PayrollDatasetSnapshot;
 use crate::{DomainError, Result};
 use chrono::{Duration, NaiveDate};
@@ -78,10 +79,9 @@ pub fn get_period_notices(
     dataset: &PayrollDatasetSnapshot,
     period_id: &str,
 ) -> Result<Vec<PayrollNotice>> {
-    let period = dataset
-        .periods
-        .iter()
-        .find(|period| period.id == period_id)
+    let index = PayrollDatasetIndex::build(dataset);
+    let period = index
+        .period(dataset, period_id)
         .ok_or_else(|| {
             DomainError::ValidationError(format!("Bordro dönemi bulunamadı: {}", period_id))
         })?;
@@ -105,11 +105,7 @@ pub fn get_period_notices(
             action: Some("CHECK_PERIOD_PARAMETERS".into()),
         });
     }
-    if !dataset
-        .annualPayrollParameters
-        .iter()
-        .any(|parameters| parameters.year == period.taxYear)
-    {
+    if index.annual_parameters(dataset, period.taxYear).is_none() {
         notices.push(PayrollNotice {
             code: "MISSING_ANNUAL_PARAMETERS".into(),
             severity: PayrollNoticeSeverity::Critical,
@@ -127,10 +123,9 @@ pub fn get_period_notices(
 
     for person in &dataset.personnel {
         let full_name = format!("{} {}", person.ad, person.soyad);
-        let payroll = dataset
-            .payrolls
-            .iter()
-            .find(|payroll| payroll.personelId == person.id && payroll.donemId == period_id);
+        let payroll = index
+            .payrolls_for_person_period(dataset, &person.id, period_id)
+            .next();
         if payroll.is_some_and(|payroll| payroll.status == BordroStatus::STALE) {
             notices.push(PayrollNotice {
                 code: "STALE_PAYROLL".into(),
@@ -146,9 +141,9 @@ pub fn get_period_notices(
             });
         }
 
-        let attendance = dataset.attendances.iter().find(|attendance| {
-            attendance.personelId == person.id && attendance.donemId == period_id
-        });
+        let attendance = index
+            .attendances(dataset, &person.id, period_id)
+            .next();
         let Some(attendance) = attendance else {
             notices.push(PayrollNotice {
                 code: "MISSING_ATTENDANCE".into(),
@@ -191,10 +186,8 @@ pub fn get_period_notices(
             });
         }
 
-        let records: Vec<SickLeaveRecord> = dataset
-            .sickLeaveRecords
-            .iter()
-            .filter(|record| record.personnelId == person.id)
+        let records: Vec<SickLeaveRecord> = index
+            .sick_leave_for_person(dataset, &person.id)
             .cloned()
             .collect();
         let ranges = report_ranges(&records, start, end)?;

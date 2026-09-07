@@ -3,7 +3,7 @@ use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
-use rusqlite::{params, Connection, OptionalExtension, Row};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Row};
 
 pub struct PeriodRepository;
 
@@ -142,6 +142,35 @@ impl PeriodRepository {
             .transpose()
     }
 
+    pub fn get_by_ids(conn: &Connection, ids: &[String]) -> Result<Vec<BordroDonemi>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = (1..=ids.len())
+            .map(|index| format!("?{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+             FROM payroll_periods
+             WHERE id IN ({placeholders})
+             ORDER BY yil ASC, ay ASC, id ASC"
+        );
+        let mut stmt = conn
+            .prepare(&sql)
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params_from_iter(ids.iter()), Self::from_row)
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let mut result = Vec::new();
+        for row in rows {
+            let period = row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_period(&period)?;
+            result.push(period);
+        }
+        Ok(result)
+    }
+
     pub fn get_by_tax_year_before_month(
         conn: &Connection,
         tax_year: i32,
@@ -202,6 +231,35 @@ impl PeriodRepository {
         }
 
         Ok(candidates.into_iter().next())
+    }
+
+    /// Returns the first period after the active work period in the same
+    /// deterministic order used by chronology validation. Calculation
+    /// snapshots use this single successor instead of loading every period.
+    pub fn get_next_by_work_period(
+        conn: &Connection,
+        active_period: &BordroDonemi,
+    ) -> Result<Option<BordroDonemi>> {
+        Self::validate_period(active_period)?;
+        let period = conn
+            .query_row(
+                "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+                 FROM payroll_periods
+                 WHERE baslangic_tarihi > ?1
+                 ORDER BY baslangic_tarihi ASC, id ASC
+                 LIMIT 1",
+                params![active_period.baslangicTarihi],
+                Self::from_row,
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        period
+            .map(|period| {
+                Self::validate_period(&period)?;
+                Ok(period)
+            })
+            .transpose()
     }
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {

@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import {
   assertExactDecimalDto,
@@ -14,25 +12,11 @@ import {
   toPayrollBoundaryDto,
   toPayrollUiModel,
 } from './decimalBoundary';
-
-const rustModelsSource = readFileSync(
-  resolve(process.cwd(), 'crates/payroll-core/src/models.rs'),
-  'utf8'
-);
+import { RUST_DECIMAL_KEYS } from './generated/payrollContract';
 
 // Covers direct Decimal and Option<Decimal> fields. Nested DTOs such as
 // Option<Vec<DevredenPekKaydi>> and Vec<TaxBracket> are covered below through
 // their named child structs and representative recursive fixtures.
-const rustDecimalKeys = [
-  ...new Set(
-    [
-      ...rustModelsSource.matchAll(
-        /\bpub\s+([^\s:]+)\s*:\s*(?:Option\s*<\s*)?Decimal\b/gu
-      ),
-    ].map(([, key]) => key)
-  ),
-];
-
 const exactFixtures = [
   '0.1',
   '0.15',
@@ -46,8 +30,8 @@ const exactFixtures = [
 
 describe('WASM Decimal boundary', () => {
   test('covers every direct Decimal field declared by the shared Rust models', () => {
-    expect(rustDecimalKeys.length).toBeGreaterThan(0);
-    const missing = rustDecimalKeys.filter((key) => !isDecimalBoundaryKey(key));
+    expect(RUST_DECIMAL_KEYS.length).toBeGreaterThan(0);
+    const missing = RUST_DECIMAL_KEYS.filter((key) => !isDecimalBoundaryKey(key));
     expect(missing).toEqual([]);
   });
 
@@ -67,14 +51,14 @@ describe('WASM Decimal boundary', () => {
 
   test('serializes a schema-derived representative DTO with string Decimals', () => {
     const representativeDto = Object.fromEntries(
-      rustDecimalKeys.map((key) => [key, '1234.56'])
+      RUST_DECIMAL_KEYS.map((key) => [key, '1234.56'])
     );
     const serialized = JSON.parse(serializePayrollStorage(representativeDto)) as Record<
       string,
       unknown
     >;
 
-    for (const key of rustDecimalKeys) {
+    for (const key of RUST_DECIMAL_KEYS) {
       expect(typeof serialized[key]).toBe('string');
     }
   });

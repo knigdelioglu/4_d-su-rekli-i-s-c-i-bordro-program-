@@ -659,7 +659,10 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   if (!isRecord(encodedLegacy)) {
     throw new Error('Legacy yedek canonical nesne içermiyor.');
   }
-  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(encodedLegacy, false));
+  return parseAndValidatePayrollPayload(
+    toCanonicalLegacyPayload(encodedLegacy, false),
+    { allowLegacySparsePayrollFinancials: true }
+  );
 }
 
 /**

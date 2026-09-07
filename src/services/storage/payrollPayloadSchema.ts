@@ -4,69 +4,29 @@ import {
   isExactDecimalString,
   type PayrollStorageDto,
 } from '../payrollEngine/decimalBoundary';
+import { RUST_ENUM_VALUES } from '../payrollEngine/generated/payrollContract';
 
 type UnknownRecord = Record<string, unknown>;
 
+export interface PayrollPayloadValidationOptions {
+  /**
+   * V1 snapshots may contain only aggregate payroll totals. Their missing
+   * line-item fields are canonicalized to null by the legacy adapter; keep
+   * that compatibility path explicit without weakening current V5 checks.
+   */
+  allowLegacySparsePayrollFinancials?: boolean;
+}
+
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
-const ACCRUAL_TYPE_VALUES = [
-  'NORMAL',
-  'TEDIYE',
-  'TIS_IKRAMIYE',
-  'SUPPLEMENTAL',
-  'RETRO_ADJUSTMENT',
-] as const;
-const COMPENSATION_REVISION_REASON_VALUES = [
-  'COLLECTIVE_AGREEMENT',
-  'ADMINISTRATIVE_DECISION',
-  'COURT_DECISION',
-  'PAY_CORRECTION',
-  'MISSING_ACCRUAL',
-  'OTHER',
-] as const;
-const COMPENSATION_REVISION_STATUS_VALUES = BORDRO_STATUS_VALUES;
-const COMPENSATION_REVISION_SCOPE_VALUES = [
-  'ALL_PERSONNEL',
-  'SELECTED_PERSONNEL',
-  'PERSONNEL_GROUP',
-] as const;
-const RETRO_PARAMETER_VALUES = [
-  'GUNLUK_TABAN_UCRET',
-  'GUNLUK_YEMEK',
-  'BIRLESTIRILMIS_SOSYAL_YARDIM',
-  'GUNLUK_VASITA_YOL',
-  'GIYIM_YARDIMI',
-  'HIZMET_ZAMMI_BIRIMI',
-  'IS_PRIMI_YUZDE',
-  'GECE_CALISMA_PRIMI_YUZDE',
-  'GECE_CALISMA_TATILI_PRIMI_YUZDE',
-  'EK_ODEME',
-  'DIGER_GELIR',
-  'TEDIYE',
-  'TIS_BONUS',
-] as const;
-const RETRO_EARNING_CODE_VALUES = [
-  'BASE_WAGE',
-  'NIGHT_WORK',
-  'NIGHT_HOLIDAY',
-  'WORK_PREMIUM',
-  'SOCIAL_AID',
-  'MEAL',
-  'TRANSPORT',
-  'CLOTHING',
-  'SERVICE_INCREMENT',
-  'TIS_BONUS',
-  'TEDIYE',
-  'SUPPLEMENTAL',
-  'OTHER',
-] as const;
-const RETRO_TAX_TREATMENT_VALUES = ['TAXABLE', 'EXEMPT'] as const;
-const RETRO_SETTLEMENT_STATUS_VALUES = ['UNSETTLED', 'PAID', 'OVERPAYMENT', 'SETTLED_BY_OFFSET'] as const;
-const RETRO_SGK_TREATMENT_VALUES = [
-  'WAGE_SOURCE_MONTH',
-  'NON_WAGE_PAYMENT_MONTH',
-  'NON_WAGE_CARRY',
-  'EXEMPT',
-] as const;
+const ACCRUAL_TYPE_VALUES = RUST_ENUM_VALUES.AccrualType;
+const COMPENSATION_REVISION_REASON_VALUES = RUST_ENUM_VALUES.CompensationRevisionReason;
+const COMPENSATION_REVISION_STATUS_VALUES = RUST_ENUM_VALUES.CompensationRevisionStatus;
+const COMPENSATION_REVISION_SCOPE_VALUES = RUST_ENUM_VALUES.CompensationRevisionScope;
+const RETRO_PARAMETER_VALUES = RUST_ENUM_VALUES.RetroParameterKey;
+const RETRO_EARNING_CODE_VALUES = RUST_ENUM_VALUES.RetroEarningCode;
+const RETRO_TAX_TREATMENT_VALUES = RUST_ENUM_VALUES.RetroTaxTreatment;
+const RETRO_SETTLEMENT_STATUS_VALUES = RUST_ENUM_VALUES.RetroSettlementStatus;
+const RETRO_SGK_TREATMENT_VALUES = RUST_ENUM_VALUES.RetroSgkTreatment;
 const RETRO_POLICY_BY_EARNING_CODE: Record<
   (typeof RETRO_EARNING_CODE_VALUES)[number],
   { sgkTreatment: (typeof RETRO_SGK_TREATMENT_VALUES)[number]; taxTreatment: (typeof RETRO_TAX_TREATMENT_VALUES)[number] }
@@ -85,11 +45,7 @@ const RETRO_POLICY_BY_EARNING_CODE: Record<
   SUPPLEMENTAL: { sgkTreatment: 'NON_WAGE_PAYMENT_MONTH', taxTreatment: 'TAXABLE' },
   OTHER: { sgkTreatment: 'WAGE_SOURCE_MONTH', taxTreatment: 'TAXABLE' },
 };
-const STATUTORY_SNAPSHOT_SOURCE_VALUES = [
-  'ATTENDANCE_BACKED',
-  'PROVISIONAL_PAYMENT_MONTH',
-  'LEGACY_UNKNOWN',
-] as const;
+const STATUTORY_SNAPSHOT_SOURCE_VALUES = RUST_ENUM_VALUES.StatutorySnapshotSource;
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -1089,7 +1045,19 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
   });
 }
 
-function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
+function hasPayrollFinancialLineItems(payroll: PayrollStorageDto['bordrolar'][number]): boolean {
+  const income = payroll.gelirler as unknown as UnknownRecord;
+  const deductions = payroll.kesintiler as unknown as UnknownRecord;
+  return [...PAYROLL_PAYMENT_INCOME_KEYS, ...PAYROLL_PAYMENT_DEDUCTION_KEYS].some((key) => {
+    const value = income[key] ?? deductions[key];
+    return value !== null && value !== undefined;
+  });
+}
+
+function assertCrossRecordIntegrity(
+  payload: PayrollStorageDto,
+  options: PayrollPayloadValidationOptions = {}
+): void {
   const personnelIds = new Set(payload.personeller.map((person) => person.id));
   const periodIds = new Set(payload.donemler.map((period) => period.id));
 
@@ -1111,7 +1079,11 @@ function assertCrossRecordIntegrity(payload: PayrollStorageDto): void {
 
   payload.bordrolar.forEach((payroll, index) => {
     const payrollPath = `$.bordrolar[${index}]`;
-    assertPayrollFinancialTotals(payroll, payrollPath);
+    const sparseLegacyFinancials = options.allowLegacySparsePayrollFinancials
+      && !hasPayrollFinancialLineItems(payroll);
+    if (!sparseLegacyFinancials) {
+      assertPayrollFinancialTotals(payroll, payrollPath);
+    }
     if (!personnelIds.has(payroll.personelId)) {
       fail(`$.bordrolar[${index}].personelId`, `mevcut olmayan personel kimliği: ${payroll.personelId}.`);
     }
@@ -1296,7 +1268,8 @@ function validateTopLevelArrays(value: UnknownRecord): void {
 
 /** Full current V5 runtime schema. Unknown fields are intentionally ignored. */
 export function validateCurrentPayrollPayload(
-  value: unknown
+  value: unknown,
+  options: PayrollPayloadValidationOptions = {}
 ): asserts value is PayrollStorageDto {
   assertRecord(value, '$');
   const backupVersion = required(value, 'backupVersion', '$');
@@ -1447,11 +1420,14 @@ export function validateCurrentPayrollPayload(
     ['batchId', 'sourcePeriodId', 'earningCode'],
     (allocation) => `${allocation.batchId} / ${allocation.sourcePeriodId} / ${allocation.earningCode}`
   );
-  assertCrossRecordIntegrity(typedPayload);
+  assertCrossRecordIntegrity(typedPayload, options);
   assertRetroLedgerAmounts(typedPayload);
 }
 
-export function parseAndValidatePayrollPayload(value: unknown): PayrollStorageDto {
-  validateCurrentPayrollPayload(value);
+export function parseAndValidatePayrollPayload(
+  value: unknown,
+  options: PayrollPayloadValidationOptions = {}
+): PayrollStorageDto {
+  validateCurrentPayrollPayload(value, options);
   return value;
 }

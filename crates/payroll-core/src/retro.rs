@@ -14,11 +14,12 @@ use crate::calculations::{
 };
 use crate::models::*;
 use crate::payroll_engine::{
-    accrual_order_for_payroll, calculate_paid_sick_dates_from_records,
+    accrual_order_for_payroll_with_index, calculate_paid_sick_dates_from_records,
     ensure_authoritative_payment_event, incoming_devreden_pek_for_replay,
     resolve_statutory_snapshot_for_period_with_paid_sick_dates, validate_tax_month_overlap,
     PayrollDatasetSnapshot,
 };
+use crate::index::PayrollDatasetIndex;
 use crate::{DomainError, Result};
 use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
@@ -398,8 +399,12 @@ fn scope_matches_person(revision: &CompensationRevision, personnel: &Personel) -
     }
 }
 
-fn revision_has_authoritative_batch(dataset: &PayrollDatasetSnapshot, revision_id: &str) -> bool {
-    dataset.retroBatches.iter().any(|batch| {
+fn revision_has_authoritative_batch(
+    index: &PayrollDatasetIndex,
+    dataset: &PayrollDatasetSnapshot,
+    revision_id: &str,
+) -> bool {
+    index.retro_batches_for_revision(dataset, revision_id).any(|batch| {
         batch.revisionId == revision_id
             && matches!(
                 batch.status,
@@ -409,6 +414,7 @@ fn revision_has_authoritative_batch(dataset: &PayrollDatasetSnapshot, revision_i
 }
 
 fn revision_applications(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     current_revision: &CompensationRevision,
     current_overrides: &[CompensationRevisionOverride],
@@ -423,7 +429,7 @@ fn revision_applications(
             || (!matches!(
                 revision.status,
                 CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
-            ) && !revision_has_authoritative_batch(dataset, &revision.id))
+            ) && !revision_has_authoritative_batch(index, dataset, &revision.id))
         {
             continue;
         }
@@ -439,10 +445,8 @@ fn revision_applications(
                 revision.id
             )));
         }
-        let overrides = dataset
-            .compensationRevisionOverrides
-            .iter()
-            .filter(|item| item.revisionId == revision.id)
+        let overrides = index
+            .overrides_for_revision(dataset, &revision.id)
             .cloned()
             .collect::<Vec<_>>();
         for item in &overrides {
@@ -570,14 +574,14 @@ fn calculate_segment_income(
 }
 
 fn historical_attendance<'a>(
+    index: &'a PayrollDatasetIndex,
     dataset: &'a PayrollDatasetSnapshot,
     personnel_id: &str,
     period_id: &str,
 ) -> Result<&'a PersonelPuantaj> {
-    dataset
-        .attendances
-        .iter()
-        .find(|attendance| attendance.personelId == personnel_id && attendance.donemId == period_id)
+    index
+        .attendances(dataset, personnel_id, period_id)
+        .next()
         .ok_or_else(|| {
             DomainError::NotFound(format!(
                 "{} / {} için tarihsel puantaj bulunamadı.",
@@ -587,23 +591,22 @@ fn historical_attendance<'a>(
 }
 
 fn target_income_for_period(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel: &Personel,
     period: &BordroDonemi,
     payment_date: NaiveDate,
     applications: &[RevisionApplication],
 ) -> Result<GelirKalemleri> {
-    let attendance = historical_attendance(dataset, &personnel.id, &period.id)?;
+    let attendance = historical_attendance(index, dataset, &personnel.id, &period.id)?;
     let start = period_date(period, true)?;
     let period_end = period_date(period, false)?;
     let covered_end = period_end.min(payment_date);
     if covered_end < start {
         return Ok(GelirKalemleri::default());
     }
-    let sick_records: Vec<SickLeaveRecord> = dataset
-        .sickLeaveRecords
-        .iter()
-        .filter(|record| record.personnelId == personnel.id)
+    let sick_records: Vec<SickLeaveRecord> = index
+        .sick_leave_for_person(dataset, &personnel.id)
         .cloned()
         .collect();
     let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period);
@@ -722,16 +725,18 @@ fn ensure_revision_scope(revision: &CompensationRevision, personnel: &Personel) 
 }
 
 fn original_recognized_by_period_and_code(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period_id: &str,
 ) -> Result<HashMap<RetroEarningCode, Decimal>> {
     let mut result = HashMap::new();
-    for payroll in dataset.payrolls.iter().filter(|payroll| {
-        payroll.personelId == personnel_id
-            && payroll.donemId == period_id
-            && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
-    }) {
+    for payroll in index
+        .payrolls_for_person_period(dataset, personnel_id, period_id)
+        .filter(|payroll| {
+            payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
+        })
+    {
         match payroll.status {
             BordroStatus::CALCULATED | BordroStatus::FINALIZED => {
                 for (code, value) in income_by_code(&payroll.gelirler) {
@@ -816,13 +821,12 @@ pub fn retro_payable_allocation_amount(
 }
 
 fn validate_batch_ledger(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     batch: &RetroAdjustmentBatch,
 ) -> Result<Vec<RetroAllocation>> {
-    let allocations: Vec<RetroAllocation> = dataset
-        .retroAllocations
-        .iter()
-        .filter(|allocation| allocation.batchId == batch.id)
+    let allocations: Vec<RetroAllocation> = index
+        .retro_allocations_for_batch(dataset, &batch.id)
         .cloned()
         .collect();
     let total = allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
@@ -1036,17 +1040,16 @@ fn validate_batch_ledger(
 }
 
 fn outstanding_receivable_before_current(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     payment_date: NaiveDate,
     current_batch_id: &str,
 ) -> Result<Decimal> {
-    let mut batches = dataset
-        .retroBatches
-        .iter()
+    let mut batches = index
+        .retro_batches_for_person(dataset, personnel_id)
         .filter(|batch| {
-            batch.personnelId == personnel_id
-                && batch.id != current_batch_id
+            batch.id != current_batch_id
                 && matches!(
                     batch.status,
                     CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
@@ -1066,7 +1069,7 @@ fn outstanding_receivable_before_current(
         if batch_payment_date > payment_date {
             continue;
         }
-        validate_batch_ledger(dataset, &batch)?;
+        validate_batch_ledger(index, dataset, &batch)?;
         let legacy = has_legacy_settlement_flow(&batch);
         let recoverable = if legacy {
             negative_entitlement_amount(&batch)
@@ -1138,6 +1141,7 @@ fn assign_current_settlement_allocations(
 }
 
 fn previous_authoritative_retro_by_period_and_code(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     payment_date: NaiveDate,
@@ -1145,10 +1149,9 @@ fn previous_authoritative_retro_by_period_and_code(
 ) -> Result<(RetroAmountsByPeriodAndCode, RetroAmountsByPeriodAndCode)> {
     let mut previous = HashMap::new();
     let mut previous_pek = HashMap::new();
-    let mut batches = dataset
-        .retroBatches
-        .iter()
-        .filter(|batch| batch.personnelId == personnel_id && batch.id != current_batch_id)
+    let mut batches = index
+        .retro_batches_for_person(dataset, personnel_id)
+        .filter(|batch| batch.id != current_batch_id)
         .cloned()
         .collect::<Vec<_>>();
     batches.sort_by(|left, right| {
@@ -1169,7 +1172,7 @@ fn previous_authoritative_retro_by_period_and_code(
         if batch_payment_date > payment_date {
             continue;
         }
-        for allocation in validate_batch_ledger(dataset, &batch)? {
+        for allocation in validate_batch_ledger(index, dataset, &batch)? {
             let key = (allocation.sourcePeriodId.clone(), allocation.earningCode);
             let entry = previous.entry(key.clone()).or_default();
             *entry = round2(*entry + allocation.deltaAmount);
@@ -1181,15 +1184,15 @@ fn previous_authoritative_retro_by_period_and_code(
 }
 
 fn reject_later_authoritative_retro_for_same_source_period(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     payment_date: NaiveDate,
     current_batch_id: &str,
     source_period_ids: &HashSet<String>,
 ) -> Result<()> {
-    for batch in dataset.retroBatches.iter().filter(|batch| {
-        batch.personnelId == personnel_id
-            && batch.id != current_batch_id
+    for batch in index.retro_batches_for_person(dataset, personnel_id).filter(|batch| {
+        batch.id != current_batch_id
             && matches!(
                 batch.status,
                 CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
@@ -1205,7 +1208,7 @@ fn reject_later_authoritative_retro_for_same_source_period(
             // date-only ordering cannot safely reconstruct an earlier payment.
             continue;
         }
-        let allocations = validate_batch_ledger(dataset, batch)?;
+        let allocations = validate_batch_ledger(index, dataset, batch)?;
         if allocations
             .iter()
             .any(|allocation| source_period_ids.contains(&allocation.sourcePeriodId))
@@ -1241,21 +1244,20 @@ struct SourcePekReplay {
 }
 
 fn source_statutory_snapshot(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
 ) -> Result<ResolvedStatutorySnapshot> {
-    let attendance = historical_attendance(dataset, personnel_id, &period.id)?;
+    let attendance = historical_attendance(index, dataset, personnel_id, &period.id)?;
     let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
         DomainError::InvalidData(format!(
             "{} source period için historical kurum ayarları çözümlenemedi.",
             period.id
         ))
     })?;
-    let sick_records = dataset
-        .sickLeaveRecords
-        .iter()
-        .filter(|record| record.personnelId == personnel_id)
+    let sick_records = index
+        .sick_leave_for_person(dataset, personnel_id)
         .cloned()
         .collect::<Vec<_>>();
     let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period);
@@ -1271,27 +1273,23 @@ fn source_statutory_snapshot(
 }
 
 fn source_period_events(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
 ) -> Result<Vec<BordroKaydi>> {
-    let mut events = dataset
-        .payrolls
-        .iter()
-        .filter(|payroll| {
-            payroll.personelId == personnel_id
-                && payroll.donemId == period.id
-                && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
-        })
+    let mut events = index
+        .payrolls_for_person_period(dataset, personnel_id, &period.id)
+        .filter(|payroll| payroll.accrualType != AccrualType::RETRO_ADJUSTMENT)
         .cloned()
         .collect::<Vec<_>>();
     for event in &events {
         ensure_authoritative_payment_event(event)?;
     }
     events.sort_by(|left, right| {
-        accrual_order_for_payroll(dataset, left)
+        accrual_order_for_payroll_with_index(dataset, index, left)
             .and_then(|left_order| {
-                accrual_order_for_payroll(dataset, right)
+                accrual_order_for_payroll_with_index(dataset, index, right)
                     .map(|right_order| left_order.cmp(&right_order))
             })
             .unwrap_or_else(|_| left.accrualId.cmp(&right.accrualId))
@@ -1300,11 +1298,12 @@ fn source_period_events(
 }
 
 fn attendance_summary_for_source(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
 ) -> Result<PuantajOzeti> {
-    let attendance = historical_attendance(dataset, personnel_id, &period.id)?;
+    let attendance = historical_attendance(index, dataset, personnel_id, &period.id)?;
     let mut summary = PuantajOzeti::default();
     for code in attendance.gunler.values() {
         add_summary(&mut summary, code, &period.id)?;
@@ -1340,6 +1339,7 @@ fn source_income_target(
 }
 
 fn source_original_state(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
@@ -1389,7 +1389,7 @@ fn source_original_state(
     state.employer_unemployment = employer_unemployment;
     state.employer_lower_bound_premium = employer_lower_bound_premium;
     if state.upper == Decimal::ZERO {
-        state.upper = source_statutory_snapshot(dataset, personnel_id, period)?.pekUstSinir;
+        state.upper = source_statutory_snapshot(index, dataset, personnel_id, period)?.pekUstSinir;
     }
     Ok(SourcePekReplay {
         state,
@@ -1438,6 +1438,7 @@ fn canonical_source_employer_premiums(
 }
 
 fn source_target_state(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
@@ -1448,7 +1449,7 @@ fn source_target_state(
         .institutionSettings
         .get(&period.id)
         .ok_or_else(|| DomainError::InvalidData(format!("{} source settings eksik.", period.id)))?;
-    let statutory_fallback = source_statutory_snapshot(dataset, personnel_id, period)?;
+    let statutory_fallback = source_statutory_snapshot(index, dataset, personnel_id, period)?;
     let mut ordered_events = events.to_vec();
     let original_normal_income = events
         .iter()
@@ -1462,7 +1463,7 @@ fn source_target_state(
         // Missing original accrual: replay a synthetic NORMAL event using the
         // source attendance/statutory snapshot. This is also where paid sick
         // R-days enter the source PEK capacity.
-        let synthetic_summary = attendance_summary_for_source(dataset, personnel_id, period)?;
+        let synthetic_summary = attendance_summary_for_source(index, dataset, personnel_id, period)?;
         ordered_events.push(BordroKaydi {
             id: format!("{}_retro_source_normal", period.id),
             personelId: personnel_id.to_string(),
@@ -1505,7 +1506,7 @@ fn source_target_state(
         ))
     })?;
     let (canonical_incoming, canonical_incoming_available) =
-        incoming_devreden_pek_for_replay(dataset, personnel_id, period, first_event)?;
+        incoming_devreden_pek_for_replay(dataset, &index, personnel_id, period, first_event)?;
     let first_carry = if canonical_incoming_available {
         canonical_incoming.records
     } else {
@@ -1583,18 +1584,17 @@ fn source_target_state(
 }
 
 fn previous_source_retro_state(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     payment_date: NaiveDate,
     current_batch_id: &str,
     source_period_id: &str,
 ) -> Result<SourcePekState> {
-    let mut batches = dataset
-        .retroBatches
-        .iter()
+    let mut batches = index
+        .retro_batches_for_person(dataset, personnel_id)
         .filter(|batch| {
-            batch.personnelId == personnel_id
-                && batch.id != current_batch_id
+            batch.id != current_batch_id
                 && matches!(
                     batch.status,
                     CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
@@ -1613,7 +1613,7 @@ fn previous_source_retro_state(
         if parse_date(&batch.paymentDate, "önceki retro ödeme")? > payment_date {
             continue;
         }
-        for allocation in validate_batch_ledger(dataset, &batch)? {
+        for allocation in validate_batch_ledger(index, dataset, &batch)? {
             if allocation.sourcePeriodId != source_period_id
                 || allocation.sgkTreatment != RetroSgkTreatment::WAGE_SOURCE_MONTH
             {
@@ -1641,6 +1641,7 @@ fn previous_source_retro_state(
 }
 
 fn source_eligible_delta(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
@@ -1650,7 +1651,7 @@ fn source_eligible_delta(
     if allocation.earningCode != RetroEarningCode::MEAL {
         return Ok(allocation.deltaAmount);
     }
-    let statutory = source_statutory_snapshot(dataset, personnel_id, period)?;
+    let statutory = source_statutory_snapshot(index, dataset, personnel_id, period)?;
     let exempt = statutory.sgkYemekIstisnasiToplam;
     let recognized_before =
         allocation.originalRecognizedAmount + allocation.previousAuthoritativeRetroAmount;
@@ -1737,6 +1738,7 @@ fn rebalance_sgk_component_to_total(
 }
 
 fn apply_source_month_sgk(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
@@ -1745,12 +1747,20 @@ fn apply_source_month_sgk(
     payment_date: NaiveDate,
     current_batch_id: &str,
 ) -> Result<()> {
-    let events = source_period_events(dataset, personnel_id, period)?;
-    let original_replay = source_original_state(dataset, personnel_id, period, &events)?;
-    let target_replay = source_target_state(dataset, personnel_id, period, &events, target_normal_income)?;
+    let events = source_period_events(index, dataset, personnel_id, period)?;
+    let original_replay = source_original_state(index, dataset, personnel_id, period, &events)?;
+    let target_replay = source_target_state(
+        index,
+        dataset,
+        personnel_id,
+        period,
+        &events,
+        target_normal_income,
+    )?;
     let original = original_replay.state;
     let target = target_replay.state;
     let previous = previous_source_retro_state(
+        index,
         dataset,
         personnel_id,
         payment_date,
@@ -1805,13 +1815,14 @@ fn apply_source_month_sgk(
 
     let desired = source_allocations
         .iter()
-        .map(|index| {
+        .map(|allocation_index| {
             source_eligible_delta(
+                index,
                 dataset,
                 personnel_id,
                 period,
                 settings,
-                &allocations[*index],
+                &allocations[*allocation_index],
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -1953,10 +1964,22 @@ pub fn retro_payment_income(
     GelirKalemleri,
     GelirKalemleri,
 )> {
-    let batch = dataset
-        .retroBatches
-        .iter()
-        .find(|batch| batch.id == batch_id)
+    let index = PayrollDatasetIndex::build(dataset);
+    retro_payment_income_with_index(dataset, &index, batch_id)
+}
+
+pub(crate) fn retro_payment_income_with_index(
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
+    batch_id: &str,
+) -> Result<(
+    RetroAdjustmentBatch,
+    Vec<RetroAllocation>,
+    GelirKalemleri,
+    GelirKalemleri,
+)> {
+    let batch = index
+        .retro_batch(dataset, batch_id)
         .cloned()
         .ok_or_else(|| DomainError::NotFound(format!("Retro batch bulunamadı: {}", batch_id)))?;
     if matches!(
@@ -1974,7 +1997,7 @@ pub fn retro_payment_income(
                 .into(),
         ));
     }
-    let mut allocations = validate_batch_ledger(dataset, &batch)?;
+    let mut allocations = validate_batch_ledger(&index, dataset, &batch)?;
     if has_legacy_settlement_flow(&batch) {
         // V4 had no per-allocation settlement flow.  Materialize the batch-net
         // payable allocation locally so a mixed-sign legacy batch cannot turn
@@ -2002,6 +2025,7 @@ pub struct RetroEntitlementEngine;
 
 impl RetroEntitlementEngine {
     pub fn calculate(request: &RetroCalculationRequest) -> Result<RetroCalculationResult> {
+        let index = PayrollDatasetIndex::build(&request.dataset);
         let payment_date = parse_date(&request.paymentDate, "retro ödeme")?;
         let effective_from = parse_date(&request.revision.effectiveFrom, "revision yürürlük")?;
         if effective_from > payment_date {
@@ -2016,11 +2040,8 @@ impl RetroEntitlementEngine {
                 ));
             }
         }
-        let personnel = request
-            .dataset
-            .personnel
-            .iter()
-            .find(|personnel| personnel.id == request.personnelId)
+        let personnel = index
+            .personnel(&request.dataset, &request.personnelId)
             .ok_or_else(|| DomainError::NotFound("Retro personeli bulunamadı.".into()))?;
         ensure_revision_scope(&request.revision, personnel)?;
         if request.batchId.trim().is_empty() {
@@ -2028,12 +2049,7 @@ impl RetroEntitlementEngine {
                 "Retro batch kimliği boş olamaz.".into(),
             ));
         }
-        if let Some(existing_batch) = request
-            .dataset
-            .retroBatches
-            .iter()
-            .find(|batch| batch.id == request.batchId)
-        {
+        if let Some(existing_batch) = index.retro_batch(&request.dataset, &request.batchId) {
             if existing_batch.revisionId != request.revision.id
                 || existing_batch.personnelId != request.personnelId
                 || existing_batch.paymentDate != request.paymentDate
@@ -2070,6 +2086,7 @@ impl RetroEntitlementEngine {
         }
 
         let applications = revision_applications(
+            &index,
             &request.dataset,
             &request.revision,
             &selected_overrides,
@@ -2119,6 +2136,7 @@ impl RetroEntitlementEngine {
             .map(|period| period.id.clone())
             .collect::<HashSet<_>>();
         reject_later_authoritative_retro_for_same_source_period(
+            &index,
             &request.dataset,
             &request.personnelId,
             payment_date,
@@ -2127,6 +2145,7 @@ impl RetroEntitlementEngine {
         )?;
 
         let (previous_retro, _previous_pek) = previous_authoritative_retro_by_period_and_code(
+            &index,
             &request.dataset,
             &request.personnelId,
             payment_date,
@@ -2138,6 +2157,7 @@ impl RetroEntitlementEngine {
         let mut target_income_by_period = HashMap::new();
         for period in &periods {
             let target_income = target_income_for_period(
+                &index,
                 &request.dataset,
                 personnel,
                 period,
@@ -2146,6 +2166,7 @@ impl RetroEntitlementEngine {
             )?;
             target_income_by_period.insert(period.id.clone(), target_income.clone());
             let original = original_recognized_by_period_and_code(
+                &index,
                 &request.dataset,
                 &request.personnelId,
                 &period.id,
@@ -2155,10 +2176,10 @@ impl RetroEntitlementEngine {
             // Preserve independently paid legacy events. They are already part
             // of recognized entitlement and are not regenerated by shadow
             // NORMAL replay.
-            for payroll in request.dataset.payrolls.iter().filter(|payroll| {
-                payroll.personelId == request.personnelId
-                    && payroll.donemId == period.id
-                    && payroll.accrualType != AccrualType::NORMAL
+            for payroll in index
+                .payrolls_for_person_period(&request.dataset, &request.personnelId, &period.id)
+                .filter(|payroll| {
+                    payroll.accrualType != AccrualType::NORMAL
                     && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
                     && matches!(
                         payroll.status,
@@ -2295,6 +2316,7 @@ impl RetroEntitlementEngine {
                 ))
             })?;
             apply_source_month_sgk(
+                &index,
                 &request.dataset,
                 &request.personnelId,
                 period,
@@ -2309,6 +2331,7 @@ impl RetroEntitlementEngine {
             sum + allocation.deltaAmount
         }));
         let prior_outstanding = outstanding_receivable_before_current(
+            &index,
             &request.dataset,
             &request.personnelId,
             payment_date,

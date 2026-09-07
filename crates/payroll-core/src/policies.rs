@@ -9,7 +9,10 @@ use crate::models::{
     BordroDonemi, BordroStatus, CompensationRevisionStatus, RetroAdjustmentBatch,
     StatutorySnapshotSource,
 };
-use crate::payroll_engine::{accrual_order_for_payroll as payroll_order, PayrollDatasetSnapshot};
+use crate::index::PayrollDatasetIndex;
+use crate::payroll_engine::{
+    accrual_order_for_payroll_with_index as payroll_order, PayrollDatasetSnapshot,
+};
 use crate::{DomainError, Result};
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -106,17 +109,19 @@ pub struct MutationImpact {
 }
 
 fn period_for<'a>(
+    index: &'a PayrollDatasetIndex,
     dataset: &'a PayrollDatasetSnapshot,
     period_id: &str,
 ) -> Option<&'a BordroDonemi> {
-    dataset.periods.iter().find(|period| period.id == period_id)
+    index.period(dataset, period_id)
 }
 
 fn require_period<'a>(
+    index: &'a PayrollDatasetIndex,
     dataset: &'a PayrollDatasetSnapshot,
     period_id: &str,
 ) -> Result<&'a BordroDonemi> {
-    period_for(dataset, period_id).ok_or_else(|| {
+    period_for(index, dataset, period_id).ok_or_else(|| {
         DomainError::ValidationError(format!("Bordro dönemi bulunamadı: {}", period_id))
     })
 }
@@ -184,6 +189,7 @@ fn is_sick_leave_dependency_root(payroll: &crate::models::BordroKaydi) -> bool {
 }
 
 fn affected_after_dependency_roots(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     payroll: &crate::models::BordroKaydi,
     dependency_roots: &[&crate::models::BordroKaydi],
@@ -191,12 +197,12 @@ fn affected_after_dependency_roots(
     if dependency_roots.is_empty() {
         return Ok(false);
     }
-    let candidate_order = payroll_order(dataset, payroll)?;
+    let candidate_order = payroll_order(dataset, index, payroll)?;
     dependency_roots.iter().try_fold(false, |affected, root| {
         if affected {
             Ok(true)
         } else {
-            Ok(candidate_order >= payroll_order(dataset, root)?)
+            Ok(candidate_order >= payroll_order(dataset, index, root)?)
         }
     })
 }
@@ -210,6 +216,7 @@ fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
 }
 
 fn input_order(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     period_id: &str,
     payment_date: &str,
@@ -217,7 +224,7 @@ fn input_order(
     accrual_id: &str,
 ) -> Result<crate::payroll_engine::AccrualOrder> {
     crate::payroll_engine::payment_event_order(
-        require_period(dataset, period_id)?,
+        require_period(index, dataset, period_id)?,
         payment_date,
         sequence,
         accrual_id,
@@ -225,10 +232,11 @@ fn input_order(
 }
 
 fn payroll_effective_payment_date(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     payroll: &crate::models::BordroKaydi,
 ) -> Result<NaiveDate> {
-    let period = require_period(dataset, &payroll.donemId)?;
+    let period = require_period(index, dataset, &payroll.donemId)?;
     let payment_date = if payroll.paymentDate.trim().is_empty() {
         crate::payroll_engine::default_payment_date(period)
     } else {
@@ -243,12 +251,12 @@ fn payroll_effective_payment_date(
 }
 
 fn retro_batch_requires_source_carry_replay(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     batch_id: &str,
 ) -> bool {
-    dataset
-        .retroAllocations
-        .iter()
+    index
+        .retro_allocations_for_batch(dataset, batch_id)
         .filter(|allocation| {
             allocation.batchId == batch_id
                 && allocation.sgkTreatment
@@ -285,33 +293,33 @@ fn retro_batch_payment_date(
 }
 
 fn affected_by_mutation(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     payroll_personnel_id: &str,
     payroll_period_id: &str,
     payroll: &crate::models::BordroKaydi,
     mutation: &PayrollMutation,
 ) -> Result<bool> {
-    let candidate = period_for(dataset, payroll_period_id);
+    let candidate = period_for(index, dataset, payroll_period_id);
     match mutation {
         PayrollMutation::Person { personnelId } => Ok(payroll_personnel_id == personnelId),
         PayrollMutation::PersonPeriod {
             personnelId,
             periodId,
         } => {
-            let source = require_period(dataset, periodId)?;
+            let source = require_period(index, dataset, periodId)?;
             if payroll_personnel_id != personnelId || candidate.is_none() {
                 return Ok(false);
             }
-            let dependency_roots: Vec<&crate::models::BordroKaydi> = dataset
-                .payrolls
-                .iter()
+            let dependency_roots: Vec<&crate::models::BordroKaydi> = index
+                .payrolls_for_person_period(dataset, personnelId, &source.id)
                 .filter(|root| {
                     root.personelId == *personnelId
                         && root.donemId == source.id
                         && is_attendance_dependency_root(root)
                 })
                 .collect();
-            affected_after_dependency_roots(dataset, payroll, &dependency_roots)
+            affected_after_dependency_roots(index, dataset, payroll, &dependency_roots)
         }
         PayrollMutation::PersonTaxYear {
             personnelId,
@@ -322,7 +330,7 @@ fn affected_by_mutation(
             Ok(candidate.is_some_and(|candidate| candidate.taxYear == *taxYear))
         }
         PayrollMutation::Period { periodId } => {
-            let source = require_period(dataset, periodId)?;
+            let source = require_period(index, dataset, periodId)?;
             Ok(candidate.is_some_and(|candidate| is_period_dependent(candidate, source)))
         }
         PayrollMutation::PeriodFromPosition {
@@ -342,23 +350,23 @@ fn affected_by_mutation(
                 return Ok(false);
             }
             let mut dependency_roots = Vec::new();
-            for root in dataset.payrolls.iter().filter(|root| {
-                root.personelId == *personnelId && is_sick_leave_dependency_root(root)
+            for root in index.payrolls_for_person(dataset, personnelId).filter(|root| {
+                is_sick_leave_dependency_root(root)
             }) {
-                let Some(root_period) = period_for(dataset, &root.donemId) else {
+                let Some(root_period) = period_for(index, dataset, &root.donemId) else {
                     continue;
                 };
                 if is_person_from_date(root_period, effectiveFrom)? {
                     dependency_roots.push(root);
                 }
             }
-            affected_after_dependency_roots(dataset, payroll, &dependency_roots)
+            affected_after_dependency_roots(index, dataset, payroll, &dependency_roots)
         }
         PayrollMutation::PayrollCalculation {
             personnelId,
             periodId,
         } => {
-            let source = require_period(dataset, periodId)?;
+            let source = require_period(index, dataset, periodId)?;
             Ok(payroll_personnel_id == personnelId
                 && candidate.is_some_and(|candidate| {
                     candidate.id != source.id && is_period_dependent(candidate, source)
@@ -374,14 +382,9 @@ fn affected_by_mutation(
             periodId,
             accrualId,
         } => {
-            let source = dataset
-                .payrolls
-                .iter()
-                .find(|candidate| {
-                    candidate.personelId == *personnelId
-                        && candidate.donemId == *periodId
-                        && effective_accrual_id(candidate) == *accrualId
-                })
+            let source = index
+                .payrolls_for_person_period(dataset, personnelId, periodId)
+                .find(|candidate| effective_accrual_id(candidate) == *accrualId)
                 .ok_or_else(|| {
                     DomainError::ValidationError(format!(
                         "Invalidation kaynağı tahakkuk bulunamadı: {}.",
@@ -389,7 +392,7 @@ fn affected_by_mutation(
                     ))
                 })?;
             Ok(payroll_personnel_id == personnelId
-                && (payroll_order(dataset, payroll)? > payroll_order(dataset, source)?
+                && (payroll_order(dataset, index, payroll)? > payroll_order(dataset, index, source)?
                     || (matches!(mutation, PayrollMutation::AccrualDelete { .. })
                         && effective_accrual_id(payroll) == *accrualId)))
         }
@@ -400,22 +403,20 @@ fn affected_by_mutation(
             paymentDate,
             sequence,
         } => Ok(payroll_personnel_id == personnelId
-            && payroll_order(dataset, payroll)?
-                > input_order(dataset, periodId, paymentDate, *sequence, accrualId)?),
+            && payroll_order(dataset, index, payroll)?
+                > input_order(index, dataset, periodId, paymentDate, *sequence, accrualId)?),
         PayrollMutation::RetroBatchSave {
             personnelId,
             batchId,
             paymentDate,
         } => {
             if payroll_personnel_id != personnelId
-                || !retro_batch_requires_source_carry_replay(dataset, batchId)
+                || !retro_batch_requires_source_carry_replay(index, dataset, batchId)
             {
                 return Ok(false);
             }
-            let batch = dataset
-                .retroBatches
-                .iter()
-                .find(|batch| batch.id == *batchId)
+            let batch = index
+                .retro_batch(dataset, batchId)
                 .ok_or_else(|| {
                     DomainError::ValidationError(format!(
                         "Retro carry mutation batch'i bulunamadı: {}.",
@@ -429,13 +430,14 @@ fn affected_by_mutation(
                 )));
             }
             let retro_date = retro_batch_payment_date(batch, paymentDate)?;
-            Ok(payroll_effective_payment_date(dataset, payroll)? >= retro_date)
+            Ok(payroll_effective_payment_date(index, dataset, payroll)? >= retro_date)
         }
         PayrollMutation::All => Ok(true),
     }
 }
 
 fn retro_batch_source_period_matches<F>(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     batch: &RetroAdjustmentBatch,
     mut predicate: F,
@@ -443,16 +445,8 @@ fn retro_batch_source_period_matches<F>(
 where
     F: FnMut(&BordroDonemi) -> Result<bool>,
 {
-    for allocation in dataset
-        .retroAllocations
-        .iter()
-        .filter(|allocation| allocation.batchId == batch.id)
-    {
-        if let Some(period) = dataset
-            .periods
-            .iter()
-            .find(|period| period.id == allocation.sourcePeriodId)
-        {
+    for allocation in index.retro_allocations_for_batch(dataset, &batch.id) {
+        if let Some(period) = index.period(dataset, &allocation.sourcePeriodId) {
             if predicate(period)? {
                 return Ok(true);
             }
@@ -476,6 +470,7 @@ fn retro_batch_payment_tax_year_matches(
 }
 
 fn retro_batch_affected_by_mutation(
+    index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     batch: &RetroAdjustmentBatch,
     mutation: &PayrollMutation,
@@ -485,9 +480,9 @@ fn retro_batch_affected_by_mutation(
     }
 
     let same_source_period = |period_id: &str| {
-        dataset.retroAllocations.iter().any(|allocation| {
-            allocation.batchId == batch.id && allocation.sourcePeriodId == period_id
-        })
+        index
+            .retro_allocations_for_batch(dataset, &batch.id)
+            .any(|allocation| allocation.sourcePeriodId == period_id)
     };
 
     match mutation {
@@ -513,7 +508,7 @@ fn retro_batch_affected_by_mutation(
             startDate,
             taxYear,
             taxMonth,
-        } => retro_batch_source_period_matches(dataset, batch, |period| {
+        } => retro_batch_source_period_matches(index, dataset, batch, |period| {
             Ok(is_from_position(period, startDate, *taxYear, *taxMonth))
         }),
         PayrollMutation::PersonFromDate {
@@ -523,7 +518,7 @@ fn retro_batch_affected_by_mutation(
             if batch.personnelId != *personnelId {
                 return Ok(false);
             }
-            retro_batch_source_period_matches(dataset, batch, |period| {
+            retro_batch_source_period_matches(index, dataset, batch, |period| {
                 is_person_from_date(period, effectiveFrom)
             })
         }
@@ -574,6 +569,15 @@ pub fn evaluate_payroll_invalidation(
     dataset: &PayrollDatasetSnapshot,
     mutation: &PayrollMutation,
 ) -> Result<MutationImpact> {
+    let index = PayrollDatasetIndex::build(dataset);
+    evaluate_payroll_invalidation_with_index(dataset, mutation, &index)
+}
+
+pub(crate) fn evaluate_payroll_invalidation_with_index(
+    dataset: &PayrollDatasetSnapshot,
+    mutation: &PayrollMutation,
+    index: &PayrollDatasetIndex,
+) -> Result<MutationImpact> {
     let mut affected = BTreeSet::new();
     let mut blocked = BTreeSet::new();
     let mut affected_retro_batches = BTreeSet::new();
@@ -581,6 +585,7 @@ pub fn evaluate_payroll_invalidation(
 
     for payroll in &dataset.payrolls {
         if !affected_by_mutation(
+            &index,
             dataset,
             &payroll.personelId,
             &payroll.donemId,
@@ -601,7 +606,7 @@ pub fn evaluate_payroll_invalidation(
     }
 
     for batch in &dataset.retroBatches {
-        if !retro_batch_affected_by_mutation(dataset, batch, mutation)? {
+        if !retro_batch_affected_by_mutation(&index, dataset, batch, mutation)? {
             continue;
         }
         affected_retro_batches.insert(batch.id.clone());

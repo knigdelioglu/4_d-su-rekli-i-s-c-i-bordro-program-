@@ -83,9 +83,55 @@ impl PayrollService {
         accrual: Option<&PayrollAccrualInput>,
         manual_income: Option<&ManualPayrollIncomeInput>,
     ) -> Result<BordroKaydi> {
+        Self::calculate_payroll_for_accrual_internal(
+            conn,
+            personnel_id,
+            period_id,
+            accrual,
+            manual_income,
+            false,
+        )
+    }
+
+    /// Production native command entry point. It shares the browser/WASM
+    /// checked boundary while the historical unvalidated service method above
+    /// remains available to small repository/unit fixtures.
+    pub fn calculate_payroll_for_accrual_checked(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+    ) -> Result<BordroKaydi> {
+        Self::calculate_payroll_for_accrual_internal(
+            conn,
+            personnel_id,
+            period_id,
+            accrual,
+            manual_income,
+            true,
+        )
+    }
+
+    fn calculate_payroll_for_accrual_internal(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+        checked: bool,
+    ) -> Result<BordroKaydi> {
         let request =
             Self::build_calculation_request(conn, personnel_id, period_id, accrual, manual_income)?;
-        let calculated = payroll_core::calculate_payroll(&request)?;
+        let calculated = if checked {
+            payroll_core::calculate_payroll_checked(&request)?
+        } else {
+            // Keep the historical service contract: callers that need
+            // cross-record preflight use the checked command/finalization/retro
+            // APIs. A scoped snapshot must not turn this fixture-facing method
+            // into a new validation gate.
+            payroll_core::calculate_payroll(&request)?
+        };
         PayrollRepository::save(conn, &calculated)?;
         Ok(calculated)
     }
@@ -199,8 +245,7 @@ impl PayrollService {
         // cross-period/tax-month preflight before any canonical event can be
         // persisted; the low-level formula function intentionally remains
         // usable by small unit-test fixtures.
-        payroll_core::validate_payroll_request(&request)?;
-        let calculated = payroll_core::calculate_payroll(&request)?;
+        let calculated = payroll_core::calculate_payroll_checked(&request)?;
         let mutation = if existing.is_some() {
             payroll_core::PayrollMutation::AccrualCalculation {
                 personnelId: canonical_batch.personnelId.clone(),
@@ -416,7 +461,7 @@ impl PayrollService {
         let tx = conn
             .unchecked_transaction()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
-        let records = PayrollRepository::get_all(&tx)?;
+        let records = PayrollRepository::get_for_personnel(&tx, personnel_id)?;
         let saved = records
             .iter()
             .find(|record| {
@@ -431,7 +476,7 @@ impl PayrollService {
             .ok_or_else(|| DomainError::NotFound("Bordro tahakkuku bulunamadı.".into()))?;
         let retro_batch = if saved.accrualType == AccrualType::RETRO_ADJUSTMENT {
             Some(
-                crate::repositories::retro_repo::get_batches(&tx)?
+                crate::repositories::retro_repo::get_batches_for_personnel(&tx, personnel_id)?
                     .into_iter()
                     .find(|batch| batch.id == saved.accrualId)
                     .ok_or_else(|| {
@@ -530,13 +575,113 @@ impl PayrollService {
         accrual: Option<&PayrollAccrualInput>,
         manual_income: Option<&ManualPayrollIncomeInput>,
     ) -> Result<payroll_core::PayrollCalculationRequest> {
+        // Retro payment replay needs the complete source-period graph. Normal
+        // and supplementary payment events only use the person/tax/payment
+        // dependency scope assembled below; mutation-policy snapshots remain
+        // full by design and are never routed through this loader.
+        let dataset = if accrual
+            .is_some_and(|input| input.accrualType == AccrualType::RETRO_ADJUSTMENT)
+        {
+            Self::build_dataset_snapshot(conn)?
+        } else {
+            Self::build_calculation_snapshot_for(conn, personnel_id, period_id)?
+        };
         Ok(payroll_core::PayrollCalculationRequest {
             personnelId: personnel_id.to_string(),
             periodId: period_id.to_string(),
             calculatedAt: Utc::now().to_rfc3339(),
             manualIncome: manual_income.cloned(),
             accrual: accrual.cloned(),
-            dataset: Self::build_dataset_snapshot(conn)?,
+            dataset,
+        })
+    }
+
+    /// Loads the dependency closure for one normal/supplementary calculation.
+    /// The core still receives its explicit immutable snapshot contract; this
+    /// adapter only avoids materializing unrelated personnel, attendance, and
+    /// payroll rows. Retro payment replay deliberately uses the full loader
+    /// above because its source-month graph is broader than one target event.
+    pub fn build_calculation_snapshot_for(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<payroll_core::PayrollDatasetSnapshot> {
+        let personnel = PersonnelRepository::get_by_id(conn, personnel_id)?
+            .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {personnel_id}")))?;
+        let active_period = PeriodRepository::get_by_id(conn, period_id)?
+            .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {period_id}")))?;
+        let payrolls = PayrollRepository::get_for_personnel(conn, personnel_id)?;
+        let retro_batches =
+            crate::repositories::retro_repo::get_batches_for_personnel(conn, personnel_id)?;
+        let retro_allocations =
+            crate::repositories::retro_repo::get_allocations_for_personnel(conn, personnel_id)?;
+
+        let mut period_ids = std::collections::BTreeSet::new();
+        period_ids.insert(active_period.id.clone());
+        for payroll in &payrolls {
+            period_ids.insert(payroll.donemId.clone());
+        }
+        for allocation in &retro_allocations {
+            period_ids.insert(allocation.sourcePeriodId.clone());
+        }
+        for period in PeriodRepository::get_by_tax_year_before_month(
+            conn,
+            active_period.taxYear,
+            active_period.taxMonth,
+        )? {
+            period_ids.insert(period.id);
+        }
+        if let Some(previous) = PeriodRepository::get_previous_by_work_period(conn, &active_period)? {
+            period_ids.insert(previous.id);
+        }
+        if let Some(next) = PeriodRepository::get_next_by_work_period(conn, &active_period)? {
+            period_ids.insert(next.id);
+        }
+
+        let period_ids = period_ids.into_iter().collect::<Vec<_>>();
+        let periods = PeriodRepository::get_by_ids(conn, &period_ids)?;
+        let loaded_period_ids = periods
+            .iter()
+            .map(|period| period.id.clone())
+            .collect::<Vec<_>>();
+        let attendances = AttendanceRepository::get_by_personnel_and_period(
+            conn,
+            personnel_id,
+            period_id,
+        )?
+        .into_iter()
+        .collect();
+        let tax_openings = TaxOpeningRepository::get_by_personnel_and_year(
+            conn,
+            personnel_id,
+            active_period.taxYear,
+        )?
+        .into_iter()
+        .collect();
+        let annual_payroll_parameters = AnnualPayrollParametersRepository::get_by_year(
+            conn,
+            active_period.taxYear,
+        )?
+        .into_iter()
+        .collect();
+
+        Ok(payroll_core::PayrollDatasetSnapshot {
+            personnel: vec![personnel],
+            periods,
+            institutionSettings: SettingsRepository::get_for_periods(conn, &loaded_period_ids)?,
+            attendances,
+            payrolls,
+            taxOpenings: tax_openings,
+            sickLeaveRecords: SickLeaveRepository::get_by_personnel(conn, personnel_id)?,
+            annualPayrollParameters: annual_payroll_parameters,
+            zamAylari: get_zam_aylari(conn)?,
+            // Revisions themselves are not read by normal/supplementary
+            // calculation. The person-scoped retro ledger is retained because
+            // payment-event carry replay consumes its authoritative batches.
+            compensationRevisions: Vec::new(),
+            compensationRevisionOverrides: Vec::new(),
+            retroBatches: retro_batches,
+            retroAllocations: retro_allocations,
         })
     }
 

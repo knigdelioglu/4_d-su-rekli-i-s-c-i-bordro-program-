@@ -266,6 +266,20 @@ pub fn get_overrides(conn: &Connection) -> Result<Vec<CompensationRevisionOverri
 }
 
 pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
+    get_batches_filtered(conn, None)
+}
+
+pub fn get_batches_for_personnel(
+    conn: &Connection,
+    personnel_id: &str,
+) -> Result<Vec<RetroAdjustmentBatch>> {
+    get_batches_filtered(conn, Some(personnel_id))
+}
+
+fn get_batches_filtered(
+    conn: &Connection,
+    personnel_id: Option<&str>,
+) -> Result<Vec<RetroAdjustmentBatch>> {
     let mut statement = conn
         .prepare(
             "SELECT id, revision_id, personnel_id, payment_date, status,
@@ -274,11 +288,12 @@ pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
                     recovered_amount, recoverable_amount, outstanding_receivable,
                     description, created_at, calculated_at, finalized_at
              FROM retro_adjustment_batches
+             WHERE (?1 IS NULL OR personnel_id = ?1)
              ORDER BY payment_date, id",
         )
         .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(params![personnel_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -342,6 +357,20 @@ pub fn get_batches(conn: &Connection) -> Result<Vec<RetroAdjustmentBatch>> {
 }
 
 pub fn get_allocations(conn: &Connection) -> Result<Vec<RetroAllocation>> {
+    get_allocations_filtered(conn, None)
+}
+
+pub fn get_allocations_for_personnel(
+    conn: &Connection,
+    personnel_id: &str,
+) -> Result<Vec<RetroAllocation>> {
+    get_allocations_filtered(conn, Some(personnel_id))
+}
+
+fn get_allocations_filtered(
+    conn: &Connection,
+    personnel_id: Option<&str>,
+) -> Result<Vec<RetroAllocation>> {
     let mut statement = conn
         .prepare(
             "SELECT id, batch_id, personnel_id, source_period_id, earning_code,
@@ -356,11 +385,12 @@ pub fn get_allocations(conn: &Connection) -> Result<Vec<RetroAllocation>> {
                     payable_settlement_amount, offset_settlement_amount,
                     recoverable_amount, metadata
              FROM retro_adjustment_allocations
+             WHERE (?1 IS NULL OR personnel_id = ?1)
              ORDER BY source_period_id, earning_code, id",
         )
         .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
     let rows = statement
-        .query_map([], |row| {
+        .query_map(params![personnel_id], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
