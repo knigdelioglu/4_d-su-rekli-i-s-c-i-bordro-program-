@@ -19,6 +19,8 @@ struct PayrollDependencyFingerprint {
     sonraki_devreden_pek_json: Option<String>,
 }
 
+type ExistingPayrollIdentity = (String, String, String, String, String, String, i32);
+
 pub struct PayrollRepository;
 
 impl PayrollRepository {
@@ -107,29 +109,35 @@ impl PayrollRepository {
         Ok(())
     }
 
-    fn validate_retro_financial_totals(bordro: &BordroKaydi) -> Result<()> {
-        if bordro.accrualType != AccrualType::RETRO_ADJUSTMENT {
-            return Ok(());
-        }
-
+    /// Validates the financial equation at the persistence/restore boundary.
+    /// The calculation engine is authoritative during normal operation, but a
+    /// backup payload can carry a forged or damaged snapshot that never passed
+    /// through that engine.
+    fn validate_payroll_financial_invariants(bordro: &BordroKaydi) -> Result<()> {
         let calculated_gross = calculate_gelir_toplam(&bordro.gelirler);
         let calculated_deductions = calculate_kesinti_toplam(&bordro.kesintiler);
         let calculated_net = (calculated_gross - calculated_deductions).round_dp(2);
 
-        if bordro.gelirToplam < Decimal::ZERO
-            || bordro.kesintiToplam < Decimal::ZERO
-            || bordro.netOdeme < Decimal::ZERO
-        {
+        if bordro.gelirToplam < Decimal::ZERO || bordro.kesintiToplam < Decimal::ZERO {
             return Err(DomainError::InvalidData(
-                "RETRO_ADJUSTMENT payment event finansal toplamları negatif olamaz.".into(),
+                "Bordro snapshot finansal toplamları negatif olamaz.".into(),
             ));
+        }
+        if bordro.netOdeme < Decimal::ZERO || calculated_net < Decimal::ZERO {
+            return Err(DomainError::NegativeNetPayment {
+                gelir: bordro.gelirToplam,
+                kesinti: bordro.kesintiToplam,
+                fark: (bordro.kesintiToplam - bordro.gelirToplam)
+                    .max(Decimal::ZERO)
+                    .round_dp(2),
+            });
         }
         if calculated_gross != bordro.gelirToplam
             || calculated_deductions != bordro.kesintiToplam
             || calculated_net != bordro.netOdeme
         {
             return Err(DomainError::InvalidData(format!(
-                "RETRO_ADJUSTMENT payment event finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor (gelir {}, kesinti {}, net {}; snapshot gelir {}, kesinti {}, net {}).",
+                "Bordro snapshot finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor (hesap gelir {}, kesinti {}, net {}; snapshot gelir {}, kesinti {}, net {}).",
                 calculated_gross,
                 calculated_deductions,
                 calculated_net,
@@ -139,6 +147,50 @@ impl PayrollRepository {
             )));
         }
         Ok(())
+    }
+
+    /// Old pre-snapshot SQLite databases persisted aggregate totals but did
+    /// not persist every income/deduction item.  Updating an already-loaded
+    /// legacy row must preserve that representation; new inserts and backup
+    /// restores still go through the strict validator below.
+    fn is_legacy_sparse_snapshot(conn: &Connection, bordro: &BordroKaydi) -> Result<bool> {
+        if bordro.accrualType != AccrualType::NORMAL {
+            return Ok(false);
+        }
+
+        let row = conn
+            .query_row(
+                "SELECT gross_total, total_deductions, net_payment,
+                        is_primi_snapshot_json, gv_snapshot_json,
+                        statutory_snapshot_json, damga_snapshot_json
+                 FROM payroll_records WHERE id = ?1",
+                params![bordro.id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+
+        let Some((gross, deductions, net, is_primi, gv, statutory, damga)) = row else {
+            return Ok(false);
+        };
+
+        Ok(gross == dec_to_kurus(Some(bordro.gelirToplam))?
+            && deductions == dec_to_kurus(Some(bordro.kesintiToplam))?
+            && net == dec_to_kurus(Some(bordro.netOdeme))?
+            && is_primi.is_none()
+            && gv.is_none()
+            && statutory.is_none()
+            && damga.is_none())
     }
 
     fn status_to_str(status: BordroStatus) -> &'static str {
@@ -166,7 +218,7 @@ impl PayrollRepository {
     fn existing_identity_by_id(
         conn: &Connection,
         id: &str,
-    ) -> Result<Option<(String, String, String, String, String, String, i32)>> {
+    ) -> Result<Option<ExistingPayrollIdentity>> {
         conn.query_row(
             "SELECT personnel_id, period_id, accrual_id, accrual_type, payment_date, status, sequence
              FROM payroll_records
@@ -1017,10 +1069,11 @@ impl PayrollRepository {
             }
         };
         let impact = PayrollInvalidationRepository::assert_mutation_allowed(&tx, &mutation)?;
+        let preserve_legacy_snapshot = Self::is_legacy_sparse_snapshot(&tx, bordro)?;
 
         let before =
             Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
-        Self::save_in_transaction(&tx, bordro)?;
+        Self::save_in_transaction_with_options(&tx, bordro, !preserve_legacy_snapshot)?;
         let after =
             Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
 
@@ -1036,8 +1089,18 @@ impl PayrollRepository {
     /// Bulk restore/import snapshot'ları olduğu gibi korur; production dependency
     /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
+        Self::save_in_transaction_with_options(conn, b, true)
+    }
+
+    fn save_in_transaction_with_options(
+        conn: &Connection,
+        b: &BordroKaydi,
+        validate_financial_invariants: bool,
+    ) -> Result<()> {
         Self::validate_payment_date_matches_period(conn, b)?;
-        Self::validate_retro_financial_totals(b)?;
+        if validate_financial_invariants {
+            Self::validate_payroll_financial_invariants(b)?;
+        }
         let now = Utc::now().to_rfc3339();
         let calculated_at = if b.olusturulmaTarihi.trim().is_empty() {
             now.clone()

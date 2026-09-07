@@ -2,7 +2,7 @@
  * 4/D Sürekli İşçi Bordro Programı — Main App Component
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
@@ -42,7 +42,6 @@ import {
   ZAM_AYLARI_SETTING_KEY,
 } from './types/payroll';
 import { tauriBridge } from './services/tauriBridge';
-import { browserPayrollStore } from './services/storage/browserPayrollStore';
 import {
   applyBrowserRetroBatchImpact,
   applyBrowserPayrollImpact,
@@ -72,6 +71,7 @@ import {
 import {
   parseImportedBackup,
 } from './services/storage/payrollPayload';
+import { useBrowserPayrollPersistence } from './services/storage/useBrowserPayrollPersistence';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { PeriodSummary } from './components/Dashboard/PeriodSummary';
 import { DataBackupPage } from './components/DataBackupPage';
@@ -178,13 +178,6 @@ function formatBrowserStorageLoadError(error: unknown): UserFacingStorageError {
   };
 }
 
-function formatBrowserStorageSaveError(error: unknown): UserFacingStorageError {
-  return {
-    userMessage: 'Veriler kaydedilemedi. Mevcut kayıt korunuyor.',
-    technicalDetail: getErrorMessage(error),
-  };
-}
-
 function getInitialActiveKesintiType(): KesintiTipi {
   try {
     const saved = localStorage.getItem(ACTIVE_KESINTI_STORAGE_KEY);
@@ -257,12 +250,20 @@ export default function App() {
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const browserPersistenceRevision = useRef(0);
 
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
     string | undefined
   >(undefined);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const browserPersistence = useBrowserPayrollPersistence({
+    authoritativePayload,
+    isDataLoaded,
+    isNative: tauriBridge.isTauriAvailable(),
+    setAuthoritativePayload,
+    setIsDataLoaded,
+    setLoadError,
+  });
 
   const uiDataset = useMemo<UiDatasetFields>(() => {
     if (!authoritativePayload) return EMPTY_UI_DATASET;
@@ -326,18 +327,20 @@ export default function App() {
   }, [activePayrollView]);
 
   const applyDataset = useCallback((data: DatasetFields) => {
+    browserPersistence.markClean();
     setAuthoritativePayload(makeBackupPayload(data));
-  }, []);
+  }, [browserPersistence.markClean]);
 
   const updateAuthoritativePayload = useCallback(
     (update: (current: PayrollStorageDto) => PayrollStorageDto) => {
+      browserPersistence.markDirty();
       setAuthoritativePayload((current) => {
         if (!current) return current;
         const next = update(current);
         return { ...next, exportedAt: new Date().toISOString() };
       });
     },
-    []
+    [browserPersistence.markDirty]
   );
 
   const loadData = useCallback(async () => {
@@ -394,11 +397,11 @@ export default function App() {
         return;
       }
 
-      const saved = await browserPayrollStore.loadPayload();
+      const saved = await browserPersistence.loadSnapshot();
       if (saved) {
         // Version-aware parsing keeps legacy compatibility explicit while a
         // current V3 snapshot remains strict and never reaches repair logic.
-        const payload: PayrollStorageDto = parseImportedBackup(saved);
+        const payload: PayrollStorageDto = parseImportedBackup(saved.payload);
         applyDataset(payload);
       } else {
         applyDataset(toPayrollBoundaryDto({
@@ -435,39 +438,11 @@ export default function App() {
       // than being replaced with an empty, apparently valid dataset.
       setIsDataLoaded(false);
     }
-  }, [applyDataset]);
+  }, [applyDataset, browserPersistence.loadSnapshot]);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  // Standalone browser mode has the same versioned backup contract as native
-  // mode. The loaded guard prevents the initial empty state from overwriting a
-  // real saved dataset before the first read completes.
-  useEffect(() => {
-    if (!isDataLoaded || tauriBridge.isTauriAvailable() || !authoritativePayload) return;
-    const revision = ++browserPersistenceRevision.current;
-    void browserPayrollStore
-      .savePayload(serializePayrollStorage(authoritativePayload))
-      .catch(async (err) => {
-        // React state is optimistic, but a failed IndexedDB write must not
-        // leave the UI presenting an unsaved payroll as authoritative. Ignore
-        // an older failure when a newer complete snapshot is already queued.
-        if (revision !== browserPersistenceRevision.current) return;
-        const browserError = formatBrowserStorageSaveError(err);
-        console.error('Tarayıcı verisi kaydedilemedi.', browserError.technicalDetail, err);
-        setLoadError(browserError.userMessage);
-        try {
-          const saved = await browserPayrollStore.loadPayload();
-          if (revision !== browserPersistenceRevision.current || !saved) return;
-          setAuthoritativePayload(parseImportedBackup(saved));
-        } catch (reloadError) {
-          if (revision !== browserPersistenceRevision.current) return;
-          console.error('Son başarılı tarayıcı snapshotı geri yüklenemedi.', reloadError);
-          setIsDataLoaded(false);
-        }
-      });
-  }, [authoritativePayload, isDataLoaded]);
 
   const handleSelectDonem = async (id: string) => {
     try {
@@ -585,7 +560,7 @@ export default function App() {
       if (isDataLoaded) {
         await evaluateBrowserMutations({ kind: 'ALL' });
       }
-      await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+      await browserPersistence.savePayload(serializePayrollStorage(payload));
       applyDataset(payload);
       setIsDataLoaded(true);
       setLoadError(null);
@@ -628,7 +603,7 @@ export default function App() {
         await loadData();
         return;
       }
-      await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+      await browserPersistence.savePayload(serializePayrollStorage(payload));
       applyDataset(payload);
       setIsDataLoaded(true);
       setLoadError(null);
@@ -680,7 +655,7 @@ export default function App() {
         }
         // Import is a user-visible commit point. Verify the IndexedDB write
         // before replacing the in-memory dataset or announcing success.
-        await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+        await browserPersistence.savePayload(serializePayrollStorage(payload));
         applyDataset(payload);
         setIsDataLoaded(true);
         setLoadError(null);

@@ -16,7 +16,7 @@ import {
 } from './decimalBoundary';
 
 const rustModelsSource = readFileSync(
-  resolve(process.cwd(), 'src-tauri/src/domain/models.rs'),
+  resolve(process.cwd(), 'crates/payroll-core/src/models.rs'),
   'utf8'
 );
 
@@ -27,7 +27,7 @@ const rustDecimalKeys = [
   ...new Set(
     [
       ...rustModelsSource.matchAll(
-        /\bpub\s+([A-Za-z0-9_]+):\s*(?:Option\s*<\s*)?Decimal\b/g
+        /\bpub\s+([^\s:]+)\s*:\s*(?:Option\s*<\s*)?Decimal\b/gu
       ),
     ].map(([, key]) => key)
   ),

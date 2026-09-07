@@ -798,20 +798,15 @@ pub struct ResolvedStatutorySegmentSnapshot {
     pub gunlukYemekIstisnasiGV: Decimal,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum StatutorySnapshotSource {
     AttendanceBacked,
     ProvisionalPaymentMonth,
     /// Old/imported snapshots did not record provenance. Keep them readable,
     /// but let domain policy treat supplementary records conservatively.
+    #[default]
     LegacyUnknown,
-}
-
-impl Default for StatutorySnapshotSource {
-    fn default() -> Self {
-        Self::LegacyUnknown
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

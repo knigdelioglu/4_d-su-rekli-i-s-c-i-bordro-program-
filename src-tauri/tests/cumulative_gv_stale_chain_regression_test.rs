@@ -118,7 +118,10 @@ fn payroll(
             ..Default::default()
         },
         gelirToplam: dec!(100000),
-        kesintiler: KesintiKalemleri::default(),
+        kesintiler: KesintiKalemleri {
+            digerKesinti: Some(dec!(100000) - net),
+            ..Default::default()
+        },
         kesintiToplam: dec!(100000) - net,
         netOdeme: net,
         status,

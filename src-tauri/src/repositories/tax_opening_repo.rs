@@ -2,6 +2,7 @@ use super::{dec_to_kurus, kurus_to_dec};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -63,6 +64,11 @@ impl TaxOpeningRepository {
     }
 
     pub fn save(conn: &Connection, t: &PersonelTaxOpening) -> Result<()> {
+        with_transaction(conn, |tx| Self::save_in_transaction(tx, t))
+    }
+
+    /// Caller-owned transaction variant used by backup restore.
+    pub fn save_in_transaction(conn: &Connection, t: &PersonelTaxOpening) -> Result<()> {
         if t.year <= 0 || t.gvCumulativeOpening < rust_decimal::Decimal::ZERO {
             return Err(crate::domain::DomainError::ValidationError(
                 "Vergi açılışı geçerli bir yıl ve negatif olmayan bir matrah içermelidir.".into(),
@@ -108,6 +114,11 @@ impl TaxOpeningRepository {
     }
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
+        with_transaction(conn, |tx| Self::delete_in_transaction(tx, id))
+    }
+
+    /// Caller-owned transaction variant used by composite use cases.
+    pub fn delete_in_transaction(conn: &Connection, id: &str) -> Result<()> {
         let owner = conn
             .query_row(
                 "SELECT personnel_id, year FROM personnel_tax_opening WHERE id = ?1",

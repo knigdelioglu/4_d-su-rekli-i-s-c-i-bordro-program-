@@ -262,11 +262,7 @@ fn retro_batch_requires_source_carry_replay(
                 // retaining a stale carry chain.
                 return true;
             };
-            allocation
-                .originalSourceCarry
-                .as_ref()
-                .map(Vec::as_slice)
-                != Some(target.as_slice())
+            allocation.originalSourceCarry.as_deref() != Some(target.as_slice())
         })
 }
 

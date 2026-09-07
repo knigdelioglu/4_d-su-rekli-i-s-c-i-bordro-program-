@@ -62,8 +62,8 @@ impl PeriodService {
             }
         }
 
-        PeriodRepository::save(&tx, period)?;
-        SettingsRepository::save_institution_settings(&tx, settings)?;
+        PeriodRepository::save_in_transaction(&tx, period)?;
+        SettingsRepository::save_institution_settings_in_transaction(&tx, settings)?;
         tx.commit()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }

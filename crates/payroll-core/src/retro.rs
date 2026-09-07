@@ -26,6 +26,9 @@ use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+type RetroAmountsByPeriodAndCode = HashMap<(String, RetroEarningCode), Decimal>;
+type RetroSgkLedgerTotals = BTreeMap<String, (Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal)>;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RetroCalculationRequest {
@@ -267,8 +270,7 @@ fn selected_override<'a>(
     let found_specific = specific.next();
     if specific.next().is_some() {
         return Err(DomainError::ValidationError(format!(
-            "{} parametresi için personel bazında duplicate revision override var.",
-            format!("{:?}", parameter)
+            "{parameter:?} parametresi için personel bazında duplicate revision override var."
         )));
     }
     if found_specific.is_some() {
@@ -280,8 +282,7 @@ fn selected_override<'a>(
     let found_global = global.next();
     if global.next().is_some() {
         return Err(DomainError::ValidationError(format!(
-            "{} parametresi için duplicate revision override var.",
-            format!("{:?}", parameter)
+            "{parameter:?} parametresi için duplicate revision override var."
         )));
     }
     Ok(found_global)
@@ -739,10 +740,10 @@ fn original_recognized_by_period_and_code(
             }
             BordroStatus::DRAFT | BordroStatus::STALE => {
                 return Err(DomainError::ValidationError(format!(
-                    "{} dönemindeki {} tahakkuku authoritative değil ({}); retro hesap durduruldu.",
+                    "{} dönemindeki {} tahakkuku authoritative değil ({:?}); retro hesap durduruldu.",
                     period_id,
                     payroll.accrualId,
-                    format!("{:?}", payroll.status)
+                    payroll.status
                 )))
             }
         }
@@ -1141,10 +1142,7 @@ fn previous_authoritative_retro_by_period_and_code(
     personnel_id: &str,
     payment_date: NaiveDate,
     current_batch_id: &str,
-) -> Result<(
-    HashMap<(String, RetroEarningCode), Decimal>,
-    HashMap<(String, RetroEarningCode), Decimal>,
-)> {
+) -> Result<(RetroAmountsByPeriodAndCode, RetroAmountsByPeriodAndCode)> {
     let mut previous = HashMap::new();
     let mut previous_pek = HashMap::new();
     let mut batches = dataset
@@ -2191,7 +2189,7 @@ impl RetroEntitlementEngine {
             let mut all_codes: Vec<RetroEarningCode> = target_by_code
                 .keys()
                 .chain(original.keys())
-                .filter_map(|code| Some(*code))
+                .copied()
                 .collect();
             all_codes.extend(
                 previous_retro
@@ -2234,12 +2232,7 @@ impl RetroEntitlementEngine {
                 }
                 let policy = retro_earning_policy(code);
                 allocations.push(RetroAllocation {
-                    id: format!(
-                        "{}_{}_{}",
-                        request.batchId,
-                        period.id,
-                        format!("{:?}", code)
-                    ),
+                    id: format!("{}_{}_{code:?}", request.batchId, period.id),
                     batchId: request.batchId.clone(),
                     personnelId: request.personnelId.clone(),
                     sourcePeriodId: period.id.clone(),
@@ -2366,19 +2359,7 @@ impl RetroEntitlementEngine {
 /// Computes source-period PEK deltas without exposing a mutable balance table.
 pub fn retro_sgk_ledger_totals(
     allocations: &[RetroAllocation],
-) -> BTreeMap<
-    String,
-    (
-        Decimal,
-        Decimal,
-        Decimal,
-        Decimal,
-        Decimal,
-        Decimal,
-        Decimal,
-        Decimal,
-    ),
-> {
+) -> RetroSgkLedgerTotals {
     let mut result = BTreeMap::new();
     for allocation in allocations {
         let entry = result.entry(allocation.sourcePeriodId.clone()).or_insert((

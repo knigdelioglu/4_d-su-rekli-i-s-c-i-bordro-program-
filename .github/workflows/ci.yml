@@ -101,6 +101,9 @@ jobs:
       - name: TypeScript lint
         run: bun run lint
 
+      - name: Verify generated Rust to TypeScript payroll contract
+        run: bun run verify:payroll-contract
+
       - name: Bun tests
         run: bun test
 

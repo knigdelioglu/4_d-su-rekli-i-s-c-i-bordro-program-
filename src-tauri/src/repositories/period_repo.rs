@@ -1,8 +1,8 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
-use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct PeriodRepository;
@@ -26,68 +26,7 @@ impl PeriodRepository {
     }
 
     pub fn validate_period(period: &BordroDonemi) -> Result<()> {
-        if period.yil <= 0 || !(1..=12).contains(&period.ay) {
-            return Err(crate::domain::DomainError::ValidationError(
-                "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),
-            ));
-        }
-        if period.taxYear <= 0 || !(1..=12).contains(&period.taxMonth) {
-            return Err(crate::domain::DomainError::ValidationError(
-                "Vergi yılı geçerli olmalı ve vergi ayı 1-12 arasında olmalıdır.".into(),
-            ));
-        }
-
-        let start =
-            NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
-                crate::domain::DomainError::ValidationError(format!(
-                    "Dönem başlangıç tarihi geçersiz: {}.",
-                    period.baslangicTarihi
-                ))
-            })?;
-        let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
-            crate::domain::DomainError::ValidationError(format!(
-                "Dönem bitiş tarihi geçersiz: {}.",
-                period.bitisTarihi
-            ))
-        })?;
-        if start > end {
-            return Err(crate::domain::DomainError::ValidationError(
-                "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
-            ));
-        }
-
-        // Bu uygulamanın authoritative çalışma dönemi 15-14'tür. Serbest tarih
-        // aralığı kabul etmek SGK gün hesabını ve dönem bazlı gelir üretimini
-        // belirsiz hale getirir; invalid state hesap aşamasına kadar yaşayamaz.
-        if start.day() != 15 || end.day() != 14 {
-            return Err(DomainError::ValidationError(format!(
-                "Bordro dönemi 15-14 olmalıdır: {} - {}.",
-                period.baslangicTarihi, period.bitisTarihi
-            )));
-        }
-
-        let (expected_end_year, expected_end_month) = if start.month() == 12 {
-            (start.year() + 1, 1)
-        } else {
-            (start.year(), start.month() + 1)
-        };
-        if end.year() != expected_end_year || end.month() != expected_end_month {
-            return Err(DomainError::ValidationError(format!(
-                "Bordro dönemi başlangıç ayını izleyen ayın 14'ünde bitmelidir: {} - {}.",
-                period.baslangicTarihi, period.bitisTarihi
-            )));
-        }
-
-        // `ay` dönem başlangıç ayıdır; taxYear/taxMonth ise ayrı ödeme/tahakkuk
-        // metadata'sıdır ve ürün sözleşmesi gereği kullanıcı tarafından seçilebilir.
-        if period.yil != start.year() || period.ay != start.month() as i32 {
-            return Err(DomainError::ValidationError(format!(
-                "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
-                period.yil, period.ay, period.baslangicTarihi
-            )));
-        }
-
-        Ok(())
+        payroll_core::validate_period(period)
     }
 
     /// Production bordro hesabında vergi ayı 15-14 çalışma döneminin başlangıç
@@ -95,21 +34,7 @@ impl PeriodRepository {
     /// çağrılır; repository save ise eski fixture/legacy kayıtlarını salt bu nedenle
     /// kullanılamaz hale getirmez.
     pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
-        Self::validate_period(period)?;
-        let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
-            .map_err(|e| DomainError::ValidationError(e.to_string()))?;
-        let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
-            .map_err(|e| DomainError::ValidationError(e.to_string()))?;
-        let tax_matches_start =
-            period.taxYear == start.year() && period.taxMonth == start.month() as i32;
-        let tax_matches_end = period.taxYear == end.year() && period.taxMonth == end.month() as i32;
-        if !tax_matches_start && !tax_matches_end {
-            return Err(DomainError::ValidationError(format!(
-                "Vergi yılı/ayı {}-{:02}, {}–{} çalışma dönemiyle örtüşmüyor. Vergi ayı dönemin başlangıç veya bitiş ayı olmalıdır.",
-                period.taxYear, period.taxMonth, period.baslangicTarihi, period.bitisTarihi
-            )));
-        }
-        Ok(())
+        payroll_core::validate_tax_month_overlap(period)
     }
 
     /// PEK çalışma kronolojisine, kümülatif vergi ise taxYear/taxMonth
@@ -280,6 +205,12 @@ impl PeriodRepository {
     }
 
     pub fn save(conn: &Connection, d: &BordroDonemi) -> Result<()> {
+        with_transaction(conn, |tx| Self::save_in_transaction(tx, d))
+    }
+
+    /// Caller-owned transaction variant used by period/settings composite saves
+    /// and backup restore.
+    pub fn save_in_transaction(conn: &Connection, d: &BordroDonemi) -> Result<()> {
         Self::validate_period(d)?;
         Self::validate_tax_chronology(conn, d)?;
 

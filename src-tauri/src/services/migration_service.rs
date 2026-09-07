@@ -415,14 +415,14 @@ impl MigrationService {
 
         if let Some(periods) = donemler {
             for period in periods {
-                PeriodRepository::save(conn, &period)?;
+                PeriodRepository::save_in_transaction(conn, &period)?;
             }
         }
 
         if let Some(inst_map) = kurumDegerleriMap {
             for (period_id, mut settings) in inst_map {
                 settings.donemId = period_id;
-                SettingsRepository::save_institution_settings(conn, &settings)?;
+                SettingsRepository::save_institution_settings_in_transaction(conn, &settings)?;
             }
         }
 
@@ -448,7 +448,7 @@ impl MigrationService {
                         .devirKumulatifAsgariGvMatrahiYili,
                     kesintiler: legacy_personel.kesintiler,
                 };
-                PersonnelRepository::save(conn, &personel)?;
+                PersonnelRepository::save_in_transaction(conn, &personel)?;
 
                 // Eski localStorage sözleşmesindeki GV devir alanını yeni, ayrı
                 // açılış tablosuna da yazarak native kümülatif motorla eşitleriz.
@@ -473,7 +473,7 @@ impl MigrationService {
                         if PeriodRepository::get_by_id(conn, &tax_opening.effectiveFromPeriodId)?
                             .is_some()
                         {
-                            TaxOpeningRepository::save(conn, &tax_opening)?;
+                            TaxOpeningRepository::save_in_transaction(conn, &tax_opening)?;
                         }
                     }
                 }
@@ -482,19 +482,19 @@ impl MigrationService {
 
         if let Some(openings) = taxOpenings {
             for opening in openings {
-                TaxOpeningRepository::save(conn, &opening)?;
+                TaxOpeningRepository::save_in_transaction(conn, &opening)?;
             }
         }
 
         if let Some(attendance_list) = puantajlar {
             for attendance in attendance_list {
-                AttendanceRepository::save(conn, &attendance)?;
+                AttendanceRepository::save_in_transaction(conn, &attendance)?;
             }
         }
 
         if let Some(sick_records) = sickLeaveRecords {
             for record in sick_records {
-                SickLeaveRepository::save(conn, &record)?;
+                SickLeaveRepository::save_in_transaction(conn, &record)?;
             }
         }
 
@@ -504,7 +504,7 @@ impl MigrationService {
         // Payload'da açıkça verilen yıllık parametreler her zaman önceliklidir.
         if let Some(parameters) = annualPayrollParameters {
             for parameter in parameters {
-                AnnualPayrollParametersRepository::save(conn, &parameter)?;
+                AnnualPayrollParametersRepository::save_in_transaction(conn, &parameter)?;
             }
         }
 
@@ -512,7 +512,7 @@ impl MigrationService {
             let normalized_months = SettingsRepository::normalize_zam_aylari(&months)?;
             let value = serde_json::to_string(&normalized_months)
                 .map_err(|e| DomainError::InvalidData(e.to_string()))?;
-            SettingsRepository::set_app_setting(conn, ZAM_AYLARI_SETTING_KEY, &value)?;
+            SettingsRepository::set_app_setting_in_transaction(conn, ZAM_AYLARI_SETTING_KEY, &value)?;
         }
 
         // Fill missing yearly parameters before importing the retro graph. The
@@ -529,7 +529,7 @@ impl MigrationService {
             if AnnualPayrollParametersRepository::get_by_year(conn, year)?.is_none() {
                 let mut defaults = AnnualPayrollParameters::default_for_2026();
                 defaults.year = year;
-                AnnualPayrollParametersRepository::save(conn, &defaults)?;
+                AnnualPayrollParametersRepository::save_in_transaction(conn, &defaults)?;
             }
         }
 
@@ -677,7 +677,7 @@ impl MigrationService {
         }
 
         if let Some(active_id) = aktifDonemId {
-            SettingsRepository::set_app_setting(conn, "active_period_id", &active_id)?;
+            SettingsRepository::set_app_setting_in_transaction(conn, "active_period_id", &active_id)?;
         }
 
         Ok(())
@@ -700,7 +700,7 @@ impl MigrationService {
             .transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         Self::import_payload(&tx, payload)?;
-        SettingsRepository::set_app_setting(&tx, "legacy_migrated", "true")?;
+        SettingsRepository::set_app_setting_in_transaction(&tx, "legacy_migrated", "true")?;
         tx.commit()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         Ok(())
@@ -741,7 +741,7 @@ impl MigrationService {
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         Self::import_payload(&tx, payload)?;
-        SettingsRepository::set_app_setting(&tx, "legacy_migrated", "true")?;
+        SettingsRepository::set_app_setting_in_transaction(&tx, "legacy_migrated", "true")?;
         tx.commit()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         Ok(())

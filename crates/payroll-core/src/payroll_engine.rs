@@ -7,6 +7,7 @@
 #![allow(non_snake_case)]
 
 use crate::calculations::*;
+use crate::index::PayrollDatasetIndex;
 use crate::models::*;
 use crate::retro::{
     retro_payable_allocation_amount, retro_payable_settlement_amount, retro_payment_income,
@@ -147,7 +148,9 @@ fn parse_period_date(value: &str, period_id: &str, field_name: &str) -> Result<N
     })
 }
 
-fn validate_period(period: &BordroDonemi) -> Result<()> {
+/// Validates the canonical 15–14 work-period definition. Persistence adapters
+/// call this function instead of maintaining a second copy of the invariant.
+pub fn validate_period(period: &BordroDonemi) -> Result<()> {
     if period.yil <= 0 || !(1..=12).contains(&period.ay) {
         return Err(DomainError::ValidationError(
             "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),
@@ -192,7 +195,7 @@ fn validate_period(period: &BordroDonemi) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
+pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
     validate_period(period)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
@@ -207,7 +210,9 @@ pub(crate) fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
     Ok(())
 }
 
-fn validate_statutory_segments_for_period(
+/// Validates period-local statutory overrides before they are persisted or
+/// resolved into a payroll snapshot.
+pub fn validate_statutory_segments_for_period(
     period: &BordroDonemi,
     settings: &DonemselKurumDegerleri,
 ) -> Result<()> {
@@ -679,27 +684,16 @@ fn period_by_id<'a>(dataset: &'a PayrollDatasetSnapshot, id: &str) -> Result<&'a
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", id)))
 }
 
-fn person_by_id<'a>(dataset: &'a PayrollDatasetSnapshot, id: &str) -> Result<&'a Personel> {
-    dataset
-        .personnel
-        .iter()
-        .find(|person| person.id == id)
-        .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", id)))
-}
-
 fn normal_attendance<'a>(
     dataset: &'a PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
     personnel_id: &str,
     period_id: &str,
 ) -> Result<&'a PersonelPuantaj> {
-    dataset
-        .attendances
-        .iter()
-        .find(|attendance| {
-            attendance.personelId == personnel_id
-                && attendance.donemId == period_id
-                && !attendance.gunler.is_empty()
-        })
+    index
+        .attendances(dataset, personnel_id, period_id)
+        .into_iter()
+        .find(|attendance| !attendance.gunler.is_empty())
         .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))
 }
 
@@ -737,14 +731,14 @@ fn attendance_has_full_calendar_coverage(
 
 fn existing_payroll<'a>(
     dataset: &'a PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
     personnel_id: &str,
     period_id: &str,
 ) -> Option<&'a BordroKaydi> {
-    dataset.payrolls.iter().find(|payroll| {
-        payroll.personelId == personnel_id
-            && payroll.donemId == period_id
-            && payroll.accrualType == AccrualType::NORMAL
-    })
+    index
+        .payrolls_for_person_period(dataset, personnel_id, period_id)
+        .into_iter()
+        .find(|payroll| payroll.accrualType == AccrualType::NORMAL)
 }
 
 fn effective_accrual_id(payroll: &BordroKaydi) -> String {
@@ -1044,26 +1038,30 @@ fn ensure_finalizable_statutory_snapshot(payroll: &BordroKaydi) -> Result<()> {
 
 fn payroll_for_requested_accrual<'a>(
     dataset: &'a PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
     personnel_id: &str,
     period_id: &str,
     requested: Option<&PayrollAccrualInput>,
 ) -> Option<&'a BordroKaydi> {
     if let Some(requested) = requested.filter(|input| !input.accrualId.trim().is_empty()) {
-        return dataset.payrolls.iter().find(|payroll| {
-            payroll.personelId == personnel_id
-                && payroll.donemId == period_id
-                && effective_accrual_id(payroll) == requested.accrualId
-        });
+        return index.payroll_for_accrual(
+            dataset,
+            personnel_id,
+            period_id,
+            &requested.accrualId,
+        );
     }
-    existing_payroll(dataset, personnel_id, period_id)
+    existing_payroll(dataset, index, personnel_id, period_id)
 }
 
 fn resolve_accrual_input(
     request: &PayrollCalculationRequest,
     period: &BordroDonemi,
+    index: &PayrollDatasetIndex,
 ) -> Result<PayrollAccrualInput> {
     let existing = payroll_for_requested_accrual(
         &request.dataset,
+        index,
         &request.personnelId,
         &request.periodId,
         request.accrual.as_ref(),
@@ -2129,18 +2127,18 @@ fn validate_devreden_pek_gap(
 /// Runs the fail-closed, cross-record checks required before browser or native
 /// production calculation. It does not mutate the supplied snapshot.
 pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<()> {
-    let period = period_by_id(&request.dataset, &request.periodId)?;
-    let person = person_by_id(&request.dataset, &request.personnelId)?;
-    let accrual = resolve_accrual_input(request, period)?;
-    let normal_count = request
-        .dataset
-        .payrolls
-        .iter()
-        .filter(|payroll| {
-            payroll.personelId == request.personnelId
-                && payroll.donemId == request.periodId
-                && payroll.accrualType == AccrualType::NORMAL
-        })
+    let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let person = index
+        .personnel(&request.dataset, &request.personnelId)
+        .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    let normal_count = index
+        .payrolls_for_person_period(&request.dataset, &request.personnelId, &request.periodId)
+        .into_iter()
+        .filter(|payroll| payroll.accrualType == AccrualType::NORMAL)
         .count();
     if normal_count > 1 {
         return Err(DomainError::InvalidData(
@@ -2166,7 +2164,7 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
     validate_devreden_pek_gap(&request.dataset, &request.personnelId, period, &accrual)?;
     resolve_prior_accrual_state(&request.dataset, &request.personnelId, period, &accrual)?;
     if accrual.accrualType == AccrualType::NORMAL {
-        normal_attendance(&request.dataset, &request.personnelId, &request.periodId)?;
+        normal_attendance(&request.dataset, &index, &request.personnelId, &request.periodId)?;
     }
     Ok(())
 }
@@ -2181,10 +2179,14 @@ pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<(
 pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest) -> Result<()> {
     validate_payroll_request(request)?;
 
-    let period = period_by_id(&request.dataset, &request.periodId)?;
-    let accrual = resolve_accrual_input(request, period)?;
+    let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
     let existing = payroll_for_requested_accrual(
         &request.dataset,
+        &index,
         &request.personnelId,
         &request.periodId,
         Some(&accrual),
@@ -2218,7 +2220,7 @@ pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest
 
     if accrual.accrualType == AccrualType::NORMAL {
         let attendance =
-            normal_attendance(&request.dataset, &request.personnelId, &request.periodId)?;
+            normal_attendance(&request.dataset, &index, &request.personnelId, &request.periodId)?;
         let missing_dates = attendance_missing_calendar_days(attendance, period)?;
         if !missing_dates.is_empty() {
             return Err(DomainError::ValidationError(format!(
@@ -2284,9 +2286,16 @@ pub fn finalize_payroll(request: &PayrollCalculationRequest) -> Result<BordroKay
 /// exercise the formula engine with a deliberately small snapshot.
 pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKaydi> {
     let dataset = &request.dataset;
-    let person = person_by_id(dataset, &request.personnelId)?.clone();
-    let period = period_by_id(dataset, &request.periodId)?.clone();
-    let accrual = resolve_accrual_input(request, &period)?;
+    let index = PayrollDatasetIndex::build(dataset);
+    let person = index
+        .personnel(dataset, &request.personnelId)
+        .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId)))?
+        .clone();
+    let period = index
+        .period(dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?
+        .clone();
+    let accrual = resolve_accrual_input(request, &period, &index)?;
     validate_period(&period)?;
     if let Some(input) = request.manualIncome.as_ref() {
         validate_manual_payroll_income_input(input)?;
@@ -2294,6 +2303,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
 
     let existing = payroll_for_requested_accrual(
         dataset,
+        &index,
         &request.personnelId,
         &request.periodId,
         Some(&accrual),
@@ -2338,6 +2348,7 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     let attendance = if is_normal_accrual {
         Some(normal_attendance(
             dataset,
+            &index,
             &request.personnelId,
             &request.periodId,
         )?)
@@ -2347,9 +2358,10 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
     let supplementary_attendance = if is_normal_accrual {
         None
     } else {
-        dataset.attendances.iter().find(|candidate| {
-            candidate.personelId == request.personnelId && candidate.donemId == request.periodId
-        })
+        index
+            .attendances(dataset, &request.personnelId, &request.periodId)
+            .into_iter()
+            .next()
     };
     let attendance_for_snapshot = if is_normal_accrual {
         attendance
@@ -2436,10 +2448,8 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
         statutory_snapshot.pekUstSinir,
     )?;
 
-    let annual_parameters = dataset
-        .annualPayrollParameters
-        .iter()
-        .find(|parameters| parameters.year == period.taxYear)
+    let annual_parameters = index
+        .annual_parameters(dataset, period.taxYear)
         .cloned()
         .ok_or_else(|| {
             DomainError::InvalidData(format!(

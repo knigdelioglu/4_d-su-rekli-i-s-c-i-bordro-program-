@@ -1,6 +1,7 @@
 use crate::domain::models::SickLeaveRecord;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::transaction::with_transaction;
 use chrono::NaiveDate;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -84,6 +85,12 @@ impl SickLeaveRepository {
     }
 
     pub fn save(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
+        with_transaction(conn, |tx| Self::save_in_transaction(tx, record))
+    }
+
+    /// Caller-owned transaction variant used by backup restore and composite
+    /// use cases.
+    pub fn save_in_transaction(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
         Self::validate_record(record)?;
 
         let existing = Self::get_by_id(conn, &record.id)?;
@@ -154,6 +161,11 @@ impl SickLeaveRepository {
     }
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
+        with_transaction(conn, |tx| Self::delete_in_transaction(tx, id))
+    }
+
+    /// Caller-owned transaction variant used by composite use cases.
+    pub fn delete_in_transaction(conn: &Connection, id: &str) -> Result<()> {
         if let Some(existing) = Self::get_by_id(conn, id)? {
             let impact = PayrollInvalidationRepository::assert_mutation_allowed(
                 conn,

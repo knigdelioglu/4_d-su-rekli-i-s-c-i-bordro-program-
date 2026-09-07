@@ -21,6 +21,7 @@
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "lint": "tsc --noEmit && bun run verify:production-graph",
     "verify:production-graph": "bun scripts/verify-production-graph.mjs",
+    "verify:payroll-contract": "node scripts/generate-payroll-contract.mjs",
     "verify:privacy": "bun scripts/verify-privacy-boundary.mjs",
     "test:netlify-smoke": "bun scripts/test-netlify-smoke.mjs",
     "test:e2e": "playwright test",

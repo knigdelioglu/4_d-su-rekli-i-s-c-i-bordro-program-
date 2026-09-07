@@ -2,6 +2,7 @@ use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::period_repo::PeriodRepository;
+use crate::repositories::transaction::with_transaction;
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
@@ -181,6 +182,13 @@ impl AttendanceRepository {
     }
 
     pub fn save(conn: &Connection, p: &PersonelPuantaj) -> Result<()> {
+        with_transaction(conn, |tx| Self::save_in_transaction(tx, p))
+    }
+
+    /// Caller-owned transaction variant used by backup restore and composite
+    /// use cases.  The source write and the invalidation must remain in the
+    /// same transaction as the caller's other mutations.
+    pub fn save_in_transaction(conn: &Connection, p: &PersonelPuantaj) -> Result<()> {
         let period = Self::period_for_attendance(conn, &p.donemId)?;
         Self::validate_attendance_for_period(p, &period)?;
 

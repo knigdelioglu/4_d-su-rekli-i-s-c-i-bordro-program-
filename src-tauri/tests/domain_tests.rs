@@ -355,8 +355,11 @@ mod tests {
                 ..Default::default()
             },
             gelirToplam: dec!(100000),
-            kesintiler: KesintiKalemleri::default(),
-            kesintiToplam: dec!(0),
+            kesintiler: KesintiKalemleri {
+                digerKesinti: Some(dec!(10000)),
+                ..Default::default()
+            },
+            kesintiToplam: dec!(10000),
             netOdeme: dec!(90000),
             status: BordroStatus::FINALIZED,
             olusturulmaTarihi: "".into(),

@@ -9,6 +9,7 @@ pub mod retro_repo;
 pub mod settings_repo;
 pub mod sick_leave_repo;
 pub mod tax_opening_repo;
+pub mod transaction;
 
 use rust_decimal::prelude::*;
 use rust_decimal::Decimal;

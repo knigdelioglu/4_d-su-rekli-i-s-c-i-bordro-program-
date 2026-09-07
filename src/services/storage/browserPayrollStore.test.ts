@@ -271,6 +271,11 @@ function makeRealisticSnapshot(): PayrollStorageDto {
 
 function makeV2Snapshot(netOdeme: unknown = '64179.78'): string {
   const snapshot = makeRealisticSnapshot() as unknown as TestRecord;
+  const payroll = firstRecord(snapshot, 'bordrolar');
+  const income = payroll.gelirler as TestRecord;
+  income.tabanBrutAylik = netOdeme;
+  payroll.gelirToplam = netOdeme;
+  payroll.kesintiToplam = '0.00';
   firstRecord(snapshot, 'bordrolar').netOdeme = netOdeme;
   return JSON.stringify(snapshot);
 }
@@ -474,6 +479,14 @@ describe('BrowserPayrollStore', () => {
     expect(parsed.taxOpenings.length).toBe(1);
     expect(parsed.annualPayrollParameters.length).toBe(1);
     expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
+  });
+
+  test('rejects a tampered normal financial snapshot', () => {
+    const tampered = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(tampered, 'bordrolar').netOdeme = '64179.77';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(tampered))).toThrow(
+      'finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor'
+    );
   });
 
   test('upgrades V3 retro payloads without dropping the retro graph and rejects incomplete V5', () => {

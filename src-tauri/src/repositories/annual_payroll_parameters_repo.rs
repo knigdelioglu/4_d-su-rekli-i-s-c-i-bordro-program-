@@ -1,6 +1,7 @@
 use crate::domain::models::{AnnualPayrollParameters, TaxBracket, OPEN_ENDED_TAX_BRACKET_LIMIT};
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_decimal::Decimal;
@@ -145,6 +146,14 @@ impl AnnualPayrollParametersRepository {
     }
 
     pub fn save(conn: &Connection, parameters: &AnnualPayrollParameters) -> Result<()> {
+        with_transaction(conn, |tx| Self::save_in_transaction(tx, parameters))
+    }
+
+    /// Caller-owned transaction variant used by backup restore.
+    pub fn save_in_transaction(
+        conn: &Connection,
+        parameters: &AnnualPayrollParameters,
+    ) -> Result<()> {
         Self::validate(parameters)?;
 
         // `updatedAt` DB metadata'sıdır; domain parametresi değildir. JSON içinde

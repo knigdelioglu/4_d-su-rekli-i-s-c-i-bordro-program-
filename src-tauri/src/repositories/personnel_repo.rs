@@ -1,6 +1,8 @@
 use super::{opt_dec_to_kurus, opt_kurus_to_dec};
 use crate::domain::models::*;
 use crate::domain::Result;
+use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -182,6 +184,40 @@ impl PersonnelRepository {
     }
 
     pub fn save(conn: &Connection, p: &Personel) -> Result<()> {
+        with_transaction(conn, |tx| {
+            // Do not load the full row here: the write method intentionally
+            // supports pre-devir SQLite fixtures whose newer columns do not
+            // exist yet.
+            let existing = tx
+                .query_row(
+                    "SELECT 1 FROM personnel WHERE id = ?1",
+                    params![p.id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))?
+                .is_some();
+            let impact = existing
+                .then(|| {
+                    PayrollInvalidationRepository::assert_mutation_allowed(
+                        tx,
+                        &payroll_core::PayrollMutation::Person {
+                            personnelId: p.id.clone(),
+                        },
+                    )
+                })
+                .transpose()?;
+
+            Self::save_in_transaction(tx, p)?;
+            if let Some(impact) = impact {
+                PayrollInvalidationRepository::apply_impact(tx, &impact)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Caller-owned transaction variant used by backup restore.
+    pub fn save_in_transaction(conn: &Connection, p: &Personel) -> Result<()> {
         Self::validate(p)?;
         let now = Utc::now().to_rfc3339();
         let k = p.kesintiler.as_ref();
@@ -285,6 +321,36 @@ impl PersonnelRepository {
     }
 
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
+        with_transaction(conn, |tx| {
+            let impact = if Self::get_by_id(tx, id)?.is_some() {
+                Some(PayrollInvalidationRepository::assert_mutation_allowed(
+                    tx,
+                    &payroll_core::PayrollMutation::Person {
+                        personnelId: id.to_string(),
+                    },
+                )?)
+            } else {
+                None
+            };
+            if let Some(impact) = impact.as_ref() {
+                if !impact.affectedRetroBatches.is_empty() {
+                    return Err(crate::domain::DomainError::ValidationError(
+                        "Retro batch tarihçesi bulunan personel silinemez; audit ledger korunmalıdır."
+                            .into(),
+                    ));
+                }
+            }
+
+            Self::delete_in_transaction(tx, id)?;
+            if let Some(impact) = impact {
+                PayrollInvalidationRepository::apply_impact(tx, &impact)?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Caller-owned transaction variant used by composite use cases.
+    pub fn delete_in_transaction(conn: &Connection, id: &str) -> Result<()> {
         conn.execute("DELETE FROM personnel WHERE id = ?1", params![id])
             .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
         Ok(())

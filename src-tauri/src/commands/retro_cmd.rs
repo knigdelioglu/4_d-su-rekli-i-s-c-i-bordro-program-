@@ -53,6 +53,7 @@ pub fn save_compensation_revision(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn calculate_retro_preview(
     db: State<'_, DbState>,
     batch_id: String,
