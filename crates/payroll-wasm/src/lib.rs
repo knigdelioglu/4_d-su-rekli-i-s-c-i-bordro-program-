@@ -1,8 +1,7 @@
 use payroll_core::{
     calculate_payroll_checked, evaluate_payroll_invalidation, finalize_payroll,
-    PayrollCalculationRequest,
-    PayrollDatasetSnapshot, PayrollMutation, RetroCalculationRequest, RetroEntitlementEngine,
-    Result as CoreResult,
+    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation, Result as CoreResult,
+    RetroCalculationRequest, RetroEntitlementEngine,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -53,10 +52,7 @@ pub fn calculate_retro_preview_json(request_json: &str) -> Result<String, JsValu
     })?;
     let result = RetroEntitlementEngine::calculate(&request).map_err(error_to_js)?;
     serde_json::to_string(&result).map_err(|error| {
-        JsValue::from_str(&format!(
-            "Retro hesap sonucu serileştirilemedi: {}",
-            error
-        ))
+        JsValue::from_str(&format!("Retro hesap sonucu serileştirilemedi: {}", error))
     })
 }
 
@@ -376,21 +372,48 @@ mod tests {
         use payroll_core::{AccrualType, PayrollAccrualInput};
         let mut request = standard_request();
         request.manualIncome = None;
-        let period = request.dataset.periods.iter().find(|p| p.id == request.periodId).unwrap().clone();
-        for (index, kind) in [AccrualType::TEDIYE, AccrualType::NORMAL, AccrualType::TIS_IKRAMIYE].into_iter().enumerate() {
+        let period = request
+            .dataset
+            .periods
+            .iter()
+            .find(|p| p.id == request.periodId)
+            .unwrap()
+            .clone();
+        for (index, kind) in [
+            AccrualType::TEDIYE,
+            AccrualType::NORMAL,
+            AccrualType::TIS_IKRAMIYE,
+        ]
+        .into_iter()
+        .enumerate()
+        {
             request.accrual = Some(PayrollAccrualInput {
-                accrualId: format!("event-{index}"), accrualType: kind,
-                paymentDate: format!("{}-{:02}-10", period.taxYear, period.taxMonth), sequence: index as i32,
-                grossAmount: if kind == AccrualType::NORMAL { None } else { Some(dec!(2000)) }, description: None,
+                accrualId: format!("event-{index}"),
+                accrualType: kind,
+                paymentDate: format!("{}-{:02}-10", period.taxYear, period.taxMonth),
+                sequence: index as i32,
+                grossAmount: if kind == AccrualType::NORMAL {
+                    None
+                } else {
+                    Some(dec!(2000))
+                },
+                description: None,
             });
             assert_calculation_parity("independent-payment-event", request.clone(), true);
-            request.dataset.payrolls.push(calculate_payroll(&request).unwrap());
+            request
+                .dataset
+                .payrolls
+                .push(calculate_payroll(&request).unwrap());
         }
         let mutation = PayrollMutation::AccrualDelete {
-            personnelId: request.personnelId.clone(), periodId: request.periodId.clone(), accrualId: "event-0".into(),
+            personnelId: request.personnelId.clone(),
+            periodId: request.periodId.clone(),
+            accrualId: "event-0".into(),
         };
         let input = serde_json::json!({ "dataset": request.dataset, "mutation": mutation });
-        let wasm: serde_json::Value = serde_json::from_str(&evaluate_mutation_policy_json(&input.to_string()).unwrap()).unwrap();
+        let wasm: serde_json::Value =
+            serde_json::from_str(&evaluate_mutation_policy_json(&input.to_string()).unwrap())
+                .unwrap();
         let native = evaluate_payroll_invalidation(&request.dataset, &mutation).unwrap();
         assert_eq!(wasm, serde_json::to_value(native).unwrap());
     }

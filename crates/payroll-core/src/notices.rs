@@ -1,5 +1,5 @@
-use crate::models::{BordroStatus, SickLeaveRecord};
 use crate::index::PayrollDatasetIndex;
+use crate::models::{BordroStatus, SickLeaveRecord};
 use crate::payroll_engine::PayrollDatasetSnapshot;
 use crate::{DomainError, Result};
 use chrono::{Duration, NaiveDate};
@@ -80,11 +80,9 @@ pub fn get_period_notices(
     period_id: &str,
 ) -> Result<Vec<PayrollNotice>> {
     let index = PayrollDatasetIndex::build(dataset);
-    let period = index
-        .period(dataset, period_id)
-        .ok_or_else(|| {
-            DomainError::ValidationError(format!("Bordro dönemi bulunamadı: {}", period_id))
-        })?;
+    let period = index.period(dataset, period_id).ok_or_else(|| {
+        DomainError::ValidationError(format!("Bordro dönemi bulunamadı: {}", period_id))
+    })?;
     let start = parse_date(&period.baslangicTarihi, "dönem başlangıç")?;
     let end = parse_date(&period.bitisTarihi, "dönem bitiş")?;
     let dates = date_range(start, end);
@@ -141,9 +139,7 @@ pub fn get_period_notices(
             });
         }
 
-        let attendance = index
-            .attendances(dataset, &person.id, period_id)
-            .next();
+        let attendance = index.attendances(dataset, &person.id, period_id).next();
         let Some(attendance) = attendance else {
             notices.push(PayrollNotice {
                 code: "MISSING_ATTENDANCE".into(),

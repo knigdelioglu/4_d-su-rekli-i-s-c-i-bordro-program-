@@ -508,11 +508,11 @@ impl PayrollService {
                 AccrualType::TEDIYE => saved.gelirler.tediye,
                 AccrualType::TIS_IKRAMIYE => saved.gelirler.tisIkramiyesi,
                 AccrualType::SUPPLEMENTAL => saved.gelirler.ekOdeme,
-                AccrualType::RETRO_ADJUSTMENT => Some(
-                    payroll_core::retro_payable_settlement_amount(
+                AccrualType::RETRO_ADJUSTMENT => {
+                    Some(payroll_core::retro_payable_settlement_amount(
                         retro_batch.as_ref().expect("retro batch resolved"),
-                    ),
-                ),
+                    ))
+                }
                 AccrualType::NORMAL => None,
             },
             description: saved.accrualDescription.clone(),
@@ -579,13 +579,12 @@ impl PayrollService {
         // and supplementary payment events only use the person/tax/payment
         // dependency scope assembled below; mutation-policy snapshots remain
         // full by design and are never routed through this loader.
-        let dataset = if accrual
-            .is_some_and(|input| input.accrualType == AccrualType::RETRO_ADJUSTMENT)
-        {
-            Self::build_dataset_snapshot(conn)?
-        } else {
-            Self::build_calculation_snapshot_for(conn, personnel_id, period_id)?
-        };
+        let dataset =
+            if accrual.is_some_and(|input| input.accrualType == AccrualType::RETRO_ADJUSTMENT) {
+                Self::build_dataset_snapshot(conn)?
+            } else {
+                Self::build_calculation_snapshot_for(conn, personnel_id, period_id)?
+            };
         Ok(payroll_core::PayrollCalculationRequest {
             personnelId: personnel_id.to_string(),
             periodId: period_id.to_string(),
@@ -631,7 +630,8 @@ impl PayrollService {
         )? {
             period_ids.insert(period.id);
         }
-        if let Some(previous) = PeriodRepository::get_previous_by_work_period(conn, &active_period)? {
+        if let Some(previous) = PeriodRepository::get_previous_by_work_period(conn, &active_period)?
+        {
             period_ids.insert(previous.id);
         }
         if let Some(next) = PeriodRepository::get_next_by_work_period(conn, &active_period)? {
@@ -644,13 +644,10 @@ impl PayrollService {
             .iter()
             .map(|period| period.id.clone())
             .collect::<Vec<_>>();
-        let attendances = AttendanceRepository::get_by_personnel_and_period(
-            conn,
-            personnel_id,
-            period_id,
-        )?
-        .into_iter()
-        .collect();
+        let attendances =
+            AttendanceRepository::get_by_personnel_and_period(conn, personnel_id, period_id)?
+                .into_iter()
+                .collect();
         let tax_openings = TaxOpeningRepository::get_by_personnel_and_year(
             conn,
             personnel_id,
@@ -658,12 +655,10 @@ impl PayrollService {
         )?
         .into_iter()
         .collect();
-        let annual_payroll_parameters = AnnualPayrollParametersRepository::get_by_year(
-            conn,
-            active_period.taxYear,
-        )?
-        .into_iter()
-        .collect();
+        let annual_payroll_parameters =
+            AnnualPayrollParametersRepository::get_by_year(conn, active_period.taxYear)?
+                .into_iter()
+                .collect();
 
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: vec![personnel],

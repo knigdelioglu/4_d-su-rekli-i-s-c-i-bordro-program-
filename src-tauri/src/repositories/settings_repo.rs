@@ -126,7 +126,9 @@ impl SettingsRepository {
     }
 
     pub fn save_institution_settings(conn: &Connection, k: &DonemselKurumDegerleri) -> Result<()> {
-        with_transaction(conn, |tx| Self::save_institution_settings_in_transaction(tx, k))
+        with_transaction(conn, |tx| {
+            Self::save_institution_settings_in_transaction(tx, k)
+        })
     }
 
     /// Caller-owned transaction variant used by period save and backup restore.
@@ -201,15 +203,13 @@ impl SettingsRepository {
     }
 
     pub fn set_app_setting(conn: &Connection, key: &str, value: &str) -> Result<()> {
-        with_transaction(conn, |tx| Self::set_app_setting_in_transaction(tx, key, value))
+        with_transaction(conn, |tx| {
+            Self::set_app_setting_in_transaction(tx, key, value)
+        })
     }
 
     /// Caller-owned transaction variant used by backup restore.
-    pub fn set_app_setting_in_transaction(
-        conn: &Connection,
-        key: &str,
-        value: &str,
-    ) -> Result<()> {
+    pub fn set_app_setting_in_transaction(conn: &Connection, key: &str, value: &str) -> Result<()> {
         let previous = Self::get_app_setting(conn, key)?;
         let impact = if key == ZAM_AYLARI_SETTING_KEY && previous.as_deref() != Some(value) {
             Some(PayrollInvalidationRepository::assert_mutation_allowed(

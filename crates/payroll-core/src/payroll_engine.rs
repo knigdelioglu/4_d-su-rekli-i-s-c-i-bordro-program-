@@ -807,17 +807,16 @@ fn retro_source_carry_overrides_for_event(
     current_order: &AccrualOrder,
 ) -> Result<Vec<RetroSourceCarryOverride>> {
     let mut by_source = BTreeMap::<String, RetroSourceCarryOverride>::new();
-    for batch in index.retro_batches_for_person(dataset, personnel_id).filter(|batch| {
-        matches!(
-            batch.status,
-            CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
-        )
-    }) {
-        let payment_date = parse_period_date(
-            &batch.paymentDate,
-            &batch.id,
-            "retro ödeme",
-        )?;
+    for batch in index
+        .retro_batches_for_person(dataset, personnel_id)
+        .filter(|batch| {
+            matches!(
+                batch.status,
+                CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+            )
+        })
+    {
+        let payment_date = parse_period_date(&batch.paymentDate, &batch.id, "retro ödeme")?;
         if payment_date > current_order.payment_date {
             continue;
         }
@@ -877,10 +876,7 @@ fn carry_override_changed(override_state: &RetroSourceCarryOverride) -> bool {
     override_state.original_carry != override_state.target_carry
 }
 
-fn validate_retro_source_carry(
-    records: &[DevredenPekKaydi],
-    field: &str,
-) -> Result<()> {
+fn validate_retro_source_carry(records: &[DevredenPekKaydi], field: &str) -> Result<()> {
     if records
         .iter()
         .any(|record| record.tutar < Decimal::ZERO || record.kalanAySayisi < 0)
@@ -897,19 +893,17 @@ fn carry_override_for_source_period<'a>(
     overrides: &'a [RetroSourceCarryOverride],
     source_period_id: &str,
 ) -> Option<&'a RetroSourceCarryOverride> {
-    overrides.iter().find(|item| {
-        item.source_period_id == source_period_id && carry_override_changed(item)
-    })
+    overrides
+        .iter()
+        .find(|item| item.source_period_id == source_period_id && carry_override_changed(item))
 }
 
 fn incoming_from_retro_source_carry(
     override_state: &RetroSourceCarryOverride,
     current_order: &AccrualOrder,
 ) -> Result<IncomingDevredenPekState> {
-    let tax_months_elapsed = tax_month_distance(
-        current_order.tax_ordinal,
-        override_state.source_tax_ordinal,
-    )?;
+    let tax_months_elapsed =
+        tax_month_distance(current_order.tax_ordinal, override_state.source_tax_ordinal)?;
     if tax_months_elapsed < 0 {
         return Err(DomainError::InvalidData(
             "Retro source carry mevcut vergi ayından ileri olamaz.".into(),
@@ -991,7 +985,12 @@ fn ordered_prior_payment_events<'a>(
 ) -> Result<Vec<(AccrualOrder, &'a BordroKaydi)>> {
     let mut events = index
         .payrolls_for_person(dataset, personnel_id)
-        .map(|payroll| Ok((accrual_order_for_payroll_with_index(dataset, index, payroll)?, payroll)))
+        .map(|payroll| {
+            Ok((
+                accrual_order_for_payroll_with_index(dataset, index, payroll)?,
+                payroll,
+            ))
+        })
         .collect::<Result<Vec<_>>>()?;
     events.retain(|(order, _)| order < current_order);
     events.sort_by(|left, right| left.0.cmp(&right.0));
@@ -1054,12 +1053,7 @@ fn payroll_for_requested_accrual<'a>(
     requested: Option<&PayrollAccrualInput>,
 ) -> Option<&'a BordroKaydi> {
     if let Some(requested) = requested.filter(|input| !input.accrualId.trim().is_empty()) {
-        return index.payroll_for_accrual(
-            dataset,
-            personnel_id,
-            period_id,
-            &requested.accrualId,
-        );
+        return index.payroll_for_accrual(dataset, personnel_id, period_id, &requested.accrualId);
     }
     existing_payroll(dataset, index, personnel_id, period_id)
 }
@@ -1157,14 +1151,8 @@ fn resolve_accrual_input(
     }
 
     let normal_count = index
-        .payrolls_for_person_period(
-            &request.dataset,
-            &request.personnelId,
-            &request.periodId,
-        )
-        .filter(|payroll| {
-            payroll.accrualType == AccrualType::NORMAL
-        })
+        .payrolls_for_person_period(&request.dataset, &request.personnelId, &request.periodId)
+        .filter(|payroll| payroll.accrualType == AccrualType::NORMAL)
         .count();
     if normal_count > 1 {
         return Err(DomainError::InvalidData(
@@ -1498,10 +1486,9 @@ fn incoming_devreden_pek(
             "Devreden PEK kaynağı mevcut vergi ayından ileri veya aynı ayda çözümlenemedi.".into(),
         ));
     }
-    if let Some(override_state) = carry_override_for_source_period(
-        &retro_carry_overrides,
-        &previous_payroll.donemId,
-    ) {
+    if let Some(override_state) =
+        carry_override_for_source_period(&retro_carry_overrides, &previous_payroll.donemId)
+    {
         return incoming_from_retro_source_carry(override_state, &current_order);
     }
     if let Some(override_state) = changed_overrides.last() {
@@ -1539,16 +1526,12 @@ pub(crate) fn incoming_devreden_pek_for_replay(
     payroll: &BordroKaydi,
 ) -> Result<(IncomingDevredenPekState, bool)> {
     let current_order = accrual_order_for_payroll_with_index(dataset, index, payroll)?;
-    let has_prior_events = !ordered_prior_payment_events(dataset, index, personnel_id, &current_order)?
-        .is_empty();
-    let has_retro_carry_override = retro_source_carry_overrides_for_event(
-        dataset,
-        index,
-        personnel_id,
-        &current_order,
-    )?
-    .iter()
-    .any(carry_override_changed);
+    let has_prior_events =
+        !ordered_prior_payment_events(dataset, index, personnel_id, &current_order)?.is_empty();
+    let has_retro_carry_override =
+        retro_source_carry_overrides_for_event(dataset, index, personnel_id, &current_order)?
+            .iter()
+            .any(carry_override_changed);
     let state = incoming_devreden_pek(
         dataset,
         index,
@@ -1563,10 +1546,7 @@ pub(crate) fn incoming_devreden_pek_for_replay(
             description: payroll.accrualDescription.clone(),
         },
     )?;
-    Ok((
-        state,
-        has_prior_events || has_retro_carry_override,
-    ))
+    Ok((state, has_prior_events || has_retro_carry_override))
 }
 
 fn payroll_gv_base(payroll: &BordroKaydi) -> Result<Decimal> {
@@ -1648,17 +1628,19 @@ fn previous_gv(
                 .filter(|period| period.taxYear == opening.year)
                 .map(|period| period.taxMonth)
                 .unwrap_or(1);
-            if index.payrolls_for_person(dataset, &person.id).any(|payroll| {
-                matches!(
-                    payroll.status,
-                    BordroStatus::CALCULATED | BordroStatus::FINALIZED
-                )
-                    && index
+            if index
+                .payrolls_for_person(dataset, &person.id)
+                .any(|payroll| {
+                    matches!(
+                        payroll.status,
+                        BordroStatus::CALCULATED | BordroStatus::FINALIZED
+                    ) && index
                         .period(dataset, &payroll.donemId)
                         .is_some_and(|period| {
                             period.taxYear == opening.year && period.taxMonth < start_month
                         })
-            }) {
+                })
+            {
                 return Err(DomainError::TaxOpeningConflict(
                     "Bu devir matrahı sistemde mevcut geçmiş bordrolarla aynı dönemi kapsamaktadır."
                         .into(),
@@ -1672,25 +1654,27 @@ fn previous_gv(
 
     let active_order = accrual_order_for_input(active_period, current)?;
     let mut prior = opening_value;
-    for payroll in index.payrolls_for_person(dataset, &person.id).filter(|payroll| {
-        matches!(
-            payroll.status,
-            BordroStatus::CALCULATED | BordroStatus::FINALIZED
-        )
-    }) {
-        let period = index
-            .period(dataset, &payroll.donemId)
-            .ok_or_else(|| {
-                DomainError::InvalidData(format!(
-                    "{} bordrosunun dönemi bulunamadı; kümülatif GV zinciri eksik.",
-                    payroll.id
-                ))
-            })?;
+    for payroll in index
+        .payrolls_for_person(dataset, &person.id)
+        .filter(|payroll| {
+            matches!(
+                payroll.status,
+                BordroStatus::CALCULATED | BordroStatus::FINALIZED
+            )
+        })
+    {
+        let period = index.period(dataset, &payroll.donemId).ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} bordrosunun dönemi bulunamadı; kümülatif GV zinciri eksik.",
+                payroll.id
+            ))
+        })?;
         let before_current = period.taxYear == active_period.taxYear
             && period.taxMonth >= start_month
-                    && (period.taxMonth < active_period.taxMonth
+            && (period.taxMonth < active_period.taxMonth
                 || (period.taxMonth == active_period.taxMonth
-                    && accrual_order_for_payroll_with_index(dataset, index, payroll)? < active_order));
+                    && accrual_order_for_payroll_with_index(dataset, index, payroll)?
+                        < active_order));
         if before_current {
             prior = prior
                 .checked_add(payroll_gv_base(payroll)?)
@@ -1699,22 +1683,22 @@ fn previous_gv(
                 })?;
         }
     }
-    for payroll in index.payrolls_for_person(dataset, &person.id).filter(|payroll| {
-        matches!(payroll.status, BordroStatus::DRAFT | BordroStatus::STALE)
-    }) {
-        let period = index
-            .period(dataset, &payroll.donemId)
-            .ok_or_else(|| {
-                DomainError::InvalidData(format!(
-                    "{} bordrosunun dönemi bulunamadı; kümülatif GV zinciri eksik.",
-                    payroll.id
-                ))
-            })?;
+    for payroll in index
+        .payrolls_for_person(dataset, &person.id)
+        .filter(|payroll| matches!(payroll.status, BordroStatus::DRAFT | BordroStatus::STALE))
+    {
+        let period = index.period(dataset, &payroll.donemId).ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} bordrosunun dönemi bulunamadı; kümülatif GV zinciri eksik.",
+                payroll.id
+            ))
+        })?;
         let before_current = period.taxYear == active_period.taxYear
             && period.taxMonth >= start_month
-                    && (period.taxMonth < active_period.taxMonth
+            && (period.taxMonth < active_period.taxMonth
                 || (period.taxMonth == active_period.taxMonth
-                    && accrual_order_for_payroll_with_index(dataset, index, payroll)? < active_order));
+                    && accrual_order_for_payroll_with_index(dataset, index, payroll)?
+                        < active_order));
         if before_current {
             return Err(DomainError::ValidationError(
                 "Önceki vergi zincirinde DRAFT/STALE bordro var. Kümülatif GV hesabına devam etmeden önce bu bordroları yeniden hesaplayın.".into(),
@@ -1784,19 +1768,23 @@ fn previous_insurance_gv(
 ) -> Result<Decimal> {
     let active_order = accrual_order_for_input(active_period, current)?;
     let mut total = Decimal::ZERO;
-    for payroll in index.payrolls_for_person(dataset, personnel_id).filter(|payroll| {
-        matches!(
-            payroll.status,
-            BordroStatus::CALCULATED | BordroStatus::FINALIZED
-        )
-    }) {
+    for payroll in index
+        .payrolls_for_person(dataset, personnel_id)
+        .filter(|payroll| {
+            matches!(
+                payroll.status,
+                BordroStatus::CALCULATED | BordroStatus::FINALIZED
+            )
+        })
+    {
         let Some(period) = index.period(dataset, &payroll.donemId) else {
             continue;
         };
         let before_current = period.taxYear == active_period.taxYear
             && (period.taxMonth < active_period.taxMonth
                 || (period.taxMonth == active_period.taxMonth
-                    && accrual_order_for_payroll_with_index(dataset, index, payroll)? < active_order));
+                    && accrual_order_for_payroll_with_index(dataset, index, payroll)?
+                        < active_order));
         if before_current {
             if let Some(detail) = payroll.gvDetay.as_ref() {
                 total += detail.uygulanabilirSigortaGvIndirimi;
@@ -1813,7 +1801,8 @@ fn previous_insurance_gv(
         let before_current = period.taxYear == active_period.taxYear
             && (period.taxMonth < active_period.taxMonth
                 || (period.taxMonth == active_period.taxMonth
-                    && accrual_order_for_payroll_with_index(dataset, index, payroll)? < active_order));
+                    && accrual_order_for_payroll_with_index(dataset, index, payroll)?
+                        < active_order));
         if before_current {
             return Err(DomainError::ValidationError(
                 "Önceki vergi zincirinde DRAFT/STALE bordro var; sigorta GV yıllık limiti çözülemez.".into(),
@@ -2044,8 +2033,7 @@ fn validate_devreden_pek_gap(
             "Devreden PEK vergi ayı kronolojisi geçersiz.".into(),
         ));
     }
-    if carry_override_for_source_period(&retro_carry_overrides, &previous_payroll.donemId)
-        .is_some()
+    if carry_override_for_source_period(&retro_carry_overrides, &previous_payroll.donemId).is_some()
     {
         return Ok(());
     }
@@ -2123,11 +2111,12 @@ fn validate_payroll_request_with_index(
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
     let person = index
         .personnel(&request.dataset, &request.personnelId)
-        .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId)))?;
-    let accrual = resolve_accrual_input(request, period, &index)?;
+        .ok_or_else(|| {
+            DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId))
+        })?;
+    let accrual = resolve_accrual_input(request, period, index)?;
     let normal_count = index
         .payrolls_for_person_period(&request.dataset, &request.personnelId, &request.periodId)
-        .into_iter()
         .filter(|payroll| payroll.accrualType == AccrualType::NORMAL)
         .count();
     if normal_count > 1 {
@@ -2138,7 +2127,7 @@ fn validate_payroll_request_with_index(
     validate_period(period)?;
     validate_tax_month_overlap(period)?;
     validate_tax_chronology(&request.dataset, period)?;
-    validate_tax_month_chain(&request.dataset, &index, person, period)?;
+    validate_tax_month_chain(&request.dataset, index, person, period)?;
     let settings = request
         .dataset
         .institutionSettings
@@ -2151,10 +2140,27 @@ fn validate_payroll_request_with_index(
         })?;
     validate_kurum_degerleri_for_payroll(settings)?;
     validate_statutory_tax_month_reference(period, settings)?;
-    validate_devreden_pek_gap(&request.dataset, &index, &request.personnelId, period, &accrual)?;
-    resolve_prior_accrual_state(&request.dataset, &index, &request.personnelId, period, &accrual)?;
+    validate_devreden_pek_gap(
+        &request.dataset,
+        index,
+        &request.personnelId,
+        period,
+        &accrual,
+    )?;
+    resolve_prior_accrual_state(
+        &request.dataset,
+        index,
+        &request.personnelId,
+        period,
+        &accrual,
+    )?;
     if accrual.accrualType == AccrualType::NORMAL {
-        normal_attendance(&request.dataset, &index, &request.personnelId, &request.periodId)?;
+        normal_attendance(
+            &request.dataset,
+            index,
+            &request.personnelId,
+            &request.periodId,
+        )?;
     }
     Ok(())
 }
@@ -2180,10 +2186,10 @@ fn validate_payroll_finalization_request_with_index(
     let period = index
         .period(&request.dataset, &request.periodId)
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
-    let accrual = resolve_accrual_input(request, period, &index)?;
+    let accrual = resolve_accrual_input(request, period, index)?;
     let existing = payroll_for_requested_accrual(
         &request.dataset,
-        &index,
+        index,
         &request.personnelId,
         &request.periodId,
         Some(&accrual),
@@ -2213,11 +2219,21 @@ fn validate_payroll_finalization_request_with_index(
         BordroStatus::CALCULATED => {}
     }
 
-    validate_prior_accruals_finalized(&request.dataset, &index, &request.personnelId, period, &accrual)?;
+    validate_prior_accruals_finalized(
+        &request.dataset,
+        index,
+        &request.personnelId,
+        period,
+        &accrual,
+    )?;
 
     if accrual.accrualType == AccrualType::NORMAL {
-        let attendance =
-            normal_attendance(&request.dataset, &index, &request.personnelId, &request.periodId)?;
+        let attendance = normal_attendance(
+            &request.dataset,
+            index,
+            &request.personnelId,
+            &request.periodId,
+        )?;
         let missing_dates = attendance_missing_calendar_days(attendance, period)?;
         if !missing_dates.is_empty() {
             return Err(DomainError::ValidationError(format!(
@@ -2304,13 +2320,15 @@ fn calculate_payroll_with_index(
     let dataset = &request.dataset;
     let person = index
         .personnel(dataset, &request.personnelId)
-        .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId)))?
+        .ok_or_else(|| {
+            DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId))
+        })?
         .clone();
     let period = index
         .period(dataset, &request.periodId)
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?
         .clone();
-    let accrual = resolve_accrual_input(request, &period, &index)?;
+    let accrual = resolve_accrual_input(request, &period, index)?;
     validate_period(&period)?;
     if let Some(input) = request.manualIncome.as_ref() {
         validate_manual_payroll_income_input(input)?;
@@ -2318,7 +2336,7 @@ fn calculate_payroll_with_index(
 
     let existing = payroll_for_requested_accrual(
         dataset,
-        &index,
+        index,
         &request.personnelId,
         &request.periodId,
         Some(&accrual),
@@ -2367,7 +2385,7 @@ fn calculate_payroll_with_index(
     let attendance = if is_normal_accrual {
         Some(normal_attendance(
             dataset,
-            &index,
+            index,
             &request.personnelId,
             &request.periodId,
         )?)
@@ -2379,7 +2397,6 @@ fn calculate_payroll_with_index(
     } else {
         index
             .attendances(dataset, &request.personnelId, &request.periodId)
-            .into_iter()
             .next()
     };
     let attendance_for_snapshot = if is_normal_accrual {
@@ -2433,8 +2450,10 @@ fn calculate_payroll_with_index(
     // DRAFT/STALE chain fail-closed with the generic payment-event error and
     // makes the same-month authoritative snapshot available to a supplementary
     // event that has no attendance input.
-    let prior_accruals = resolve_prior_accrual_state(dataset, &index, &person.id, &period, &accrual)?;
-    let incoming_devreden_state = incoming_devreden_pek(dataset, &index, &person.id, &period, &accrual)?;
+    let prior_accruals =
+        resolve_prior_accrual_state(dataset, index, &person.id, &period, &accrual)?;
+    let incoming_devreden_state =
+        incoming_devreden_pek(dataset, index, &person.id, &period, &accrual)?;
     let statutory_snapshot = if is_normal_accrual {
         resolve_statutory_snapshot_for_period_with_paid_sick_dates(
             attendance
@@ -2598,8 +2617,8 @@ fn calculate_payroll_with_index(
         )));
     }
     let same_month_gv_used = same_month_gv_exemption_used(&prior_accruals)?;
-    let previous_cumulative_gv = previous_gv(dataset, &index, &person, &period, &accrual)?;
-    let previous_cumulative_asgari_gv = previous_asgari_gv(dataset, &index, &person, &period)?;
+    let previous_cumulative_gv = previous_gv(dataset, index, &person, &period, &accrual)?;
+    let previous_cumulative_asgari_gv = previous_asgari_gv(dataset, index, &person, &period)?;
     let incoming_devreden = &incoming_devreden_state.records;
     let tax_inputs = StatutoryDeductionTaxInputs {
         previous_cumulative_gv,
@@ -2656,14 +2675,12 @@ fn calculate_payroll_with_index(
         let payment_month_worker_pek = pek_detail.primMatrahi;
         (
             KesintiKalemleri {
-                isciSgkPrimi: Some(
-                    round_sgk_amount(source_worker_sgk + payment_month_worker_pek * sgk_rate),
-                ),
-                isciIssizlikPrimi: Some(
-                    round_sgk_amount(
-                        source_worker_unemployment + payment_month_worker_pek * unemployment_rate,
-                    ),
-                ),
+                isciSgkPrimi: Some(round_sgk_amount(
+                    source_worker_sgk + payment_month_worker_pek * sgk_rate,
+                )),
+                isciIssizlikPrimi: Some(round_sgk_amount(
+                    source_worker_unemployment + payment_month_worker_pek * unemployment_rate,
+                )),
                 ..KesintiKalemleri::default()
             },
             pek_detail,
@@ -2792,7 +2809,7 @@ fn calculate_payroll_with_index(
                 period.taxYear
             ))
         })?;
-    let insurance_used = previous_insurance_gv(dataset, &index, &person.id, &period, &accrual)?;
+    let insurance_used = previous_insurance_gv(dataset, index, &person.id, &period, &accrual)?;
     let insurance_wage_base =
         (income_total - income.yemek.unwrap_or_default() - income.vasitaYol.unwrap_or_default())
             .max(Decimal::ZERO);
@@ -3002,14 +3019,9 @@ mod tests {
 
         for status in [BordroStatus::DRAFT, BordroStatus::STALE] {
             dataset.payrolls[1].status = status;
-            let error = validate_devreden_pek_gap(
-                &dataset,
-                &index,
-                "person-1",
-                &current_period,
-                &current,
-            )
-                .expect_err("non-authoritative intermediate event must fail closed");
+            let error =
+                validate_devreden_pek_gap(&dataset, &index, "person-1", &current_period, &current)
+                    .expect_err("non-authoritative intermediate event must fail closed");
             assert!(error.to_string().contains("Payment-event/PEK"));
         }
     }

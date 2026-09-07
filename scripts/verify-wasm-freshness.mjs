@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
 const root = process.cwd();
@@ -43,6 +43,7 @@ const currentHash = hash.digest('hex');
 const shouldWrite = process.argv.includes('--write');
 
 if (shouldWrite) {
+  rmSync(resolve(root, 'src/wasm/pkg/.gitignore'), { force: true });
   writeFileSync(manifestPath, `${currentHash}\n`);
   if (existsSync(packageManifestPath)) {
     const packageManifest = JSON.parse(readFileSync(packageManifestPath, 'utf8'));

@@ -3455,11 +3455,8 @@ mod tests {
             )?;
         }
 
-        let snapshot = PayrollService::build_calculation_snapshot_for(
-            &conn,
-            "test-scope-a",
-            &period.id,
-        )?;
+        let snapshot =
+            PayrollService::build_calculation_snapshot_for(&conn, "test-scope-a", &period.id)?;
 
         assert_eq!(snapshot.personnel.len(), 1);
         assert_eq!(snapshot.personnel[0].id, "test-scope-a");

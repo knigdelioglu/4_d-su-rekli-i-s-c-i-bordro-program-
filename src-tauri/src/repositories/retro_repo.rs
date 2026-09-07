@@ -84,9 +84,8 @@ fn validate_settlement_status(
         for allocation in allocations {
             let positive_delta = allocation.deltaAmount.max(rust_decimal::Decimal::ZERO);
             let negative_delta = (-allocation.deltaAmount).max(rust_decimal::Decimal::ZERO);
-            if round2(
-                allocation.payableSettlementAmount + allocation.offsetSettlementAmount,
-            ) > round2(positive_delta)
+            if round2(allocation.payableSettlementAmount + allocation.offsetSettlementAmount)
+                > round2(positive_delta)
                 || round2(allocation.recoverableAmount) > round2(negative_delta)
             {
                 return Err(DomainError::InvalidData(

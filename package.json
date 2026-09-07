@@ -10,7 +10,7 @@
     "web:verify": "bun scripts/verify-web-build.mjs",
     "verify:wasm-package": "bun scripts/verify-wasm-package.mjs",
     "verify:wasm-freshness": "bun scripts/verify-wasm-freshness.mjs",
-    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-opt --no-typescript && rm -f src/wasm/pkg/.gitignore && bun scripts/verify-wasm-freshness.mjs --write",
+    "wasm:build": "wasm-pack build crates/payroll-wasm --target web --out-dir ../../src/wasm/pkg --release --no-opt --no-typescript && bun scripts/verify-wasm-freshness.mjs --write",
     "wasm:test": "wasm-pack test --node crates/payroll-wasm",
     "web:build": "bun run wasm:build && vite build",
     "preview": "vite preview",

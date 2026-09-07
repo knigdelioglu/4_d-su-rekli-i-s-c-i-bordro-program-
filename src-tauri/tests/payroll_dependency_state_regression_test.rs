@@ -405,7 +405,9 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
         "unexpected error: {error}"
     );
     assert!(
-        error.to_string().contains("ara authoritative payment event"),
+        error
+            .to_string()
+            .contains("ara authoritative payment event"),
         "unexpected error: {error}"
     );
 }

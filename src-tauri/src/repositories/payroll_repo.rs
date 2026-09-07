@@ -75,10 +75,7 @@ impl PayrollRepository {
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", b.donemId)))
     }
 
-    fn validate_payment_date_matches_period(
-        conn: &Connection,
-        bordro: &BordroKaydi,
-    ) -> Result<()> {
+    fn validate_payment_date_matches_period(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
         if bordro.paymentDate.trim().is_empty() {
             // Pre-accrual legacy rows may omit the event date. New calculation
             // paths always materialize it before persistence.
@@ -92,9 +89,11 @@ impl PayrollRepository {
             )
             .optional()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?
-            .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", bordro.donemId)))?;
-        let payment_date = NaiveDate::parse_from_str(&bordro.paymentDate, "%Y-%m-%d")
-            .map_err(|error| {
+            .ok_or_else(|| {
+                DomainError::NotFound(format!("Dönem bulunamadı: {}", bordro.donemId))
+            })?;
+        let payment_date =
+            NaiveDate::parse_from_str(&bordro.paymentDate, "%Y-%m-%d").map_err(|error| {
                 DomainError::ValidationError(format!(
                     "{} bordrosunun ödeme tarihi geçersiz: {}",
                     bordro.accrualId, error
@@ -818,22 +817,26 @@ impl PayrollRepository {
 
         // Kalemler iki toplu sorgu ile okunur; her bordro için ayrı SELECT yapılmaz.
         let mut income_stmt = conn
-            .prepare("SELECT payroll_id, item_type, amount
+            .prepare(
+                "SELECT payroll_id, item_type, amount
                       FROM payroll_income_items
                       WHERE payroll_id IN (
                           SELECT id FROM payroll_records
                           WHERE (?1 IS NULL OR personnel_id = ?1)
                       )
-                      ORDER BY payroll_id, item_type")
+                      ORDER BY payroll_id, item_type",
+            )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let mut deduction_stmt = conn
-            .prepare("SELECT payroll_id, item_type, amount
+            .prepare(
+                "SELECT payroll_id, item_type, amount
                       FROM payroll_deduction_items
                       WHERE payroll_id IN (
                           SELECT id FROM payroll_records
                           WHERE (?1 IS NULL OR personnel_id = ?1)
                       )
-                      ORDER BY payroll_id, item_type")
+                      ORDER BY payroll_id, item_type",
+            )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let mut income_by_payroll: std::collections::HashMap<String, GelirKalemleri> =
@@ -980,22 +983,32 @@ impl PayrollRepository {
             ..Default::default()
         };
         let index = payroll_core::PayrollDatasetIndex::build(&dataset);
-        let mut ordered = result.into_iter().map(|record| {
-            let order = payroll_core::payroll_engine::accrual_order_for_payroll_with_index(
-                &dataset,
-                &index,
-                &record,
-            )?;
-            Ok((order, record))
-        }).collect::<Result<Vec<_>>>()?;
+        let mut ordered = result
+            .into_iter()
+            .map(|record| {
+                let order = payroll_core::payroll_engine::accrual_order_for_payroll_with_index(
+                    &dataset, &index, &record,
+                )?;
+                Ok((order, record))
+            })
+            .collect::<Result<Vec<_>>>()?;
         ordered.sort_by(|left, right| left.0.cmp(&right.0));
         Ok(ordered.into_iter().map(|(_, record)| record).collect())
     }
 
     /// Delete one event and invalidate its downstream in a single transaction.
-    pub fn delete_accrual(conn: &Connection, personnel_id: &str, period_id: &str, accrual_id: &str) -> Result<()> {
-        let tx = conn.unchecked_transaction().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        if Self::get_status_and_created_at_for_accrual(&tx, personnel_id, period_id, accrual_id)?.is_none() {
+    pub fn delete_accrual(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual_id: &str,
+    ) -> Result<()> {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if Self::get_status_and_created_at_for_accrual(&tx, personnel_id, period_id, accrual_id)?
+            .is_none()
+        {
             return Err(DomainError::NotFound("Tahakkuk bulunamadı.".into()));
         }
         let accrual_type: String = tx
@@ -1007,9 +1020,14 @@ impl PayrollRepository {
                 |row| row.get(0),
             )
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        let impact = PayrollInvalidationRepository::assert_mutation_allowed(&tx, &PayrollMutation::AccrualDelete {
-            personnelId: personnel_id.into(), periodId: period_id.into(), accrualId: accrual_id.into(),
-        })?;
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+            &tx,
+            &PayrollMutation::AccrualDelete {
+                personnelId: personnel_id.into(),
+                periodId: period_id.into(),
+                accrualId: accrual_id.into(),
+            },
+        )?;
         tx.execute("DELETE FROM payroll_records WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
             params![personnel_id, period_id, accrual_id]).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         if accrual_type == "RETRO_ADJUSTMENT" {
@@ -1026,7 +1044,8 @@ impl PayrollRepository {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         }
         PayrollInvalidationRepository::apply_impact(&tx, &impact)?;
-        tx.commit().map_err(|e| DomainError::DatabaseError(e.to_string()))
+        tx.commit()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }
 
     pub fn save(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
@@ -1042,8 +1061,15 @@ impl PayrollRepository {
         let accrual_id = Self::effective_accrual_id(bordro);
         let accrual_type = Self::accrual_type_to_str(bordro.accrualType);
         let payment_date = Self::effective_payment_date(&tx, bordro)?;
-        if let Some((existing_personnel, existing_period, existing_accrual, existing_type, existing_payment_date, existing_status, existing_sequence)) =
-            Self::existing_identity_by_id(&tx, &bordro.id)?
+        if let Some((
+            existing_personnel,
+            existing_period,
+            existing_accrual,
+            existing_type,
+            existing_payment_date,
+            existing_status,
+            existing_sequence,
+        )) = Self::existing_identity_by_id(&tx, &bordro.id)?
         {
             if existing_status == "FINALIZED" {
                 return Err(DomainError::PayrollFinalized(
@@ -1148,8 +1174,15 @@ impl PayrollRepository {
         // submit a new accrual id while reusing another row's primary id and
         // overwrite that row (including a finalized one) before the unique
         // accrual-id or payment-sequence constraints ran.
-        if let Some((existing_personnel, existing_period, existing_accrual, existing_type, existing_payment_date, existing_status, existing_sequence)) =
-            Self::existing_identity_by_id(conn, &b.id)?
+        if let Some((
+            existing_personnel,
+            existing_period,
+            existing_accrual,
+            existing_type,
+            existing_payment_date,
+            existing_status,
+            existing_sequence,
+        )) = Self::existing_identity_by_id(conn, &b.id)?
         {
             if existing_status == "FINALIZED" {
                 return Err(DomainError::PayrollFinalized(

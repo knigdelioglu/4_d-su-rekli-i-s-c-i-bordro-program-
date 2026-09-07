@@ -64,9 +64,12 @@ function readStoredPayroll(page) {
             .get('current');
           request.onerror = () => reject(request.error ?? new Error('Snapshot okunamadı.'));
           request.onsuccess = () => {
-            const value = request.result;
+            const stored = request.result;
+            const storedRecord =
+              stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : null;
+            const payload = typeof stored === 'string' ? stored : storedRecord?.payload;
             database.close();
-            resolve(typeof value === 'string' ? JSON.parse(value) : null);
+            resolve(typeof payload === 'string' ? JSON.parse(payload) : null);
           };
         };
       })
@@ -87,7 +90,16 @@ async function installCalculableFixture(page) {
           readRequest.onerror = () => reject(readRequest.error ?? new Error('Fixture okunamadı.'));
           readRequest.onsuccess = () => {
             try {
-              const snapshot = JSON.parse(readRequest.result);
+              const stored = readRequest.result;
+              const storedRecord =
+                stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : null;
+              const payload = typeof stored === 'string' ? stored : storedRecord?.payload;
+              const revision =
+                Number.isInteger(storedRecord?.revision) && storedRecord.revision >= 0
+                  ? storedRecord.revision
+                  : 0;
+              if (typeof payload !== 'string') throw new Error('Fixture snapshot payload bulunamadı.');
+              const snapshot = JSON.parse(payload);
               snapshot.donemler = snapshot.donemler.map((period) => ({
                 ...period,
                 taxYear: period.yil,
@@ -99,7 +111,10 @@ async function installCalculableFixture(page) {
               );
               if (!annual) throw new Error('Örnek fixture yıllık vergi parametresi içermiyor.');
               annual.sigortaGvYillikBrutAsgariUcretTavani = '396360';
-              const writeRequest = objectStore.put(JSON.stringify(snapshot), 'current');
+              const writeRequest = objectStore.put(
+                { payload: JSON.stringify(snapshot), revision },
+                'current'
+              );
               writeRequest.onerror = () =>
                 reject(writeRequest.error ?? new Error('Fixture yazılamadı.'));
             } catch (error) {

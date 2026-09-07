@@ -338,8 +338,8 @@ export default function App() {
       const saved = await browserPersistence.loadSnapshot();
       if (saved) {
         // Version-aware parsing keeps legacy compatibility explicit while a
-        // current V3 snapshot remains strict and never reaches repair logic.
-        const payload: PayrollStorageDto = parseImportedBackup(saved.payload);
+        // current snapshot remains strict and never reaches repair logic.
+        const payload: PayrollStorageDto = parseImportedBackup(saved);
         applyDataset(payload);
       } else {
         applyDataset(toPayrollBoundaryDto({

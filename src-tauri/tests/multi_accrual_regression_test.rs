@@ -234,7 +234,8 @@ fn native_multi_accrual_keeps_finalized_normal_immutable_and_continues_into_octo
 
 /// A/C/G/H/I/J/O: actual SQLite saves/deletes, transaction rollback and frozen snapshots.
 #[test]
-fn payment_event_backdated_insert_delete_and_finalized_protection() -> Result<(), Box<dyn std::error::Error>> {
+fn payment_event_backdated_insert_delete_and_finalized_protection(
+) -> Result<(), Box<dyn std::error::Error>> {
     let conn = create_in_memory_connection()?;
     let active = period("2026-07", 7, 8);
     let personnel_id = "payment-event-native";
@@ -249,50 +250,96 @@ fn payment_event_backdated_insert_delete_and_finalized_protection() -> Result<()
             id: format!("reference-{tax_month}"),
             yil: if tax_month == 1 { 2025 } else { 2026 },
             ay: if tax_month == 1 { 12 } else { tax_month - 1 },
-            baslangicTarihi: if tax_month == 1 { "2025-12-15".into() } else { format!("2026-{:02}-15", tax_month - 1) },
+            baslangicTarihi: if tax_month == 1 {
+                "2025-12-15".into()
+            } else {
+                format!("2026-{:02}-15", tax_month - 1)
+            },
             bitisTarihi: format!("2026-{tax_month:02}-14"),
-            donemAdi: format!("Reference {tax_month}"), taxYear: 2026, taxMonth: tax_month,
+            donemAdi: format!("Reference {tax_month}"),
+            taxYear: 2026,
+            taxMonth: tax_month,
         };
         PeriodRepository::save(&conn, &previous)?;
         SettingsRepository::save_institution_settings(&conn, &settings(&previous.id))?;
     }
     let input = |id: &str, kind, date: &str| PayrollAccrualInput {
-        accrualId: id.into(), accrualType: kind, paymentDate: date.into(), sequence: 0,
-        grossAmount: if kind == AccrualType::NORMAL { None } else { Some(dec!(2000)) }, description: None,
+        accrualId: id.into(),
+        accrualType: kind,
+        paymentDate: date.into(),
+        sequence: 0,
+        grossAmount: if kind == AccrualType::NORMAL {
+            None
+        } else {
+            Some(dec!(2000))
+        },
+        description: None,
     };
     let normal = input("normal", AccrualType::NORMAL, "2026-08-14");
     let tis = input("tis", AccrualType::TIS_IKRAMIYE, "2026-08-25");
     let tediye = input("tediye", AccrualType::TEDIYE, "2026-08-10");
     let calculate = |event: &PayrollAccrualInput| {
-        PayrollService::validate_payroll_request_for_accrual(&conn, personnel_id, &active.id, Some(event))?;
-        PayrollService::calculate_payroll_for_accrual(&conn, personnel_id, &active.id, Some(event), None)
+        PayrollService::validate_payroll_request_for_accrual(
+            &conn,
+            personnel_id,
+            &active.id,
+            Some(event),
+        )?;
+        PayrollService::calculate_payroll_for_accrual(
+            &conn,
+            personnel_id,
+            &active.id,
+            Some(event),
+            None,
+        )
     };
     calculate(&normal)?;
     calculate(&tis)?;
     calculate(&tediye)?;
     let records = PayrollRepository::get_all(&conn)?;
     for id in ["normal", "tis"] {
-        assert_eq!(records.iter().find(|record| record.accrualId == id).unwrap().status, BordroStatus::STALE);
+        assert_eq!(
+            records
+                .iter()
+                .find(|record| record.accrualId == id)
+                .unwrap()
+                .status,
+            BordroStatus::STALE
+        );
     }
     calculate(&normal)?;
     calculate(&tis)?;
     PayrollRepository::delete_accrual(&conn, personnel_id, &active.id, "tediye")?;
     let records = PayrollRepository::get_all(&conn)?;
     assert_eq!(records.len(), 2);
-    assert!(records.iter().all(|record| record.status == BordroStatus::STALE));
+    assert!(records
+        .iter()
+        .all(|record| record.status == BordroStatus::STALE));
     // The first event can be created/calculated with no NORMAL at all.
     PayrollRepository::delete_accrual(&conn, personnel_id, &active.id, "normal")?;
     calculate(&tediye)?;
     let late_normal = calculate(&normal)?;
     let detail = late_normal.pekDetay.as_ref().unwrap();
-    let first = PayrollRepository::get_all(&conn)?.into_iter().find(|r| r.accrualId == "tediye").unwrap();
+    let first = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .find(|r| r.accrualId == "tediye")
+        .unwrap();
     let used = first.pekDetay.as_ref().unwrap().primMatrahi;
     assert!(detail.pekAltSinir > used + detail.primMatrahi);
-    assert_eq!(detail.altSinirTamamlamaFarki, detail.pekAltSinir - used - detail.primMatrahi);
-    assert_eq!(detail.finalPek, detail.primMatrahi + detail.altSinirTamamlamaFarki);
+    assert_eq!(
+        detail.altSinirTamamlamaFarki,
+        detail.pekAltSinir - used - detail.primMatrahi
+    );
+    assert_eq!(
+        detail.finalPek,
+        detail.primMatrahi + detail.altSinirTamamlamaFarki
+    );
     calculate(&tis)?;
     // Persist a finalized snapshot to isolate mutation protection from finalization preflight.
-    let mut finalized = PayrollRepository::get_all(&conn)?.into_iter().find(|r| r.accrualId == "normal").unwrap();
+    let mut finalized = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .find(|r| r.accrualId == "normal")
+        .unwrap();
     finalized.status = BordroStatus::FINALIZED;
     PayrollRepository::save_in_transaction(&conn, &finalized)?;
     let before = serialized(&PayrollRepository::get_all(&conn)?);

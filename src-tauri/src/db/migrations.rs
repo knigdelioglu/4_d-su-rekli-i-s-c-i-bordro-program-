@@ -811,10 +811,7 @@ pub fn get_migrations() -> Migrations<'static> {
                         }
                         (payable, offset, recovered, recoverable, outstanding)
                     };
-                let authoritative = matches!(
-                    status.as_str(),
-                    "CALCULATED" | "FINALIZED"
-                );
+                let authoritative = matches!(status.as_str(), "CALCULATED" | "FINALIZED");
                 if authoritative {
                     outstanding_by_person.insert(personnel_id, next_outstanding);
                 }
@@ -860,10 +857,12 @@ pub fn get_migrations() -> Migrations<'static> {
                         remaining_payable -= allocation_payable;
                         let negative = delta
                             .checked_neg()
-                            .ok_or_else(|| migration_invalid_data(format!(
-                                "{} allocation delta'sı INTEGER sınırını aşıyor.",
-                                allocation_id
-                            )))?
+                            .ok_or_else(|| {
+                                migration_invalid_data(format!(
+                                    "{} allocation delta'sı INTEGER sınırını aşıyor.",
+                                    allocation_id
+                                ))
+                            })?
                             .max(0);
                         let allocation_recoverable = negative.min(remaining_recoverable);
                         remaining_recoverable -= allocation_recoverable;

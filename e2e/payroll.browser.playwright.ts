@@ -131,9 +131,19 @@ async function readStoredPayload(page: Page): Promise<string | null> {
               reject(request.error ?? new Error('Snapshot okunamadı.'));
             };
             request.onsuccess = () => {
-              const payload = request.result;
+              const stored = request.result as unknown;
+              const storedRecord =
+                stored && typeof stored === 'object' && !Array.isArray(stored)
+                  ? (stored as { payload?: unknown })
+                  : null;
+              const payload =
+                typeof stored === 'string'
+                  ? stored
+                  : typeof storedRecord?.payload === 'string'
+                    ? storedRecord.payload
+                    : null;
               database.close();
-              resolve(typeof payload === 'string' ? payload : null);
+              resolve(payload);
             };
           } catch (error) {
             database.close();
@@ -210,7 +220,25 @@ async function installCalculableFixture(page: Page): Promise<void> {
           readRequest.onerror = () => reject(readRequest.error ?? new Error('Fixture okunamadı.'));
           readRequest.onsuccess = () => {
             try {
-              const snapshot = JSON.parse(readRequest.result as string) as StoredSnapshot;
+              const stored = readRequest.result as unknown;
+              const storedRecord =
+                stored && typeof stored === 'object' && !Array.isArray(stored)
+                  ? (stored as { payload?: unknown; revision?: unknown })
+                  : null;
+              const payload =
+                typeof stored === 'string'
+                  ? stored
+                  : typeof storedRecord?.payload === 'string'
+                    ? storedRecord.payload
+                    : null;
+              const revision =
+                typeof storedRecord?.revision === 'number' &&
+                Number.isInteger(storedRecord.revision) &&
+                storedRecord.revision >= 0
+                  ? storedRecord.revision
+                  : 0;
+              if (payload === null) throw new Error('Fixture snapshot payload bulunamadı.');
+              const snapshot = JSON.parse(payload) as StoredSnapshot;
               if (!snapshot.donemler || !snapshot.annualPayrollParameters) {
                 throw new Error('Örnek fixture dönem/yıllık parametre içermiyor.');
               }
@@ -230,7 +258,10 @@ async function installCalculableFixture(page: Page): Promise<void> {
               if (!annual) throw new Error('Örnek fixture yıllık vergi parametresi içermiyor.');
               annual.sigortaGvYillikBrutAsgariUcretTavani = '396360';
 
-              const writeRequest = objectStore.put(JSON.stringify(snapshot), 'current');
+              const writeRequest = objectStore.put(
+                { payload: JSON.stringify(snapshot), revision },
+                'current'
+              );
               writeRequest.onerror = () =>
                 reject(writeRequest.error ?? new Error('Fixture yazılamadı.'));
             } catch (error) {
@@ -265,7 +296,25 @@ async function seedExactTaxOpening(page: Page, periodId: string, value: string):
           readRequest.onerror = () => reject(readRequest.error ?? new Error('Snapshot okunamadı.'));
           readRequest.onsuccess = () => {
             try {
-              const snapshot = JSON.parse(readRequest.result as string) as StoredSnapshot;
+              const stored = readRequest.result as unknown;
+              const storedRecord =
+                stored && typeof stored === 'object' && !Array.isArray(stored)
+                  ? (stored as { payload?: unknown; revision?: unknown })
+                  : null;
+              const payload =
+                typeof stored === 'string'
+                  ? stored
+                  : typeof storedRecord?.payload === 'string'
+                    ? storedRecord.payload
+                    : null;
+              const revision =
+                typeof storedRecord?.revision === 'number' &&
+                Number.isInteger(storedRecord.revision) &&
+                storedRecord.revision >= 0
+                  ? storedRecord.revision
+                  : 0;
+              if (payload === null) throw new Error('Snapshot payload bulunamadı.');
+              const snapshot = JSON.parse(payload) as StoredSnapshot;
               snapshot.taxOpenings = [
                 {
                   id: `exact-${seededPeriodId}`,
@@ -275,7 +324,10 @@ async function seedExactTaxOpening(page: Page, periodId: string, value: string):
                   effectiveFromPeriodId: seededPeriodId,
                 },
               ];
-              const writeRequest = objectStore.put(JSON.stringify(snapshot), 'current');
+              const writeRequest = objectStore.put(
+                { payload: JSON.stringify(snapshot), revision },
+                'current'
+              );
               writeRequest.onerror = () =>
                 reject(writeRequest.error ?? new Error('Exact tax opening yazılamadı.'));
             } catch (error) {
@@ -420,6 +472,7 @@ test('SGK prim kontrolü tüm personeli ve manuel mutabakat farkını gösterir'
     'İşveren İşsizlik %2',
     'SGK İşçi %14',
     'İşçi İşsizlik %1',
+    'Retro kaynak PEK farkı',
     'PEK Alt Sınır İşveren Tamamlama',
     'Toplam',
   ]);
@@ -658,6 +711,8 @@ test('browser migrates a numeric legacy localStorage backup into exact IndexedDB
   legacySnapshot.backupVersion = 1;
   const legacyPayroll = (legacySnapshot.bordrolar as Array<Record<string, unknown>>)[0];
   legacyPayroll.netOdeme = 64179.78;
+  (legacyPayroll.kesintiler as Record<string, unknown>).digerKesinti = '7245.59';
+  legacyPayroll.kesintiToplam = '31984.88';
   delete legacyPayroll.status;
   const legacyPayload = JSON.stringify(legacySnapshot);
   await page.evaluate(

@@ -512,7 +512,11 @@ impl MigrationService {
             let normalized_months = SettingsRepository::normalize_zam_aylari(&months)?;
             let value = serde_json::to_string(&normalized_months)
                 .map_err(|e| DomainError::InvalidData(e.to_string()))?;
-            SettingsRepository::set_app_setting_in_transaction(conn, ZAM_AYLARI_SETTING_KEY, &value)?;
+            SettingsRepository::set_app_setting_in_transaction(
+                conn,
+                ZAM_AYLARI_SETTING_KEY,
+                &value,
+            )?;
         }
 
         // Fill missing yearly parameters before importing the retro graph. The
@@ -612,13 +616,12 @@ impl MigrationService {
                                 RetroSettlementStatus::UNSETTLED
                             };
                     } else if batch.settlementStatus == RetroSettlementStatus::UNSETTLED {
-                        batch.settlementStatus = if batch.totalGrossDelta
-                            < rust_decimal::Decimal::ZERO
-                        {
-                            RetroSettlementStatus::OVERPAYMENT
-                        } else {
-                            RetroSettlementStatus::PAID
-                        };
+                        batch.settlementStatus =
+                            if batch.totalGrossDelta < rust_decimal::Decimal::ZERO {
+                                RetroSettlementStatus::OVERPAYMENT
+                            } else {
+                                RetroSettlementStatus::PAID
+                            };
                     }
                 }
                 crate::repositories::retro_repo::restore_batch_in_transaction(
@@ -677,7 +680,11 @@ impl MigrationService {
         }
 
         if let Some(active_id) = aktifDonemId {
-            SettingsRepository::set_app_setting_in_transaction(conn, "active_period_id", &active_id)?;
+            SettingsRepository::set_app_setting_in_transaction(
+                conn,
+                "active_period_id",
+                &active_id,
+            )?;
         }
 
         Ok(())

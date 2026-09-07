@@ -5,11 +5,11 @@
 
 #![allow(non_snake_case)]
 
+use crate::index::PayrollDatasetIndex;
 use crate::models::{
     BordroDonemi, BordroStatus, CompensationRevisionStatus, RetroAdjustmentBatch,
     StatutorySnapshotSource,
 };
-use crate::index::PayrollDatasetIndex;
 use crate::payroll_engine::{
     accrual_order_for_payroll_with_index as payroll_order, PayrollDatasetSnapshot,
 };
@@ -259,8 +259,7 @@ fn retro_batch_requires_source_carry_replay(
         .retro_allocations_for_batch(dataset, batch_id)
         .filter(|allocation| {
             allocation.batchId == batch_id
-                && allocation.sgkTreatment
-                    == crate::models::RetroSgkTreatment::WAGE_SOURCE_MONTH
+                && allocation.sgkTreatment == crate::models::RetroSgkTreatment::WAGE_SOURCE_MONTH
         })
         .any(|allocation| {
             let Some(target) = allocation.targetSourceCarry.as_ref() else {
@@ -350,9 +349,10 @@ fn affected_by_mutation(
                 return Ok(false);
             }
             let mut dependency_roots = Vec::new();
-            for root in index.payrolls_for_person(dataset, personnelId).filter(|root| {
-                is_sick_leave_dependency_root(root)
-            }) {
+            for root in index
+                .payrolls_for_person(dataset, personnelId)
+                .filter(|root| is_sick_leave_dependency_root(root))
+            {
                 let Some(root_period) = period_for(index, dataset, &root.donemId) else {
                     continue;
                 };
@@ -392,7 +392,8 @@ fn affected_by_mutation(
                     ))
                 })?;
             Ok(payroll_personnel_id == personnelId
-                && (payroll_order(dataset, index, payroll)? > payroll_order(dataset, index, source)?
+                && (payroll_order(dataset, index, payroll)?
+                    > payroll_order(dataset, index, source)?
                     || (matches!(mutation, PayrollMutation::AccrualDelete { .. })
                         && effective_accrual_id(payroll) == *accrualId)))
         }
@@ -415,14 +416,12 @@ fn affected_by_mutation(
             {
                 return Ok(false);
             }
-            let batch = index
-                .retro_batch(dataset, batchId)
-                .ok_or_else(|| {
-                    DomainError::ValidationError(format!(
-                        "Retro carry mutation batch'i bulunamadı: {}.",
-                        batchId
-                    ))
-                })?;
+            let batch = index.retro_batch(dataset, batchId).ok_or_else(|| {
+                DomainError::ValidationError(format!(
+                    "Retro carry mutation batch'i bulunamadı: {}.",
+                    batchId
+                ))
+            })?;
             if batch.personnelId != *personnelId {
                 return Err(DomainError::InvalidData(format!(
                     "{} retro batch personel kimliği mutation ile eşleşmiyor.",
@@ -585,7 +584,7 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
 
     for payroll in &dataset.payrolls {
         if !affected_by_mutation(
-            &index,
+            index,
             dataset,
             &payroll.personelId,
             &payroll.donemId,
@@ -606,7 +605,7 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
     }
 
     for batch in &dataset.retroBatches {
-        if !retro_batch_affected_by_mutation(&index, dataset, batch, mutation)? {
+        if !retro_batch_affected_by_mutation(index, dataset, batch, mutation)? {
             continue;
         }
         affected_retro_batches.insert(batch.id.clone());
@@ -627,8 +626,8 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
 mod tests {
     use super::*;
     use crate::models::{
-        AccrualType, BordroKaydi, CompensationRevisionStatus, GelirKalemleri, KesintiKalemleri,
-        DevredenPekKaydi, PuantajOzeti, ResolvedStatutorySnapshot, RetroAdjustmentBatch,
+        AccrualType, BordroKaydi, CompensationRevisionStatus, DevredenPekKaydi, GelirKalemleri,
+        KesintiKalemleri, PuantajOzeti, ResolvedStatutorySnapshot, RetroAdjustmentBatch,
         RetroAllocation, RetroEarningCode, RetroSettlementStatus, RetroSgkTreatment,
         RetroTaxTreatment,
     };

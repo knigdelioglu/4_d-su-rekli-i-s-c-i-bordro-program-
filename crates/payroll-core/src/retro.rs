@@ -12,6 +12,7 @@ use crate::calculations::{
     calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state, canonical_sgk_earning_class,
     round_sgk_amount, CanonicalSgkEarningClass, PekCalculationOptions,
 };
+use crate::index::PayrollDatasetIndex;
 use crate::models::*;
 use crate::payroll_engine::{
     accrual_order_for_payroll_with_index, calculate_paid_sick_dates_from_records,
@@ -19,7 +20,6 @@ use crate::payroll_engine::{
     resolve_statutory_snapshot_for_period_with_paid_sick_dates, validate_tax_month_overlap,
     PayrollDatasetSnapshot,
 };
-use crate::index::PayrollDatasetIndex;
 use crate::{DomainError, Result};
 use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
@@ -28,7 +28,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 type RetroAmountsByPeriodAndCode = HashMap<(String, RetroEarningCode), Decimal>;
-type RetroSgkLedgerTotals = BTreeMap<String, (Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal, Decimal)>;
+type RetroSgkLedgerTotals = BTreeMap<
+    String,
+    (
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+    ),
+>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -404,13 +416,15 @@ fn revision_has_authoritative_batch(
     dataset: &PayrollDatasetSnapshot,
     revision_id: &str,
 ) -> bool {
-    index.retro_batches_for_revision(dataset, revision_id).any(|batch| {
-        batch.revisionId == revision_id
-            && matches!(
-                batch.status,
-                CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
-            )
-    })
+    index
+        .retro_batches_for_revision(dataset, revision_id)
+        .any(|batch| {
+            batch.revisionId == revision_id
+                && matches!(
+                    batch.status,
+                    CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+                )
+        })
 }
 
 fn revision_applications(
@@ -733,9 +747,7 @@ fn original_recognized_by_period_and_code(
     let mut result = HashMap::new();
     for payroll in index
         .payrolls_for_person_period(dataset, personnel_id, period_id)
-        .filter(|payroll| {
-            payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
-        })
+        .filter(|payroll| payroll.accrualType != AccrualType::RETRO_ADJUSTMENT)
     {
         match payroll.status {
             BordroStatus::CALCULATED | BordroStatus::FINALIZED => {
@@ -955,9 +967,8 @@ fn validate_batch_ledger(
         if !has_legacy_settlement_flow(batch) {
             let positive_delta = allocation.deltaAmount.max(Decimal::ZERO);
             let negative_delta = (-allocation.deltaAmount).max(Decimal::ZERO);
-            if round2(
-                allocation.payableSettlementAmount + allocation.offsetSettlementAmount,
-            ) > round2(positive_delta)
+            if round2(allocation.payableSettlementAmount + allocation.offsetSettlementAmount)
+                > round2(positive_delta)
                 || round2(allocation.recoverableAmount) > round2(negative_delta)
             {
                 return Err(DomainError::InvalidData(format!(
@@ -996,9 +1007,7 @@ fn validate_batch_ledger(
                 batch.id
             )));
         }
-        if batch.totalGrossDelta >= Decimal::ZERO
-            && batch.recoverableAmount != Decimal::ZERO
-        {
+        if batch.totalGrossDelta >= Decimal::ZERO && batch.recoverableAmount != Decimal::ZERO {
             return Err(DomainError::InvalidData(format!(
                 "{} pozitif entitlement delta'sı recoverable settlement üretemez.",
                 batch.id
@@ -1191,13 +1200,16 @@ fn reject_later_authoritative_retro_for_same_source_period(
     current_batch_id: &str,
     source_period_ids: &HashSet<String>,
 ) -> Result<()> {
-    for batch in index.retro_batches_for_person(dataset, personnel_id).filter(|batch| {
-        batch.id != current_batch_id
-            && matches!(
-                batch.status,
-                CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
-            )
-    }) {
+    for batch in index
+        .retro_batches_for_person(dataset, personnel_id)
+        .filter(|batch| {
+            batch.id != current_batch_id
+                && matches!(
+                    batch.status,
+                    CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+                )
+        })
+    {
         let batch_payment_date = parse_date(&batch.paymentDate, "önceki retro ödeme")?;
         if batch_payment_date <= payment_date {
             // A new retro payment is assigned the next canonical payment-event
@@ -1373,18 +1385,12 @@ fn source_original_state(
         }
         state.upper = detail.pekUstSinir;
     }
-    let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
-        DomainError::InvalidData(format!(
-            "{} source settings eksik.",
-            period.id
-        ))
-    })?;
+    let settings = dataset
+        .institutionSettings
+        .get(&period.id)
+        .ok_or_else(|| DomainError::InvalidData(format!("{} source settings eksik.", period.id)))?;
     let (employer_sgk, employer_unemployment, employer_lower_bound_premium) =
-        canonical_source_employer_premiums(
-            state.worker_pek,
-            state.employer_lower_bound,
-            settings,
-        )?;
+        canonical_source_employer_premiums(state.worker_pek, state.employer_lower_bound, settings)?;
     state.employer_sgk = employer_sgk;
     state.employer_unemployment = employer_unemployment;
     state.employer_lower_bound_premium = employer_lower_bound_premium;
@@ -1409,10 +1415,9 @@ fn canonical_source_employer_premiums(
         .sgkIsverenOraniYuzde
         .ok_or_else(|| DomainError::InvalidData("Historical SGK işveren oranı eksik.".into()))?
         / dec!(100);
-    let employer_unemployment_rate = settings
-        .issizlikIsverenOraniYuzde
-        .ok_or_else(|| DomainError::InvalidData("Historical işveren işsizlik oranı eksik.".into()))?
-        / dec!(100);
+    let employer_unemployment_rate = settings.issizlikIsverenOraniYuzde.ok_or_else(|| {
+        DomainError::InvalidData("Historical işveren işsizlik oranı eksik.".into())
+    })? / dec!(100);
     let worker_sgk_rate = settings
         .sgkIsciOraniYuzde
         .ok_or_else(|| DomainError::InvalidData("Historical SGK işçi oranı eksik.".into()))?
@@ -1424,12 +1429,10 @@ fn canonical_source_employer_premiums(
     let final_pek = round2((worker_pek + employer_lower_bound).max(Decimal::ZERO));
     let employer_sgk = round_sgk_amount(final_pek * employer_sgk_rate);
     let employer_unemployment = round_sgk_amount(final_pek * employer_unemployment_rate);
-    let lower_bound_sgk = round_sgk_amount(
-        employer_lower_bound.max(Decimal::ZERO) * worker_sgk_rate,
-    );
-    let lower_bound_unemployment = round_sgk_amount(
-        employer_lower_bound.max(Decimal::ZERO) * worker_unemployment_rate,
-    );
+    let lower_bound_sgk =
+        round_sgk_amount(employer_lower_bound.max(Decimal::ZERO) * worker_sgk_rate);
+    let lower_bound_unemployment =
+        round_sgk_amount(employer_lower_bound.max(Decimal::ZERO) * worker_unemployment_rate);
     Ok((
         employer_sgk,
         employer_unemployment,
@@ -1463,7 +1466,8 @@ fn source_target_state(
         // Missing original accrual: replay a synthetic NORMAL event using the
         // source attendance/statutory snapshot. This is also where paid sick
         // R-days enter the source PEK capacity.
-        let synthetic_summary = attendance_summary_for_source(index, dataset, personnel_id, period)?;
+        let synthetic_summary =
+            attendance_summary_for_source(index, dataset, personnel_id, period)?;
         ordered_events.push(BordroKaydi {
             id: format!("{}_retro_source_normal", period.id),
             personelId: personnel_id.to_string(),
@@ -1506,7 +1510,7 @@ fn source_target_state(
         ))
     })?;
     let (canonical_incoming, canonical_incoming_available) =
-        incoming_devreden_pek_for_replay(dataset, &index, personnel_id, period, first_event)?;
+        incoming_devreden_pek_for_replay(dataset, index, personnel_id, period, first_event)?;
     let first_carry = if canonical_incoming_available {
         canonical_incoming.records
     } else {
@@ -1569,11 +1573,7 @@ fn source_target_state(
         tax_months_elapsed = 0;
     }
     let (employer_sgk, employer_unemployment, employer_lower_bound_premium) =
-        canonical_source_employer_premiums(
-            state.worker_pek,
-            state.employer_lower_bound,
-            settings,
-        )?;
+        canonical_source_employer_premiums(state.worker_pek, state.employer_lower_bound, settings)?;
     state.employer_sgk = employer_sgk;
     state.employer_unemployment = employer_unemployment;
     state.employer_lower_bound_premium = employer_lower_bound_premium;
@@ -1620,13 +1620,10 @@ fn previous_source_retro_state(
                 continue;
             }
             state.worker_pek = round2(state.worker_pek + allocation.retroPekDelta);
-            state.worker_sgk =
-                round_sgk_amount(state.worker_sgk + allocation.workerSgkDelta);
-            state.worker_unemployment = round_sgk_amount(
-                state.worker_unemployment + allocation.workerUnemploymentDelta,
-            );
-            state.employer_sgk =
-                round_sgk_amount(state.employer_sgk + allocation.employerSgkDelta);
+            state.worker_sgk = round_sgk_amount(state.worker_sgk + allocation.workerSgkDelta);
+            state.worker_unemployment =
+                round_sgk_amount(state.worker_unemployment + allocation.workerUnemploymentDelta);
+            state.employer_sgk = round_sgk_amount(state.employer_sgk + allocation.employerSgkDelta);
             state.employer_unemployment = round_sgk_amount(
                 state.employer_unemployment + allocation.employerUnemploymentDelta,
             );
@@ -1737,6 +1734,11 @@ fn rebalance_sgk_component_to_total(
     }
 }
 
+struct SourceMonthSgkPayment<'a> {
+    payment_date: NaiveDate,
+    current_batch_id: &'a str,
+}
+
 fn apply_source_month_sgk(
     index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
@@ -1744,8 +1746,7 @@ fn apply_source_month_sgk(
     period: &BordroDonemi,
     target_normal_income: &GelirKalemleri,
     allocations: &mut [RetroAllocation],
-    payment_date: NaiveDate,
-    current_batch_id: &str,
+    payment: SourceMonthSgkPayment<'_>,
 ) -> Result<()> {
     let events = source_period_events(index, dataset, personnel_id, period)?;
     let original_replay = source_original_state(index, dataset, personnel_id, period, &events)?;
@@ -1763,8 +1764,8 @@ fn apply_source_month_sgk(
         index,
         dataset,
         personnel_id,
-        payment_date,
-        current_batch_id,
+        payment.payment_date,
+        payment.current_batch_id,
         &period.id,
     )?;
     let settings = dataset
@@ -1997,7 +1998,7 @@ pub(crate) fn retro_payment_income_with_index(
                 .into(),
         ));
     }
-    let mut allocations = validate_batch_ledger(&index, dataset, &batch)?;
+    let mut allocations = validate_batch_ledger(index, dataset, &batch)?;
     if has_legacy_settlement_flow(&batch) {
         // V4 had no per-allocation settlement flow.  Materialize the batch-net
         // payable allocation locally so a mixed-sign legacy batch cannot turn
@@ -2180,12 +2181,13 @@ impl RetroEntitlementEngine {
                 .payrolls_for_person_period(&request.dataset, &request.personnelId, &period.id)
                 .filter(|payroll| {
                     payroll.accrualType != AccrualType::NORMAL
-                    && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
-                    && matches!(
-                        payroll.status,
-                        BordroStatus::CALCULATED | BordroStatus::FINALIZED
-                    )
-            }) {
+                        && payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
+                        && matches!(
+                            payroll.status,
+                            BordroStatus::CALCULATED | BordroStatus::FINALIZED
+                        )
+                })
+            {
                 for (code, value) in income_by_code(&payroll.gelirler) {
                     add_code(&mut target_by_code, code, value);
                 }
@@ -2322,8 +2324,10 @@ impl RetroEntitlementEngine {
                 period,
                 target_normal_income,
                 &mut allocations,
-                payment_date,
-                &request.batchId,
+                SourceMonthSgkPayment {
+                    payment_date,
+                    current_batch_id: &request.batchId,
+                },
             )?;
         }
 
@@ -2380,9 +2384,7 @@ impl RetroEntitlementEngine {
 }
 
 /// Computes source-period PEK deltas without exposing a mutable balance table.
-pub fn retro_sgk_ledger_totals(
-    allocations: &[RetroAllocation],
-) -> RetroSgkLedgerTotals {
+pub fn retro_sgk_ledger_totals(allocations: &[RetroAllocation]) -> RetroSgkLedgerTotals {
     let mut result = BTreeMap::new();
     for allocation in allocations {
         let entry = result.entry(allocation.sourcePeriodId.clone()).or_insert((

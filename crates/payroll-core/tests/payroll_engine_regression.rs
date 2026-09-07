@@ -2,10 +2,10 @@ use chrono::{Duration, NaiveDate};
 use payroll_core::{
     calculate_incremental_prime_esas_kazanc, calculate_payroll, calculate_prime_esas_kazanc,
     evaluate_payroll_invalidation, finalize_payroll, validate_payroll_request, AccrualType,
-    AnnualPayrollParameters, BordroDonemi, BordroStatus, DevredenPekKaydi,
-    DonemselKurumDegerleri, GelirKalemleri, ManualPayrollIncomeInput, PayrollAccrualInput,
-    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation, Personel, PersonelPuantaj,
-    PuantajOzeti, StatutorySnapshotSource,
+    AnnualPayrollParameters, BordroDonemi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
+    GelirKalemleri, ManualPayrollIncomeInput, PayrollAccrualInput, PayrollCalculationRequest,
+    PayrollDatasetSnapshot, PayrollMutation, Personel, PersonelPuantaj, PuantajOzeti,
+    StatutorySnapshotSource,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -146,7 +146,10 @@ fn supplementary_is_independent_and_only_prior_events_must_be_authoritative() {
         assert!(!error.contains("normal maaş"));
     }
     let mut earlier = supplementary_request("2026-02-10");
-    earlier.dataset.payrolls.push(calculate_payroll(&explicit_normal_request("2026-02-14")).unwrap());
+    earlier
+        .dataset
+        .payrolls
+        .push(calculate_payroll(&explicit_normal_request("2026-02-14")).unwrap());
     calculate_payroll(&earlier).expect("later NORMAL is not a prerequisite");
 }
 
@@ -169,14 +172,18 @@ fn supplementary_events_calculate_without_attendance_but_normal_still_fails_clos
             description: None,
         });
 
-        let payroll = calculate_payroll(&request).expect("supplementary event is attendance-independent");
+        let payroll =
+            calculate_payroll(&request).expect("supplementary event is attendance-independent");
         assert_eq!(payroll.gelirToplam, dec!(2000));
         assert_eq!(payroll.puantajOzeti.c, 0);
         assert_eq!(payroll.puantajOzeti.t, 0);
         assert_eq!(payroll.puantajOzeti.r, 0);
         assert_eq!(payroll.odenenRaporluGun, Some(0));
         assert_eq!(payroll.raporluGun, Some(0));
-        assert_eq!(payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi, 30);
+        assert_eq!(
+            payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi,
+            30
+        );
         assert_eq!(
             payroll.statutorySnapshot.as_ref().unwrap().source,
             StatutorySnapshotSource::ProvisionalPaymentMonth
@@ -222,19 +229,24 @@ fn incomplete_supplementary_attendance_remains_provisional() {
         .gunler
         .retain(|date, _| date.as_str() == "2026-01-15");
 
-    let payroll = calculate_payroll(&request).expect("incomplete attendance must not block supplementary calculation");
+    let payroll = calculate_payroll(&request)
+        .expect("incomplete attendance must not block supplementary calculation");
     assert_eq!(
         payroll.statutorySnapshot.as_ref().unwrap().source,
         StatutorySnapshotSource::ProvisionalPaymentMonth
     );
-    assert_eq!(payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi, 30);
+    assert_eq!(
+        payroll.statutorySnapshot.as_ref().unwrap().sgkPrimGunSayisi,
+        30
+    );
 }
 
 #[test]
 fn attendance_mutation_invalidates_attendance_dependent_supplementary_events() {
     let mut provisional_request = supplementary_request("2026-02-10");
     provisional_request.dataset.attendances.clear();
-    let provisional = calculate_payroll(&provisional_request).expect("provisional event should calculate");
+    let provisional =
+        calculate_payroll(&provisional_request).expect("provisional event should calculate");
     let provisional_impact = evaluate_payroll_invalidation(
         &PayrollDatasetSnapshot {
             payrolls: vec![provisional],
@@ -269,7 +281,8 @@ fn attendance_mutation_invalidates_attendance_dependent_supplementary_events() {
 fn provisional_supplementary_recalculates_as_attendance_backed_then_finalizes() {
     let mut provisional_request = standalone_supplementary_request("2026-01-31");
     provisional_request.dataset.attendances.clear();
-    let provisional = calculate_payroll(&provisional_request).expect("provisional event should calculate");
+    let provisional =
+        calculate_payroll(&provisional_request).expect("provisional event should calculate");
 
     let mut recalculation_request = standalone_supplementary_request("2026-01-31");
     recalculation_request.dataset.payrolls.push(provisional);
@@ -312,7 +325,8 @@ fn normal_after_attendance_free_tediye_reuses_payment_event_state() {
     let mut tediye_request = supplementary_request("2026-02-10");
     tediye_request.dataset.attendances.clear();
     tediye_request.accrual.as_mut().unwrap().grossAmount = Some(dec!(1000000));
-    let tediye = calculate_payroll(&tediye_request).expect("attendance-free tediye should calculate");
+    let tediye =
+        calculate_payroll(&tediye_request).expect("attendance-free tediye should calculate");
 
     let mut normal_request = explicit_normal_request("2026-02-14");
     normal_request.dataset.payrolls.push(tediye.clone());
@@ -324,11 +338,19 @@ fn normal_after_attendance_free_tediye_reuses_payment_event_state() {
         tediye.gvDetay.as_ref().unwrap().yeniKumulatifGvMatrahi
     );
     assert_eq!(
-        normal.gvDetay.as_ref().unwrap().ayniAyOncekiKullanilanGvIstisnasi,
+        normal
+            .gvDetay
+            .as_ref()
+            .unwrap()
+            .ayniAyOncekiKullanilanGvIstisnasi,
         tediye.gvDetay.as_ref().unwrap().uygulananGvIstisnasi
     );
     assert_eq!(
-        normal.damgaDetay.as_ref().unwrap().ayniAyOncekiKullanilanDamgaIstisnasi,
+        normal
+            .damgaDetay
+            .as_ref()
+            .unwrap()
+            .ayniAyOncekiKullanilanDamgaIstisnasi,
         tediye.damgaDetay.as_ref().unwrap().uygulananDamgaIstisnasi
     );
     assert_eq!(
@@ -871,40 +893,73 @@ fn payment_event_chain_shares_snapshots_and_preserves_full_normal_income() {
         first_request.accrual.as_mut().unwrap().sequence = 0;
         first_request.accrual.as_mut().unwrap().grossAmount = Some(dec!(1000000));
         let first = calculate_payroll(&first_request).unwrap();
-        let mut normal_request = explicit_normal_request(if same_day { "2026-02-10" } else { "2026-02-14" });
+        let mut normal_request =
+            explicit_normal_request(if same_day { "2026-02-10" } else { "2026-02-14" });
         normal_request.accrual.as_mut().unwrap().sequence = if same_day { 1 } else { 0 };
         let standalone = calculate_payroll(&normal_request).unwrap();
         normal_request.dataset.payrolls.push(first.clone());
         let normal = calculate_payroll(&normal_request).unwrap();
-        assert_eq!(normal.gelirler.tabanBrutAylik, standalone.gelirler.tabanBrutAylik);
+        assert_eq!(
+            normal.gelirler.tabanBrutAylik,
+            standalone.gelirler.tabanBrutAylik
+        );
         assert_eq!(normal.gelirler.yemek, standalone.gelirler.yemek);
         assert_eq!(normal.gelirler.vasitaYol, standalone.gelirler.vasitaYol);
         assert_eq!(normal.gelirler.isPrimi, standalone.gelirler.isPrimi);
         let gv = normal.gvDetay.as_ref().unwrap();
         let first_gv = first.gvDetay.as_ref().unwrap();
         assert_eq!(gv.oncekiKumulatifGvMatrahi, first_gv.yeniKumulatifGvMatrahi);
-        assert_eq!(gv.ayniAyOncekiKullanilanGvIstisnasi, first_gv.uygulananGvIstisnasi);
-        assert_eq!(normal.damgaDetay.as_ref().unwrap().ayniAyOncekiKullanilanDamgaIstisnasi,
-            first.damgaDetay.as_ref().unwrap().uygulananDamgaIstisnasi);
-        assert!(first.pekDetay.as_ref().unwrap().primMatrahi + normal.pekDetay.as_ref().unwrap().primMatrahi
-            <= normal.statutorySnapshot.as_ref().unwrap().pekUstSinir);
-        assert_eq!(serde_json::to_value(&normal.devredenPekGelen).unwrap(), serde_json::to_value(&first.sonrakiDevredenPek).unwrap());
+        assert_eq!(
+            gv.ayniAyOncekiKullanilanGvIstisnasi,
+            first_gv.uygulananGvIstisnasi
+        );
+        assert_eq!(
+            normal
+                .damgaDetay
+                .as_ref()
+                .unwrap()
+                .ayniAyOncekiKullanilanDamgaIstisnasi,
+            first.damgaDetay.as_ref().unwrap().uygulananDamgaIstisnasi
+        );
+        assert!(
+            first.pekDetay.as_ref().unwrap().primMatrahi
+                + normal.pekDetay.as_ref().unwrap().primMatrahi
+                <= normal.statutorySnapshot.as_ref().unwrap().pekUstSinir
+        );
+        assert_eq!(
+            serde_json::to_value(&normal.devredenPekGelen).unwrap(),
+            serde_json::to_value(&first.sonrakiDevredenPek).unwrap()
+        );
         let mut third_request = normal_request.clone();
         third_request.dataset.payrolls.push(normal.clone());
         third_request.dataset.payrolls.reverse(); // input storage order is irrelevant
         third_request.accrual = Some(PayrollAccrualInput {
-            accrualId: "third-tis".into(), accrualType: AccrualType::TIS_IKRAMIYE,
+            accrualId: "third-tis".into(),
+            accrualType: AccrualType::TIS_IKRAMIYE,
             paymentDate: if same_day { "2026-02-10" } else { "2026-02-25" }.into(),
-            sequence: if same_day { 2 } else { 0 }, grossAmount: Some(dec!(2000)), description: None,
+            sequence: if same_day { 2 } else { 0 },
+            grossAmount: Some(dec!(2000)),
+            description: None,
         });
         let third = calculate_payroll(&third_request).unwrap();
-        assert_eq!(third.gvDetay.as_ref().unwrap().oncekiKumulatifGvMatrahi,
-            first_gv.cariGvMatrahi + gv.cariGvMatrahi);
-        assert_eq!(third.gvDetay.as_ref().unwrap().uygulananGvIstisnasi, dec!(0));
-        assert_eq!(serde_json::to_value(&third.devredenPekGelen).unwrap(), serde_json::to_value(&normal.sonrakiDevredenPek).unwrap());
+        assert_eq!(
+            third.gvDetay.as_ref().unwrap().oncekiKumulatifGvMatrahi,
+            first_gv.cariGvMatrahi + gv.cariGvMatrahi
+        );
+        assert_eq!(
+            third.gvDetay.as_ref().unwrap().uygulananGvIstisnasi,
+            dec!(0)
+        );
+        assert_eq!(
+            serde_json::to_value(&third.devredenPekGelen).unwrap(),
+            serde_json::to_value(&normal.sonrakiDevredenPek).unwrap()
+        );
         // Exactly one normal per personnel + work period, regardless of date/sequence.
         third_request.accrual.as_mut().unwrap().accrualType = AccrualType::NORMAL;
-        assert!(calculate_payroll(&third_request).unwrap_err().to_string().contains("yalnız bir NORMAL"));
+        assert!(calculate_payroll(&third_request)
+            .unwrap_err()
+            .to_string()
+            .contains("yalnız bir NORMAL"));
     }
 }
 
@@ -931,16 +986,27 @@ fn first_supplementary_event_advances_carry_month_once() {
     let mut request = supplementary_request("2026-02-10");
     request.accrual.as_mut().unwrap().grossAmount = Some(dec!(1000000));
     let previous = calculate_payroll(&request).unwrap();
-    assert_eq!(previous.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 2);
+    assert_eq!(
+        previous.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
+        2
+    );
     request.dataset.payrolls.push(previous);
     let next = BordroDonemi {
-        id: "2026-02".into(), yil: 2026, ay: 2,
-        baslangicTarihi: "2026-02-15".into(), bitisTarihi: "2026-03-14".into(),
-        donemAdi: "Next month".into(), taxYear: 2026, taxMonth: 3,
+        id: "2026-02".into(),
+        yil: 2026,
+        ay: 2,
+        baslangicTarihi: "2026-02-15".into(),
+        bitisTarihi: "2026-03-14".into(),
+        donemAdi: "Next month".into(),
+        taxYear: 2026,
+        taxMonth: 3,
     };
     let mut settings = request.dataset.institutionSettings["2026-01"].clone();
     settings.donemId = next.id.clone();
-    request.dataset.institutionSettings.insert(next.id.clone(), settings);
+    request
+        .dataset
+        .institutionSettings
+        .insert(next.id.clone(), settings);
     let mut days = HashMap::new();
     let mut date = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
     let end = NaiveDate::from_ymd_opt(2026, 3, 14).unwrap();
@@ -949,19 +1015,32 @@ fn first_supplementary_event_advances_carry_month_once() {
         date += Duration::days(1);
     }
     request.dataset.attendances.push(PersonelPuantaj {
-        id: "next-attendance".into(), personelId: request.personnelId.clone(), donemId: next.id.clone(), gunler: days,
+        id: "next-attendance".into(),
+        personelId: request.personnelId.clone(),
+        donemId: next.id.clone(),
+        gunler: days,
     });
     request.periodId = next.id.clone();
     request.dataset.periods.push(next);
     request.accrual = Some(PayrollAccrualInput {
-        accrualId: "next-first".into(), accrualType: AccrualType::TEDIYE, paymentDate: "2026-03-10".into(),
-        sequence: 0, grossAmount: Some(dec!(1000000)), description: None,
+        accrualId: "next-first".into(),
+        accrualType: AccrualType::TEDIYE,
+        paymentDate: "2026-03-10".into(),
+        sequence: 0,
+        grossAmount: Some(dec!(1000000)),
+        description: None,
     });
     let first = calculate_payroll(&request).unwrap();
-    assert_eq!(first.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 1);
+    assert_eq!(
+        first.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
+        1
+    );
     request.dataset.payrolls.push(first);
     request.accrual.as_mut().unwrap().accrualId = "next-second".into();
     request.accrual.as_mut().unwrap().sequence = 1;
     let second = calculate_payroll(&request).unwrap();
-    assert_eq!(second.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi, 1);
+    assert_eq!(
+        second.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
+        1
+    );
 }

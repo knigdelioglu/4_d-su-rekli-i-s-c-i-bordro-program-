@@ -41,126 +41,14 @@ pub struct PayrollDatasetIndex {
     overrides_by_revision: PersonKeyedPositions,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::models::{BordroDonemi, Personel, PersonelPuantaj, SickLeaveRecord};
-    use std::collections::HashMap;
-
-    fn period(id: &str, tax_month: i32) -> BordroDonemi {
-        BordroDonemi {
-            id: id.into(),
-            yil: 2026,
-            ay: tax_month,
-            baslangicTarihi: format!("2026-{tax_month:02}-15"),
-            bitisTarihi: format!("2026-{tax_month:02}-28"),
-            donemAdi: id.into(),
-            taxYear: 2026,
-            taxMonth: tax_month,
-        }
-    }
-
-    fn person(id: &str) -> Personel {
-        Personel {
-            id: id.into(),
-            tcNo: format!("TC-{id}"),
-            ad: "Test".into(),
-            soyad: "Personel".into(),
-            grup: "1. Grup".into(),
-            unvan: None,
-            sgkSicilNo: String::new(),
-            iban: String::new(),
-            hizmetYili: 0,
-            aciklama: None,
-            devirKumulatifGvMatrahi: None,
-            devirKumulatifGvMatrahiYili: None,
-            devirKumulatifGvMatrahiBaslangicAyi: None,
-            devirKumulatifAsgariGvMatrahi: None,
-            devirKumulatifAsgariGvMatrahiYili: None,
-            kesintiler: None,
-        }
-    }
-
-    #[test]
-    fn repeated_build_preserves_source_order_for_keyed_lookups() {
-        let mut first_days = HashMap::new();
-        first_days.insert("2026-01-15".into(), "Ç".into());
-        let mut second_days = HashMap::new();
-        second_days.insert("2026-02-15".into(), "R".into());
-        let dataset = PayrollDatasetSnapshot {
-            personnel: vec![person("person-1")],
-            periods: vec![period("period-2", 2), period("period-1", 1)],
-            attendances: vec![
-                PersonelPuantaj {
-                    id: "attendance-2".into(),
-                    personelId: "person-1".into(),
-                    donemId: "period-2".into(),
-                    gunler: second_days,
-                },
-                PersonelPuantaj {
-                    id: "attendance-1".into(),
-                    personelId: "person-1".into(),
-                    donemId: "period-1".into(),
-                    gunler: first_days,
-                },
-            ],
-            sickLeaveRecords: vec![
-                SickLeaveRecord {
-                    id: "sick-2".into(),
-                    personnelId: "person-1".into(),
-                    startDate: "2026-02-15".into(),
-                    endDate: "2026-02-16".into(),
-                    createdAt: None,
-                    updatedAt: None,
-                },
-                SickLeaveRecord {
-                    id: "sick-1".into(),
-                    personnelId: "person-1".into(),
-                    startDate: "2026-01-15".into(),
-                    endDate: "2026-01-16".into(),
-                    createdAt: None,
-                    updatedAt: None,
-                },
-            ],
-            ..PayrollDatasetSnapshot::default()
-        };
-
-        let first = PayrollDatasetIndex::build(&dataset);
-        let second = PayrollDatasetIndex::build(&dataset);
-        let period_ids = |index: &PayrollDatasetIndex| {
-            index
-                .periods_for_tax_month(&dataset, 2026, 2)
-                .map(|period| period.id.clone())
-                .collect::<Vec<_>>()
-        };
-        let attendance_ids = |index: &PayrollDatasetIndex| {
-            index
-                .attendances(&dataset, "person-1", "period-1")
-                .map(|attendance| attendance.id.clone())
-                .collect::<Vec<_>>()
-        };
-        let sick_ids = |index: &PayrollDatasetIndex| {
-            index
-                .sick_leave_for_person(&dataset, "person-1")
-                .map(|record| record.id.clone())
-                .collect::<Vec<_>>()
-        };
-
-        assert_eq!(first.personnel(&dataset, "person-1").map(|p| p.id.as_str()), Some("person-1"));
-        assert_eq!(period_ids(&first), period_ids(&second));
-        assert_eq!(attendance_ids(&first), vec!["attendance-1".to_owned()]);
-        assert_eq!(attendance_ids(&first), attendance_ids(&second));
-        assert_eq!(sick_ids(&first), vec!["sick-2".to_owned(), "sick-1".to_owned()]);
-        assert_eq!(sick_ids(&first), sick_ids(&second));
-    }
-}
-
-fn positions<'a>(value: Option<&'a Positions>) -> &'a [usize] {
+fn positions(value: Option<&Positions>) -> &[usize] {
     value.map(Vec::as_slice).unwrap_or(&[])
 }
 
 fn records<'a, T>(values: &'a [T], positions: &'a [usize]) -> impl Iterator<Item = &'a T> + 'a {
-    positions.iter().filter_map(|position| values.get(*position))
+    positions
+        .iter()
+        .filter_map(|position| values.get(*position))
 }
 
 fn push_position(map: &mut PersonKeyedPositions, key: &str, position: usize) {
@@ -228,7 +116,11 @@ impl PayrollDatasetIndex {
                     .push(position);
             }
             if !payroll.accrualId.trim().is_empty() {
-                push_position(&mut index.payrolls_by_accrual_id, &payroll.accrualId, position);
+                push_position(
+                    &mut index.payrolls_by_accrual_id,
+                    &payroll.accrualId,
+                    position,
+                );
             }
             if payroll.id != payroll.accrualId {
                 push_position(&mut index.payrolls_by_accrual_id, &payroll.id, position);
@@ -251,14 +143,22 @@ impl PayrollDatasetIndex {
                 .push(position);
         }
         for (position, record) in dataset.sickLeaveRecords.iter().enumerate() {
-            push_position(&mut index.sick_leave_by_person, &record.personnelId, position);
+            push_position(
+                &mut index.sick_leave_by_person,
+                &record.personnelId,
+                position,
+            );
         }
         for (position, batch) in dataset.retroBatches.iter().enumerate() {
             index
                 .retro_batches_by_id
                 .entry(batch.id.clone())
                 .or_insert(position);
-            push_position(&mut index.retro_batches_by_person, &batch.personnelId, position);
+            push_position(
+                &mut index.retro_batches_by_person,
+                &batch.personnelId,
+                position,
+            );
             push_position(
                 &mut index.retro_batches_by_revision,
                 &batch.revisionId,
@@ -498,5 +398,125 @@ impl PayrollDatasetIndex {
             &dataset.compensationRevisionOverrides,
             positions(self.overrides_by_revision.get(revision_id)),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{BordroDonemi, Personel, PersonelPuantaj, SickLeaveRecord};
+    use std::collections::HashMap;
+
+    fn period(id: &str, tax_month: i32) -> BordroDonemi {
+        BordroDonemi {
+            id: id.into(),
+            yil: 2026,
+            ay: tax_month,
+            baslangicTarihi: format!("2026-{tax_month:02}-15"),
+            bitisTarihi: format!("2026-{tax_month:02}-28"),
+            donemAdi: id.into(),
+            taxYear: 2026,
+            taxMonth: tax_month,
+        }
+    }
+
+    fn person(id: &str) -> Personel {
+        Personel {
+            id: id.into(),
+            tcNo: format!("TC-{id}"),
+            ad: "Test".into(),
+            soyad: "Personel".into(),
+            grup: "1. Grup".into(),
+            unvan: None,
+            sgkSicilNo: String::new(),
+            iban: String::new(),
+            hizmetYili: 0,
+            aciklama: None,
+            devirKumulatifGvMatrahi: None,
+            devirKumulatifGvMatrahiYili: None,
+            devirKumulatifGvMatrahiBaslangicAyi: None,
+            devirKumulatifAsgariGvMatrahi: None,
+            devirKumulatifAsgariGvMatrahiYili: None,
+            kesintiler: None,
+        }
+    }
+
+    #[test]
+    fn repeated_build_preserves_source_order_for_keyed_lookups() {
+        let mut first_days = HashMap::new();
+        first_days.insert("2026-01-15".into(), "Ç".into());
+        let mut second_days = HashMap::new();
+        second_days.insert("2026-02-15".into(), "R".into());
+        let dataset = PayrollDatasetSnapshot {
+            personnel: vec![person("person-1")],
+            periods: vec![period("period-2", 2), period("period-1", 1)],
+            attendances: vec![
+                PersonelPuantaj {
+                    id: "attendance-2".into(),
+                    personelId: "person-1".into(),
+                    donemId: "period-2".into(),
+                    gunler: second_days,
+                },
+                PersonelPuantaj {
+                    id: "attendance-1".into(),
+                    personelId: "person-1".into(),
+                    donemId: "period-1".into(),
+                    gunler: first_days,
+                },
+            ],
+            sickLeaveRecords: vec![
+                SickLeaveRecord {
+                    id: "sick-2".into(),
+                    personnelId: "person-1".into(),
+                    startDate: "2026-02-15".into(),
+                    endDate: "2026-02-16".into(),
+                    createdAt: None,
+                    updatedAt: None,
+                },
+                SickLeaveRecord {
+                    id: "sick-1".into(),
+                    personnelId: "person-1".into(),
+                    startDate: "2026-01-15".into(),
+                    endDate: "2026-01-16".into(),
+                    createdAt: None,
+                    updatedAt: None,
+                },
+            ],
+            ..PayrollDatasetSnapshot::default()
+        };
+
+        let first = PayrollDatasetIndex::build(&dataset);
+        let second = PayrollDatasetIndex::build(&dataset);
+        let period_ids = |index: &PayrollDatasetIndex| {
+            index
+                .periods_for_tax_month(&dataset, 2026, 2)
+                .map(|period| period.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let attendance_ids = |index: &PayrollDatasetIndex| {
+            index
+                .attendances(&dataset, "person-1", "period-1")
+                .map(|attendance| attendance.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let sick_ids = |index: &PayrollDatasetIndex| {
+            index
+                .sick_leave_for_person(&dataset, "person-1")
+                .map(|record| record.id.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            first.personnel(&dataset, "person-1").map(|p| p.id.as_str()),
+            Some("person-1")
+        );
+        assert_eq!(period_ids(&first), period_ids(&second));
+        assert_eq!(attendance_ids(&first), vec!["attendance-1".to_owned()]);
+        assert_eq!(attendance_ids(&first), attendance_ids(&second));
+        assert_eq!(
+            sick_ids(&first),
+            vec!["sick-2".to_owned(), "sick-1".to_owned()]
+        );
+        assert_eq!(sick_ids(&first), sick_ids(&second));
     }
 }

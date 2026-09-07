@@ -175,9 +175,15 @@ impl CumulativeTaxService {
                 record.accrualId.as_str()
             };
             let is_before = payroll_core::payroll_engine::payment_event_order(
-                &period, &payment_date.format("%Y-%m-%d").to_string(), record.sequence, record_id,
+                &period,
+                &payment_date.format("%Y-%m-%d").to_string(),
+                record.sequence,
+                record_id,
             )? < payroll_core::payroll_engine::payment_event_order(
-                active_period, &accrual.paymentDate, accrual.sequence, current_id,
+                active_period,
+                &accrual.paymentDate,
+                accrual.sequence,
+                current_id,
             )?;
             if !is_before {
                 continue;
