@@ -636,6 +636,24 @@ fn target_income_for_period(
         })?
         .clone();
     crate::calculations::validate_kurum_degerleri_for_payroll(&historical_settings)?;
+    // Replay the same scheduled daily-rate split as the original NORMAL.
+    // Monthly allowances remain owned by this period's settings.
+    let raise_date = crate::payroll_engine::find_zam_tarihi(period, &dataset.zamAylari)?;
+    let before_raise_settings = if raise_date.is_some() {
+        let previous = crate::payroll_engine::find_previous_work_period(dataset, period)?
+            .ok_or_else(|| DomainError::InvalidData(format!("{} retro zam öncesi dönem eksik.", period.id)))?;
+        let previous = dataset.institutionSettings.get(&previous.id)
+            .ok_or_else(|| DomainError::InvalidData(format!("{} retro zam öncesi kurum ayarları eksik.", period.id)))?;
+        crate::calculations::validate_kurum_degerleri_for_payroll(previous)?;
+        let mut baseline = historical_settings.clone();
+        baseline.gunlukTabanUcret = previous.gunlukTabanUcret;
+        baseline.gunlukYemek = previous.gunlukYemek;
+        baseline.gunlukVasitaYol = previous.gunlukVasitaYol;
+        baseline.isPrimiGruplari = previous.isPrimiGruplari.clone();
+        baseline.geceCalismaPrimiYuzde = previous.geceCalismaPrimiYuzde;
+        baseline.geceCalismaTatiliPrimiYuzde = previous.geceCalismaTatiliPrimiYuzde;
+        Some(baseline)
+    } else { None };
     let mut segments: Vec<ReplaySegment> = Vec::new();
     let mut current = start;
     while current <= covered_end {
@@ -657,16 +675,21 @@ fn target_income_for_period(
             .map(|application| application.revision.id.as_str())
             .collect::<Vec<_>>()
             .join("|");
+        let before_raise = raise_date.is_some_and(|cutoff| current < cutoff);
+        let segment_key = format!("{before_raise}:{active_revision_ids}");
+        let baseline = if before_raise {
+            before_raise_settings.as_ref().unwrap_or(&historical_settings)
+        } else { &historical_settings };
         let segment_index = if let Some(index) = segments
             .iter()
-            .position(|segment| segment.key == active_revision_ids)
+            .position(|segment| segment.key == segment_key)
         {
             index
         } else {
             let settings =
-                settings_for_replay_date(&historical_settings, personnel, current, applications)?;
+                settings_for_replay_date(baseline, personnel, current, applications)?;
             segments.push(ReplaySegment {
-                key: active_revision_ids,
+                key: segment_key,
                 settings,
                 summary: PuantajOzeti::default(),
                 paid_sick_days: 0,

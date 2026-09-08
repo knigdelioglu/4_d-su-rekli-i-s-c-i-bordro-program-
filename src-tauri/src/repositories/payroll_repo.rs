@@ -17,6 +17,10 @@ struct PayrollDependencyFingerprint {
     new_cumulative_gv: i64,
     net_payment: i64,
     sonraki_devreden_pek_json: Option<String>,
+    gv_snapshot_json: Option<String>,
+    damga_snapshot_json: Option<String>,
+    statutory_snapshot_json: Option<String>,
+    pek_detail_json: Option<String>,
 }
 
 type ExistingPayrollIdentity = (String, String, String, String, String, String, i32);
@@ -246,7 +250,7 @@ impl PayrollRepository {
         accrual_id: &str,
     ) -> Result<Option<PayrollDependencyFingerprint>> {
         conn.query_row(
-            "SELECT gv_base, sgk_base, new_cumulative_gv, net_payment, sonraki_devreden_pek_json
+            "SELECT gv_base, sgk_base, new_cumulative_gv, net_payment, sonraki_devreden_pek_json, gv_snapshot_json, damga_snapshot_json, statutory_snapshot_json, pek_detail_json
              FROM payroll_records
              WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
             params![personnel_id, period_id, accrual_id],
@@ -257,6 +261,10 @@ impl PayrollRepository {
                     new_cumulative_gv: row.get(2)?,
                     net_payment: row.get(3)?,
                     sonraki_devreden_pek_json: row.get(4)?,
+                    gv_snapshot_json: row.get(5)?,
+                    damga_snapshot_json: row.get(6)?,
+                    statutory_snapshot_json: row.get(7)?,
+                    pek_detail_json: row.get(8)?,
                 })
             },
         )
@@ -1049,18 +1057,22 @@ impl PayrollRepository {
     }
 
     pub fn save(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
-        let tx = conn
-            .unchecked_transaction()
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        crate::repositories::transaction::with_transaction(conn, |tx| {
+            Self::save_with_policy_in_transaction(tx, bordro)
+        })
+    }
 
+    /// Production save including identity checks and downstream invalidation,
+    /// inside the service's snapshot/read/calculate/write transaction.
+    pub(crate) fn save_with_policy_in_transaction(tx: &Connection, bordro: &BordroKaydi) -> Result<()> {
         // Reject a split-brain payment event before dependency invalidation or
         // any other mutation policy can mask the authoritative date/tax-month
         // validation error. `save_in_transaction` repeats this check for
         // restore/import callers that intentionally bypass production policy.
-        Self::validate_payment_date_matches_period(&tx, bordro)?;
+        Self::validate_payment_date_matches_period(tx, bordro)?;
         let accrual_id = Self::effective_accrual_id(bordro);
         let accrual_type = Self::accrual_type_to_str(bordro.accrualType);
-        let payment_date = Self::effective_payment_date(&tx, bordro)?;
+        let payment_date = Self::effective_payment_date(tx, bordro)?;
         if let Some((
             existing_personnel,
             existing_period,
@@ -1069,7 +1081,7 @@ impl PayrollRepository {
             existing_payment_date,
             existing_status,
             existing_sequence,
-        )) = Self::existing_identity_by_id(&tx, &bordro.id)?
+        )) = Self::existing_identity_by_id(tx, &bordro.id)?
         {
             if existing_status == "FINALIZED" {
                 return Err(DomainError::PayrollFinalized(
@@ -1096,7 +1108,7 @@ impl PayrollRepository {
             }
         }
         let existing_status = Self::get_status_and_created_at_for_accrual(
-            &tx,
+            tx,
             &bordro.personelId,
             &bordro.donemId,
             &accrual_id,
@@ -1120,25 +1132,24 @@ impl PayrollRepository {
                 personnelId: bordro.personelId.clone(),
                 periodId: bordro.donemId.clone(),
                 accrualId: accrual_id.clone(),
-                paymentDate: Self::effective_payment_date(&tx, bordro)?,
+                paymentDate: Self::effective_payment_date(tx, bordro)?,
                 sequence: bordro.sequence,
             }
         };
-        let impact = PayrollInvalidationRepository::assert_mutation_allowed(&tx, &mutation)?;
-        let preserve_legacy_snapshot = Self::is_legacy_sparse_snapshot(&tx, bordro)?;
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(tx, &mutation)?;
+        let preserve_legacy_snapshot = Self::is_legacy_sparse_snapshot(tx, bordro)?;
 
         let before =
-            Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
-        Self::save_in_transaction_with_options(&tx, bordro, !preserve_legacy_snapshot)?;
+            Self::dependency_fingerprint(tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
+        Self::save_in_transaction_with_options(tx, bordro, !preserve_legacy_snapshot)?;
         let after =
-            Self::dependency_fingerprint(&tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
+            Self::dependency_fingerprint(tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
 
         if before != after {
-            PayrollInvalidationRepository::apply_impact(&tx, &impact)?;
+            PayrollInvalidationRepository::apply_impact(tx, &impact)?;
         }
 
-        tx.commit()
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))
+        Ok(())
     }
 
     /// MigrationService transaction'ı içinden çağrılır; yeni transaction açmaz.

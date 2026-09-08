@@ -680,7 +680,7 @@ fn add_paid_sick_wage(field: &mut Option<Decimal>, paid_days: i32, daily_wage: D
     ));
 }
 
-fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<NaiveDate>> {
+pub(crate) fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<NaiveDate>> {
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let mut result = None;
@@ -1482,7 +1482,7 @@ fn same_month_stamp_exemption_used(prior: &[&BordroKaydi], stamp_rate: Decimal) 
     })
 }
 
-fn find_previous_work_period<'a>(
+pub(crate) fn find_previous_work_period<'a>(
     dataset: &'a PayrollDatasetSnapshot,
     active_period: &BordroDonemi,
 ) -> Result<Option<&'a BordroDonemi>> {
@@ -2488,6 +2488,11 @@ fn validate_payroll_request_with_index(
         .ok_or_else(|| {
             DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId))
         })?;
+    crate::validate_personnel_for_payroll(person)?;
+    let annual = index.annual_parameters(&request.dataset, period.taxYear).ok_or_else(|| {
+        DomainError::InvalidData(format!("{} vergi yılı yıllık bordro parametreleri eksik.", period.taxYear))
+    })?;
+    crate::validate_annual_payroll_parameters(annual)?;
     let accrual = resolve_accrual_input(request, period, index)?;
     let normal_count = index
         .payrolls_for_person_period(&request.dataset, &request.personnelId, &request.periodId)
@@ -2722,6 +2727,7 @@ fn calculate_payroll_with_index(
         ));
     }
 
+    crate::validate_personnel_for_payroll(&person)?;
     let is_normal_accrual = accrual.accrualType == AccrualType::NORMAL;
     let is_retro_accrual = accrual.accrualType == AccrualType::RETRO_ADJUSTMENT;
     let retro_payment = if is_retro_accrual {
@@ -2869,6 +2875,7 @@ fn calculate_payroll_with_index(
                 period.taxYear
             ))
         })?;
+    crate::validate_annual_payroll_parameters(&annual_parameters)?;
     let (before_summary, after_summary, raise_date) = if let Some(attendance) = attendance {
         split_puantaj_by_zam_tarihi(attendance, &period, &dataset.zamAylari)?
     } else {
@@ -3057,6 +3064,13 @@ fn calculate_payroll_with_index(
                 isciIssizlikPrimi: Some(round_sgk_amount(
                     source_worker_unemployment + payment_month_worker_pek * unemployment_rate,
                 )),
+                bes: calculate_oks_deduction(
+                    payment_month_worker_pek
+                        + allocations.iter().map(|allocation| allocation.retroPekDelta).sum::<Decimal>(),
+                    &effective_settings,
+                    Some(&person),
+                    false,
+                ),
                 ..KesintiKalemleri::default()
             },
             pek_detail,
@@ -3085,32 +3099,7 @@ fn calculate_payroll_with_index(
             .ok_or_else(|| DomainError::InvalidData("İşsizlik işçi oranı eksik.".into()))?
             / dec!(100);
         let worker_pek = pek_detail.primMatrahi;
-        let is_oks = person
-            .kesintiler
-            .as_ref()
-            .and_then(|deductions| deductions.besUyesi)
-            .unwrap_or(false);
-        let bes = if is_oks
-            && person
-                .kesintiler
-                .as_ref()
-                .and_then(|deductions| deductions.sabitBesTutar)
-                .is_none()
-        {
-            let rate = person
-                .kesintiler
-                .as_ref()
-                .and_then(|deductions| deductions.oksOraniYuzde)
-                .or(effective_settings.besOraniYuzde)
-                .unwrap_or(dec!(3))
-                / dec!(100);
-            Some((worker_pek * rate).floor())
-        } else {
-            // Fixed BES, union, enforcement, debt, insurance, and other
-            // configured deductions are MONTHLY_ONCE/MANUAL. No silent second
-            // application is allowed on a supplementary accrual.
-            None
-        };
+        let bes = calculate_oks_deduction(worker_pek, &effective_settings, Some(&person), false);
         (
             KesintiKalemleri {
                 isciSgkPrimi: Some(round_sgk_amount(worker_pek * sgk_rate)),
@@ -3130,8 +3119,16 @@ fn calculate_payroll_with_index(
         / dec!(1000);
     let monthly_minimum = round2(statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30));
     let same_month_stamp_used = same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?;
+    // GVK 23/8 meal exemption also excludes this amount from stamp tax
+    // (322 numbered Income Tax Communiqué, article 4/6). Keep it separate
+    // from the shared monthly minimum-wage exemption balance.
+    let normal_meal_tax_exemption = if is_normal_accrual {
+        income.yemek.unwrap_or_default().min(statutory_snapshot.gvYemekIstisnasiToplam)
+    } else {
+        Decimal::ZERO
+    };
     let stamp_detail = calculate_monthly_stamp_tax_state(
-        (income_total - retro_stamp_tax_exempt).max(Decimal::ZERO),
+        (income_total - retro_stamp_tax_exempt - normal_meal_tax_exemption).max(Decimal::ZERO),
         monthly_minimum,
         stamp_rate,
         same_month_stamp_used,
@@ -3189,7 +3186,7 @@ fn calculate_payroll_with_index(
     let insurance_wage_base =
         (income_total - income.yemek.unwrap_or_default() - income.vasitaYol.unwrap_or_default())
             .max(Decimal::ZERO);
-    let gv_discount = calculate_gv_indirimleri(
+    let mut gv_discount = calculate_gv_indirimleri(
         insurance_wage_base,
         birth_military,
         life_insurance,
@@ -3197,18 +3194,21 @@ fn calculate_payroll_with_index(
         insurance_cap,
         insurance_used,
     );
-    let gv_base = (income_total
+    let gv_base_before_discounts = (income_total
         - retro_income_tax_exempt
         - deductions.isciSgkPrimi.unwrap_or_default()
         - deductions.isciIssizlikPrimi.unwrap_or_default()
-        - income
-            .yemek
-            .unwrap_or_default()
-            .min(statutory_snapshot.gvYemekIstisnasiToplam)
-        - deductions.sendikaAidati.unwrap_or_default()
-        - gv_discount.dogum_askerlik_indirimi
-        - gv_discount.uygulanabilir_sigorta_indirimi)
+        - income.yemek.unwrap_or_default().min(statutory_snapshot.gvYemekIstisnasiToplam)
+        - deductions.sendikaAidati.unwrap_or_default())
         .max(Decimal::ZERO);
+    gv_discount.dogum_askerlik_indirimi = gv_discount.dogum_askerlik_indirimi.min(gv_base_before_discounts);
+    // Only a deduction actually absorbed by the current tax base may consume
+    // the annual insurance allowance used by subsequent payment events.
+    gv_discount.uygulanabilir_sigorta_indirimi = gv_discount.uygulanabilir_sigorta_indirimi
+        .min(gv_base_before_discounts - gv_discount.dogum_askerlik_indirimi);
+    let gv_base = gv_base_before_discounts
+        - gv_discount.dogum_askerlik_indirimi
+        - gv_discount.uygulanabilir_sigorta_indirimi;
     let daily_minimum = statutory_snapshot.gvReferansGunlukAsgariUcret;
     let monthly_asgari_gv =
         calculate_aylik_asgari_ucret_gv_matrahi(daily_minimum, sgk_rate, unemployment_rate);

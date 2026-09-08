@@ -103,6 +103,30 @@ pub fn canonical_sgk_income_components(
     })
 }
 
+/// Resolves the same personal/institutional fixed-or-percentage rule for
+/// every event. Positive fixed amounts are collected by NORMAL only;
+/// explicit zero has the same meaning as an absent fixed amount.
+pub(crate) fn calculate_oks_deduction(
+    pek: Decimal,
+    settings: &DonemselKurumDegerleri,
+    person: Option<&Personel>,
+    apply_fixed: bool,
+) -> Option<Decimal> {
+    let personal = person.and_then(|p| p.kesintiler.as_ref());
+    if !personal.and_then(|p| p.besUyesi).unwrap_or(false) {
+        return None;
+    }
+    let fixed = personal.and_then(|p| p.sabitBesTutar)
+        .filter(|value| *value > Decimal::ZERO)
+        .or(settings.sabitBesTutar.filter(|value| *value > Decimal::ZERO));
+    if let Some(fixed) = fixed {
+        return apply_fixed.then_some(fixed);
+    }
+    let rate = personal.and_then(|p| p.oksOraniYuzde)
+        .or(settings.besOraniYuzde).unwrap_or(dec!(3)) / dec!(100);
+    Some(floor_dec(pek.max(Decimal::ZERO) * rate))
+}
+
 fn floor_dec(val: Decimal) -> Decimal {
     val.floor()
 }
@@ -1272,21 +1296,7 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
         dec!(0)
     };
 
-    let is_oks = p_kesintiler.and_then(|pk| pk.besUyesi).unwrap_or(false);
-    let bes = if is_oks {
-        p_kesintiler
-            .and_then(|pk| pk.sabitBesTutar)
-            .filter(|&sabit| sabit > dec!(0))
-            .or_else(|| k.sabitBesTutar.filter(|&sabit| sabit > dec!(0)))
-            .unwrap_or_else(|| {
-                let custom_oran = p_kesintiler.and_then(|pk| pk.oksOraniYuzde);
-                let oks_orani =
-                    custom_oran.unwrap_or_else(|| k.besOraniYuzde.unwrap_or(dec!(3))) / dec!(100);
-                floor_dec(oks_pek_matrah * oks_orani)
-            })
-    } else {
-        dec!(0)
-    };
+    let bes = calculate_oks_deduction(oks_pek_matrah, k, personel, true).unwrap_or_default();
 
     let icra = p_kesintiler
         .and_then(|pk| pk.icraTutar)

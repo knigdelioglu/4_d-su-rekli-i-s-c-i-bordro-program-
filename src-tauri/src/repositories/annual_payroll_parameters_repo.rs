@@ -1,4 +1,4 @@
-use crate::domain::models::{AnnualPayrollParameters, TaxBracket, OPEN_ENDED_TAX_BRACKET_LIMIT};
+use crate::domain::models::AnnualPayrollParameters;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::transaction::with_transaction;
@@ -10,57 +10,7 @@ pub struct AnnualPayrollParametersRepository;
 
 impl AnnualPayrollParametersRepository {
     fn validate(parameters: &AnnualPayrollParameters) -> Result<()> {
-        if parameters.year <= 0 || parameters.gelirVergisiDilimleri.is_empty() {
-            return Err(DomainError::ValidationError(
-                "Yıllık bordro parametresi geçerli bir yıl ve en az bir vergi dilimi içermelidir."
-                    .into(),
-            ));
-        }
-
-        if parameters
-            .sigortaGvYillikBrutAsgariUcretTavani
-            .is_some_and(|value| value <= Decimal::ZERO)
-        {
-            return Err(DomainError::ValidationError(
-                "Sigorta GV yıllık tavanı sıfırdan büyük olmalıdır.".into(),
-            ));
-        }
-
-        let mut previous_limit = rust_decimal_macros::dec!(0);
-        let max_persisted_limit = Decimal::from(OPEN_ENDED_TAX_BRACKET_LIMIT);
-        for TaxBracket { limit, oran } in &parameters.gelirVergisiDilimleri {
-            if *limit <= previous_limit
-                || *limit > max_persisted_limit
-                || *oran < rust_decimal_macros::dec!(0)
-                || *oran > rust_decimal_macros::dec!(1)
-            {
-                return Err(DomainError::ValidationError(
-                    "Yıllık gelir vergisi dilimleri artan, SQLite'a sığan limitlere ve 0-1 arası oranlara sahip olmalıdır."
-                        .into(),
-                ));
-            }
-            previous_limit = *limit;
-        }
-
-        // The last bracket is semantically open-ended in the calculation
-        // engine. Its persistence boundary must remain finite and safe for the
-        // serde-float/SQLite JSON contract; Decimal::MAX is not a valid value.
-        let last_limit = parameters
-            .gelirVergisiDilimleri
-            .last()
-            .map(|bracket| bracket.limit)
-            .ok_or_else(|| {
-                DomainError::ValidationError(
-                    "Yıllık gelir vergisi parametresinin son dilimi zorunludur.".into(),
-                )
-            })?;
-        if last_limit > max_persisted_limit {
-            return Err(DomainError::ValidationError(
-                "Yıllık gelir vergisi son dilim sınırı SQLite-safe üst sınırı aşamaz.".into(),
-            ));
-        }
-
-        Ok(())
+        payroll_core::validate_annual_payroll_parameters(parameters)
     }
 
     fn parse_row(

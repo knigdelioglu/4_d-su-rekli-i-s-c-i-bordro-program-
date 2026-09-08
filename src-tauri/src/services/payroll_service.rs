@@ -121,22 +121,24 @@ impl PayrollService {
         manual_income: Option<&ManualPayrollIncomeInput>,
         checked: bool,
     ) -> Result<BordroKaydi> {
-        let request =
-            Self::build_calculation_request(conn, personnel_id, period_id, accrual, manual_income)?;
-        let calculated = if checked {
-            payroll_core::calculate_payroll_checked(&request)?
-        } else {
-            // Keep the historical service contract: callers that need
-            // cross-record preflight use the checked command/finalization/retro
-            // APIs. A scoped snapshot must not turn this fixture-facing method
-            // into a new validation gate.
-            payroll_core::calculate_payroll(&request)?
-        };
-        // Freeze the period-level legal inputs before the first persisted
-        // authoritative record. Existing snapshots are never replaced.
-        SettingsRepository::persist_statutory_snapshot_if_missing(conn, period_id)?;
-        PayrollRepository::save(conn, &calculated)?;
-        Ok(calculated)
+        crate::repositories::transaction::with_transaction(conn, |tx| {
+            let request =
+                Self::build_calculation_request(tx, personnel_id, period_id, accrual, manual_income)?;
+            let calculated = if checked {
+                payroll_core::calculate_payroll_checked(&request)?
+            } else {
+                // Keep the historical service contract: callers that need
+                // cross-record preflight use the checked command/finalization/retro
+                // APIs. A scoped snapshot must not turn this fixture-facing method
+                // into a new validation gate.
+                payroll_core::calculate_payroll(&request)?
+            };
+            // Freeze the period-level legal inputs before the first persisted
+            // authoritative record. Existing snapshots are never replaced.
+            SettingsRepository::persist_statutory_snapshot_if_missing(tx, period_id)?;
+            PayrollRepository::save_with_policy_in_transaction(tx, &calculated)?;
+            Ok(calculated)
+        })
     }
 
     /// Atomically persists a calculated retro batch and its canonical payment
