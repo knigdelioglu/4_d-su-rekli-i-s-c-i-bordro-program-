@@ -2394,7 +2394,7 @@ mod tests {
     }
 
     #[test]
-    fn test_explicit_asgari_opening_is_period_based_and_round_trips(
+    fn test_asgari_only_opening_does_not_create_synthetic_normal_opening(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
         let periods = [
@@ -2458,9 +2458,8 @@ mod tests {
             Some("2026-03")
         );
 
-        // Production normal-GV service still follows the real historical
-        // payroll chain; the asgari-only row must not create a normal opening
-        // or a TaxOpeningConflict.
+        // With no legacy normal component, an asgari-only row must not create
+        // a synthetic normal opening or a TaxOpeningConflict.
         PayrollRepository::save(
             &conn,
             &bordro_kaydi(&person.id, &periods[0].id, dec!(50000)),
@@ -2475,6 +2474,112 @@ mod tests {
             &periods[2],
         )?;
         assert_eq!(previous, dec!(156151.00));
+        Ok(())
+    }
+
+    #[test]
+    fn test_asgari_only_opening_keeps_legacy_normal_and_matches_core(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+        let periods = [
+            BordroDonemi {
+                id: "2026-04".into(),
+                yil: 2026,
+                ay: 4,
+                baslangicTarihi: "2026-04-15".into(),
+                bitisTarihi: "2026-05-14".into(),
+                donemAdi: "Nisan 2026".into(),
+                taxYear: 2026,
+                taxMonth: 4,
+            },
+            BordroDonemi {
+                id: "2026-05".into(),
+                yil: 2026,
+                ay: 5,
+                baslangicTarihi: "2026-05-15".into(),
+                bitisTarihi: "2026-06-14".into(),
+                donemAdi: "Mayıs 2026".into(),
+                taxYear: 2026,
+                taxMonth: 5,
+            },
+            BordroDonemi {
+                id: "2026-06".into(),
+                yil: 2026,
+                ay: 6,
+                baslangicTarihi: "2026-06-15".into(),
+                bitisTarihi: "2026-07-14".into(),
+                donemAdi: "Haziran 2026".into(),
+                taxYear: 2026,
+                taxMonth: 6,
+            },
+        ];
+        for period in &periods {
+            PeriodRepository::save(&conn, period)?;
+            ensure_test_institution_settings(&conn, &[period.id.as_str()])?;
+        }
+        ensure_test_annual_parameters(&conn, &[2026])?;
+
+        let mut person = setup_test_person("test-asgari-legacy-normal");
+        person.devirKumulatifGvMatrahi = Some(dec!(100000));
+        person.devirKumulatifGvMatrahiYili = Some(2026);
+        person.devirKumulatifGvMatrahiBaslangicAyi = Some(4);
+        PersonnelRepository::save(&conn, &person)?;
+        let opening = PersonelTaxOpening {
+            id: "test-asgari-legacy-normal_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: None,
+            effectiveFromPeriodId: None,
+            asgariGvCumulativeOpening: Some(dec!(100000)),
+            asgariGvEffectiveFromPeriodId: Some(periods[2].id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        };
+        TaxOpeningRepository::save(&conn, &opening)?;
+        PayrollRepository::save_in_transaction(
+            &conn,
+            &bordro_kaydi(&person.id, &periods[0].id, dec!(20000)),
+        )?;
+        PayrollRepository::save_in_transaction(
+            &conn,
+            &bordro_kaydi(&person.id, &periods[1].id, dec!(30000)),
+        )?;
+        AttendanceRepository::save(
+            &conn,
+            &PersonelPuantaj {
+                id: format!("{}_{}", person.id, periods[2].id),
+                personelId: person.id.clone(),
+                donemId: periods[2].id.clone(),
+                gunler: thirty_work_days(&periods[2]),
+            },
+        )?;
+
+        let native_normal =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, &person.id, &periods[2])?;
+        let native_asgari = CumulativeTaxService::get_previous_cumulative_asgari_gv_strict(
+            &conn,
+            &person.id,
+            &periods[2],
+        )?;
+        assert_eq!(native_normal, dec!(150000));
+        assert_eq!(native_asgari, dec!(100000));
+
+        let dataset =
+            PayrollService::build_calculation_snapshot_for(&conn, &person.id, &periods[2].id)?;
+        let core_result =
+            payroll_core::calculate_payroll(&payroll_core::PayrollCalculationRequest {
+                personnelId: person.id.clone(),
+                periodId: periods[2].id.clone(),
+                calculatedAt: "2026-09-08T00:00:00Z".into(),
+                manualIncome: None,
+                accrual: None,
+                dataset,
+            })?;
+        assert_eq!(core_result.oncekiKumulatifGvMatrahi, Some(native_normal));
+        assert_eq!(
+            core_result.oncekiKumulatifAsgariGvMatrahi,
+            Some(native_asgari)
+        );
         Ok(())
     }
 
