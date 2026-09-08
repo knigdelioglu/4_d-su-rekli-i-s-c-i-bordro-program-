@@ -286,6 +286,8 @@ fn sick_leave_and_tax_opening_mutations_invalidate_calculated_payroll() {
             year: 2026,
             gvCumulativeOpening: dec!(1000),
             effectiveFromPeriodId: active.id.clone(),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
             updatedAt: None,
         },
@@ -351,6 +353,21 @@ fn tax_month_minimum_wage_reference_mismatch_fails_closed() {
 
     let active = period("2026-12", 2026, 12, 2026, 12);
     PeriodRepository::save(&conn, &active).unwrap();
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: "p-tax-ref_2026".into(),
+            personnelId: p.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: dec!(0),
+            effectiveFromPeriodId: active.id.clone(),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some(active.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )
+    .unwrap();
     let mut k = settings(&active.id, dec!(1000));
     k.statutoryParameterSegments = Some(vec![StatutoryParameterSegment {
         effectiveFrom: "2027-01-01".into(),
@@ -381,6 +398,21 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
     PeriodRepository::save(&conn, &june).unwrap();
     PeriodRepository::save(&conn, &july).unwrap();
     PeriodRepository::save(&conn, &august).unwrap();
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: "p-pek-gap_2026".into(),
+            personnelId: p.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: dec!(0),
+            effectiveFromPeriodId: june.id.clone(),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some(june.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )
+    .unwrap();
     SettingsRepository::save_institution_settings(&conn, &settings(&august.id, dec!(1000)))
         .unwrap();
 

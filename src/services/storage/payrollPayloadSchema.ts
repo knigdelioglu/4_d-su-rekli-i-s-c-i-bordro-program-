@@ -461,6 +461,19 @@ function validateResolvedStatutorySnapshot(value: unknown, path: string): void {
   ].forEach((key) => requiredDecimal(value, key, path));
 }
 
+function validateStatutoryParameterSnapshot(value: unknown, path: string): void {
+  assertRecord(value, path);
+  [
+    'gunlukAsgariUcret',
+    'sgkIsciOraniYuzde',
+    'issizlikIsciOraniYuzde',
+    'pekTavanKatsayisi',
+    'gunlukYemekIstisnasiSGK',
+    'gunlukYemekIstisnasiGV',
+  ].forEach((key) => requiredDecimal(value, key, path));
+  optionalNullableArray(value, 'statutoryParameterSegments', path, validateStatutoryParameterSegment);
+}
+
 function validateTediyeKalemi(value: unknown, path: string): void {
   assertRecord(value, path);
   requiredInteger(value, 'id', path);
@@ -530,6 +543,7 @@ export function validateInstitutionSettings(
   optionalNullableArray(value, 'tisIkramiyeListesi', path, validateTisIkramiyeKalemi);
   optionalNullableString(value, 'tediyeTisNotu', path);
   optionalNullableArray(value, 'statutoryParameterSegments', path, validateStatutoryParameterSegment);
+  optionalNullableRecord(value, 'statutoryParameterSnapshot', path, validateStatutoryParameterSnapshot);
 }
 
 function validateTaxBracket(value: unknown, path: string): void {
@@ -562,6 +576,8 @@ export function validateTaxOpening(
   );
   requiredInteger(value, 'year', path);
   requiredDecimal(value, 'gvCumulativeOpening', path);
+  optionalDecimal(value, 'asgariGvCumulativeOpening', path);
+  optionalNullableString(value, 'asgariGvEffectiveFromPeriodId', path);
   optionalNullableString(value, 'createdAt', path);
   optionalNullableString(value, 'updatedAt', path);
 }
@@ -1113,6 +1129,15 @@ function assertCrossRecordIntegrity(
       fail(
         `$.taxOpenings[${index}].effectiveFromPeriodId`,
         `mevcut olmayan dönem kimliği: ${opening.effectiveFromPeriodId}.`
+      );
+    }
+    if (
+      opening.asgariGvEffectiveFromPeriodId &&
+      !periodIds.has(opening.asgariGvEffectiveFromPeriodId)
+    ) {
+      fail(
+        `$.taxOpenings[${index}].asgariGvEffectiveFromPeriodId`,
+        `mevcut olmayan dönem kimliği: ${opening.asgariGvEffectiveFromPeriodId}.`
       );
     }
   });

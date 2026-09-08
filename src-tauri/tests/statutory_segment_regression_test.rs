@@ -238,5 +238,29 @@ fn payroll_persists_resolved_statutory_snapshot() -> Result<(), Box<dyn std::err
         .expect("persisted statutory snapshot");
     assert_eq!(persisted.pekAltSinir, dec!(4400));
     assert_eq!(persisted.segments.len(), 2);
+
+    let frozen =
+        SettingsRepository::get_institution_settings(&conn, &p.id)?.expect("period settings");
+    let frozen_snapshot = frozen
+        .statutoryParameterSnapshot
+        .as_ref()
+        .expect("period statutory snapshot");
+    assert_eq!(frozen_snapshot.gunlukAsgariUcret, dec!(100));
+    assert_eq!(frozen_snapshot.statutoryParameterSegments.len(), 1);
+
+    // A later mutable settings edit must not rewrite the period's legal
+    // reference used by historical asgari-GV calculations.
+    let mut changed_settings = frozen;
+    changed_settings.gunlukAsgariUcret = Some(dec!(999));
+    changed_settings.statutoryParameterSegments = None;
+    SettingsRepository::save_institution_settings(&conn, &changed_settings)?;
+    let reloaded_settings = SettingsRepository::get_institution_settings(&conn, &p.id)?
+        .expect("period settings after edit");
+    let reloaded_snapshot = reloaded_settings
+        .statutoryParameterSnapshot
+        .as_ref()
+        .expect("immutable period snapshot");
+    assert_eq!(reloaded_snapshot.gunlukAsgariUcret, dec!(100));
+    assert_eq!(reloaded_snapshot.statutoryParameterSegments.len(), 1);
     Ok(())
 }

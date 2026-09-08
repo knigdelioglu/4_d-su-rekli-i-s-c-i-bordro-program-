@@ -17,6 +17,33 @@ use std::collections::{BTreeSet, HashMap};
 
 pub const CURRENT_BACKUP_VERSION: u32 = 5;
 
+/// Legacy person records stored only a month integer. Resolve it only when
+/// the imported period set proves one unique period; ambiguous work-month vs
+/// tax-month interpretations stay in the legacy person fields and are not
+/// silently converted into a wrong opening row.
+fn resolve_legacy_opening_period_id(
+    conn: &Connection,
+    year: i32,
+    raw_month: Option<i32>,
+) -> Result<Option<String>> {
+    let Some(raw_month) = raw_month else {
+        return Ok(None);
+    };
+    if !(1..=12).contains(&raw_month) {
+        return Ok(None);
+    }
+    let mut candidates = PeriodRepository::get_all(conn)?
+        .into_iter()
+        .filter(|period| {
+            period.taxYear == year && (period.ay == raw_month || period.taxMonth == raw_month)
+        })
+        .map(|period| period.id)
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates.dedup();
+    Ok((candidates.len() == 1).then(|| candidates.remove(0)))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LegacyPayload {
@@ -377,6 +404,15 @@ impl MigrationService {
         // Only V1/V2 backups may be normalized to the single legacy NORMAL
         // node; treating V3 as pre-accrual would erase retro/TEDIYE ordering.
         let is_pre_accrual_backup = backupVersion.unwrap_or(1) < 3;
+        let explicit_opening_keys: BTreeSet<(String, i32)> = taxOpenings
+            .as_ref()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|opening| (opening.personnelId.clone(), opening.year))
+                    .collect()
+            })
+            .unwrap_or_default();
         let had_retro_batches = retroBatches.is_some();
         let mut retro_batches = retroBatches.unwrap_or_default();
         let mut retro_allocations = retroAllocations.unwrap_or_default();
@@ -450,30 +486,74 @@ impl MigrationService {
                 };
                 PersonnelRepository::save_in_transaction(conn, &personel)?;
 
-                // Eski localStorage sözleşmesindeki GV devir alanını yeni, ayrı
-                // açılış tablosuna da yazarak native kümülatif motorla eşitleriz.
-                if let Some(opening_value) = personel.devirKumulatifGvMatrahi {
-                    if opening_value > rust_decimal_macros::dec!(0) {
-                        let year = personel.devirKumulatifGvMatrahiYili.unwrap_or(2026);
-                        let start_month = personel.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(1);
-                        let tax_opening = PersonelTaxOpening {
-                            id: format!("{}_{}", personel.id, year),
-                            personnelId: personel.id.clone(),
+                // Eski localStorage sözleşmesindeki GV/asgari GV devir
+                // alanlarını yeni, ayrı opening modeline yalnızca period ID
+                // güvenilir biçimde çözülebiliyorsa backfill et. Mevcut
+                // explicit opening ve aynı anahtardaki DB kaydı authoritative
+                // kalır; legacy alanlar bunları ezemez.
+                let normal_value = personel.devirKumulatifGvMatrahi.unwrap_or_default();
+                let asgari_value = personel.devirKumulatifAsgariGvMatrahi.unwrap_or_default();
+                let normal_year = personel.devirKumulatifGvMatrahiYili;
+                let asgari_year = personel.devirKumulatifAsgariGvMatrahiYili;
+                let opening_year = normal_year.or(asgari_year);
+                let years_match = normal_year
+                    .zip(asgari_year)
+                    .is_none_or(|(normal_year, asgari_year)| normal_year == asgari_year);
+                if (normal_value > rust_decimal_macros::dec!(0)
+                    || asgari_value > rust_decimal_macros::dec!(0))
+                    && normal_value >= rust_decimal_macros::dec!(0)
+                    && asgari_value >= rust_decimal_macros::dec!(0)
+                    && years_match
+                {
+                    if let Some(year) = opening_year {
+                        let has_explicit_opening =
+                            explicit_opening_keys.contains(&(personel.id.clone(), year));
+                        let has_existing_opening = TaxOpeningRepository::get_by_personnel_and_year(
+                            conn,
+                            &personel.id,
                             year,
-                            gvCumulativeOpening: opening_value,
-                            effectiveFromPeriodId: format!("{}-{:02}", year, start_month),
-                            createdAt: None,
-                            updatedAt: None,
-                        };
-                        // Devir alanı personel kaydında zaten saklanır ve native
-                        // hesap motoru gerektiğinde oradan okuyabilir. Eski
-                        // payload'da başlangıç dönemi bulunmuyorsa FK hatasıyla
-                        // tüm legacy migration'ı bozmayalım; yalnızca gerçek bir
-                        // dönem karşılığı varsa ayrı açılış tablosunu doldur.
-                        if PeriodRepository::get_by_id(conn, &tax_opening.effectiveFromPeriodId)?
-                            .is_some()
-                        {
-                            TaxOpeningRepository::save_in_transaction(conn, &tax_opening)?;
+                        )?
+                        .is_some();
+                        if !has_explicit_opening && !has_existing_opening {
+                            if let Some(effective_period_id) = resolve_legacy_opening_period_id(
+                                conn,
+                                year,
+                                personel.devirKumulatifGvMatrahiBaslangicAyi,
+                            )? {
+                                let tax_opening = PersonelTaxOpening {
+                                    id: format!("{}_{}", personel.id, year),
+                                    personnelId: personel.id.clone(),
+                                    year,
+                                    gvCumulativeOpening: normal_value,
+                                    effectiveFromPeriodId: effective_period_id.clone(),
+                                    asgariGvCumulativeOpening: (asgari_value
+                                        > rust_decimal_macros::dec!(0))
+                                    .then_some(asgari_value),
+                                    asgariGvEffectiveFromPeriodId: (asgari_value
+                                        > rust_decimal_macros::dec!(0))
+                                    .then_some(effective_period_id),
+                                    createdAt: None,
+                                    updatedAt: None,
+                                };
+                                // A compatibility backfill must never turn an
+                                // existing FINALIZED chain into a migration
+                                // failure or attempt to mutate it. Leave the
+                                // legacy fields intact; the runtime resolver
+                                // will require an explicit period if the
+                                // legacy value remains ambiguous.
+                                let impact = PayrollInvalidationRepository::evaluate_mutation(
+                                    conn,
+                                    &payroll_core::PayrollMutation::PersonTaxYear {
+                                        personnelId: personel.id.clone(),
+                                        taxYear: year,
+                                    },
+                                )?;
+                                if impact.blockedByFinalized.is_empty()
+                                    && impact.blockedByFinalizedRetroBatches.is_empty()
+                                {
+                                    TaxOpeningRepository::save_in_transaction(conn, &tax_opening)?;
+                                }
+                            }
                         }
                     }
                 }

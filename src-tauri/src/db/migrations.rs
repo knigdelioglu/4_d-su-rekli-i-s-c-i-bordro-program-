@@ -295,6 +295,8 @@ pub fn get_migrations() -> Migrations<'static> {
                 year INTEGER NOT NULL,
                 gv_cumulative_opening INTEGER NOT NULL,
                 effective_from_period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                asgari_gv_cumulative_opening INTEGER,
+                asgari_gv_effective_from_period_id TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 CONSTRAINT unique_personnel_tax_opening_year UNIQUE(personnel_id, year)
@@ -892,6 +894,7 @@ fn table_columns(
 ) -> Result<HashSet<String>, Box<dyn std::error::Error>> {
     let pragma = match table {
         "personnel" => "PRAGMA table_info(personnel)",
+        "personnel_tax_opening" => "PRAGMA table_info(personnel_tax_opening)",
         "payroll_periods" => "PRAGMA table_info(payroll_periods)",
         "payroll_records" => "PRAGMA table_info(payroll_records)",
         "retro_adjustment_batches" => "PRAGMA table_info(retro_adjustment_batches)",
@@ -1006,6 +1009,22 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
             definition,
         )?;
     }
+
+    let mut tax_opening_columns = table_columns(&tx, "personnel_tax_opening")?;
+    add_column_if_missing(
+        &tx,
+        "personnel_tax_opening",
+        &mut tax_opening_columns,
+        "asgari_gv_cumulative_opening",
+        "INTEGER",
+    )?;
+    add_column_if_missing(
+        &tx,
+        "personnel_tax_opening",
+        &mut tax_opening_columns,
+        "asgari_gv_effective_from_period_id",
+        "TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE",
+    )?;
 
     let mut period_columns = table_columns(&tx, "payroll_periods")?;
     add_column_if_missing(

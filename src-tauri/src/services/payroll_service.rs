@@ -132,6 +132,9 @@ impl PayrollService {
             // into a new validation gate.
             payroll_core::calculate_payroll(&request)?
         };
+        // Freeze the period-level legal inputs before the first persisted
+        // authoritative record. Existing snapshots are never replaced.
+        SettingsRepository::persist_statutory_snapshot_if_missing(conn, period_id)?;
         PayrollRepository::save(conn, &calculated)?;
         Ok(calculated)
     }
@@ -263,6 +266,7 @@ impl PayrollService {
         };
         let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
             assert_mutation_allowed(&tx, &mutation)?;
+        SettingsRepository::persist_statutory_snapshot_if_missing(&tx, payment_period_id)?;
         PayrollRepository::save_in_transaction(&tx, &calculated)?;
         crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
             &tx, &impact,

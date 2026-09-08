@@ -126,9 +126,10 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       aciklama: formData.aciklama?.trim() || '',
       devirKumulatifGvMatrahi: Number(formData.devirKumulatifGvMatrahi) || 0,
       devirKumulatifGvMatrahiYili: formData.devirKumulatifGvMatrahiYili || (Number(formData.devirKumulatifGvMatrahi) ? new Date().getFullYear() : undefined),
-      devirKumulatifGvMatrahiBaslangicAyi: Number(formData.devirKumulatifGvMatrahi) > 0
-        ? formData.devirKumulatifGvMatrahiBaslangicAyi || 1
-        : undefined,
+      // The month-only legacy field is preserved when it already exists, but
+      // new UI input never invents a work/tax-month interpretation. The
+      // explicit period opening is written from BordroHesaplama.
+      devirKumulatifGvMatrahiBaslangicAyi: formData.devirKumulatifGvMatrahiBaslangicAyi,
       devirKumulatifAsgariGvMatrahi: Number(formData.devirKumulatifAsgariGvMatrahi) || 0,
       devirKumulatifAsgariGvMatrahiYili: formData.devirKumulatifAsgariGvMatrahiYili || (Number(formData.devirKumulatifAsgariGvMatrahi) ? new Date().getFullYear() : undefined),
       kesintiler: formData.kesintiler ? {
@@ -740,18 +741,13 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                       className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold text-amber-800 mb-0.5">
-                      Başlangıç Vergi Ayı
-                    </label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={12}
-                      value={formData.devirKumulatifGvMatrahiBaslangicAyi ?? ''}
-                      onChange={(e) => setFormData({ ...formData, devirKumulatifGvMatrahiBaslangicAyi: parseInt(e.target.value, 10) || undefined })}
-                      className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
-                    />
+                  <div className="sm:col-span-1 rounded-lg border border-amber-200 bg-amber-100/60 px-2.5 py-2 text-[10px] leading-relaxed text-amber-900">
+                    <div className="font-semibold">Başlangıç dönemi</div>
+                    <div>
+                      Ay numarası burada girilmez. Explicit GV/asgari GV opening, Bordro ekranında seçili
+                      bordro dönemiyle (period ID) kaydedilir; bu legacy alan yalnız eski kayıtların uyumluluğu
+                      için korunur.
+                    </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

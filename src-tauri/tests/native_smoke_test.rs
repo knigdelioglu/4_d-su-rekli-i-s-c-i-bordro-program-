@@ -177,6 +177,8 @@ mod smoke_tests {
                 year: 2026,
                 gvCumulativeOpening: dec!(120000),
                 effectiveFromPeriodId: "2026-05".into(),
+                asgariGvCumulativeOpening: None,
+                asgariGvEffectiveFromPeriodId: None,
                 createdAt: None,
                 updatedAt: None,
             };

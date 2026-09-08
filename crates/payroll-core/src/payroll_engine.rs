@@ -292,6 +292,101 @@ pub fn validate_statutory_segments_for_period(
     Ok(())
 }
 
+/// Captures only the period-level legal inputs needed to reproduce the
+/// statutory reference. It intentionally excludes attendance, personnel and
+/// payment-event state so the same snapshot can serve every employee.
+pub fn snapshot_statutory_parameters(
+    settings: &DonemselKurumDegerleri,
+) -> Result<StatutoryParameterSnapshot> {
+    if let Some(snapshot) = settings.statutoryParameterSnapshot.as_ref() {
+        return Ok(snapshot.clone());
+    }
+
+    Ok(StatutoryParameterSnapshot {
+        gunlukAsgariUcret: settings
+            .gunlukAsgariUcret
+            .ok_or_else(|| DomainError::ValidationError("Günlük asgari ücret eksik.".into()))?,
+        sgkIsciOraniYuzde: settings
+            .sgkIsciOraniYuzde
+            .ok_or_else(|| DomainError::ValidationError("SGK işçi oranı eksik.".into()))?,
+        issizlikIsciOraniYuzde: settings
+            .issizlikIsciOraniYuzde
+            .ok_or_else(|| DomainError::ValidationError("İşsizlik işçi oranı eksik.".into()))?,
+        pekTavanKatsayisi: settings
+            .pekTavanKatsayisi
+            .ok_or_else(|| DomainError::ValidationError("PEK tavan katsayısı eksik.".into()))?,
+        gunlukYemekIstisnasiSGK: settings.gunlukYemekIstisnasiSGK.ok_or_else(|| {
+            DomainError::ValidationError("Günlük SGK yemek istisnası eksik.".into())
+        })?,
+        gunlukYemekIstisnasiGV: settings
+            .gunlukYemekIstisnasiGV
+            .or(settings.gunlukYemekIstisnasiSGK)
+            .ok_or_else(|| {
+                DomainError::ValidationError("Günlük GV yemek istisnası eksik.".into())
+            })?,
+        statutoryParameterSegments: settings
+            .statutoryParameterSegments
+            .clone()
+            .unwrap_or_default(),
+    })
+}
+
+/// Applies the immutable period-level legal snapshot to the mutable settings
+/// envelope. Non-statutory earning/deduction settings remain untouched.
+fn effective_statutory_settings(
+    settings: &DonemselKurumDegerleri,
+) -> Result<DonemselKurumDegerleri> {
+    let Some(snapshot) = settings.statutoryParameterSnapshot.as_ref() else {
+        return Ok(settings.clone());
+    };
+
+    let mut effective = settings.clone();
+    effective.gunlukAsgariUcret = Some(snapshot.gunlukAsgariUcret);
+    effective.sgkIsciOraniYuzde = Some(snapshot.sgkIsciOraniYuzde);
+    effective.issizlikIsciOraniYuzde = Some(snapshot.issizlikIsciOraniYuzde);
+    effective.pekTavanKatsayisi = Some(snapshot.pekTavanKatsayisi);
+    effective.gunlukYemekIstisnasiSGK = Some(snapshot.gunlukYemekIstisnasiSGK);
+    effective.gunlukYemekIstisnasiGV = Some(snapshot.gunlukYemekIstisnasiGV);
+    effective.statutoryParameterSegments = Some(snapshot.statutoryParameterSegments.clone());
+    Ok(effective)
+}
+
+/// Reconstructs the legal settings envelope from an older persisted payroll
+/// snapshot. This is a compatibility fallback for periods created before the
+/// period-level immutable snapshot existed; the period-level snapshot remains
+/// the primary source whenever it is available.
+pub fn settings_with_resolved_statutory_snapshot(
+    settings: &DonemselKurumDegerleri,
+    snapshot: &ResolvedStatutorySnapshot,
+) -> Result<DonemselKurumDegerleri> {
+    let Some(first_segment) = snapshot.segments.first() else {
+        return Err(DomainError::InvalidData(
+            "Tarihsel statutory snapshot'ı boş; yasal ayarlar yeniden üretilemez.".into(),
+        ));
+    };
+
+    let mut historical = settings.clone();
+    historical.gunlukAsgariUcret = Some(first_segment.gunlukAsgariUcret);
+    historical.pekTavanKatsayisi = Some(first_segment.pekTavanKatsayisi);
+    historical.gunlukYemekIstisnasiSGK = Some(first_segment.gunlukYemekIstisnasiSGK);
+    historical.gunlukYemekIstisnasiGV = Some(first_segment.gunlukYemekIstisnasiGV);
+    historical.statutoryParameterSegments = Some(
+        snapshot
+            .segments
+            .iter()
+            .skip(1)
+            .map(|segment| StatutoryParameterSegment {
+                effectiveFrom: segment.effectiveFrom.clone(),
+                gunlukAsgariUcret: Some(segment.gunlukAsgariUcret),
+                pekTavanKatsayisi: Some(segment.pekTavanKatsayisi),
+                gunlukYemekIstisnasiSGK: Some(segment.gunlukYemekIstisnasiSGK),
+                gunlukYemekIstisnasiGV: Some(segment.gunlukYemekIstisnasiGV),
+            })
+            .collect(),
+    );
+    effective_statutory_settings(&historical)
+}
+
 /// Resolves all statutory values against the dates actually present in the
 /// attendance map. This is the same segment algorithm used by the native
 /// application and is public for native/WASM parity tests.
@@ -330,7 +425,8 @@ fn resolve_statutory_snapshot_internal(
     settings: &DonemselKurumDegerleri,
     paid_sick_dates: &[NaiveDate],
 ) -> Result<ResolvedStatutorySnapshot> {
-    validate_statutory_segments_for_period(period, settings)?;
+    let settings = effective_statutory_settings(settings)?;
+    validate_statutory_segments_for_period(period, &settings)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let full_calendar_coverage = attendance
@@ -1592,65 +1688,36 @@ fn previous_gv(
     active_period: &BordroDonemi,
     current: &PayrollAccrualInput,
 ) -> Result<Decimal> {
-    let explicit = index
-        .tax_opening(dataset, &person.id, active_period.taxYear)
-        .cloned();
-    let opening = explicit.or_else(|| {
-        person.devirKumulatifGvMatrahi.and_then(|value| {
-            if value <= Decimal::ZERO {
-                return None;
-            }
-            let year = person
-                .devirKumulatifGvMatrahiYili
-                .unwrap_or(active_period.taxYear);
-            (year == active_period.taxYear).then(|| PersonelTaxOpening {
-                id: format!("{}_{}", person.id, year),
-                personnelId: person.id.clone(),
-                year,
-                gvCumulativeOpening: value,
-                effectiveFromPeriodId: format!(
-                    "{}-{:02}",
-                    year,
-                    person.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(1)
-                ),
-                createdAt: None,
-                updatedAt: None,
-            })
-        })
-    });
+    let openings = resolve_tax_openings(dataset, index, person, active_period)?;
+    let (start_month, opening_value) = openings
+        .normal
+        .map(|opening| (opening.start_tax_month, opening.value))
+        .unwrap_or((1, Decimal::ZERO));
+    if start_month > active_period.taxMonth {
+        return Err(DomainError::ValidationError(format!(
+            "GV opening başlangıç vergi ayı {} aktif vergi ayı {} sonrasında olamaz.",
+            start_month, active_period.taxMonth
+        )));
+    }
 
-    let (start_month, opening_value) = if let Some(opening) = opening {
-        if opening.gvCumulativeOpening <= Decimal::ZERO {
-            (1, Decimal::ZERO)
-        } else {
-            let start_month = index
-                .period(dataset, &opening.effectiveFromPeriodId)
-                .filter(|period| period.taxYear == opening.year)
-                .map(|period| period.taxMonth)
-                .unwrap_or(1);
-            if index
-                .payrolls_for_person(dataset, &person.id)
-                .any(|payroll| {
-                    matches!(
-                        payroll.status,
-                        BordroStatus::CALCULATED | BordroStatus::FINALIZED
-                    ) && index
-                        .period(dataset, &payroll.donemId)
-                        .is_some_and(|period| {
-                            period.taxYear == opening.year && period.taxMonth < start_month
-                        })
-                })
-            {
-                return Err(DomainError::TaxOpeningConflict(
-                    "Bu devir matrahı sistemde mevcut geçmiş bordrolarla aynı dönemi kapsamaktadır."
-                        .into(),
-                ));
-            }
-            (start_month, opening.gvCumulativeOpening)
-        }
-    } else {
-        (1, Decimal::ZERO)
-    };
+    if openings.normal.is_some()
+        && index
+            .payrolls_for_person(dataset, &person.id)
+            .any(|payroll| {
+                matches!(
+                    payroll.status,
+                    BordroStatus::CALCULATED | BordroStatus::FINALIZED
+                ) && index
+                    .period(dataset, &payroll.donemId)
+                    .is_some_and(|period| {
+                        period.taxYear == active_period.taxYear && period.taxMonth < start_month
+                    })
+            })
+    {
+        return Err(DomainError::TaxOpeningConflict(
+            "Bu devir matrahı sistemde mevcut geçmiş bordrolarla aynı dönemi kapsamaktadır.".into(),
+        ));
+    }
 
     let active_order = accrual_order_for_input(active_period, current)?;
     let mut prior = opening_value;
@@ -1708,42 +1775,249 @@ fn previous_gv(
     Ok(round2(prior))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResolvedTaxOpening {
+    value: Decimal,
+    start_tax_month: i32,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ResolvedTaxOpenings {
+    normal: Option<ResolvedTaxOpening>,
+    asgari: Option<ResolvedTaxOpening>,
+}
+
+fn resolve_effective_period_tax_month(
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
+    year: i32,
+    period_id: &str,
+    opening_label: &str,
+) -> Result<i32> {
+    let period = index.period(dataset, period_id).ok_or_else(|| {
+        DomainError::ValidationError(format!(
+            "{} effective başlangıç dönemi bulunamadı: {}.",
+            opening_label, period_id
+        ))
+    })?;
+    if period.taxYear != year {
+        return Err(DomainError::ValidationError(format!(
+            "{} effective dönemi {} vergi yılına ait değil; bulunan vergi yılı {}, beklenen vergi yılı {}.",
+            opening_label, period.id, period.taxYear, year
+        )));
+    }
+    Ok(period.taxMonth)
+}
+
+/// Resolves an old month-only value only when the loaded period set proves a
+/// single interpretation. Work-month and tax-month candidates are both
+/// considered; two different candidates are deliberately rejected.
+fn resolve_legacy_effective_tax_month(
+    dataset: &PayrollDatasetSnapshot,
+    year: i32,
+    raw_month: Option<i32>,
+    opening_label: &str,
+) -> Result<i32> {
+    let raw_month = raw_month.ok_or_else(|| {
+        DomainError::ValidationError(format!(
+            "{} için legacy başlangıç ayı period ID ile çözülemiyor; explicit effectiveFromPeriodId girin.",
+            opening_label
+        ))
+    })?;
+    if !(1..=12).contains(&raw_month) {
+        return Err(DomainError::ValidationError(format!(
+            "{} legacy başlangıç ayı 1-12 arasında olmalıdır.",
+            opening_label
+        )));
+    }
+
+    let mut candidates = dataset
+        .periods
+        .iter()
+        .filter(|period| {
+            period.taxYear == year && (period.ay == raw_month || period.taxMonth == raw_month)
+        })
+        .map(|period| (period.id.as_str(), period.taxMonth))
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by(|left, right| left.0.cmp(right.0));
+    candidates.dedup_by(|left, right| left.0 == right.0);
+
+    match candidates.as_slice() {
+        [(_, tax_month)] => Ok(*tax_month),
+        [] => Err(DomainError::ValidationError(format!(
+            "{} legacy başlangıç ayı {} için {} vergi yılında bir bordro dönemi bulunamadı; explicit effectiveFromPeriodId girin.",
+            opening_label, raw_month, year
+        ))),
+        _ => Err(DomainError::ValidationError(format!(
+            "{} legacy başlangıç ayı {} çalışma ayı/vergi ayı olarak birden fazla döneme karşılık geliyor; sessiz dönüşüm yapılmadı, explicit effectiveFromPeriodId girin.",
+            opening_label, raw_month
+        ))),
+    }
+}
+
+fn resolve_tax_openings(
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
+    person: &Personel,
+    active_period: &BordroDonemi,
+) -> Result<ResolvedTaxOpenings> {
+    let explicit = index
+        .tax_opening(dataset, &person.id, active_period.taxYear)
+        .cloned();
+
+    let normal = if let Some(opening) = explicit.as_ref() {
+        if opening.gvCumulativeOpening < Decimal::ZERO {
+            return Err(DomainError::ValidationError(
+                "GV opening matrahı negatif olamaz.".into(),
+            ));
+        }
+        // Zero is still an explicit opening. Its period boundary determines
+        // which historical payrolls are in scope, even when the cumulative
+        // amount itself is zero.
+        Some(ResolvedTaxOpening {
+            value: opening.gvCumulativeOpening,
+            start_tax_month: resolve_effective_period_tax_month(
+                dataset,
+                index,
+                opening.year,
+                &opening.effectiveFromPeriodId,
+                "GV opening",
+            )?,
+        })
+    } else {
+        let value = person.devirKumulatifGvMatrahi.unwrap_or_default();
+        if value < Decimal::ZERO {
+            return Err(DomainError::ValidationError(
+                "Legacy GV devir matrahı negatif olamaz.".into(),
+            ));
+        }
+        let year = person
+            .devirKumulatifGvMatrahiYili
+            .unwrap_or(active_period.taxYear);
+        if value > Decimal::ZERO && year == active_period.taxYear {
+            Some(ResolvedTaxOpening {
+                value,
+                start_tax_month: resolve_legacy_effective_tax_month(
+                    dataset,
+                    year,
+                    person.devirKumulatifGvMatrahiBaslangicAyi,
+                    "Legacy GV opening",
+                )?,
+            })
+        } else {
+            None
+        }
+    };
+
+    let explicit_asgari_value = explicit
+        .as_ref()
+        .and_then(|opening| opening.asgariGvCumulativeOpening);
+    let legacy_asgari_value = person.devirKumulatifAsgariGvMatrahi;
+    if explicit_asgari_value.is_none()
+        && legacy_asgari_value.is_some_and(|value| value < Decimal::ZERO)
+    {
+        return Err(DomainError::ValidationError(
+            "Legacy asgari GV devir matrahı negatif olamaz.".into(),
+        ));
+    }
+    // Legacy personnel rows commonly persisted a default zero. That is not
+    // an asgari opening and must not force legacy month resolution. An
+    // explicit opening row may still deliberately carry Some(0).
+    let asgari_value = explicit_asgari_value
+        .or_else(|| legacy_asgari_value.filter(|value| *value > Decimal::ZERO));
+    let asgari_year = if explicit_asgari_value.is_some() {
+        explicit
+            .as_ref()
+            .map(|opening| opening.year)
+            .unwrap_or(active_period.taxYear)
+    } else {
+        person
+            .devirKumulatifAsgariGvMatrahiYili
+            .unwrap_or(active_period.taxYear)
+    };
+    let asgari = if let Some(value) = asgari_value {
+        if value < Decimal::ZERO {
+            return Err(DomainError::ValidationError(
+                "Asgari GV opening matrahı negatif olamaz.".into(),
+            ));
+        }
+        if value >= Decimal::ZERO && asgari_year == active_period.taxYear {
+            let start_tax_month = if explicit_asgari_value.is_some() {
+                let opening = explicit.as_ref().ok_or_else(|| {
+                    DomainError::InvalidData("Asgari GV explicit opening kaydı çözülemedi.".into())
+                })?;
+                let period_id = opening
+                    .asgariGvEffectiveFromPeriodId
+                    .as_deref()
+                    .unwrap_or(opening.effectiveFromPeriodId.as_str());
+                resolve_effective_period_tax_month(
+                    dataset,
+                    index,
+                    asgari_year,
+                    period_id,
+                    "Asgari GV opening",
+                )?
+            } else {
+                resolve_legacy_effective_tax_month(
+                    dataset,
+                    asgari_year,
+                    person.devirKumulatifGvMatrahiBaslangicAyi,
+                    "Legacy asgari GV opening",
+                )?
+            };
+            Some(ResolvedTaxOpening {
+                value,
+                start_tax_month,
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    Ok(ResolvedTaxOpenings { normal, asgari })
+}
+
 fn previous_asgari_gv(
     dataset: &PayrollDatasetSnapshot,
     index: &PayrollDatasetIndex,
     person: &Personel,
     active_period: &BordroDonemi,
 ) -> Result<Decimal> {
-    let mut cumulative = if person
-        .devirKumulatifAsgariGvMatrahiYili
-        .unwrap_or(active_period.taxYear)
-        == active_period.taxYear
-    {
-        person.devirKumulatifAsgariGvMatrahi.unwrap_or_default()
-    } else {
-        Decimal::ZERO
-    };
+    let openings = resolve_tax_openings(dataset, index, person, active_period)?;
+    let (start_tax_month, mut cumulative) = openings
+        .asgari
+        .map(|opening| (opening.start_tax_month, opening.value))
+        .unwrap_or((1, Decimal::ZERO));
+    if start_tax_month > active_period.taxMonth {
+        return Err(DomainError::ValidationError(format!(
+            "Asgari GV opening başlangıç vergi ayı {} aktif vergi ayı {} sonrasında olamaz.",
+            start_tax_month, active_period.taxMonth
+        )));
+    }
 
-    for tax_month in 1..active_period.taxMonth {
+    // Opening, start tax month'tan önceki kümülatif referansı zaten içerir.
+    // Yalnızca opening sonrasındaki eksik vergi ayları bir kez oluşturulur.
+    for tax_month in start_tax_month..active_period.taxMonth {
         // A tax month has one minimum-wage reference entitlement regardless
-        // of how many accruals it contains. The first period in source order
-        // remains the reference, matching the former vector scan semantics.
+        // of how many accruals it contains. The period-level statutory source
+        // is shared by every employee and payment event.
         let Some(period) = index
             .periods_for_tax_month(dataset, active_period.taxYear, tax_month)
             .next()
         else {
+            // `calculate_payroll` is the historical low-level formula API and
+            // intentionally accepts a scoped fixture without every preceding
+            // period. Production/checked calculation has already run
+            // `validate_tax_month_chain`, which uses the same opening start
+            // resolver and fails closed before reaching this compatibility
+            // path.
             continue;
         };
-        let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "{} dönemi kurum ayarları bulunamadı; asgari GV kümülatifi hesaplanamaz.",
-                period.id
-            ))
-        })?;
-        validate_kurum_degerleri_for_payroll(settings)?;
-        let daily_minimum = settings
-            .gunlukAsgariUcret
-            .ok_or_else(|| DomainError::ValidationError("Günlük asgari ücret eksik.".into()))?;
+        let settings = historical_statutory_settings(dataset, period)?;
+        validate_kurum_degerleri_for_payroll(&settings)?;
+        let statutory_snapshot = resolve_statutory_snapshot_for_payment_month(period, &settings)?;
         let sgk_rate = settings
             .sgkIsciOraniYuzde
             .ok_or_else(|| DomainError::ValidationError("SGK işçi oranı eksik.".into()))?
@@ -1752,11 +2026,69 @@ fn previous_asgari_gv(
             .issizlikIsciOraniYuzde
             .ok_or_else(|| DomainError::ValidationError("İşsizlik işçi oranı eksik.".into()))?
             / dec!(100);
-        let monthly_gross = round2(daily_minimum * dec!(30));
-        let monthly_sgk = round_sgk_amount(monthly_gross * (sgk_rate + unemployment_rate));
-        cumulative += (monthly_gross - monthly_sgk).max(Decimal::ZERO);
+        let monthly_reference = calculate_aylik_asgari_ucret_gv_matrahi(
+            statutory_snapshot.gvReferansGunlukAsgariUcret,
+            sgk_rate,
+            unemployment_rate,
+        );
+        cumulative = cumulative.checked_add(monthly_reference).ok_or_else(|| {
+            DomainError::InvalidData("Kümülatif asgari GV Decimal taşması oluştu.".into())
+        })?;
     }
     Ok(round2(cumulative))
+}
+
+fn historical_statutory_settings(
+    dataset: &PayrollDatasetSnapshot,
+    period: &BordroDonemi,
+) -> Result<DonemselKurumDegerleri> {
+    let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "{} dönemi kurum ayarları bulunamadı; asgari GV kümülatifi hesaplanamaz.",
+            period.id
+        ))
+    })?;
+
+    // The period-level immutable snapshot is the canonical source. It is
+    // shared by every employee/event and therefore remains valid even when a
+    // particular employee has no historical payroll row.
+    if settings.statutoryParameterSnapshot.is_some() {
+        return effective_statutory_settings(settings);
+    }
+
+    // Older databases may predate the period-level field. A persisted,
+    // authoritative payroll statutory snapshot is a compatibility fallback
+    // only; it is never preferred over the period-level legal source.
+    let historical_snapshots = dataset
+        .payrolls
+        .iter()
+        .filter(|payroll| {
+            payroll.donemId == period.id
+                && matches!(
+                    payroll.status,
+                    BordroStatus::CALCULATED | BordroStatus::FINALIZED
+                )
+        })
+        .filter_map(|payroll| payroll.statutorySnapshot.as_ref())
+        .collect::<Vec<_>>();
+    let Some(historical_snapshot) = historical_snapshots.first() else {
+        return effective_statutory_settings(settings);
+    };
+    if historical_snapshots
+        .iter()
+        .any(|snapshot| *snapshot != *historical_snapshot)
+    {
+        return Err(DomainError::InvalidData(format!(
+            "{} dönemi bordrolarında birbiriyle uyuşmayan historical statutory snapshot'lar bulundu; asgari GV referansı güvenilir biçimde çözülemez.",
+            period.id
+        )));
+    }
+    settings_with_resolved_statutory_snapshot(settings, historical_snapshot).map_err(|error| {
+        DomainError::InvalidData(format!(
+            "{} tarihsel statutory snapshot'ı kullanılamadı: {}",
+            period.id, error
+        ))
+    })
 }
 
 fn previous_insurance_gv(
@@ -1877,27 +2209,14 @@ fn validate_tax_month_chain(
     person: &Personel,
     period: &BordroDonemi,
 ) -> Result<()> {
-    if period.taxMonth <= 1 {
-        return Ok(());
-    }
-    let has_asgari_opening = person.devirKumulatifAsgariGvMatrahi.is_some()
-        && person
-            .devirKumulatifAsgariGvMatrahiYili
-            .unwrap_or(period.taxYear)
-            == period.taxYear;
-    let start_month = if has_asgari_opening {
-        person.devirKumulatifGvMatrahiBaslangicAyi.unwrap_or(1)
-    } else {
-        1
-    };
-    if !(1..=12).contains(&start_month) {
-        return Err(DomainError::ValidationError(
-            "Asgari GV devir başlangıç ayı 1-12 arasında olmalıdır.".into(),
-        ));
-    }
+    let openings = resolve_tax_openings(dataset, index, person, period)?;
+    let start_month = openings
+        .asgari
+        .map(|opening| opening.start_tax_month)
+        .unwrap_or(1);
     if start_month > period.taxMonth {
         return Err(DomainError::ValidationError(format!(
-            "Asgari GV devir başlangıç ayı {} aktif vergi ayı {} sonrasında olamaz.",
+            "Asgari GV opening başlangıç vergi ayı {} aktif vergi ayı {} sonrasında olamaz.",
             start_month, period.taxMonth
         )));
     }
@@ -2128,7 +2447,7 @@ fn validate_payroll_request_with_index(
     validate_tax_month_overlap(period)?;
     validate_tax_chronology(&request.dataset, period)?;
     validate_tax_month_chain(&request.dataset, index, person, period)?;
-    let settings = request
+    let raw_settings = request
         .dataset
         .institutionSettings
         .get(&period.id)
@@ -2138,8 +2457,9 @@ fn validate_payroll_request_with_index(
                 period.id
             ))
         })?;
-    validate_kurum_degerleri_for_payroll(settings)?;
-    validate_statutory_tax_month_reference(period, settings)?;
+    let settings = effective_statutory_settings(raw_settings)?;
+    validate_kurum_degerleri_for_payroll(&settings)?;
+    validate_statutory_tax_month_reference(period, &settings)?;
     validate_devreden_pek_gap(
         &request.dataset,
         index,
@@ -2433,7 +2753,7 @@ fn calculate_payroll_with_index(
         0
     };
 
-    let settings = dataset
+    let raw_settings = dataset
         .institutionSettings
         .get(&period.id)
         .ok_or_else(|| {
@@ -2443,6 +2763,7 @@ fn calculate_payroll_with_index(
             ))
         })?
         .clone();
+    let settings = effective_statutory_settings(&raw_settings)?;
     validate_kurum_degerleri_for_payroll(&settings)?;
     validate_statutory_segments_for_period(&period, &settings)?;
 
@@ -2916,6 +3237,7 @@ fn calculate_payroll_with_index(
 mod tests {
     use super::*;
     use rust_decimal_macros::dec;
+    use std::collections::HashMap;
 
     fn tax_period(id: &str, tax_month: i32) -> BordroDonemi {
         BordroDonemi {
@@ -2976,6 +3298,386 @@ mod tests {
             odenenRaporluGun: None,
             raporluGun: None,
         }
+    }
+
+    fn valid_tax_period(
+        id: &str,
+        work_year: i32,
+        work_month: i32,
+        tax_year: i32,
+        tax_month: i32,
+    ) -> BordroDonemi {
+        let (end_year, end_month) = if work_month == 12 {
+            (work_year + 1, 1)
+        } else {
+            (work_year, work_month + 1)
+        };
+        BordroDonemi {
+            id: id.into(),
+            yil: work_year,
+            ay: work_month,
+            baslangicTarihi: format!("{work_year}-{work_month:02}-15"),
+            bitisTarihi: format!("{end_year}-{end_month:02}-14"),
+            donemAdi: id.into(),
+            taxYear: tax_year,
+            taxMonth: tax_month,
+        }
+    }
+
+    fn test_person(id: &str) -> Personel {
+        Personel {
+            id: id.into(),
+            tcNo: "1".into(),
+            ad: "Test".into(),
+            soyad: "Personel".into(),
+            grup: "A".into(),
+            unvan: None,
+            sgkSicilNo: String::new(),
+            iban: String::new(),
+            hizmetYili: 1,
+            aciklama: None,
+            devirKumulatifGvMatrahi: None,
+            devirKumulatifGvMatrahiYili: None,
+            devirKumulatifGvMatrahiBaslangicAyi: None,
+            devirKumulatifAsgariGvMatrahi: None,
+            devirKumulatifAsgariGvMatrahiYili: None,
+            kesintiler: None,
+        }
+    }
+
+    fn test_settings(period_id: &str, daily_minimum: Decimal) -> DonemselKurumDegerleri {
+        DonemselKurumDegerleri {
+            donemId: period_id.into(),
+            gunlukAsgariUcret: Some(daily_minimum),
+            ..DonemselKurumDegerleri::default()
+        }
+    }
+
+    fn test_asgari_opening(
+        personnel_id: &str,
+        period: &BordroDonemi,
+        value: Decimal,
+    ) -> PersonelTaxOpening {
+        PersonelTaxOpening {
+            id: format!("{}_{}", personnel_id, period.taxYear),
+            personnelId: personnel_id.into(),
+            year: period.taxYear,
+            gvCumulativeOpening: Decimal::ZERO,
+            effectiveFromPeriodId: period.id.clone(),
+            asgariGvCumulativeOpening: Some(value),
+            asgariGvEffectiveFromPeriodId: Some(period.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        }
+    }
+
+    fn test_dataset(
+        periods: Vec<BordroDonemi>,
+        person: Personel,
+        settings: Vec<DonemselKurumDegerleri>,
+        tax_openings: Vec<PersonelTaxOpening>,
+    ) -> PayrollDatasetSnapshot {
+        PayrollDatasetSnapshot {
+            personnel: vec![person],
+            periods,
+            institutionSettings: settings
+                .into_iter()
+                .map(|settings| (settings.donemId.clone(), settings))
+                .collect::<HashMap<_, _>>(),
+            taxOpenings: tax_openings,
+            ..PayrollDatasetSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn asgari_gv_opening_at_active_tax_month_is_not_double_counted() {
+        let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let person = test_person("person-a");
+        let opening = test_asgari_opening(&person.id, &active, dec!(100000));
+        let dataset = test_dataset(
+            vec![active.clone()],
+            person.clone(),
+            vec![test_settings(&active.id, dec!(1000))],
+            vec![opening],
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(100000)
+        );
+    }
+
+    #[test]
+    fn asgari_gv_opening_adds_only_months_after_effective_tax_month() {
+        let april = valid_tax_period("2026-03", 2026, 3, 2026, 4);
+        let may = valid_tax_period("2026-04", 2026, 4, 2026, 5);
+        let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let person = test_person("person-b");
+        let opening = test_asgari_opening(&person.id, &april, dec!(100000));
+        let dataset = test_dataset(
+            vec![april.clone(), may.clone(), active.clone()],
+            person.clone(),
+            vec![
+                test_settings(&april.id, dec!(1000)),
+                test_settings(&may.id, dec!(1000)),
+                test_settings(&active.id, dec!(1000)),
+            ],
+            vec![opening],
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(151000)
+        );
+        validate_tax_month_chain(&dataset, &index, &person, &active).unwrap();
+    }
+
+    #[test]
+    fn asgari_gv_without_opening_keeps_january_to_previous_month_behavior() {
+        let periods = vec![
+            valid_tax_period("2025-12", 2025, 12, 2026, 1),
+            valid_tax_period("2026-01", 2026, 1, 2026, 2),
+            valid_tax_period("2026-02", 2026, 2, 2026, 3),
+            valid_tax_period("2026-03", 2026, 3, 2026, 4),
+            valid_tax_period("2026-04", 2026, 4, 2026, 5),
+            valid_tax_period("2026-05", 2026, 5, 2026, 6),
+        ];
+        let active = periods.last().cloned().unwrap();
+        let person = test_person("person-c");
+        let settings = periods
+            .iter()
+            .map(|period| test_settings(&period.id, dec!(1000)))
+            .collect();
+        let dataset = test_dataset(periods, person.clone(), settings, Vec::new());
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(127500)
+        );
+    }
+
+    #[test]
+    fn cross_year_period_uses_tax_month_from_period_not_work_month() {
+        let active = valid_tax_period("2025-12", 2025, 12, 2026, 1);
+        let person = test_person("person-d");
+        let opening = test_asgari_opening(&person.id, &active, dec!(50000));
+        let dataset = test_dataset(
+            vec![active.clone()],
+            person.clone(),
+            vec![test_settings(&active.id, dec!(1000))],
+            vec![opening],
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(active.ay, 12);
+        assert_eq!(active.taxYear, 2026);
+        assert_eq!(active.taxMonth, 1);
+        validate_tax_month_chain(&dataset, &index, &person, &active).unwrap();
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(50000)
+        );
+    }
+
+    #[test]
+    fn historical_asgari_gv_uses_statutory_segment_for_cross_year_period() {
+        let prior = valid_tax_period("2025-12", 2025, 12, 2026, 1);
+        let active = valid_tax_period("2026-01", 2026, 1, 2026, 2);
+        let person = test_person("person-e");
+        let mut prior_settings = test_settings(&prior.id, dec!(1000));
+        prior_settings.statutoryParameterSegments = Some(vec![StatutoryParameterSegment {
+            effectiveFrom: "2026-01-01".into(),
+            gunlukAsgariUcret: Some(dec!(1100)),
+            ..StatutoryParameterSegment::default()
+        }]);
+        let dataset = test_dataset(
+            vec![prior.clone(), active.clone()],
+            person.clone(),
+            vec![prior_settings, test_settings(&active.id, dec!(1100))],
+            Vec::new(),
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(28050)
+        );
+    }
+
+    #[test]
+    fn historical_asgari_gv_ignores_later_mutable_settings_when_snapshot_exists() {
+        let prior = valid_tax_period("2025-12", 2025, 12, 2026, 1);
+        let active = valid_tax_period("2026-01", 2026, 1, 2026, 2);
+        let person = test_person("person-f");
+        let mut prior_settings = test_settings(&prior.id, dec!(2000));
+        prior_settings.statutoryParameterSnapshot = Some(StatutoryParameterSnapshot {
+            gunlukAsgariUcret: dec!(1000),
+            sgkIsciOraniYuzde: dec!(14),
+            issizlikIsciOraniYuzde: dec!(1),
+            pekTavanKatsayisi: dec!(9),
+            gunlukYemekIstisnasiSGK: dec!(300),
+            gunlukYemekIstisnasiGV: dec!(300),
+            statutoryParameterSegments: Vec::new(),
+        });
+        let dataset = test_dataset(
+            vec![prior.clone(), active.clone()],
+            person.clone(),
+            vec![prior_settings, test_settings(&active.id, dec!(2000))],
+            Vec::new(),
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(25500)
+        );
+    }
+
+    #[test]
+    fn same_tax_month_multiple_events_advance_asgari_reference_once() {
+        let tax_one = valid_tax_period("2025-12", 2025, 12, 2026, 1);
+        let tax_two = valid_tax_period("2026-01", 2026, 1, 2026, 2);
+        let active = valid_tax_period("2026-02", 2026, 2, 2026, 3);
+        let person = test_person("person-1");
+        let dataset = PayrollDatasetSnapshot {
+            personnel: vec![person.clone()],
+            periods: vec![tax_one.clone(), tax_two.clone(), active.clone()],
+            institutionSettings: [
+                (tax_one.id.clone(), test_settings(&tax_one.id, dec!(1000))),
+                (tax_two.id.clone(), test_settings(&tax_two.id, dec!(1000))),
+                (active.id.clone(), test_settings(&active.id, dec!(1000))),
+            ]
+            .into_iter()
+            .collect(),
+            payrolls: vec![
+                event(
+                    &tax_two.id,
+                    2,
+                    "normal-2",
+                    AccrualType::NORMAL,
+                    BordroStatus::CALCULATED,
+                    0,
+                ),
+                event(
+                    &tax_two.id,
+                    2,
+                    "supplemental-2",
+                    AccrualType::SUPPLEMENTAL,
+                    BordroStatus::CALCULATED,
+                    0,
+                ),
+            ],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(51000)
+        );
+    }
+
+    #[test]
+    fn asgari_only_opening_does_not_depend_on_normal_opening() {
+        let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let person = test_person("person-h");
+        let opening = test_asgari_opening(&person.id, &active, dec!(50000));
+        let dataset = test_dataset(
+            vec![active.clone()],
+            person.clone(),
+            vec![test_settings(&active.id, dec!(1000))],
+            vec![opening],
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            dec!(50000)
+        );
+    }
+
+    #[test]
+    fn legacy_zero_asgari_value_does_not_require_legacy_month_resolution() {
+        let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let mut person = test_person("person-h-zero");
+        person.devirKumulatifAsgariGvMatrahi = Some(Decimal::ZERO);
+        person.devirKumulatifAsgariGvMatrahiYili = Some(2026);
+        let opening = PersonelTaxOpening {
+            id: "person-h-zero_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: dec!(1234),
+            effectiveFromPeriodId: active.id.clone(),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
+            createdAt: None,
+            updatedAt: None,
+        };
+        let dataset = test_dataset(
+            vec![active.clone()],
+            person.clone(),
+            vec![test_settings(&active.id, dec!(1000))],
+            vec![opening],
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_asgari_gv(&dataset, &index, &person, &active).unwrap(),
+            Decimal::ZERO
+        );
+    }
+
+    #[test]
+    fn modern_normal_opening_is_authoritative_over_legacy_month_and_value() {
+        let effective = valid_tax_period("2026-03", 2026, 3, 2026, 4);
+        let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let mut person = test_person("person-i");
+        person.devirKumulatifGvMatrahi = Some(dec!(999999));
+        person.devirKumulatifGvMatrahiYili = Some(2026);
+        person.devirKumulatifGvMatrahiBaslangicAyi = Some(1);
+        let opening = PersonelTaxOpening {
+            id: "person-i_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: dec!(1234),
+            effectiveFromPeriodId: effective.id.clone(),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
+            createdAt: None,
+            updatedAt: None,
+        };
+        let dataset = test_dataset(
+            vec![effective, active.clone()],
+            person.clone(),
+            vec![
+                test_settings("2026-03", dec!(1000)),
+                test_settings(&active.id, dec!(1000)),
+            ],
+            vec![opening],
+        );
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(
+            previous_gv(
+                &dataset,
+                &index,
+                &person,
+                &active,
+                &PayrollAccrualInput {
+                    accrualId: "normal-i".into(),
+                    accrualType: AccrualType::NORMAL,
+                    paymentDate: "2026-06-10".into(),
+                    sequence: 0,
+                    grossAmount: None,
+                    description: None,
+                },
+            )
+            .unwrap(),
+            dec!(1234)
+        );
     }
 
     #[test]

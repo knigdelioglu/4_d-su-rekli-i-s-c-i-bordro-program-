@@ -143,6 +143,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     setSupplementaryAccrualDraft,
     manualKumulatifGvMap,
     setManualKumulatifGvMap,
+    manualKumulatifAsgariGvMap,
+    setManualKumulatifAsgariGvMap,
     isKumulatifModalOpen,
     setIsKumulatifModalOpen,
     getAccrualId,
@@ -1129,7 +1131,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     Önceki Kümülatif Vergi Matrahı Girişi
                   </h3>
                   <p className="text-xs text-slate-400">
-                    {aktifDonem.donemAdi} dönemi için personel kümülatif vergi matrahı yönetimi
+                    {aktifDonem.donemAdi} dönemi için normal GV ve asgari GV referans opening yönetimi
                   </p>
                 </div>
               </div>
@@ -1144,7 +1146,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed">
-                <strong>Mevzuat ve Kullanım Bilgisi:</strong> Sisteme yıl ortasında başlandığında veya geçmiş ayların bordroları henüz kaydedilmediğinde, personellerin yıl içindeki <strong>Önceki Kümülatif Gelir Vergisi Matrahı</strong> değerini buradan bir defaya mahsus girebilirsiniz. Sonraki dönem bordrolarında aylık GV matrahı otomatik eklenerek bir sonraki aya aktarılır.
+                <strong>Mevzuat ve Kullanım Bilgisi:</strong> Buradaki iki tutar birbirinden bağımsızdır: normal çalışan GV opening'i ve asgari ücret GV referans opening'i. Normal opening, aktif bordro/vergi dönemi olan <strong>{aktifDonem.id}</strong> ile saklanır; asgari opening yalnızca bu alana açıkça girildiğinde veya mevcut bir asgari opening korunurken aynı period ID ile saklanır. Çalışma ayı veya vergi ayı ayrıca girilmez.
               </div>
 
               <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
@@ -1154,6 +1156,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       <th className="py-2.5 px-3">Personel</th>
                       <th className="py-2.5 px-3 text-right">Otomatik (Eski Bordrolar + Devir)</th>
                       <th className="py-2.5 px-3">Önceki Küm. GV Matrahı (TL)</th>
+                      <th className="py-2.5 px-3">Önceki Küm. Asgari GV (TL)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 font-mono">
@@ -1170,15 +1173,30 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       const autoGv =
                         bordro?.oncekiKumulatifGvMatrahi ??
                         getDevirGvMatrahiForActiveYear(person);
+                      const explicitOpening = authoritativeDataset.taxOpenings.find(
+                        (opening) =>
+                          opening.personnelId === person.id &&
+                          opening.year === aktifDonem.taxYear
+                      );
+                      const autoAsgariGv = Number(
+                        bordro?.oncekiKumulatifAsgariGvMatrahi ??
+                          exactBordro?.oncekiKumulatifAsgariGvMatrahi ??
+                          explicitOpening?.asgariGvCumulativeOpening ??
+                          exactPerson?.devirKumulatifAsgariGvMatrahi ??
+                          0
+                      ) || 0;
 
                       const currentSession = manualKumulatifGvMap[person.id];
+                      const currentAsgariSession = manualKumulatifAsgariGvMap[person.id];
                       const displayGv =
                         currentSession ??
                         exactBordro?.manuelKumulatifGvMatrahi ??
                         exactBordro?.oncekiKumulatifGvMatrahi ??
                         exactPerson?.devirKumulatifGvMatrahi ??
                         String(autoGv);
-                      const displayGvNumber = Number(displayGv) || 0;
+                      const displayAsgariGv =
+                        currentAsgariSession ??
+                        String(autoAsgariGv);
 
                       return (
                         <tr key={person.id} className="hover:bg-slate-50">
@@ -1206,6 +1224,21 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500"
                             />
                           </td>
+                          <td className="py-2.5 px-3">
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              placeholder={autoAsgariGv.toFixed(2)}
+                              value={displayAsgariGv}
+                              onChange={(e) => {
+                                setManualKumulatifAsgariGvMap((prev) => ({
+                                  ...prev,
+                                  [person.id]: e.target.value,
+                                }));
+                              }}
+                              className="w-full px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-amber-500"
+                            />
+                          </td>
                         </tr>
                       );
                     })}
@@ -1218,6 +1251,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   type="button"
                   onClick={() => {
                     setManualKumulatifGvMap({});
+                    setManualKumulatifAsgariGvMap({});
                   }}
                   className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors w-full sm:w-auto"
                 >
@@ -1237,34 +1271,83 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     onClick={async () => {
                       try {
                         let updatedAny = false;
-                        for (const pId of Object.keys(manualKumulatifGvMap)) {
+                        const editedPersonIds = new Set([
+                          ...Object.keys(manualKumulatifGvMap),
+                          ...Object.keys(manualKumulatifAsgariGvMap),
+                        ]);
+                        for (const pId of editedPersonIds) {
                           const person = personeller.find((p) => p.id === pId);
                           if (person && onSavePersonel) {
-                            const val = manualKumulatifGvMap[pId].trim() || '0';
+                            const exactPersonSource = authoritativeDataset.personnel.find(
+                              (item) => item.id === person.id
+                            );
+                            const exactBordro = authoritativeDataset.payrolls.find(
+                              (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+                            );
+                            const existingOpening = authoritativeDataset.taxOpenings.find(
+                              (opening) =>
+                                opening.personnelId === person.id &&
+                                opening.year === aktifDonem.taxYear
+                            );
+                            const automaticGv =
+                              exactBordro?.manuelKumulatifGvMatrahi ??
+                              exactBordro?.oncekiKumulatifGvMatrahi ??
+                              exactPersonSource?.devirKumulatifGvMatrahi ??
+                              0;
+                            const automaticAsgariGv =
+                              exactBordro?.oncekiKumulatifAsgariGvMatrahi ??
+                              existingOpening?.asgariGvCumulativeOpening ??
+                              exactPersonSource?.devirKumulatifAsgariGvMatrahi ??
+                              0;
+                            const asgariOpeningWasEdited = Object.prototype.hasOwnProperty.call(
+                              manualKumulatifAsgariGvMap,
+                              pId
+                            );
+                            const hasExistingAsgariOpening =
+                              existingOpening?.asgariGvCumulativeOpening !== undefined;
+                            const val = (
+                              manualKumulatifGvMap[pId] ?? String(automaticGv)
+                            ).trim() || '0';
+                            const asgariVal = (
+                              manualKumulatifAsgariGvMap[pId] ?? String(automaticAsgariGv)
+                            ).trim() || '0';
                             if (!isExactDecimalString(val) || val.startsWith('-')) {
                               throw new Error('Kümülatif GV matrahı geçerli, negatif olmayan bir tutar olmalıdır.');
                             }
+                            if (!isExactDecimalString(asgariVal) || asgariVal.startsWith('-')) {
+                              throw new Error('Kümülatif asgari GV matrahı geçerli, negatif olmayan bir tutar olmalıdır.');
+                            }
+                            const explicitAsgariOpening =
+                              asgariOpeningWasEdited || hasExistingAsgariOpening
+                                ? asgariVal
+                                : undefined;
                             const exactPerson = mergePayrollUiIntoBoundary(
-                              authoritativeDataset.personnel.find((item) => item.id === person.id),
+                              exactPersonSource,
                               {
                                 ...person,
                                 devirKumulatifGvMatrahi: val,
+                                devirKumulatifAsgariGvMatrahi: asgariVal,
                               }
                             ) as PayrollBoundaryPersonel;
                             await onSavePersonel({
                               ...exactPerson,
-                              devirKumulatifGvMatrahiYili: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
+                              devirKumulatifGvMatrahiYili: aktifDonem.taxYear,
                               devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
+                              devirKumulatifAsgariGvMatrahiYili: aktifDonem.taxYear,
                             } as PayrollBoundaryPersonel);
                             // The App owns persistence in both native and browser
                             // modes. Do not swallow an opening-table write failure.
                             if (onSaveTaxOpening) {
                               await onSaveTaxOpening({
-                                id: `${person.id}_${aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil)}`,
+                                id: `${person.id}_${aktifDonem.taxYear}`,
                                 personnelId: person.id,
-                                year: aktifDonem.taxYear ?? (aktifDonem.ay === 12 ? aktifDonem.yil + 1 : aktifDonem.yil),
+                                year: aktifDonem.taxYear,
                                 gvCumulativeOpening: val,
                                 effectiveFromPeriodId: aktifDonem.id,
+                                asgariGvCumulativeOpening: explicitAsgariOpening,
+                                asgariGvEffectiveFromPeriodId: explicitAsgariOpening
+                                  ? aktifDonem.id
+                                  : undefined,
                               });
                             }
                             updatedAny = true;
@@ -1274,7 +1357,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         setIsKumulatifModalOpen(false);
                         if (updatedAny) {
                           setSuccessMessage(
-                            `${aktifDonem.yil} yılı kümülatif GV başlangıç matrahı güncellendi. Bu yıla ait bordrolar yeniden hesaplandı.`
+                            `${aktifDonem.taxYear} vergi yılı normal ve asgari GV opening değerleri güncellendi. Bu yıla ait bordrolar yeniden hesaplandı.`
                           );
                         }
                       } catch (err) {

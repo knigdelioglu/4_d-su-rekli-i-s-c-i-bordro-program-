@@ -5,6 +5,7 @@ use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
+use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::cumulative_tax_service::CumulativeTaxService;
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
@@ -82,6 +83,20 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
         }),
     };
     PersonnelRepository::save(&conn, &person)?;
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: "real-payroll-worker_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: dec!(400000),
+            effectiveFromPeriodId: period.id.clone(),
+            asgariGvCumulativeOpening: Some(dec!(196528.50)),
+            asgariGvEffectiveFromPeriodId: Some(period.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
 
     // 31 günlük hakediş: 20 fiilî çalışma + ücret hakkı doğuran 11 gün.
     let start = NaiveDate::from_ymd_opt(2026, 7, 15).unwrap();

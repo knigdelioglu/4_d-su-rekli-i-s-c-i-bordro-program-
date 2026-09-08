@@ -98,6 +98,40 @@ function sameRevisionOverrides(
   ));
 }
 
+type BoundaryInstitutionSettings = PayrollStorageDto['kurumDegerleriMap'][string];
+type BoundaryStatutoryParameterSnapshot = NonNullable<
+  BoundaryInstitutionSettings['statutoryParameterSnapshot']
+>;
+
+function captureStatutoryParameterSnapshot(
+  settings: BoundaryInstitutionSettings | undefined
+): BoundaryStatutoryParameterSnapshot | undefined {
+  if (!settings || settings.statutoryParameterSnapshot) {
+    return settings?.statutoryParameterSnapshot;
+  }
+  const gunlukYemekIstisnasiGV =
+    settings.gunlukYemekIstisnasiGV ?? settings.gunlukYemekIstisnasiSGK;
+  if (
+    settings.gunlukAsgariUcret === undefined ||
+    settings.sgkIsciOraniYuzde === undefined ||
+    settings.issizlikIsciOraniYuzde === undefined ||
+    settings.pekTavanKatsayisi === undefined ||
+    settings.gunlukYemekIstisnasiSGK === undefined ||
+    gunlukYemekIstisnasiGV === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    gunlukAsgariUcret: settings.gunlukAsgariUcret,
+    sgkIsciOraniYuzde: settings.sgkIsciOraniYuzde,
+    issizlikIsciOraniYuzde: settings.issizlikIsciOraniYuzde,
+    pekTavanKatsayisi: settings.pekTavanKatsayisi,
+    gunlukYemekIstisnasiSGK: settings.gunlukYemekIstisnasiSGK,
+    gunlukYemekIstisnasiGV,
+    statutoryParameterSegments: settings.statutoryParameterSegments ?? [],
+  };
+}
+
 /**
  * Owns mutation authorization, native/browser branching, and retro settlement
  * orchestration. Formula and policy authority remain in payroll-core; this
@@ -236,6 +270,7 @@ export function usePayrollMutationController({
     }
     const impact = await evaluateBrowserMutations(positionMutations);
     updateAuthoritativePayload((current) => {
+      const previousSettings = current.kurumDegerleriMap[newDonem.id];
       const exactPeriod = mergePayrollUiIntoBoundary(
         current.donemler.find((period) => period.id === newDonem.id),
         newDonem
@@ -246,13 +281,16 @@ export function usePayrollMutationController({
           )
         : [...current.donemler, exactPeriod];
       const exactSettings = mergePayrollUiIntoBoundary(
-        current.kurumDegerleriMap[newDonem.id],
+        previousSettings,
         kurumDegerleri
       );
+      const preservedSettings = previousSettings?.statutoryParameterSnapshot
+        ? { ...exactSettings, statutoryParameterSnapshot: previousSettings.statutoryParameterSnapshot }
+        : exactSettings;
       return {
         ...current,
         donemler,
-        kurumDegerleriMap: { ...current.kurumDegerleriMap, [newDonem.id]: exactSettings },
+        kurumDegerleriMap: { ...current.kurumDegerleriMap, [newDonem.id]: preservedSettings },
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
         retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
@@ -270,10 +308,13 @@ export function usePayrollMutationController({
       ...current,
       kurumDegerleriMap: {
         ...current.kurumDegerleriMap,
-        [settings.donemId]: mergePayrollUiIntoBoundary(
-          current.kurumDegerleriMap[settings.donemId],
-          settings
-        ),
+        [settings.donemId]: (() => {
+          const previousSettings = current.kurumDegerleriMap[settings.donemId];
+          const exactSettings = mergePayrollUiIntoBoundary(previousSettings, settings);
+          return previousSettings?.statutoryParameterSnapshot
+            ? { ...exactSettings, statutoryParameterSnapshot: previousSettings.statutoryParameterSnapshot }
+            : exactSettings;
+        })(),
       },
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
       retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
@@ -486,6 +527,19 @@ export function usePayrollMutationController({
         };
     const impact = await evaluateBrowserMutations(mutation);
     updateAuthoritativePayload((current) => {
+      const currentSettings = current.kurumDegerleriMap[updatedBordro.donemId];
+      const capturedSnapshot = !currentSettings?.statutoryParameterSnapshot
+        ? captureStatutoryParameterSnapshot(currentSettings)
+        : undefined;
+      const kurumDegerleriMap = capturedSnapshot && currentSettings
+        ? {
+            ...current.kurumDegerleriMap,
+            [updatedBordro.donemId]: {
+              ...currentSettings,
+              statutoryParameterSnapshot: capturedSnapshot,
+            },
+          }
+        : current.kurumDegerleriMap;
       const invalidated = applyBrowserPayrollImpact(current.bordrolar, impact);
       const index = invalidated.findIndex(
         (payroll) => payroll.id === updatedBordro.id || payroll.accrualId === updatedBordro.accrualId
@@ -493,6 +547,7 @@ export function usePayrollMutationController({
       if (index < 0) {
         return {
           ...current,
+          kurumDegerleriMap,
           bordrolar: [...invalidated, updatedBordro],
           retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
         };
@@ -501,6 +556,7 @@ export function usePayrollMutationController({
       next[index] = updatedBordro;
       return {
         ...current,
+        kurumDegerleriMap,
         bordrolar: next,
         retroBatches: updatedBordro.accrualType === 'RETRO_ADJUSTMENT' && updatedBordro.status === 'FINALIZED'
           ? (current.retroBatches ?? []).map((batch) =>

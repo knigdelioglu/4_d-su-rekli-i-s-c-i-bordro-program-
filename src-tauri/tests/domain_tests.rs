@@ -145,6 +145,8 @@ mod tests {
             year: 2026,
             gvCumulativeOpening: dec!(120000),
             effectiveFromPeriodId: "2026-05".into(),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
             updatedAt: None,
         };
@@ -2371,6 +2373,78 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_explicit_asgari_opening_is_period_based_and_round_trips(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+        let periods = [
+            BordroDonemi {
+                id: "2026-03".into(),
+                yil: 2026,
+                ay: 3,
+                baslangicTarihi: "2026-03-15".into(),
+                bitisTarihi: "2026-04-14".into(),
+                donemAdi: "Mart 2026".into(),
+                taxYear: 2026,
+                taxMonth: 4,
+            },
+            BordroDonemi {
+                id: "2026-04".into(),
+                yil: 2026,
+                ay: 4,
+                baslangicTarihi: "2026-04-15".into(),
+                bitisTarihi: "2026-05-14".into(),
+                donemAdi: "Nisan 2026".into(),
+                taxYear: 2026,
+                taxMonth: 5,
+            },
+            BordroDonemi {
+                id: "2026-05".into(),
+                yil: 2026,
+                ay: 5,
+                baslangicTarihi: "2026-05-15".into(),
+                bitisTarihi: "2026-06-14".into(),
+                donemAdi: "Mayıs 2026".into(),
+                taxYear: 2026,
+                taxMonth: 6,
+            },
+        ];
+        for period in &periods {
+            PeriodRepository::save(&conn, period)?;
+            ensure_test_institution_settings(&conn, &[period.id.as_str()])?;
+        }
+        let person = setup_test_person("test-asgari-opening");
+        PersonnelRepository::save(&conn, &person)?;
+        let opening = PersonelTaxOpening {
+            id: "test-asgari-opening_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: dec!(0),
+            effectiveFromPeriodId: periods[0].id.clone(),
+            asgariGvCumulativeOpening: Some(dec!(100000)),
+            asgariGvEffectiveFromPeriodId: Some(periods[0].id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        };
+        TaxOpeningRepository::save(&conn, &opening)?;
+
+        let reloaded = TaxOpeningRepository::get_by_personnel_and_year(&conn, &person.id, 2026)?
+            .expect("asgari opening should persist");
+        assert_eq!(reloaded.asgariGvCumulativeOpening, Some(dec!(100000)));
+        assert_eq!(
+            reloaded.asgariGvEffectiveFromPeriodId.as_deref(),
+            Some("2026-03")
+        );
+
+        let previous = CumulativeTaxService::get_previous_cumulative_asgari_gv_strict(
+            &conn,
+            &person.id,
+            &periods[2],
+        )?;
+        assert_eq!(previous, dec!(156151.00));
+        Ok(())
+    }
+
     // ===== Test A: Yıl geçişi — 15.12.2026–14.01.2027 (taxYear=2027/taxMonth=1)
     //     2026 vergi yılı kümülatifi 2027'ye taşınmamalı.
     #[test]
@@ -2399,6 +2473,8 @@ mod tests {
             year: 2026,
             gvCumulativeOpening: dec!(300000),
             effectiveFromPeriodId: "2026-12".into(),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
             updatedAt: None,
         };
@@ -2438,6 +2514,8 @@ mod tests {
             year: 2027,
             gvCumulativeOpening: dec!(120000),
             effectiveFromPeriodId: "2026-12".into(),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
             updatedAt: None,
         };

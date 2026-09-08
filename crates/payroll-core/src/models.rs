@@ -85,6 +85,14 @@ pub struct PersonelTaxOpening {
     pub year: i32,
     pub gvCumulativeOpening: Decimal,
     pub effectiveFromPeriodId: String, // e.g. "2026-05"
+    /// Asgari ücret GV referans takviminin opening değeri. Bu alan gerçek
+    /// çalışanın GV kümülatifinden bağımsızdır ve eski kayıtlar için None'dır.
+    #[serde(default)]
+    pub asgariGvCumulativeOpening: Option<Decimal>,
+    /// Asgari GV opening'i normal GV opening'inden farklı bir vergi döneminde
+    /// başlayabilir. None ise effectiveFromPeriodId ortak dönem olarak kullanılır.
+    #[serde(default)]
+    pub asgariGvEffectiveFromPeriodId: Option<String>,
     pub createdAt: Option<String>,
     pub updatedAt: Option<String>,
 }
@@ -785,7 +793,7 @@ pub struct StatutoryParameterSegment {
     pub gunlukYemekIstisnasiGV: Option<Decimal>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedStatutorySegmentSnapshot {
     pub effectiveFrom: String,
@@ -809,7 +817,7 @@ pub enum StatutorySnapshotSource {
     LegacyUnknown,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedStatutorySnapshot {
     /// Provenance of the statutory/PEK capacity used by the calculation.
@@ -825,6 +833,22 @@ pub struct ResolvedStatutorySnapshot {
     /// Gelir vergisi asgari ücret istisnası için vergi ayına taşınan son
     /// yürürlükteki günlük asgari ücret değeri.
     pub gvReferansGunlukAsgariUcret: Decimal,
+}
+
+/// Dönem için ilk authoritative hesaplamada kilitlenen yasal parametreler.
+/// Attendance/PEK sonuçlarını içermez; bu nedenle kişi veya tahakkuk olayına
+/// bağlı olmadan tarihsel asgari GV referansı üretilebilir.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatutoryParameterSnapshot {
+    pub gunlukAsgariUcret: Decimal,
+    pub sgkIsciOraniYuzde: Decimal,
+    pub issizlikIsciOraniYuzde: Decimal,
+    pub pekTavanKatsayisi: Decimal,
+    pub gunlukYemekIstisnasiSGK: Decimal,
+    pub gunlukYemekIstisnasiGV: Decimal,
+    #[serde(default)]
+    pub statutoryParameterSegments: Vec<StatutoryParameterSegment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -866,6 +890,10 @@ pub struct DonemselKurumDegerleri {
     /// Yalnız bu açık/gelecek 15-14 dönemi içinde geçerli değişiklikler.
     /// Genel tarihsel mevzuat arşivi değildir.
     pub statutoryParameterSegments: Option<Vec<StatutoryParameterSegment>>,
+    /// İlk authoritative payroll hesabında oluşturulan immutable yasal
+    /// kaynak. Mevcut ayarların sonradan değiştirilmesi bu snapshot'ı bozmaz.
+    #[serde(default)]
+    pub statutoryParameterSnapshot: Option<StatutoryParameterSnapshot>,
     pub pekTavanKatsayisi: Option<Decimal>,
     pub gunlukAsgariUcret: Option<Decimal>,
 
@@ -928,6 +956,7 @@ impl Default for DonemselKurumDegerleri {
             gunlukYemekIstisnasiSGK: Some(dec!(300.00)),
             gunlukYemekIstisnasiGV: Some(dec!(300.00)),
             statutoryParameterSegments: None,
+            statutoryParameterSnapshot: None,
             pekTavanKatsayisi: Some(dec!(9)),
             gunlukAsgariUcret: Some(dec!(1101.00)),
             sgkIsverenOraniYuzde: Some(dec!(21.75)),

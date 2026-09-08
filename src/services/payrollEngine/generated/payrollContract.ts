@@ -6,6 +6,7 @@ export const RUST_DECIMAL_KEYS = [
   "adjustedPek",
   "altSinirTamamlamaFarki",
   "amount",
+  "asgariGvCumulativeOpening",
   "asgariUcretGvIstisnasi",
   "asgariUcretGvMatrahi",
   "asgariUcretReferansKumulatifMatrahi",
@@ -642,6 +643,24 @@ export const RUST_STRUCT_CONTRACT = {
         "required": true,
         "optional": false,
         "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "asgariGvCumulativeOpening": {
+        "rustName": "asgariGvCumulativeOpening",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "asgariGvEffectiveFromPeriodId": {
+        "rustName": "asgariGvEffectiveFromPeriodId",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
         "decimal": false,
         "nestedTypes": []
       },
@@ -3106,6 +3125,77 @@ export const RUST_STRUCT_CONTRACT = {
       }
     }
   },
+  "StatutoryParameterSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "gunlukAsgariUcret": {
+        "rustName": "gunlukAsgariUcret",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sgkIsciOraniYuzde": {
+        "rustName": "sgkIsciOraniYuzde",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "issizlikIsciOraniYuzde": {
+        "rustName": "issizlikIsciOraniYuzde",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "pekTavanKatsayisi": {
+        "rustName": "pekTavanKatsayisi",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiSGK": {
+        "rustName": "gunlukYemekIstisnasiSGK",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiGV": {
+        "rustName": "gunlukYemekIstisnasiGV",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "statutoryParameterSegments": {
+        "rustName": "statutoryParameterSegments",
+        "rustType": "Vec<StatutoryParameterSegment>",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "StatutoryParameterSegment"
+        ]
+      }
+    }
+  },
   "DonemselKurumDegerleri": {
     "renameAll": "camelCase",
     "default": false,
@@ -3359,6 +3449,17 @@ export const RUST_STRUCT_CONTRACT = {
         "decimal": false,
         "nestedTypes": [
           "StatutoryParameterSegment"
+        ]
+      },
+      "statutoryParameterSnapshot": {
+        "rustName": "statutoryParameterSnapshot",
+        "rustType": "Option<StatutoryParameterSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "StatutoryParameterSnapshot"
         ]
       },
       "pekTavanKatsayisi": {

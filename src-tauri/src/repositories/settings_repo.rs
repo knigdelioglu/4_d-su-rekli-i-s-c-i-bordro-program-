@@ -149,15 +149,6 @@ impl SettingsRepository {
             },
         )?;
 
-        let mut normalized = k.clone();
-        if normalized.gunlukYemekIstisnasiGV.is_none() {
-            normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
-        }
-        crate::domain::calculations::validate_kurum_degerleri_for_payroll(&normalized)?;
-        Self::validate_statutory_segments_for_period(&period, &normalized)?;
-
-        let json_str = serde_json::to_string(&normalized)
-            .map_err(|e| crate::domain::DomainError::InvalidData(e.to_string()))?;
         let existing_json = conn
             .query_row(
                 "SELECT settings_json FROM institution_settings WHERE period_id = ?1",
@@ -166,6 +157,26 @@ impl SettingsRepository {
             )
             .optional()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        let mut normalized = k.clone();
+        if normalized.gunlukYemekIstisnasiGV.is_none() {
+            normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
+        }
+        // A statutory snapshot is period history, not a mutable copy of the
+        // current form values. Once captured, later settings edits may change
+        // ordinary payroll inputs but must never rewrite the legal reference
+        // used by historical asgari-GV calculations.
+        if let Some(existing_json) = existing_json.as_deref() {
+            let existing = Self::decode_settings(&k.donemId, existing_json)?;
+            if existing.statutoryParameterSnapshot.is_some() {
+                normalized.statutoryParameterSnapshot = existing.statutoryParameterSnapshot;
+            }
+        }
+        crate::domain::calculations::validate_kurum_degerleri_for_payroll(&normalized)?;
+        Self::validate_statutory_segments_for_period(&period, &normalized)?;
+
+        let json_str = serde_json::to_string(&normalized)
+            .map_err(|e| crate::domain::DomainError::InvalidData(e.to_string()))?;
         let changed = existing_json.as_deref() != Some(json_str.as_str());
         let now = Utc::now().to_rfc3339();
         conn.execute(
@@ -181,6 +192,46 @@ impl SettingsRepository {
             PayrollInvalidationRepository::apply_impact(conn, &impact)?;
         }
 
+        Ok(())
+    }
+
+    /// Freezes the period-level legal inputs on the first authoritative
+    /// payroll calculation. This is deliberately not a normal settings save:
+    /// it does not invalidate payrolls and it never replaces an existing
+    /// snapshot.
+    pub fn persist_statutory_snapshot_if_missing(conn: &Connection, period_id: &str) -> Result<()> {
+        let current_json = conn
+            .query_row(
+                "SELECT settings_json FROM institution_settings WHERE period_id = ?1",
+                params![period_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi kurum ayarları bulunamadı; statutory snapshot oluşturulamaz.",
+                    period_id
+                ))
+            })?;
+        let mut settings = Self::decode_settings(period_id, &current_json)?;
+        if settings.statutoryParameterSnapshot.is_some() {
+            return Ok(());
+        }
+
+        settings.statutoryParameterSnapshot = Some(
+            payroll_core::payroll_engine::snapshot_statutory_parameters(&settings)?,
+        );
+        let json_str = serde_json::to_string(&settings)
+            .map_err(|e| DomainError::InvalidData(e.to_string()))?;
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE institution_settings
+             SET settings_json = ?1, updated_at = ?2
+             WHERE period_id = ?3 AND settings_json = ?4",
+            params![json_str, now, period_id, current_json],
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         Ok(())
     }
 

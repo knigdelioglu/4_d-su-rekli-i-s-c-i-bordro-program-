@@ -572,7 +572,10 @@ function toCanonicalLegacyPayload(
           !pruneDanglingReferences ||
           !isRecord(item) ||
           ((!validPersonnelIds.size || validPersonnelIds.has(String(item.personnelId))) &&
-            (!validPeriodIds.size || validPeriodIds.has(String(item.effectiveFromPeriodId))))
+            (!validPeriodIds.size || validPeriodIds.has(String(item.effectiveFromPeriodId))) &&
+            (!item.asgariGvEffectiveFromPeriodId ||
+              !validPeriodIds.size ||
+              validPeriodIds.has(String(item.asgariGvEffectiveFromPeriodId))))
       )
     : rawTaxOpenings;
 

@@ -181,6 +181,10 @@ export interface PersonelTaxOpening {
   year: number;
   gvCumulativeOpening: number; // TL
   effectiveFromPeriodId: string; // e.g. "2026-05"
+  /** Asgari ücret GV referans kümülatifi; normal GV opening'den ayrıdır. */
+  asgariGvCumulativeOpening?: number;
+  /** Asgari GV opening için ayrı başlangıç dönemi; yoksa ortak effective dönem kullanılır. */
+  asgariGvEffectiveFromPeriodId?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -249,6 +253,17 @@ export interface ResolvedStatutorySnapshot {
   gvReferansGunlukAsgariUcret: number;
 }
 
+/** Period-level immutable legal inputs used for every employee/event. */
+export interface StatutoryParameterSnapshot {
+  gunlukAsgariUcret: number;
+  sgkIsciOraniYuzde: number;
+  issizlikIsciOraniYuzde: number;
+  pekTavanKatsayisi: number;
+  gunlukYemekIstisnasiSGK: number;
+  gunlukYemekIstisnasiGV: number;
+  statutoryParameterSegments: StatutoryParameterSegment[];
+}
+
 export interface DönemselKurumDegerleri {
   donemId: string;
   gunlukTabanUcret: number;
@@ -279,6 +294,7 @@ export interface DönemselKurumDegerleri {
   gunlukYemekIstisnasiSGK?: number;
   gunlukYemekIstisnasiGV?: number;
   statutoryParameterSegments?: StatutoryParameterSegment[];
+  statutoryParameterSnapshot?: StatutoryParameterSnapshot;
   pekTavanKatsayisi?: number;
   gunlukAsgariUcret?: number;
 

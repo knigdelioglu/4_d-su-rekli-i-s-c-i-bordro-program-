@@ -106,6 +106,7 @@ export function useBordroCalculationController({
     description: '',
   });
   const [manualKumulatifGvMap, setManualKumulatifGvMap] = useState<Record<string, string>>({});
+  const [manualKumulatifAsgariGvMap, setManualKumulatifAsgariGvMap] = useState<Record<string, string>>({});
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState(false);
 
   const getAccrualId = (payroll: BordroKaydi): string => payroll.accrualId || payroll.id;
@@ -443,6 +444,8 @@ export function useBordroCalculationController({
     setSupplementaryAccrualDraft,
     manualKumulatifGvMap,
     setManualKumulatifGvMap,
+    manualKumulatifAsgariGvMap,
+    setManualKumulatifAsgariGvMap,
     isKumulatifModalOpen,
     setIsKumulatifModalOpen,
     getAccrualId,

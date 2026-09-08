@@ -135,4 +135,4 @@ UNIQUE ve foreign-key invariants kurallarını mümkün olduğunca mirror eder
 Bunlar bordro business rule'ları değil, bozuk snapshot'ın authoritative state'e
 girmesini önleyen storage kontrolleridir.
 
-Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.
+Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Aynı kayıt içindeki normal GV ve asgari GV opening tutarları bağımsızdır; her biri kendi `effectiveFromPeriodId` değeri üzerinden ilgili dönemin `taxYear`/`taxMonth` alanına çözülür. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.
