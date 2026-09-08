@@ -179,11 +179,12 @@ export interface PersonelTaxOpening {
   id: string;
   personnelId: string;
   year: number;
-  gvCumulativeOpening: number; // TL
-  effectiveFromPeriodId: string; // e.g. "2026-05"
+  /** None = no normal opening; 0 is represented explicitly with a period. */
+  gvCumulativeOpening?: number; // TL
+  effectiveFromPeriodId?: string; // e.g. "2026-05"
   /** Asgari ücret GV referans kümülatifi; normal GV opening'den ayrıdır. */
   asgariGvCumulativeOpening?: number;
-  /** Asgari GV opening için ayrı başlangıç dönemi; yoksa ortak effective dönem kullanılır. */
+  /** Asgari GV opening için normal GV'den bağımsız başlangıç dönemi. */
   asgariGvEffectiveFromPeriodId?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -251,6 +252,10 @@ export interface ResolvedStatutorySnapshot {
   sgkYemekIstisnasiToplam: number;
   gvYemekIstisnasiToplam: number;
   gvReferansGunlukAsgariUcret: number;
+  /** Optional for legacy payroll snapshots created before rate provenance. */
+  sgkIsciOraniYuzde?: number;
+  /** Optional for legacy payroll snapshots created before rate provenance. */
+  issizlikIsciOraniYuzde?: number;
 }
 
 /** Period-level immutable legal inputs used for every employee/event. */

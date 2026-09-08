@@ -293,8 +293,8 @@ pub fn get_migrations() -> Migrations<'static> {
                 id TEXT PRIMARY KEY,
                 personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
                 year INTEGER NOT NULL,
-                gv_cumulative_opening INTEGER NOT NULL,
-                effective_from_period_id TEXT NOT NULL REFERENCES payroll_periods(id) ON DELETE CASCADE,
+                gv_cumulative_opening INTEGER,
+                effective_from_period_id TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE,
                 asgari_gv_cumulative_opening INTEGER,
                 asgari_gv_effective_from_period_id TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE,
                 created_at TEXT NOT NULL,
@@ -885,6 +885,10 @@ pub fn get_migrations() -> Migrations<'static> {
             }
             Ok(())
         }),
+        M::up_with_hook("SELECT 1;", |tx| {
+            ensure_nullable_tax_opening_table(tx)?;
+            Ok(())
+        }),
     ])
 }
 
@@ -908,6 +912,95 @@ fn table_columns(
         columns.insert(row?);
     }
     Ok(columns)
+}
+
+/// Makes both GV opening components nullable without changing legacy values.
+/// SQLite requires a table rebuild to remove a NOT NULL constraint. A legacy
+/// asgari value with no own period is backfilled from the old shared normal
+/// period only when that relation is explicit; unresolved rows stay intact.
+/// This helper is also called by the additive-column repair path because some
+/// pre-release databases advanced their migration marker independently.
+fn ensure_nullable_tax_opening_table(conn: &Connection) -> rusqlite::Result<()> {
+    let mut statement = conn.prepare("PRAGMA table_info(personnel_tax_opening)")?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(1)?, row.get::<_, i32>(3)?))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let has_column = |name: &str| columns.iter().any(|(column, _)| column == name);
+    let normal_is_required = columns
+        .iter()
+        .any(|(column, not_null)| column == "gv_cumulative_opening" && *not_null != 0)
+        || columns
+            .iter()
+            .any(|(column, not_null)| column == "effective_from_period_id" && *not_null != 0);
+    let needs_rebuild = normal_is_required
+        || !has_column("asgari_gv_cumulative_opening")
+        || !has_column("asgari_gv_effective_from_period_id");
+    if !needs_rebuild {
+        // Older rows used the normal effective period implicitly for asgari
+        // GV. When both the old normal value/period and the asgari value are
+        // present, that is the only unambiguous migration target. Rows with
+        // no normal period remain untouched and are rejected by the runtime
+        // invariant instead of being guessed.
+        conn.execute(
+            "UPDATE personnel_tax_opening
+             SET asgari_gv_effective_from_period_id = effective_from_period_id
+             WHERE asgari_gv_cumulative_opening IS NOT NULL
+               AND asgari_gv_effective_from_period_id IS NULL
+               AND gv_cumulative_opening IS NOT NULL
+               AND effective_from_period_id IS NOT NULL",
+            [],
+        )?;
+        return Ok(());
+    }
+
+    let asgari_value = if has_column("asgari_gv_cumulative_opening") {
+        "asgari_gv_cumulative_opening"
+    } else {
+        "NULL"
+    };
+    let asgari_period = if has_column("asgari_gv_cumulative_opening")
+        && has_column("asgari_gv_effective_from_period_id")
+    {
+        "CASE
+            WHEN asgari_gv_cumulative_opening IS NOT NULL
+             AND asgari_gv_effective_from_period_id IS NULL
+             AND gv_cumulative_opening IS NOT NULL
+             AND effective_from_period_id IS NOT NULL
+            THEN effective_from_period_id
+            ELSE asgari_gv_effective_from_period_id
+         END"
+    } else {
+        "NULL"
+    };
+    conn.execute_batch(&format!(
+        "CREATE TABLE personnel_tax_opening__nullable (
+            id TEXT PRIMARY KEY,
+            personnel_id TEXT NOT NULL REFERENCES personnel(id) ON DELETE CASCADE,
+            year INTEGER NOT NULL,
+            gv_cumulative_opening INTEGER,
+            effective_from_period_id TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE,
+            asgari_gv_cumulative_opening INTEGER,
+            asgari_gv_effective_from_period_id TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CONSTRAINT unique_personnel_tax_opening_year UNIQUE(personnel_id, year)
+        );
+        INSERT INTO personnel_tax_opening__nullable (
+            id, personnel_id, year, gv_cumulative_opening, effective_from_period_id,
+            asgari_gv_cumulative_opening, asgari_gv_effective_from_period_id,
+            created_at, updated_at
+        )
+        SELECT id, personnel_id, year, gv_cumulative_opening, effective_from_period_id,
+               {asgari_value}, {asgari_period}, created_at, updated_at
+          FROM personnel_tax_opening;
+        DROP TABLE personnel_tax_opening;
+        ALTER TABLE personnel_tax_opening__nullable RENAME TO personnel_tax_opening;
+        CREATE INDEX IF NOT EXISTS idx_tax_opening_personnel_year
+            ON personnel_tax_opening(personnel_id, year);"
+    ))?;
+    Ok(())
 }
 
 fn add_column_if_missing(
@@ -1025,6 +1118,7 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
         "asgari_gv_effective_from_period_id",
         "TEXT REFERENCES payroll_periods(id) ON DELETE CASCADE",
     )?;
+    ensure_nullable_tax_opening_table(&tx)?;
 
     let mut period_columns = table_columns(&tx, "payroll_periods")?;
     add_column_if_missing(

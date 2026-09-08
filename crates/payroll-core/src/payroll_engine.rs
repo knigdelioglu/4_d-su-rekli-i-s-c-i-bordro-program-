@@ -302,6 +302,16 @@ pub fn snapshot_statutory_parameters(
         return Ok(snapshot.clone());
     }
 
+    current_statutory_parameter_definition(settings)
+}
+
+/// Returns the statutory definition currently present in the mutable settings
+/// envelope. Unlike `snapshot_statutory_parameters`, this deliberately ignores
+/// any already-persisted snapshot so settings mutation can compare the new
+/// legal definition with the old one.
+pub fn current_statutory_parameter_definition(
+    settings: &DonemselKurumDegerleri,
+) -> Result<StatutoryParameterSnapshot> {
     Ok(StatutoryParameterSnapshot {
         gunlukAsgariUcret: settings
             .gunlukAsgariUcret
@@ -370,6 +380,12 @@ pub fn settings_with_resolved_statutory_snapshot(
     historical.pekTavanKatsayisi = Some(first_segment.pekTavanKatsayisi);
     historical.gunlukYemekIstisnasiSGK = Some(first_segment.gunlukYemekIstisnasiSGK);
     historical.gunlukYemekIstisnasiGV = Some(first_segment.gunlukYemekIstisnasiGV);
+    if let Some(rate) = snapshot.sgkIsciOraniYuzde {
+        historical.sgkIsciOraniYuzde = Some(rate);
+    }
+    if let Some(rate) = snapshot.issizlikIsciOraniYuzde {
+        historical.issizlikIsciOraniYuzde = Some(rate);
+    }
     historical.statutoryParameterSegments = Some(
         snapshot
             .segments
@@ -574,6 +590,8 @@ fn resolve_statutory_snapshot_internal(
         sgkYemekIstisnasiToplam: sgk_meal_total.round_dp(2),
         gvYemekIstisnasiToplam: gv_meal_total.round_dp(2),
         gvReferansGunlukAsgariUcret: gv_reference,
+        sgkIsciOraniYuzde: settings.sgkIsciOraniYuzde,
+        issizlikIsciOraniYuzde: settings.issizlikIsciOraniYuzde,
     })
 }
 
@@ -1866,24 +1884,37 @@ fn resolve_tax_openings(
         .cloned();
 
     let normal = if let Some(opening) = explicit.as_ref() {
-        if opening.gvCumulativeOpening < Decimal::ZERO {
-            return Err(DomainError::ValidationError(
-                "GV opening matrahı negatif olamaz.".into(),
-            ));
+        match (
+            opening.gvCumulativeOpening,
+            opening.effectiveFromPeriodId.as_deref(),
+        ) {
+            (None, None) => None,
+            (Some(value), Some(period_id)) => {
+                if value < Decimal::ZERO {
+                    return Err(DomainError::ValidationError(
+                        "GV opening matrahı negatif olamaz.".into(),
+                    ));
+                }
+                // Zero is still an explicit opening. Its period boundary
+                // determines which historical payrolls are in scope.
+                Some(ResolvedTaxOpening {
+                    value,
+                    start_tax_month: resolve_effective_period_tax_month(
+                        dataset,
+                        index,
+                        opening.year,
+                        period_id,
+                        "GV opening",
+                    )?,
+                })
+            }
+            (Some(_), None) | (None, Some(_)) => {
+                return Err(DomainError::ValidationError(
+                    "Normal GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                        .into(),
+                ));
+            }
         }
-        // Zero is still an explicit opening. Its period boundary determines
-        // which historical payrolls are in scope, even when the cumulative
-        // amount itself is zero.
-        Some(ResolvedTaxOpening {
-            value: opening.gvCumulativeOpening,
-            start_tax_month: resolve_effective_period_tax_month(
-                dataset,
-                index,
-                opening.year,
-                &opening.effectiveFromPeriodId,
-                "GV opening",
-            )?,
-        })
     } else {
         let value = person.devirKumulatifGvMatrahi.unwrap_or_default();
         if value < Decimal::ZERO {
@@ -1949,7 +1980,12 @@ fn resolve_tax_openings(
                 let period_id = opening
                     .asgariGvEffectiveFromPeriodId
                     .as_deref()
-                    .unwrap_or(opening.effectiveFromPeriodId.as_str());
+                    .ok_or_else(|| {
+                        DomainError::ValidationError(
+                            "Asgari GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                                .into(),
+                        )
+                    })?;
                 resolve_effective_period_tax_month(
                     dataset,
                     index,
@@ -3362,8 +3398,8 @@ mod tests {
             id: format!("{}_{}", personnel_id, period.taxYear),
             personnelId: personnel_id.into(),
             year: period.taxYear,
-            gvCumulativeOpening: Decimal::ZERO,
-            effectiveFromPeriodId: period.id.clone(),
+            gvCumulativeOpening: None,
+            effectiveFromPeriodId: None,
             asgariGvCumulativeOpening: Some(value),
             asgariGvEffectiveFromPeriodId: Some(period.id.clone()),
             createdAt: None,
@@ -3609,8 +3645,8 @@ mod tests {
             id: "person-h-zero_2026".into(),
             personnelId: person.id.clone(),
             year: 2026,
-            gvCumulativeOpening: dec!(1234),
-            effectiveFromPeriodId: active.id.clone(),
+            gvCumulativeOpening: Some(dec!(1234)),
+            effectiveFromPeriodId: Some(active.id.clone()),
             asgariGvCumulativeOpening: None,
             asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
@@ -3642,8 +3678,8 @@ mod tests {
             id: "person-i_2026".into(),
             personnelId: person.id.clone(),
             year: 2026,
-            gvCumulativeOpening: dec!(1234),
-            effectiveFromPeriodId: effective.id.clone(),
+            gvCumulativeOpening: Some(dec!(1234)),
+            effectiveFromPeriodId: Some(effective.id.clone()),
             asgariGvCumulativeOpening: None,
             asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
@@ -3677,6 +3713,94 @@ mod tests {
             )
             .unwrap(),
             dec!(1234)
+        );
+    }
+
+    #[test]
+    fn explicit_zero_normal_opening_is_not_the_same_as_no_opening() {
+        let prior = valid_tax_period("2026-01", 2026, 1, 2026, 2);
+        let effective = valid_tax_period("2026-03", 2026, 3, 2026, 4);
+        let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let person = test_person("person-1");
+        let prior_payroll = event(
+            &prior.id,
+            prior.taxMonth,
+            "prior-gv",
+            AccrualType::NORMAL,
+            BordroStatus::CALCULATED,
+            0,
+        );
+        let opening = PersonelTaxOpening {
+            id: "person-1_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: Some(Decimal::ZERO),
+            effectiveFromPeriodId: Some(effective.id.clone()),
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
+            createdAt: None,
+            updatedAt: None,
+        };
+        let current = PayrollAccrualInput {
+            accrualId: "current-gv".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: "2026-06-10".into(),
+            sequence: 0,
+            grossAmount: None,
+            description: None,
+        };
+        let explicit_dataset = PayrollDatasetSnapshot {
+            personnel: vec![person.clone()],
+            periods: vec![prior.clone(), effective.clone(), active.clone()],
+            institutionSettings: vec![
+                test_settings(&prior.id, dec!(1000)),
+                test_settings(&effective.id, dec!(1000)),
+                test_settings(&active.id, dec!(1000)),
+            ]
+            .into_iter()
+            .map(|settings| (settings.donemId.clone(), settings))
+            .collect(),
+            payrolls: vec![prior_payroll.clone()],
+            taxOpenings: vec![opening],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let explicit_index = PayrollDatasetIndex::build(&explicit_dataset);
+        assert!(matches!(
+            previous_gv(
+                &explicit_dataset,
+                &explicit_index,
+                &person,
+                &active,
+                &current
+            ),
+            Err(DomainError::TaxOpeningConflict(_))
+        ));
+
+        let no_opening_dataset = PayrollDatasetSnapshot {
+            personnel: vec![person.clone()],
+            periods: vec![prior, effective, active.clone()],
+            institutionSettings: vec![
+                test_settings("2026-01", dec!(1000)),
+                test_settings("2026-03", dec!(1000)),
+                test_settings("2026-05", dec!(1000)),
+            ]
+            .into_iter()
+            .map(|settings| (settings.donemId.clone(), settings))
+            .collect(),
+            payrolls: vec![prior_payroll],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let no_opening_index = PayrollDatasetIndex::build(&no_opening_dataset);
+        assert_eq!(
+            previous_gv(
+                &no_opening_dataset,
+                &no_opening_index,
+                &person,
+                &active,
+                &current,
+            )
+            .unwrap(),
+            Decimal::ZERO
         );
     }
 

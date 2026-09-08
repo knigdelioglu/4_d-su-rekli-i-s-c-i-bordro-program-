@@ -165,6 +165,37 @@ fn initialize_db_fails_explicitly_when_legacy_tax_month_duplicates_exist() {
 }
 
 #[test]
+fn tax_opening_schema_allows_independent_nullable_components() {
+    let conn = create_in_memory_connection().unwrap();
+    for column in ["gv_cumulative_opening", "effective_from_period_id"] {
+        let not_null: i32 = conn
+            .query_row(
+                "SELECT \"notnull\" FROM pragma_table_info('personnel_tax_opening') WHERE name = ?1",
+                [column],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            not_null, 0,
+            "{column} bağımsız opening için nullable olmalı"
+        );
+    }
+    for column in [
+        "asgari_gv_cumulative_opening",
+        "asgari_gv_effective_from_period_id",
+    ] {
+        let exists: i32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('personnel_tax_opening') WHERE name = ?1",
+                [column],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 1, "{column} migration sonrası mevcut olmalı");
+    }
+}
+
+#[test]
 fn insurance_and_borrowing_gv_deductions_apply_legal_limits() {
     let det = calculate_gv_indirimleri(
         dec!(100000),

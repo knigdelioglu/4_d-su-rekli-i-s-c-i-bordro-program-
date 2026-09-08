@@ -60,6 +60,8 @@ fn zero_gross_with_used_deferred_pek_still_accrues_worker_premiums_and_oks() {
         sgkYemekIstisnasiToplam: dec!(0),
         gvYemekIstisnasiToplam: dec!(0),
         gvReferansGunlukAsgariUcret: dec!(1000),
+        sgkIsciOraniYuzde: None,
+        issizlikIsciOraniYuzde: None,
     };
     let incoming = vec![DevredenPekKaydi {
         tutar: dec!(20000),

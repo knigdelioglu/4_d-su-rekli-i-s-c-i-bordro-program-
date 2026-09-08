@@ -339,6 +339,29 @@ function canonicalizeLegacyPersonel(value: unknown): unknown {
   return personel;
 }
 
+function canonicalizeLegacyTaxOpenings(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map((item) => {
+    if (!isRecord(item)) return item;
+    const opening = { ...item };
+    // Before independent openings, an asgari value without its own period
+    // intentionally shared the normal GV effective period. Preserve that
+    // known legacy meaning only when the shared period is explicit; otherwise
+    // the canonical pair invariant remains fail-closed.
+    if (
+      opening.asgariGvCumulativeOpening !== undefined &&
+      opening.asgariGvCumulativeOpening !== null &&
+      (opening.asgariGvEffectiveFromPeriodId === undefined ||
+        opening.asgariGvEffectiveFromPeriodId === null) &&
+      typeof opening.effectiveFromPeriodId === 'string' &&
+      opening.effectiveFromPeriodId.trim() !== ''
+    ) {
+      opening.asgariGvEffectiveFromPeriodId = opening.effectiveFromPeriodId;
+    }
+    return opening;
+  });
+}
+
 function legacyCents(value: unknown): bigint {
   const text = typeof value === 'string' ? value : String(value ?? '0');
   const negative = text.trim().startsWith('-');
@@ -565,14 +588,18 @@ function toCanonicalLegacyPayload(
       )
     : rawPuantajlar;
 
-  const rawTaxOpenings = legacyValueOrDefault(parsed, 'taxOpenings', []);
+  const rawTaxOpenings = canonicalizeLegacyTaxOpenings(
+    legacyValueOrDefault(parsed, 'taxOpenings', [])
+  );
   const taxOpenings = Array.isArray(rawTaxOpenings)
-      ? rawTaxOpenings.filter(
+    ? rawTaxOpenings.filter(
         (item) =>
           !pruneDanglingReferences ||
           !isRecord(item) ||
           ((!validPersonnelIds.size || validPersonnelIds.has(String(item.personnelId))) &&
-            (!validPeriodIds.size || validPeriodIds.has(String(item.effectiveFromPeriodId))) &&
+            (!item.effectiveFromPeriodId ||
+              !validPeriodIds.size ||
+              validPeriodIds.has(String(item.effectiveFromPeriodId))) &&
             (!item.asgariGvEffectiveFromPeriodId ||
               !validPeriodIds.size ||
               validPeriodIds.has(String(item.asgariGvEffectiveFromPeriodId))))
@@ -664,7 +691,10 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   }
   return parseAndValidatePayrollPayload(
     toCanonicalLegacyPayload(encodedLegacy, false),
-    { allowLegacySparsePayrollFinancials: true }
+    {
+      allowLegacySparsePayrollFinancials: true,
+      allowLegacyTaxOpeningYearMismatch: true,
+    }
   );
 }
 
@@ -677,7 +707,9 @@ export function repairAndCanonicalizeBackup(raw: UnknownRecord): PayrollStorageD
   if (!isRecord(converted)) {
     throw new Error('Kurtarılacak veri geçerli bir nesne değil.');
   }
-  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted, true));
+  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted, true), {
+    allowLegacyTaxOpeningYearMismatch: true,
+  });
 }
 
 /** Explicit structural/version predicate for legacy localStorage or imports. */

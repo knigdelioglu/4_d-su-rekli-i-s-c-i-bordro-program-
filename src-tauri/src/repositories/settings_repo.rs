@@ -162,18 +162,41 @@ impl SettingsRepository {
         if normalized.gunlukYemekIstisnasiGV.is_none() {
             normalized.gunlukYemekIstisnasiGV = normalized.gunlukYemekIstisnasiSGK;
         }
-        // A statutory snapshot is period history, not a mutable copy of the
-        // current form values. Once captured, later settings edits may change
-        // ordinary payroll inputs but must never rewrite the legal reference
-        // used by historical asgari-GV calculations.
-        if let Some(existing_json) = existing_json.as_deref() {
-            let existing = Self::decode_settings(&k.donemId, existing_json)?;
-            if existing.statutoryParameterSnapshot.is_some() {
-                normalized.statutoryParameterSnapshot = existing.statutoryParameterSnapshot;
-            }
-        }
         crate::domain::calculations::validate_kurum_degerleri_for_payroll(&normalized)?;
         Self::validate_statutory_segments_for_period(&period, &normalized)?;
+
+        // A period snapshot is immutable only while it protects FINALIZED
+        // history. CALCULATED/STALE records are invalidated by the same period
+        // mutation above, so a statutory correction must clear the old
+        // snapshot and let the next authoritative calculation capture the new
+        // definition. Non-statutory edits keep the existing legal snapshot.
+        if let Some(existing_json) = existing_json.as_deref() {
+            let existing = Self::decode_settings(&k.donemId, existing_json)?;
+            let statutory_changed = match (
+                payroll_core::payroll_engine::current_statutory_parameter_definition(&existing),
+                payroll_core::payroll_engine::current_statutory_parameter_definition(&normalized),
+            ) {
+                (Ok(old_definition), Ok(new_definition)) => {
+                    old_definition != new_definition
+                        || existing
+                            .statutoryParameterSnapshot
+                            .as_ref()
+                            .is_some_and(|snapshot| snapshot != &old_definition)
+                }
+                (Err(_), Ok(new_definition)) => existing
+                    .statutoryParameterSnapshot
+                    .as_ref()
+                    .is_some_and(|old_definition| old_definition != &new_definition),
+                (Ok(_), Err(_)) | (Err(_), Err(_)) => true,
+            };
+            normalized.statutoryParameterSnapshot = if statutory_changed {
+                None
+            } else {
+                existing
+                    .statutoryParameterSnapshot
+                    .or(normalized.statutoryParameterSnapshot)
+            };
+        }
 
         let json_str = serde_json::to_string(&normalized)
             .map_err(|e| crate::domain::DomainError::InvalidData(e.to_string()))?;

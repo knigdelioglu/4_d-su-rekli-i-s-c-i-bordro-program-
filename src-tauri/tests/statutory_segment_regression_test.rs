@@ -248,19 +248,107 @@ fn payroll_persists_resolved_statutory_snapshot() -> Result<(), Box<dyn std::err
     assert_eq!(frozen_snapshot.gunlukAsgariUcret, dec!(100));
     assert_eq!(frozen_snapshot.statutoryParameterSegments.len(), 1);
 
-    // A later mutable settings edit must not rewrite the period's legal
-    // reference used by historical asgari-GV calculations.
+    // A statutory correction invalidates the CALCULATED record and clears the
+    // refreshable period snapshot. The next authoritative calculation then
+    // captures the corrected legal definition.
     let mut changed_settings = frozen;
     changed_settings.gunlukAsgariUcret = Some(dec!(999));
     changed_settings.statutoryParameterSegments = None;
     SettingsRepository::save_institution_settings(&conn, &changed_settings)?;
     let reloaded_settings = SettingsRepository::get_institution_settings(&conn, &p.id)?
         .expect("period settings after edit");
-    let reloaded_snapshot = reloaded_settings
+    assert!(reloaded_settings.statutoryParameterSnapshot.is_none());
+    assert_eq!(
+        PayrollRepository::get_all(&conn)?
+            .into_iter()
+            .find(|payroll| payroll.id == calculated.id)
+            .expect("invalidated payroll")
+            .status,
+        bordro_programi_lib::domain::models::BordroStatus::STALE
+    );
+
+    let recalculated = PayrollService::calculate_payroll_for_personnel(&conn, "p-segment", &p.id)?;
+    assert_eq!(
+        recalculated
+            .statutorySnapshot
+            .as_ref()
+            .expect("corrected statutory snapshot")
+            .gvReferansGunlukAsgariUcret,
+        dec!(999)
+    );
+    let corrected_settings = SettingsRepository::get_institution_settings(&conn, &p.id)?
+        .expect("corrected period settings");
+    assert_eq!(
+        corrected_settings
+            .statutoryParameterSnapshot
+            .as_ref()
+            .expect("recaptured statutory snapshot")
+            .gunlukAsgariUcret,
+        dec!(999)
+    );
+
+    // Non-statutory edits do not replace the legal snapshot.
+    let mut non_statutory_edit = corrected_settings.clone();
+    non_statutory_edit.gunlukTabanUcret += dec!(1);
+    SettingsRepository::save_institution_settings(&conn, &non_statutory_edit)?;
+    assert_eq!(
+        SettingsRepository::get_institution_settings(&conn, &p.id)?
+            .expect("settings after non-statutory edit")
+            .statutoryParameterSnapshot,
+        corrected_settings.statutoryParameterSnapshot
+    );
+    Ok(())
+}
+
+#[test]
+fn finalized_statutory_snapshot_cannot_be_mutated() -> Result<(), Box<dyn std::error::Error>> {
+    let conn = create_in_memory_connection()?;
+    let p = period();
+    PeriodRepository::save(&conn, &p)?;
+    PersonnelRepository::save(&conn, &person())?;
+    AttendanceRepository::save(&conn, &full_attendance(&p))?;
+    AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
+    SettingsRepository::save_institution_settings(&conn, &base_settings())?;
+
+    let calculated = PayrollService::calculate_payroll_for_personnel(&conn, "p-segment", &p.id)?;
+    let finalized = PayrollService::finalize_payroll_for_personnel(&conn, "p-segment", &p.id)?;
+    assert_eq!(
+        finalized.status,
+        bordro_programi_lib::domain::models::BordroStatus::FINALIZED
+    );
+    let before = SettingsRepository::get_institution_settings(&conn, &p.id)?
+        .expect("settings before blocked edit");
+    let before_snapshot = before
         .statutoryParameterSnapshot
-        .as_ref()
-        .expect("immutable period snapshot");
-    assert_eq!(reloaded_snapshot.gunlukAsgariUcret, dec!(100));
-    assert_eq!(reloaded_snapshot.statutoryParameterSegments.len(), 1);
+        .clone()
+        .expect("finalized period snapshot");
+    let before_payroll_snapshot = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .find(|payroll| payroll.id == calculated.id)
+        .and_then(|payroll| payroll.statutorySnapshot)
+        .expect("finalized payroll snapshot");
+
+    let mut changed = before.clone();
+    changed.gunlukAsgariUcret = Some(dec!(1100));
+    assert!(matches!(
+        SettingsRepository::save_institution_settings(&conn, &changed),
+        Err(DomainError::PayrollFinalized(_))
+    ));
+
+    let after = SettingsRepository::get_institution_settings(&conn, &p.id)?
+        .expect("settings after blocked edit");
+    assert_eq!(
+        after.statutoryParameterSnapshot,
+        Some(before_snapshot.clone())
+    );
+    let persisted = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .find(|payroll| payroll.id == calculated.id)
+        .expect("finalized payroll");
+    assert_eq!(
+        persisted.status,
+        bordro_programi_lib::domain::models::BordroStatus::FINALIZED
+    );
+    assert_eq!(persisted.statutorySnapshot, Some(before_payroll_snapshot));
     Ok(())
 }

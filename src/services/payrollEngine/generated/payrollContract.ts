@@ -630,19 +630,19 @@ export const RUST_STRUCT_CONTRACT = {
       },
       "gvCumulativeOpening": {
         "rustName": "gvCumulativeOpening",
-        "rustType": "Decimal",
-        "required": true,
-        "optional": false,
-        "nullable": false,
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
         "decimal": true,
         "nestedTypes": []
       },
       "effectiveFromPeriodId": {
         "rustName": "effectiveFromPeriodId",
-        "rustType": "String",
-        "required": true,
-        "optional": false,
-        "nullable": false,
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
         "decimal": false,
         "nestedTypes": []
       },
@@ -3120,6 +3120,24 @@ export const RUST_STRUCT_CONTRACT = {
         "required": true,
         "optional": false,
         "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sgkIsciOraniYuzde": {
+        "rustName": "sgkIsciOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "issizlikIsciOraniYuzde": {
+        "rustName": "issizlikIsciOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
         "decimal": true,
         "nestedTypes": []
       }

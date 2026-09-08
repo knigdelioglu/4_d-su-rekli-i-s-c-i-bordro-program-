@@ -1161,28 +1161,31 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                   </thead>
                   <tbody className="divide-y divide-slate-200 font-mono">
                     {personeller.map((person) => {
-                      const bordro = bordrolar.find(
-                        (b) => b.personelId === person.id && b.donemId === aktifDonem.id
-                      );
                       const exactPerson = authoritativeDataset.personnel.find(
                         (item) => item.id === person.id
                       );
                       const exactBordro = authoritativeDataset.payrolls.find(
                         (item) => item.personelId === person.id && item.donemId === aktifDonem.id
                       );
-                      const autoGv =
-                        bordro?.oncekiKumulatifGvMatrahi ??
-                        getDevirGvMatrahiForActiveYear(person);
                       const explicitOpening = authoritativeDataset.taxOpenings.find(
                         (opening) =>
                           opening.personnelId === person.id &&
                           opening.year === aktifDonem.taxYear
                       );
+                      const legacyAsgariGv =
+                        exactPerson?.devirKumulatifAsgariGvMatrahi != null &&
+                        (!exactPerson.devirKumulatifAsgariGvMatrahiYili ||
+                          exactPerson.devirKumulatifAsgariGvMatrahiYili === aktifDonem.taxYear)
+                          ? exactPerson.devirKumulatifAsgariGvMatrahi
+                          : undefined;
+                      const autoGv =
+                        explicitOpening?.gvCumulativeOpening ??
+                        exactBordro?.oncekiKumulatifGvMatrahi ??
+                        getDevirGvMatrahiForActiveYear(person);
                       const autoAsgariGv = Number(
-                        bordro?.oncekiKumulatifAsgariGvMatrahi ??
+                        explicitOpening?.asgariGvCumulativeOpening ??
                           exactBordro?.oncekiKumulatifAsgariGvMatrahi ??
-                          explicitOpening?.asgariGvCumulativeOpening ??
-                          exactPerson?.devirKumulatifAsgariGvMatrahi ??
+                          legacyAsgariGv ??
                           0
                       ) || 0;
 
@@ -1190,9 +1193,6 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       const currentAsgariSession = manualKumulatifAsgariGvMap[person.id];
                       const displayGv =
                         currentSession ??
-                        exactBordro?.manuelKumulatifGvMatrahi ??
-                        exactBordro?.oncekiKumulatifGvMatrahi ??
-                        exactPerson?.devirKumulatifGvMatrahi ??
                         String(autoGv);
                       const displayAsgariGv =
                         currentAsgariSession ??
@@ -1284,71 +1284,113 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             const exactBordro = authoritativeDataset.payrolls.find(
                               (item) => item.personelId === person.id && item.donemId === aktifDonem.id
                             );
+                            const legacyAsgariGv =
+                              exactPersonSource?.devirKumulatifAsgariGvMatrahi != null &&
+                              (!exactPersonSource.devirKumulatifAsgariGvMatrahiYili ||
+                                exactPersonSource.devirKumulatifAsgariGvMatrahiYili === aktifDonem.taxYear)
+                                ? exactPersonSource.devirKumulatifAsgariGvMatrahi
+                                : undefined;
                             const existingOpening = authoritativeDataset.taxOpenings.find(
                               (opening) =>
                                 opening.personnelId === person.id &&
                                 opening.year === aktifDonem.taxYear
                             );
                             const automaticGv =
-                              exactBordro?.manuelKumulatifGvMatrahi ??
+                              existingOpening?.gvCumulativeOpening ??
                               exactBordro?.oncekiKumulatifGvMatrahi ??
-                              exactPersonSource?.devirKumulatifGvMatrahi ??
-                              0;
+                              getDevirGvMatrahiForActiveYear(person);
                             const automaticAsgariGv =
-                              exactBordro?.oncekiKumulatifAsgariGvMatrahi ??
                               existingOpening?.asgariGvCumulativeOpening ??
-                              exactPersonSource?.devirKumulatifAsgariGvMatrahi ??
+                              exactBordro?.oncekiKumulatifAsgariGvMatrahi ??
+                              legacyAsgariGv ??
                               0;
+                            const normalOpeningWasEdited = Object.prototype.hasOwnProperty.call(
+                              manualKumulatifGvMap,
+                              pId
+                            );
                             const asgariOpeningWasEdited = Object.prototype.hasOwnProperty.call(
                               manualKumulatifAsgariGvMap,
                               pId
                             );
+                            const hasExistingNormalOpening =
+                              existingOpening?.gvCumulativeOpening != null;
+                            const hasExistingNormalPeriod =
+                              existingOpening?.effectiveFromPeriodId != null;
                             const hasExistingAsgariOpening =
-                              existingOpening?.asgariGvCumulativeOpening !== undefined;
-                            const val = (
-                              manualKumulatifGvMap[pId] ?? String(automaticGv)
-                            ).trim() || '0';
+                              existingOpening?.asgariGvCumulativeOpening != null;
+                            const hasExistingAsgariPeriod =
+                              existingOpening?.asgariGvEffectiveFromPeriodId != null;
+                            const val = (manualKumulatifGvMap[pId] ?? String(automaticGv)).trim() || '0';
                             const asgariVal = (
                               manualKumulatifAsgariGvMap[pId] ?? String(automaticAsgariGv)
                             ).trim() || '0';
-                            if (!isExactDecimalString(val) || val.startsWith('-')) {
+                            if (normalOpeningWasEdited && (!isExactDecimalString(val) || val.startsWith('-'))) {
                               throw new Error('Kümülatif GV matrahı geçerli, negatif olmayan bir tutar olmalıdır.');
                             }
-                            if (!isExactDecimalString(asgariVal) || asgariVal.startsWith('-')) {
+                            if (asgariOpeningWasEdited && (!isExactDecimalString(asgariVal) || asgariVal.startsWith('-'))) {
                               throw new Error('Kümülatif asgari GV matrahı geçerli, negatif olmayan bir tutar olmalıdır.');
                             }
-                            const explicitAsgariOpening =
-                              asgariOpeningWasEdited || hasExistingAsgariOpening
-                                ? asgariVal
-                                : undefined;
+                            if (hasExistingNormalOpening !== hasExistingNormalPeriod) {
+                              throw new Error('Mevcut normal GV opening effective dönemi eksik; kayıt güvenli biçimde güncellenemiyor.');
+                            }
+                            if (hasExistingAsgariOpening !== hasExistingAsgariPeriod) {
+                              throw new Error('Mevcut asgari GV opening effective dönemi eksik; kayıt güvenli biçimde güncellenemiyor.');
+                            }
                             const exactPerson = mergePayrollUiIntoBoundary(
                               exactPersonSource,
                               {
                                 ...person,
-                                devirKumulatifGvMatrahi: val,
-                                devirKumulatifAsgariGvMatrahi: asgariVal,
+                                ...(normalOpeningWasEdited
+                                  ? { devirKumulatifGvMatrahi: val }
+                                  : { devirKumulatifGvMatrahi: exactPersonSource?.devirKumulatifGvMatrahi }),
+                                ...(asgariOpeningWasEdited
+                                  ? { devirKumulatifAsgariGvMatrahi: asgariVal }
+                                  : { devirKumulatifAsgariGvMatrahi: exactPersonSource?.devirKumulatifAsgariGvMatrahi }),
                               }
                             ) as PayrollBoundaryPersonel;
                             await onSavePersonel({
                               ...exactPerson,
-                              devirKumulatifGvMatrahiYili: aktifDonem.taxYear,
-                              devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
-                              devirKumulatifAsgariGvMatrahiYili: aktifDonem.taxYear,
+                              ...(normalOpeningWasEdited
+                                ? {
+                                    devirKumulatifGvMatrahiYili: aktifDonem.taxYear,
+                                    devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
+                                  }
+                                : {}),
+                              ...(asgariOpeningWasEdited
+                                ? { devirKumulatifAsgariGvMatrahiYili: aktifDonem.taxYear }
+                                : {}),
                             } as PayrollBoundaryPersonel);
                             // The App owns persistence in both native and browser
                             // modes. Do not swallow an opening-table write failure.
                             if (onSaveTaxOpening) {
-                              await onSaveTaxOpening({
+                              const openingUpdate: PayrollBoundaryTaxOpening = {
                                 id: `${person.id}_${aktifDonem.taxYear}`,
                                 personnelId: person.id,
                                 year: aktifDonem.taxYear,
-                                gvCumulativeOpening: val,
-                                effectiveFromPeriodId: aktifDonem.id,
-                                asgariGvCumulativeOpening: explicitAsgariOpening,
-                                asgariGvEffectiveFromPeriodId: explicitAsgariOpening
-                                  ? aktifDonem.id
-                                  : undefined,
-                              });
+                                ...(normalOpeningWasEdited
+                                  ? {
+                                      gvCumulativeOpening: val,
+                                      effectiveFromPeriodId: aktifDonem.id,
+                                    }
+                                  : hasExistingNormalOpening
+                                    ? {
+                                        gvCumulativeOpening: existingOpening!.gvCumulativeOpening,
+                                        effectiveFromPeriodId: existingOpening!.effectiveFromPeriodId,
+                                      }
+                                    : {}),
+                                ...(asgariOpeningWasEdited
+                                  ? {
+                                      asgariGvCumulativeOpening: asgariVal,
+                                      asgariGvEffectiveFromPeriodId: aktifDonem.id,
+                                    }
+                                  : hasExistingAsgariOpening
+                                    ? {
+                                        asgariGvCumulativeOpening: existingOpening!.asgariGvCumulativeOpening,
+                                        asgariGvEffectiveFromPeriodId: existingOpening!.asgariGvEffectiveFromPeriodId,
+                                      }
+                                    : {}),
+                              };
+                              await onSaveTaxOpening(openingUpdate);
                             }
                             updatedAny = true;
                           }

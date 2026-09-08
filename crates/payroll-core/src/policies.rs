@@ -706,6 +706,8 @@ mod tests {
             sgkYemekIstisnasiToplam: Default::default(),
             gvYemekIstisnasiToplam: Default::default(),
             gvReferansGunlukAsgariUcret: Default::default(),
+            sgkIsciOraniYuzde: None,
+            issizlikIsciOraniYuzde: None,
         }
     }
 

@@ -40,6 +40,7 @@ import {
   type PayrollStorageDto,
 } from '../services/payrollEngine/decimalBoundary';
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
+import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
 
 export interface PayrollMutationControllerOptions {
   isNative: boolean;
@@ -284,9 +285,7 @@ export function usePayrollMutationController({
         previousSettings,
         kurumDegerleri
       );
-      const preservedSettings = previousSettings?.statutoryParameterSnapshot
-        ? { ...exactSettings, statutoryParameterSnapshot: previousSettings.statutoryParameterSnapshot }
-        : exactSettings;
+      const preservedSettings = reconcileStatutorySnapshot(previousSettings, exactSettings);
       return {
         ...current,
         donemler,
@@ -311,9 +310,7 @@ export function usePayrollMutationController({
         [settings.donemId]: (() => {
           const previousSettings = current.kurumDegerleriMap[settings.donemId];
           const exactSettings = mergePayrollUiIntoBoundary(previousSettings, settings);
-          return previousSettings?.statutoryParameterSnapshot
-            ? { ...exactSettings, statutoryParameterSnapshot: previousSettings.statutoryParameterSnapshot }
-            : exactSettings;
+          return reconcileStatutorySnapshot(previousSettings, exactSettings);
         })(),
       },
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
@@ -366,9 +363,42 @@ export function usePayrollMutationController({
     updateAuthoritativePayload((current) => {
       const index = current.taxOpenings.findIndex((item) => item.id === opening.id);
       const taxOpenings = [...current.taxOpenings];
+      const previousOpening = index < 0 ? undefined : current.taxOpenings[index];
+      const clearNormalOpening =
+        opening.gvCumulativeOpening === null || opening.effectiveFromPeriodId === null;
+      const clearAsgariOpening =
+        opening.asgariGvCumulativeOpening === null || opening.asgariGvEffectiveFromPeriodId === null;
+      const mergedOpening = { ...opening } as PayrollBoundaryTaxOpening;
+      if (clearNormalOpening) {
+        mergedOpening.gvCumulativeOpening = null;
+        mergedOpening.effectiveFromPeriodId = null;
+      } else if (
+        opening.gvCumulativeOpening === undefined &&
+        previousOpening?.gvCumulativeOpening !== undefined
+      ) {
+        mergedOpening.gvCumulativeOpening = previousOpening.gvCumulativeOpening;
+        mergedOpening.effectiveFromPeriodId = previousOpening.effectiveFromPeriodId;
+      }
+      if (clearAsgariOpening) {
+        mergedOpening.asgariGvCumulativeOpening = null;
+        mergedOpening.asgariGvEffectiveFromPeriodId = null;
+      } else if (
+        opening.asgariGvCumulativeOpening === undefined &&
+        previousOpening?.asgariGvCumulativeOpening !== undefined
+      ) {
+        mergedOpening.asgariGvCumulativeOpening = previousOpening.asgariGvCumulativeOpening;
+        mergedOpening.asgariGvEffectiveFromPeriodId = previousOpening.asgariGvEffectiveFromPeriodId;
+      }
+      const hasNormalValue = mergedOpening.gvCumulativeOpening != null;
+      const hasNormalPeriod = mergedOpening.effectiveFromPeriodId != null;
+      const hasAsgariValue = mergedOpening.asgariGvCumulativeOpening != null;
+      const hasAsgariPeriod = mergedOpening.asgariGvEffectiveFromPeriodId != null;
+      if (hasNormalValue !== hasNormalPeriod || hasAsgariValue !== hasAsgariPeriod) {
+        throw new Error('Vergi opening bileşenleri değer ve effective dönem çiftleri olarak birlikte tanımlanmalıdır.');
+      }
       const exactOpening = mergePayrollUiIntoBoundary(
-        index < 0 ? undefined : current.taxOpenings[index],
-        opening
+        previousOpening,
+        mergedOpening
       );
       if (index < 0) taxOpenings.push(exactOpening);
       else taxOpenings[index] = exactOpening;

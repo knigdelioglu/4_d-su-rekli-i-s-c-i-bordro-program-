@@ -1305,6 +1305,35 @@ describe('SQLite persistence invariant parity', () => {
     );
   });
 
+  test('accepts an asgari-only tax opening without creating a normal opening', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const opening = firstRecord(payload, 'taxOpenings');
+    delete opening.gvCumulativeOpening;
+    delete opening.effectiveFromPeriodId;
+    opening.asgariGvCumulativeOpening = '100000.00';
+    opening.asgariGvEffectiveFromPeriodId = '2026-01';
+
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(parsed.taxOpenings[0].gvCumulativeOpening).toBe(undefined);
+    expect(parsed.taxOpenings[0].effectiveFromPeriodId).toBe(undefined);
+    expect(parsed.taxOpenings[0].asgariGvCumulativeOpening).toBe('100000.00');
+  });
+
+  test('legacy shared asgari effective period is normalized only in restore', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    payload.backupVersion = 4;
+    const opening = firstRecord(payload, 'taxOpenings');
+    opening.asgariGvCumulativeOpening = '100000.00';
+    delete opening.asgariGvEffectiveFromPeriodId;
+
+    const restored = parseLegacyBackup(JSON.stringify(payload));
+    expect(restored.taxOpenings[0].asgariGvEffectiveFromPeriodId).toBe('2026-01');
+    const currentPayload = { ...payload, backupVersion: 5 };
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(currentPayload))).toThrow(
+      'asgari GV opening değeri ile asgari effectiveFromPeriodId birlikte tanımlanmalıdır'
+    );
+  });
+
   test('rejects duplicate annualPayrollParameters.year', () => {
     const duplicate = parseTestSnapshot(makeV2Snapshot());
     (duplicate.annualPayrollParameters as TestRecord[]).push({

@@ -143,8 +143,8 @@ mod tests {
             id: "opt_1".into(),
             personnelId: "test-p1".into(),
             year: 2026,
-            gvCumulativeOpening: dec!(120000),
-            effectiveFromPeriodId: "2026-05".into(),
+            gvCumulativeOpening: Some(dec!(120000)),
+            effectiveFromPeriodId: Some("2026-05".into()),
             asgariGvCumulativeOpening: None,
             asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
@@ -1830,6 +1830,26 @@ mod tests {
         let all_migrations = bordro_programi_lib::db::migrations::get_migrations();
         all_migrations.to_latest(&mut conn)?;
 
+        for column in ["gv_cumulative_opening", "effective_from_period_id"] {
+            let not_null: i32 = conn.query_row(
+                "SELECT \"notnull\" FROM pragma_table_info('personnel_tax_opening') WHERE name = ?1",
+                [column],
+                |row| row.get(0),
+            )?;
+            assert_eq!(not_null, 0, "legacy {column} nullable hale gelmeli");
+        }
+        for column in [
+            "asgari_gv_cumulative_opening",
+            "asgari_gv_effective_from_period_id",
+        ] {
+            let exists: i32 = conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('personnel_tax_opening') WHERE name = ?1",
+                [column],
+                |row| row.get(0),
+            )?;
+            assert_eq!(exists, 1, "legacy migration {column} alanını eklemeli");
+        }
+
         // Read all payroll records
         let records = PayrollRepository::get_all(&conn)?;
         assert_eq!(records.len(), 1);
@@ -2419,8 +2439,8 @@ mod tests {
             id: "test-asgari-opening_2026".into(),
             personnelId: person.id.clone(),
             year: 2026,
-            gvCumulativeOpening: dec!(0),
-            effectiveFromPeriodId: periods[0].id.clone(),
+            gvCumulativeOpening: None,
+            effectiveFromPeriodId: None,
             asgariGvCumulativeOpening: Some(dec!(100000)),
             asgariGvEffectiveFromPeriodId: Some(periods[0].id.clone()),
             createdAt: None,
@@ -2430,11 +2450,24 @@ mod tests {
 
         let reloaded = TaxOpeningRepository::get_by_personnel_and_year(&conn, &person.id, 2026)?
             .expect("asgari opening should persist");
+        assert_eq!(reloaded.gvCumulativeOpening, None);
+        assert_eq!(reloaded.effectiveFromPeriodId, None);
         assert_eq!(reloaded.asgariGvCumulativeOpening, Some(dec!(100000)));
         assert_eq!(
             reloaded.asgariGvEffectiveFromPeriodId.as_deref(),
             Some("2026-03")
         );
+
+        // Production normal-GV service still follows the real historical
+        // payroll chain; the asgari-only row must not create a normal opening
+        // or a TaxOpeningConflict.
+        PayrollRepository::save(
+            &conn,
+            &bordro_kaydi(&person.id, &periods[0].id, dec!(50000)),
+        )?;
+        let previous_normal =
+            CumulativeTaxService::get_previous_cumulative_gv(&conn, &person.id, &periods[2])?;
+        assert_eq!(previous_normal, dec!(50000));
 
         let previous = CumulativeTaxService::get_previous_cumulative_asgari_gv_strict(
             &conn,
@@ -2471,14 +2504,14 @@ mod tests {
             id: "opt_2026".into(),
             personnelId: "test-yil-gecis".into(),
             year: 2026,
-            gvCumulativeOpening: dec!(300000),
-            effectiveFromPeriodId: "2026-12".into(),
+            gvCumulativeOpening: Some(dec!(300000)),
+            effectiveFromPeriodId: Some("2026-12".into()),
             asgariGvCumulativeOpening: None,
             asgariGvEffectiveFromPeriodId: None,
             createdAt: None,
             updatedAt: None,
         };
-        TaxOpeningRepository::save(&conn, &opening2026)?;
+        TaxOpeningRepository::save_legacy(&conn, &opening2026)?;
 
         let prev =
             CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-yil-gecis", &aralik2026)?;
@@ -2512,8 +2545,8 @@ mod tests {
             id: "opt_2027".into(),
             personnelId: "test-2027-opening".into(),
             year: 2027,
-            gvCumulativeOpening: dec!(120000),
-            effectiveFromPeriodId: "2026-12".into(),
+            gvCumulativeOpening: Some(dec!(120000)),
+            effectiveFromPeriodId: Some("2026-12".into()),
             asgariGvCumulativeOpening: None,
             asgariGvEffectiveFromPeriodId: None,
             createdAt: None,

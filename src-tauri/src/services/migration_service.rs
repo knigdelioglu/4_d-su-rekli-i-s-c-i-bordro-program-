@@ -524,8 +524,12 @@ impl MigrationService {
                                     id: format!("{}_{}", personel.id, year),
                                     personnelId: personel.id.clone(),
                                     year,
-                                    gvCumulativeOpening: normal_value,
-                                    effectiveFromPeriodId: effective_period_id.clone(),
+                                    gvCumulativeOpening: (normal_value
+                                        > rust_decimal_macros::dec!(0))
+                                    .then_some(normal_value),
+                                    effectiveFromPeriodId: (normal_value
+                                        > rust_decimal_macros::dec!(0))
+                                    .then_some(effective_period_id.clone()),
                                     asgariGvCumulativeOpening: (asgari_value
                                         > rust_decimal_macros::dec!(0))
                                     .then_some(asgari_value),
@@ -561,8 +565,19 @@ impl MigrationService {
         }
 
         if let Some(openings) = taxOpenings {
-            for opening in openings {
-                TaxOpeningRepository::save_in_transaction(conn, &opening)?;
+            for mut opening in openings {
+                // Restore keeps legacy period/year pairings intact. Runtime
+                // writes use the stricter canonical repository path.
+                // Before the openings were independent, an asgari value with
+                // no own period shared the normal effective period. Preserve
+                // that known legacy meaning only when the normal period is
+                // present; unresolved pairs remain fail-closed.
+                if opening.asgariGvCumulativeOpening.is_some()
+                    && opening.asgariGvEffectiveFromPeriodId.is_none()
+                {
+                    opening.asgariGvEffectiveFromPeriodId = opening.effectiveFromPeriodId.clone();
+                }
+                TaxOpeningRepository::save_legacy_in_transaction(conn, &opening)?;
             }
         }
 

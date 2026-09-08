@@ -1,4 +1,4 @@
-use super::{dec_to_kurus, kurus_to_dec};
+use super::{kurus_to_dec, opt_dec_to_kurus};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
@@ -22,12 +22,11 @@ impl TaxOpeningRepository {
 
         let rows = stmt
             .query_map([], |row| {
-                let opening_kurus: i64 = row.get(3)?;
                 Ok(PersonelTaxOpening {
                     id: row.get(0)?,
                     personnelId: row.get(1)?,
                     year: row.get(2)?,
-                    gvCumulativeOpening: kurus_to_dec(opening_kurus),
+                    gvCumulativeOpening: row.get::<_, Option<i64>>(3)?.map(kurus_to_dec),
                     effectiveFromPeriodId: row.get(4)?,
                     asgariGvCumulativeOpening: row.get::<_, Option<i64>>(5)?.map(kurus_to_dec),
                     asgariGvEffectiveFromPeriodId: row.get(6)?,
@@ -56,12 +55,11 @@ impl TaxOpeningRepository {
              FROM personnel_tax_opening WHERE personnel_id = ?1 AND year = ?2",
             params![personnel_id, year],
             |row| {
-                let opening_kurus: i64 = row.get(3)?;
                 Ok(PersonelTaxOpening {
                     id: row.get(0)?,
                     personnelId: row.get(1)?,
                     year: row.get(2)?,
-                    gvCumulativeOpening: kurus_to_dec(opening_kurus),
+                    gvCumulativeOpening: row.get::<_, Option<i64>>(3)?.map(kurus_to_dec),
                     effectiveFromPeriodId: row.get(4)?,
                     asgariGvCumulativeOpening: row.get::<_, Option<i64>>(5)?.map(kurus_to_dec),
                     asgariGvEffectiveFromPeriodId: row.get(6)?,
@@ -78,10 +76,31 @@ impl TaxOpeningRepository {
         with_transaction(conn, |tx| Self::save_in_transaction(tx, t))
     }
 
+    pub fn save_legacy(conn: &Connection, t: &PersonelTaxOpening) -> Result<()> {
+        with_transaction(conn, |tx| Self::save_legacy_in_transaction(tx, t))
+    }
+
     /// Caller-owned transaction variant used by backup restore.
     pub fn save_in_transaction(conn: &Connection, t: &PersonelTaxOpening) -> Result<()> {
+        Self::save_in_transaction_with_policy(conn, t, true)
+    }
+
+    /// Compatibility restore path. It validates the two-component shape and
+    /// referenced periods, but preserves legacy rows whose opening year and
+    /// period tax year were historically inconsistent. The calculation
+    /// resolver remains fail-closed for those rows.
+    pub fn save_legacy_in_transaction(conn: &Connection, t: &PersonelTaxOpening) -> Result<()> {
+        Self::save_in_transaction_with_policy(conn, t, false)
+    }
+
+    fn save_in_transaction_with_policy(
+        conn: &Connection,
+        t: &PersonelTaxOpening,
+        enforce_tax_year: bool,
+    ) -> Result<()> {
         if t.year <= 0
-            || t.gvCumulativeOpening < rust_decimal::Decimal::ZERO
+            || t.gvCumulativeOpening
+                .is_some_and(|value| value < rust_decimal::Decimal::ZERO)
             || t.asgariGvCumulativeOpening
                 .is_some_and(|value| value < rust_decimal::Decimal::ZERO)
         {
@@ -89,37 +108,71 @@ impl TaxOpeningRepository {
                 "Vergi açılışı geçerli bir yıl ve negatif olmayan bir matrah içermelidir.".into(),
             ));
         }
-        if t.effectiveFromPeriodId.trim().is_empty() {
-            return Err(crate::domain::DomainError::ValidationError(
-                "Vergi açılışı için başlangıç dönemi zorunludur.".into(),
-            ));
-        }
-        let _effective_period = PeriodRepository::get_by_id(conn, &t.effectiveFromPeriodId)?
-            .ok_or_else(|| {
-                crate::domain::DomainError::ValidationError(format!(
-                    "GV açılış başlangıç dönemi bulunamadı: {}.",
-                    t.effectiveFromPeriodId
-                ))
-            })?;
-        // Keep legacy rows readable even when an old import paired a tax-year
-        // opening with a work-period ID from another tax year. The canonical
-        // resolver validates this relation at calculation time; persistence
-        // must not rewrite or discard existing history during migration.
-        if let Some(asgari_period_id) = t.asgariGvEffectiveFromPeriodId.as_deref() {
-            if asgari_period_id.trim().is_empty() {
+        let normal_period = match (t.gvCumulativeOpening, t.effectiveFromPeriodId.as_deref()) {
+            (None, None) => None,
+            (Some(_), Some(period_id)) if !period_id.trim().is_empty() => Some(
+                PeriodRepository::get_by_id(conn, period_id)?.ok_or_else(|| {
+                    crate::domain::DomainError::ValidationError(format!(
+                        "GV açılış başlangıç dönemi bulunamadı: {}.",
+                        period_id
+                    ))
+                })?,
+            ),
+            (Some(_), Some(_)) | (None, Some(_)) => {
                 return Err(crate::domain::DomainError::ValidationError(
-                    "Asgari GV açılışı için başlangıç dönemi boş olamaz.".into(),
+                    "Normal GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                        .into(),
                 ));
             }
-            let _asgari_period =
-                PeriodRepository::get_by_id(conn, asgari_period_id)?.ok_or_else(|| {
+            (Some(_), None) => {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Normal GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                        .into(),
+                ));
+            }
+        };
+        if enforce_tax_year
+            && normal_period
+                .as_ref()
+                .is_some_and(|period| period.taxYear != t.year)
+        {
+            let period = normal_period.as_ref().expect("checked above");
+            return Err(crate::domain::DomainError::ValidationError(format!(
+                "GV opening effective dönemi {} vergi yılı {}, opening yılı {} ile uyuşmuyor.",
+                period.id, period.taxYear, t.year
+            )));
+        }
+
+        let asgari_period = match (
+            t.asgariGvCumulativeOpening,
+            t.asgariGvEffectiveFromPeriodId.as_deref(),
+        ) {
+            (None, None) => None,
+            (Some(_), Some(period_id)) if !period_id.trim().is_empty() => Some(
+                PeriodRepository::get_by_id(conn, period_id)?.ok_or_else(|| {
                     crate::domain::DomainError::ValidationError(format!(
                         "Asgari GV açılış başlangıç dönemi bulunamadı: {}.",
-                        asgari_period_id
+                        period_id
                     ))
-                })?;
-            // As above, calculation resolves the period's taxYear/taxMonth and
-            // fails closed if this legacy row is inconsistent.
+                })?,
+            ),
+            (Some(_), Some(_)) | (None, Some(_)) | (Some(_), None) => {
+                return Err(crate::domain::DomainError::ValidationError(
+                    "Asgari GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                        .into(),
+                ));
+            }
+        };
+        if enforce_tax_year
+            && asgari_period
+                .as_ref()
+                .is_some_and(|period| period.taxYear != t.year)
+        {
+            let period = asgari_period.as_ref().expect("checked above");
+            return Err(crate::domain::DomainError::ValidationError(format!(
+                "Asgari GV opening effective dönemi {} vergi yılı {}, opening yılı {} ile uyuşmuyor.",
+                period.id, period.taxYear, t.year
+            )));
         }
 
         let impact = PayrollInvalidationRepository::assert_mutation_allowed(
@@ -140,8 +193,8 @@ impl TaxOpeningRepository {
             })
             .unwrap_or(true);
         let now = Utc::now().to_rfc3339();
-        let opening_kurus = dec_to_kurus(Some(t.gvCumulativeOpening))?;
-        let asgari_opening_kurus = dec_to_kurus(t.asgariGvCumulativeOpening)?;
+        let opening_kurus = opt_dec_to_kurus(t.gvCumulativeOpening)?;
+        let asgari_opening_kurus = opt_dec_to_kurus(t.asgariGvCumulativeOpening)?;
 
         conn.execute(
             "INSERT INTO personnel_tax_opening (
@@ -160,9 +213,9 @@ impl TaxOpeningRepository {
                 t.personnelId,
                 t.year,
                 opening_kurus,
-                t.effectiveFromPeriodId,
+                t.effectiveFromPeriodId.as_deref(),
                 asgari_opening_kurus,
-                t.asgariGvEffectiveFromPeriodId,
+                t.asgariGvEffectiveFromPeriodId.as_deref(),
                 now,
                 now
             ],

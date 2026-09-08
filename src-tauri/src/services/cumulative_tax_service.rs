@@ -32,19 +32,27 @@ impl CumulativeTaxService {
         )?;
 
         let personel = PersonnelRepository::get_by_id(conn, personnel_id)?;
-        let opening_value = explicit_tax_opening
-            .as_ref()
-            .map(|opening| opening.gvCumulativeOpening)
-            .or_else(|| personel.as_ref().and_then(|p| p.devirKumulatifGvMatrahi));
-        let opening_year = explicit_tax_opening
-            .as_ref()
-            .map(|opening| opening.year)
-            .or_else(|| {
-                personel
-                    .as_ref()
-                    .and_then(|p| p.devirKumulatifGvMatrahiYili)
-            })
-            .unwrap_or(active_period.taxYear);
+        // An explicit row is authoritative for each component independently:
+        // a row containing only an asgari opening must not synthesize a normal
+        // GV opening from the legacy personnel fields.
+        let opening_value = if explicit_tax_opening.is_some() {
+            explicit_tax_opening
+                .as_ref()
+                .and_then(|opening| opening.gvCumulativeOpening)
+        } else {
+            personel.as_ref().and_then(|p| p.devirKumulatifGvMatrahi)
+        };
+        let opening_year = if explicit_tax_opening.is_some() {
+            explicit_tax_opening
+                .as_ref()
+                .map(|opening| opening.year)
+                .unwrap_or(active_period.taxYear)
+        } else {
+            personel
+                .as_ref()
+                .and_then(|p| p.devirKumulatifGvMatrahiYili)
+                .unwrap_or(active_period.taxYear)
+        };
 
         if let Some(opening_value) = opening_value {
             if opening_value < dec!(0) {
@@ -54,12 +62,13 @@ impl CumulativeTaxService {
             }
             if opening_year == active_period.taxYear {
                 let start_tax_month = if let Some(opening) = explicit_tax_opening.as_ref() {
-                    resolve_explicit_start_tax_month(
-                        conn,
-                        opening.year,
-                        &opening.effectiveFromPeriodId,
-                        "GV opening",
-                    )?
+                    let period_id = opening.effectiveFromPeriodId.as_deref().ok_or_else(|| {
+                        DomainError::ValidationError(
+                            "Normal GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                                .into(),
+                        )
+                    })?;
+                    resolve_explicit_start_tax_month(conn, opening.year, period_id, "GV opening")?
                 } else {
                     let raw_month = personel
                         .as_ref()
@@ -487,7 +496,12 @@ fn resolve_asgari_opening(
         let period_id = opening
             .asgariGvEffectiveFromPeriodId
             .as_deref()
-            .unwrap_or(opening.effectiveFromPeriodId.as_str());
+            .ok_or_else(|| {
+                DomainError::ValidationError(
+                    "Asgari GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır."
+                        .into(),
+                )
+            })?;
         resolve_explicit_start_tax_month(conn, year, period_id, "Asgari GV opening")?
     } else {
         resolve_legacy_start_tax_month(

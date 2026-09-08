@@ -83,14 +83,20 @@ pub struct PersonelTaxOpening {
     pub id: String,
     pub personnelId: String,
     pub year: i32,
-    pub gvCumulativeOpening: Decimal,
-    pub effectiveFromPeriodId: String, // e.g. "2026-05"
+    /// Normal GV opening bileşeni. None, normal opening'in tanımlı olmadığını
+    /// ifade eder; Some(0) ise explicit sıfır opening'dir.
+    #[serde(default)]
+    pub gvCumulativeOpening: Option<Decimal>,
+    /// Normal GV opening'in authoritative başlangıç dönemi.
+    #[serde(default)]
+    pub effectiveFromPeriodId: Option<String>,
     /// Asgari ücret GV referans takviminin opening değeri. Bu alan gerçek
     /// çalışanın GV kümülatifinden bağımsızdır ve eski kayıtlar için None'dır.
     #[serde(default)]
     pub asgariGvCumulativeOpening: Option<Decimal>,
     /// Asgari GV opening'i normal GV opening'inden farklı bir vergi döneminde
-    /// başlayabilir. None ise effectiveFromPeriodId ortak dönem olarak kullanılır.
+    /// başlayabilir. Bu bileşen normal GV opening ile ortak effective dönem
+    /// kullanmaz; değeri Some ise kendi effective period ID'si de Some olmalıdır.
     #[serde(default)]
     pub asgariGvEffectiveFromPeriodId: Option<String>,
     pub createdAt: Option<String>,
@@ -782,7 +788,7 @@ pub struct DamgaVergisiHesapDetayi {
     pub kesilenDamgaVergisi: Decimal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatutoryParameterSegment {
     /// Inclusive effective date inside this payroll period (YYYY-MM-DD).
@@ -833,12 +839,18 @@ pub struct ResolvedStatutorySnapshot {
     /// Gelir vergisi asgari ücret istisnası için vergi ayına taşınan son
     /// yürürlükteki günlük asgari ücret değeri.
     pub gvReferansGunlukAsgariUcret: Decimal,
+    /// Legacy payroll snapshots may not contain these fields. When present,
+    /// they make the historical SGK rate source immutable as well.
+    #[serde(default)]
+    pub sgkIsciOraniYuzde: Option<Decimal>,
+    #[serde(default)]
+    pub issizlikIsciOraniYuzde: Option<Decimal>,
 }
 
 /// Dönem için ilk authoritative hesaplamada kilitlenen yasal parametreler.
 /// Attendance/PEK sonuçlarını içermez; bu nedenle kişi veya tahakkuk olayına
 /// bağlı olmadan tarihsel asgari GV referansı üretilebilir.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StatutoryParameterSnapshot {
     pub gunlukAsgariUcret: Decimal,

@@ -15,6 +15,12 @@ export interface PayrollPayloadValidationOptions {
    * that compatibility path explicit without weakening current V5 checks.
    */
   allowLegacySparsePayrollFinancials?: boolean;
+  /**
+   * Legacy restore keeps historically ambiguous opening year/period pairs
+   * intact. The runtime resolver still rejects such a pair until it can be
+   * repaired explicitly; current canonical snapshots remain strict.
+   */
+  allowLegacyTaxOpeningYearMismatch?: boolean;
 }
 
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
@@ -459,6 +465,8 @@ function validateResolvedStatutorySnapshot(value: unknown, path: string): void {
     'gvYemekIstisnasiToplam',
     'gvReferansGunlukAsgariUcret',
   ].forEach((key) => requiredDecimal(value, key, path));
+  optionalDecimal(value, 'sgkIsciOraniYuzde', path);
+  optionalDecimal(value, 'issizlikIsciOraniYuzde', path);
 }
 
 function validateStatutoryParameterSnapshot(value: unknown, path: string): void {
@@ -571,15 +579,33 @@ export function validateTaxOpening(
   path = '$'
 ): asserts value is PayrollStorageDto['taxOpenings'][number] {
   assertRecord(value, path);
-  ['id', 'personnelId', 'effectiveFromPeriodId'].forEach((key) =>
-    requiredString(value, key, path)
-  );
+  ['id', 'personnelId'].forEach((key) => requiredString(value, key, path));
   requiredInteger(value, 'year', path);
-  requiredDecimal(value, 'gvCumulativeOpening', path);
+  optionalDecimal(value, 'gvCumulativeOpening', path);
+  optionalNullableString(value, 'effectiveFromPeriodId', path);
   optionalDecimal(value, 'asgariGvCumulativeOpening', path);
   optionalNullableString(value, 'asgariGvEffectiveFromPeriodId', path);
   optionalNullableString(value, 'createdAt', path);
   optionalNullableString(value, 'updatedAt', path);
+  const normalValue = optional(value, 'gvCumulativeOpening', path);
+  const normalPeriod = optional(value, 'effectiveFromPeriodId', path);
+  if (
+    (normalValue !== undefined && normalValue !== null) !==
+    (normalPeriod !== undefined && normalPeriod !== null)
+  ) {
+    fail(
+      path,
+      'normal GV opening değeri ile effectiveFromPeriodId birlikte tanımlanmalıdır.'
+    );
+  }
+  const asgariValue = optional(value, 'asgariGvCumulativeOpening', path);
+  const asgariPeriod = optional(value, 'asgariGvEffectiveFromPeriodId', path);
+  if ((asgariValue === undefined || asgariValue === null) !== (asgariPeriod === undefined || asgariPeriod === null)) {
+    fail(
+      path,
+      'asgari GV opening değeri ile asgari effectiveFromPeriodId birlikte tanımlanmalıdır.'
+    );
+  }
 }
 
 export function validateSickLeaveRecord(
@@ -1125,11 +1151,24 @@ function assertCrossRecordIntegrity(
         `mevcut olmayan personel kimliği: ${opening.personnelId}.`
       );
     }
-    if (!periodIds.has(opening.effectiveFromPeriodId)) {
+    if (opening.effectiveFromPeriodId && !periodIds.has(opening.effectiveFromPeriodId)) {
       fail(
         `$.taxOpenings[${index}].effectiveFromPeriodId`,
         `mevcut olmayan dönem kimliği: ${opening.effectiveFromPeriodId}.`
       );
+    }
+    if (opening.effectiveFromPeriodId) {
+      const period = payload.donemler.find((candidate) => candidate.id === opening.effectiveFromPeriodId);
+      if (
+        period &&
+        period.taxYear !== opening.year &&
+        !options.allowLegacyTaxOpeningYearMismatch
+      ) {
+        fail(
+          `$.taxOpenings[${index}].effectiveFromPeriodId`,
+          `opening yılı ${opening.year} ile period vergi yılı ${period.taxYear} eşleşmiyor.`
+        );
+      }
     }
     if (
       opening.asgariGvEffectiveFromPeriodId &&
@@ -1139,6 +1178,21 @@ function assertCrossRecordIntegrity(
         `$.taxOpenings[${index}].asgariGvEffectiveFromPeriodId`,
         `mevcut olmayan dönem kimliği: ${opening.asgariGvEffectiveFromPeriodId}.`
       );
+    }
+    if (opening.asgariGvEffectiveFromPeriodId) {
+      const period = payload.donemler.find(
+        (candidate) => candidate.id === opening.asgariGvEffectiveFromPeriodId
+      );
+      if (
+        period &&
+        period.taxYear !== opening.year &&
+        !options.allowLegacyTaxOpeningYearMismatch
+      ) {
+        fail(
+          `$.taxOpenings[${index}].asgariGvEffectiveFromPeriodId`,
+          `asgari opening yılı ${opening.year} ile period vergi yılı ${period.taxYear} eşleşmiyor.`
+        );
+      }
     }
   });
 
