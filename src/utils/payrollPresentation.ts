@@ -19,6 +19,8 @@ import type {
   TediyeKalemi,
   TisIkramiyeKalemi,
 } from '../types/payroll';
+import { OPEN_ENDED_TAX_BRACKET_LIMIT } from '../services/storage/annualPayrollParametersValidation';
+export { OPEN_ENDED_TAX_BRACKET_LIMIT } from '../services/storage/annualPayrollParametersValidation';
 
 export const AY_ISIMLERI = [
   'Ocak',
@@ -134,11 +136,10 @@ const PERIOD_PERCENTAGE_FIELDS = [
 ] as const;
 
 /**
- * Persistence-safe sentinel for the open-ended final tax bracket.
- * No browser/shared counterpart exists; keep this in parity with
- * `src-tauri/src/domain/models.rs:11` (`OPEN_ENDED_TAX_BRACKET_LIMIT`).
+ * Persistence-safe sentinel for the open-ended final tax bracket. The
+ * storage semantic helper owns this browser-side contract; this re-export
+ * keeps existing presentation imports compatible.
  */
-export const OPEN_ENDED_TAX_BRACKET_LIMIT = 1_000_000_000_000_000;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);

@@ -733,6 +733,93 @@ fn split_puantaj_by_zam_tarihi(
     Ok((before, after, Some(cutoff)))
 }
 
+/// Builds the person-specific meal earning slices that correspond to the
+/// already-resolved statutory segments.  A wage change can split one legal
+/// segment into two earning slices; both slices retain the legal capacity of
+/// their dates.  The resulting totals are the only meal-exemption inputs used
+/// by normal SGK, GV, and stamp-tax calculations.
+fn calculate_normal_meal_exemptions(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+    statutory_snapshot: &ResolvedStatutorySnapshot,
+    current_settings: &DonemselKurumDegerleri,
+    previous_settings: Option<&DonemselKurumDegerleri>,
+    raise_date: Option<NaiveDate>,
+) -> Result<MealExemptionTotals> {
+    let mut earning_segments = Vec::new();
+
+    for statutory_segment in &statutory_snapshot.segments {
+        let segment_start = parse_period_date(
+            &statutory_segment.effectiveFrom,
+            &period.id,
+            "statutory snapshot başlangıç",
+        )?;
+        let segment_end = parse_period_date(
+            &statutory_segment.effectiveTo,
+            &period.id,
+            "statutory snapshot bitiş",
+        )?;
+        let mut before_raise_days = 0;
+        let mut after_raise_days = 0;
+
+        for (date_text, code) in &attendance.gunler {
+            if !matches!(code.as_str(), "Ç" | "GÇ") {
+                continue;
+            }
+            let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|error| {
+                DomainError::InvalidData(format!(
+                    "{} döneminde puantaj tarihi geçersiz: {} ({})",
+                    period.id, date_text, error
+                ))
+            })?;
+            if date < segment_start || date > segment_end {
+                continue;
+            }
+            if raise_date.is_some_and(|cutoff| date < cutoff) {
+                before_raise_days += 1;
+            } else {
+                after_raise_days += 1;
+            }
+        }
+
+        if before_raise_days + after_raise_days != statutory_segment.fiiliYemekGunu {
+            return Err(DomainError::InvalidData(format!(
+                "{} döneminde statutory yemek günü ile puantaj yemek günü eşleşmiyor ({} / {}).",
+                period.id,
+                statutory_segment.fiiliYemekGunu,
+                before_raise_days + after_raise_days
+            )));
+        }
+
+        if before_raise_days > 0 {
+            let settings = previous_settings.ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} döneminde zam öncesi yemek ayarı çözümlenemedi.",
+                    period.id
+                ))
+            })?;
+            earning_segments.push(MealExemptionSegment {
+                actual: calculate_meal_income(before_raise_days, settings.gunlukYemek),
+                sgk_capacity: statutory_segment.gunlukYemekIstisnasiSGK
+                    * Decimal::from(before_raise_days),
+                gv_capacity: statutory_segment.gunlukYemekIstisnasiGV
+                    * Decimal::from(before_raise_days),
+            });
+        }
+        if after_raise_days > 0 {
+            earning_segments.push(MealExemptionSegment {
+                actual: calculate_meal_income(after_raise_days, current_settings.gunlukYemek),
+                sgk_capacity: statutory_segment.gunlukYemekIstisnasiSGK
+                    * Decimal::from(after_raise_days),
+                gv_capacity: statutory_segment.gunlukYemekIstisnasiGV
+                    * Decimal::from(after_raise_days),
+            });
+        }
+    }
+
+    Ok(calculate_segmented_meal_exemptions(&earning_segments))
+}
+
 fn sum_income_field(before: Option<Decimal>, after: Option<Decimal>) -> Option<Decimal> {
     Some(round2(
         before.unwrap_or_default() + after.unwrap_or_default(),
@@ -2913,6 +3000,7 @@ fn calculate_payroll_with_index(
         (income, None)
     };
     let mut effective_settings = settings.clone();
+    let mut previous_settings_for_meal: Option<DonemselKurumDegerleri> = None;
 
     if is_normal_accrual {
         if let Some(cutoff) = raise_date {
@@ -2983,6 +3071,7 @@ fn calculate_payroll_with_index(
                     .unwrap_or(settings.gunlukTabanUcret),
                 );
             }
+            previous_settings_for_meal = Some(previous_settings);
         } else {
             add_paid_sick_wage(
                 &mut income.tabanBrutAylik,
@@ -2991,6 +3080,21 @@ fn calculate_payroll_with_index(
             );
         }
     }
+
+    let normal_meal_exemptions = if is_normal_accrual {
+        calculate_normal_meal_exemptions(
+            attendance.ok_or_else(|| {
+                DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into())
+            })?,
+            &period,
+            &statutory_snapshot,
+            &settings,
+            previous_settings_for_meal.as_ref(),
+            raise_date,
+        )?
+    } else {
+        MealExemptionTotals::default()
+    };
 
     let month_to_date_pek = same_month_pek_used(&prior_accruals)?;
     if month_to_date_pek > statutory_snapshot.pekUstSinir {
@@ -3021,6 +3125,7 @@ fn calculate_payroll_with_index(
                 month_to_date_pek,
                 tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                 apply_lower_bound: true,
+                meal_exemption: Some(normal_meal_exemptions),
             },
         )?
     } else if is_retro_accrual {
@@ -3038,6 +3143,7 @@ fn calculate_payroll_with_index(
                 PekCalculationOptions {
                     tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                     apply_lower_bound: false,
+                    meal_exemption: None,
                 },
             )?;
         let source_worker_sgk = allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
@@ -3088,6 +3194,7 @@ fn calculate_payroll_with_index(
                 PekCalculationOptions {
                     tax_months_elapsed: incoming_devreden_state.tax_months_elapsed,
                     apply_lower_bound: false,
+                    meal_exemption: None,
                 },
             )?;
         let sgk_rate = effective_settings
@@ -3123,7 +3230,7 @@ fn calculate_payroll_with_index(
     // (322 numbered Income Tax Communiqué, article 4/6). Keep it separate
     // from the shared monthly minimum-wage exemption balance.
     let normal_meal_tax_exemption = if is_normal_accrual {
-        income.yemek.unwrap_or_default().min(statutory_snapshot.gvYemekIstisnasiToplam)
+        normal_meal_exemptions.gv.min(income.yemek.unwrap_or_default())
     } else {
         Decimal::ZERO
     };
@@ -4165,6 +4272,7 @@ mod tests {
             PekCalculationOptions {
                 tax_months_elapsed: 2,
                 apply_lower_bound: false,
+                meal_exemption: None,
             },
         )
         .expect("distance=2 should be valid");
@@ -4206,6 +4314,7 @@ mod tests {
             PekCalculationOptions {
                 tax_months_elapsed: 3,
                 apply_lower_bound: false,
+                meal_exemption: None,
             },
         )
         .expect("distance=3 should be valid");
@@ -4226,6 +4335,7 @@ mod tests {
             PekCalculationOptions {
                 tax_months_elapsed: -1,
                 apply_lower_bound: false,
+                meal_exemption: None,
             },
         )
         .expect_err("negative tax-month distance must be rejected");

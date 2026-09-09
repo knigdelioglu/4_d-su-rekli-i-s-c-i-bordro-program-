@@ -483,6 +483,15 @@ describe('BrowserPayrollStore', () => {
     expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
   });
 
+  test('rejects semantically invalid annual parameters at the current storage boundary', () => {
+    const invalid = parseTestSnapshot(makeV2Snapshot());
+    const annual = firstRecord(invalid, 'annualPayrollParameters');
+    annual.gelirVergisiDilimleri = [];
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(invalid))).toThrow(
+      '$.annualPayrollParameters[0].gelirVergisiDilimleri en az bir vergi dilimi içermelidir.'
+    );
+  });
+
   test('rejects a tampered normal financial snapshot', () => {
     const tampered = parseTestSnapshot(makeV2Snapshot());
     firstRecord(tampered, 'bordrolar').netOdeme = '64179.77';

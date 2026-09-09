@@ -4,6 +4,7 @@ type WasmExports = {
   calculate_retro_preview_json: (requestJson: string) => string;
   finalize_payroll_json: (requestJson: string) => string;
   validate_payroll_json: (requestJson: string) => void;
+  validate_annual_payroll_parameters_json: (parametersJson: string) => void;
   evaluate_mutation_policy_json: (requestJson: string) => string;
   get_payroll_notices_json: (requestJson: string) => string;
 };

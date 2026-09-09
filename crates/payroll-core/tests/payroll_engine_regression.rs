@@ -1,11 +1,12 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
     calculate_incremental_prime_esas_kazanc, calculate_payroll, calculate_prime_esas_kazanc,
-    evaluate_payroll_invalidation, finalize_payroll, validate_payroll_request, AccrualType,
-    AnnualPayrollParameters, BordroDonemi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
+    calculate_segmented_meal_exemptions, evaluate_payroll_invalidation, finalize_payroll,
+    validate_payroll_request, AccrualType, AnnualPayrollParameters, BordroDonemi, BordroStatus,
+    DevredenPekKaydi, DonemselKurumDegerleri,
     GelirKalemleri, ManualPayrollIncomeInput, PayrollAccrualInput, PayrollCalculationRequest,
     PayrollDatasetSnapshot, PayrollMutation, Personel, PersonelPuantaj, PuantajOzeti,
-    StatutorySnapshotSource,
+    MealExemptionSegment, StatutoryParameterSegment, StatutorySnapshotSource,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -1042,5 +1043,137 @@ fn first_supplementary_event_advances_carry_month_once() {
     assert_eq!(
         second.sonrakiDevredenPek.as_ref().unwrap()[0].kalanAySayisi,
         1
+    );
+}
+
+#[test]
+fn segmented_meal_policy_applies_min_per_segment_and_keeps_sgk_gv_caps_separate() {
+    let under_limit = calculate_segmented_meal_exemptions(&[MealExemptionSegment {
+        actual: dec!(200),
+        sgk_capacity: dec!(300),
+        gv_capacity: dec!(100),
+    }]);
+    assert_eq!(under_limit.sgk, dec!(200));
+    assert_eq!(under_limit.gv, dec!(100));
+
+    let over_limit = calculate_segmented_meal_exemptions(&[MealExemptionSegment {
+        actual: dec!(400),
+        sgk_capacity: dec!(300),
+        gv_capacity: dec!(400),
+    }]);
+    assert_eq!(over_limit.sgk, dec!(300));
+    assert_eq!(over_limit.gv, dec!(400));
+
+    let two_segments = calculate_segmented_meal_exemptions(&[
+        MealExemptionSegment {
+            actual: dec!(200),
+            sgk_capacity: dec!(300),
+            gv_capacity: dec!(100),
+        },
+        MealExemptionSegment {
+            actual: dec!(400),
+            sgk_capacity: dec!(300),
+            gv_capacity: dec!(400),
+        },
+    ]);
+    assert_eq!(two_segments.sgk, dec!(500));
+    assert_eq!(two_segments.gv, dec!(500));
+}
+
+#[test]
+fn normal_payroll_uses_segmented_meal_exemptions_for_sgk_gv_and_stamp_tax() {
+    let mut request = explicit_normal_request("2026-02-14");
+    let stamp_rate = {
+        let settings = request
+            .dataset
+            .institutionSettings
+            .get_mut("2026-01")
+            .unwrap();
+        settings.gunlukYemek = dec!(200);
+        settings.gunlukYemekIstisnasiSGK = Some(dec!(300));
+        settings.gunlukYemekIstisnasiGV = Some(dec!(100));
+        settings.statutoryParameterSegments = Some(vec![StatutoryParameterSegment {
+            effectiveFrom: "2026-02-01".into(),
+            gunlukYemekIstisnasiSGK: Some(dec!(100)),
+            gunlukYemekIstisnasiGV: Some(dec!(400)),
+            ..Default::default()
+        }]);
+        settings.damgaVergisiOraniBinde.unwrap() / dec!(1000)
+    };
+
+    let payroll = calculate_payroll(&request).expect("segmented normal payroll should calculate");
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(6200)));
+    assert_eq!(
+        payroll.pekDetay.as_ref().unwrap().yemekIstisnasiTutar,
+        dec!(4800)
+    );
+
+    let worker_sgk = payroll.kesintiler.isciSgkPrimi.unwrap_or_default();
+    let worker_unemployment = payroll.kesintiler.isciIssizlikPrimi.unwrap_or_default();
+    assert_eq!(
+        payroll.gvDetay.as_ref().unwrap().cariGvMatrahi,
+        (payroll.gelirToplam - worker_sgk - worker_unemployment - dec!(4500)).max(Decimal::ZERO)
+    );
+
+    assert_eq!(
+        payroll.damgaDetay.as_ref().unwrap().brutDamgaVergisi,
+        ((payroll.gelirToplam - dec!(4500)) * stamp_rate).round_dp(2)
+    );
+}
+
+#[test]
+fn normal_payroll_splits_meal_earning_at_wage_raise_before_applying_segment_capacity() {
+    let mut request = explicit_normal_request("2026-02-14");
+    request.dataset.zamAylari = vec![2];
+    let current_settings = request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap();
+    current_settings.gunlukYemek = dec!(500);
+    current_settings.gunlukYemekIstisnasiSGK = Some(dec!(300));
+    current_settings.gunlukYemekIstisnasiGV = Some(dec!(300));
+    current_settings.statutoryParameterSegments = Some(vec![StatutoryParameterSegment {
+        effectiveFrom: "2026-02-01".into(),
+        gunlukYemekIstisnasiSGK: Some(dec!(300)),
+        gunlukYemekIstisnasiGV: Some(dec!(300)),
+        ..Default::default()
+    }]);
+
+    let previous_period = BordroDonemi {
+        id: "2025-12".into(),
+        yil: 2025,
+        ay: 12,
+        baslangicTarihi: "2025-12-15".into(),
+        bitisTarihi: "2026-01-14".into(),
+        donemAdi: "Aralık 2025".into(),
+        taxYear: 2025,
+        taxMonth: 12,
+    };
+    let mut previous_settings = request.dataset.institutionSettings["2026-01"].clone();
+    previous_settings.donemId = previous_period.id.clone();
+    previous_settings.gunlukYemek = dec!(200);
+    previous_settings.statutoryParameterSegments = None;
+    request.dataset.periods.push(previous_period);
+    request
+        .dataset
+        .institutionSettings
+        .insert("2025-12".into(), previous_settings);
+
+    let payroll = calculate_payroll(&request).expect("raise-split normal payroll should calculate");
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(10400)));
+    // Jan 15–31: min(17×200, 17×300)=3400; Feb 1–14:
+    // min(14×500, 14×300)=4200; total=7600.
+    assert_eq!(
+        payroll.pekDetay.as_ref().unwrap().yemekIstisnasiTutar,
+        dec!(7600)
+    );
+    assert_eq!(
+        payroll.gvDetay.as_ref().unwrap().cariGvMatrahi,
+        (payroll.gelirToplam
+            - payroll.kesintiler.isciSgkPrimi.unwrap_or_default()
+            - payroll.kesintiler.isciIssizlikPrimi.unwrap_or_default()
+            - dec!(7600))
+            .max(Decimal::ZERO)
     );
 }

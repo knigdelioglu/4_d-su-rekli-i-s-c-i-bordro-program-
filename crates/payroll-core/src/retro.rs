@@ -1576,6 +1576,7 @@ fn source_target_state(
                 PekCalculationOptions {
                     tax_months_elapsed,
                     apply_lower_bound: is_normal,
+                    meal_exemption: None,
                 },
             )?;
         state.worker_pek = round2(state.worker_pek + detail.primMatrahi);

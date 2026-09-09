@@ -1,5 +1,7 @@
 use super::{dec_to_kurus, kurus_to_dec};
-use crate::domain::calculations::{calculate_gelir_toplam, calculate_kesinti_toplam};
+use crate::domain::calculations::{
+    calculate_gelir_toplam, calculate_kesinti_toplam, round_sgk_amount,
+};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
@@ -116,7 +118,10 @@ impl PayrollRepository {
     /// The calculation engine is authoritative during normal operation, but a
     /// backup payload can carry a forged or damaged snapshot that never passed
     /// through that engine.
-    fn validate_payroll_financial_invariants(bordro: &BordroKaydi) -> Result<()> {
+    fn validate_payroll_financial_invariants(
+        conn: &Connection,
+        bordro: &BordroKaydi,
+    ) -> Result<()> {
         let calculated_gross = calculate_gelir_toplam(&bordro.gelirler);
         let calculated_deductions = calculate_kesinti_toplam(&bordro.kesintiler);
         let calculated_net = (calculated_gross - calculated_deductions).round_dp(2);
@@ -148,6 +153,325 @@ impl PayrollRepository {
                 bordro.kesintiToplam,
                 bordro.netOdeme,
             )));
+        }
+        Self::validate_snapshot_reconciliation(conn, bordro)?;
+        Ok(())
+    }
+
+    fn validate_snapshot_reconciliation(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
+        Self::validate_gv_snapshot(bordro)?;
+        Self::validate_damga_snapshot(bordro)?;
+        Self::validate_pek_snapshot(conn, bordro)?;
+        Ok(())
+    }
+
+    fn validate_non_negative_snapshot_amount(field: &str, value: Decimal) -> Result<()> {
+        if value < Decimal::ZERO {
+            return Err(DomainError::InvalidData(format!(
+                "{} snapshot değeri negatif olamaz: {}.",
+                field, value
+            )));
+        }
+        Ok(())
+    }
+
+    fn validate_gv_snapshot(bordro: &BordroKaydi) -> Result<()> {
+        let Some(detail) = bordro.gvDetay.as_ref() else {
+            return Ok(());
+        };
+
+        let persisted_tax = bordro.kesintiler.gelirVergisi.unwrap_or_default();
+        if detail.kesilenGelirVergisi != persisted_tax {
+            return Err(DomainError::InvalidData(format!(
+                "GV snapshot kesilen gelir vergisi ile kesinti kalemi eşleşmiyor (snapshot {}, kesinti {}).",
+                detail.kesilenGelirVergisi, persisted_tax
+            )));
+        }
+
+        for (field, value) in [
+            ("GV önceki kümülatif matrahı", detail.oncekiKumulatifGvMatrahi),
+            ("GV cari matrahı", detail.cariGvMatrahi),
+            ("GV yeni kümülatif matrahı", detail.yeniKumulatifGvMatrahi),
+            ("GV brüt vergisi", detail.brutGelirVergisi),
+            ("asgari GV matrahı", detail.asgariUcretGvMatrahi),
+            (
+                "asgari GV referans kümülatif matrahı",
+                detail.asgariUcretReferansKumulatifMatrahi,
+            ),
+            ("asgari GV istisnası", detail.asgariUcretGvIstisnasi),
+            (
+                "aynı ay önceki GV istisnası",
+                detail.ayniAyOncekiKullanilanGvIstisnasi,
+            ),
+            (
+                "tahakkuk öncesi kalan GV istisnası",
+                detail.tahakkukOncesiKalanGvIstisnasi,
+            ),
+            ("uygulanan GV istisnası", detail.uygulananGvIstisnasi),
+            (
+                "tahakkuk sonrası kalan GV istisnası",
+                detail.tahakkukSonrasiKalanGvIstisnasi,
+            ),
+            ("kesilen gelir vergisi", detail.kesilenGelirVergisi),
+            ("doğum/askerlik GV indirimi", detail.dogumAskerlikGvIndirimi),
+            ("sigorta GV indirim adayı", detail.sigortaGvIndirimAdayi),
+            ("sigorta GV aylık limiti", detail.sigortaGvAylikLimiti),
+            (
+                "sigorta GV yıllık kalan limiti",
+                detail.sigortaGvYillikKalanLimiti,
+            ),
+            (
+                "uygulanabilir sigorta GV indirimi",
+                detail.uygulanabilirSigortaGvIndirimi,
+            ),
+        ] {
+            Self::validate_non_negative_snapshot_amount(field, value)?;
+        }
+
+        if detail.yeniKumulatifGvMatrahi
+            != detail.oncekiKumulatifGvMatrahi + detail.cariGvMatrahi
+        {
+            return Err(DomainError::InvalidData(
+                "GV snapshot yeni kümülatif matrahı önceki + cari matraha eşit değil.".into(),
+            ));
+        }
+        if let Some(previous_gv) = bordro.oncekiKumulatifGvMatrahi {
+            if detail.oncekiKumulatifGvMatrahi != previous_gv {
+                return Err(DomainError::InvalidData(
+                    "GV snapshot önceki kümülatif matrahı bordro açılış state'iyle eşleşmiyor."
+                        .into(),
+                ));
+            }
+        }
+        if let Some(previous_asgari) = bordro.oncekiKumulatifAsgariGvMatrahi {
+            if detail.asgariUcretReferansKumulatifMatrahi
+                != previous_asgari + detail.asgariUcretGvMatrahi
+            {
+                return Err(DomainError::InvalidData(
+                    "GV snapshot asgari ücret referans kümülatif matrahı önceki + cari matraha eşit değil."
+                        .into(),
+                ));
+            }
+        }
+
+        let remaining_before = (detail.asgariUcretGvIstisnasi
+            - detail.ayniAyOncekiKullanilanGvIstisnasi)
+            .max(Decimal::ZERO);
+        if detail.ayniAyOncekiKullanilanGvIstisnasi > detail.asgariUcretGvIstisnasi
+            || detail.tahakkukOncesiKalanGvIstisnasi != remaining_before
+            || detail.uygulananGvIstisnasi > detail.brutGelirVergisi
+            || detail.uygulananGvIstisnasi > remaining_before
+            || detail.tahakkukSonrasiKalanGvIstisnasi
+                != remaining_before - detail.uygulananGvIstisnasi
+            || detail.kesilenGelirVergisi
+                != detail.brutGelirVergisi - detail.uygulananGvIstisnasi
+        {
+            return Err(DomainError::InvalidData(
+                "GV snapshot istisna state'i brüt vergi, aylık hak ve kalan tutarla eşleşmiyor."
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_damga_snapshot(bordro: &BordroKaydi) -> Result<()> {
+        let Some(detail) = bordro.damgaDetay.as_ref() else {
+            return Ok(());
+        };
+
+        let persisted_tax = bordro.kesintiler.damgaVergisi.unwrap_or_default();
+        if detail.kesilenDamgaVergisi != persisted_tax {
+            return Err(DomainError::InvalidData(format!(
+                "Damga snapshot kesilen vergi ile kesinti kalemi eşleşmiyor (snapshot {}, kesinti {}).",
+                detail.kesilenDamgaVergisi, persisted_tax
+            )));
+        }
+
+        for (field, value) in [
+            ("brüt damga vergisi", detail.brutDamgaVergisi),
+            ("aylık damga istisna hakkı", detail.aylikDamgaIstisnaHakki),
+            (
+                "aynı ay önceki damga istisnası",
+                detail.ayniAyOncekiKullanilanDamgaIstisnasi,
+            ),
+            ("uygulanan damga istisnası", detail.uygulananDamgaIstisnasi),
+            ("kalan damga istisnası", detail.kalanDamgaIstisnasi),
+            ("kesilen damga vergisi", detail.kesilenDamgaVergisi),
+        ] {
+            Self::validate_non_negative_snapshot_amount(field, value)?;
+        }
+
+        let remaining_before = (detail.aylikDamgaIstisnaHakki
+            - detail.ayniAyOncekiKullanilanDamgaIstisnasi)
+            .max(Decimal::ZERO);
+        if detail.ayniAyOncekiKullanilanDamgaIstisnasi > detail.aylikDamgaIstisnaHakki
+            || detail.uygulananDamgaIstisnasi > detail.brutDamgaVergisi
+            || detail.uygulananDamgaIstisnasi > remaining_before
+            || detail.kalanDamgaIstisnasi
+                != remaining_before - detail.uygulananDamgaIstisnasi
+            || detail.kesilenDamgaVergisi
+                != detail.brutDamgaVergisi - detail.uygulananDamgaIstisnasi
+        {
+            return Err(DomainError::InvalidData(
+                "Damga snapshot istisna state'i aylık hak, brüt vergi ve kalan tutarla eşleşmiyor."
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_pek_snapshot(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
+        let Some(detail) = bordro.pekDetay.as_ref() else {
+            return Ok(());
+        };
+
+        for (field, value) in [
+            ("hesaplanan PEK", detail.hesaplananPek),
+            ("ham PEK", detail.hamPek),
+            ("kullanılan devreden PEK", detail.devredenPekKullanilan),
+            ("PEK prim matrahı", detail.primMatrahi),
+            ("final PEK", detail.finalPek),
+            ("aşan devreden PEK", detail.devredenPekAşanTutar),
+            ("PEK alt sınırı", detail.pekAltSinir),
+            ("PEK üst sınırı", detail.pekUstSinir),
+            ("alt sınır tamamlama farkı", detail.altSinirTamamlamaFarki),
+            ("yemek istisnası", detail.yemekIstisnasiTutar),
+        ] {
+            Self::validate_non_negative_snapshot_amount(field, value)?;
+        }
+        if detail.fiiliYemekGunu < 0 {
+            return Err(DomainError::InvalidData(
+                "PEK snapshot fiili yemek günü negatif olamaz.".into(),
+            ));
+        }
+        if detail.pekAltSinir > detail.pekUstSinir
+            || detail.finalPek != detail.primMatrahi + detail.altSinirTamamlamaFarki
+        {
+            return Err(DomainError::InvalidData(
+                "PEK snapshot sınırları veya final PEK denklemi geçersiz.".into(),
+            ));
+        }
+
+        // RETRO contains source-month worker deltas in addition to the
+        // payment-month PEK. It must be reconciled against its authoritative
+        // ledger, not against payment-month PEK multiplied by one rate.
+        if bordro.accrualType == AccrualType::RETRO_ADJUSTMENT {
+            Self::validate_retro_worker_premiums(conn, bordro)?;
+            return Ok(());
+        }
+
+        let Some(statutory) = bordro.statutorySnapshot.as_ref() else {
+            return Ok(());
+        };
+        for (field, rate, deduction) in [
+            (
+                "SGK işçi oranı",
+                statutory.sgkIsciOraniYuzde,
+                bordro.kesintiler.isciSgkPrimi.unwrap_or_default(),
+            ),
+            (
+                "işsizlik işçi oranı",
+                statutory.issizlikIsciOraniYuzde,
+                bordro.kesintiler.isciIssizlikPrimi.unwrap_or_default(),
+            ),
+        ] {
+            let Some(rate) = rate else {
+                if statutory.source != StatutorySnapshotSource::LegacyUnknown {
+                    return Err(DomainError::InvalidData(format!(
+                        "{} persisted statutory snapshot'ta eksik.",
+                        field
+                    )));
+                }
+                continue;
+            };
+            if !(Decimal::ZERO..=Decimal::from(100)).contains(&rate) {
+                return Err(DomainError::InvalidData(format!(
+                    "{} 0-100 aralığında olmalıdır: {}.",
+                    field, rate
+                )));
+            }
+            let expected = round_sgk_amount(detail.primMatrahi * rate / Decimal::from(100));
+            if deduction != expected {
+                return Err(DomainError::InvalidData(format!(
+                    "{} ile persisted PEK işçi primi eşleşmiyor (beklenen {}, kesinti {}).",
+                    field, expected, deduction
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// A RETRO payment combines source-month deltas from its allocation ledger
+    /// with any payment-month PEK. A missing ledger is retained as a legacy
+    /// compatibility case; when the ledger is present, both worker components
+    /// must reconcile with the persisted payment event using the same rounding
+    /// helper as payroll-core.
+    fn validate_retro_worker_premiums(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
+        let batch_id = Self::effective_accrual_id(bordro);
+        let (allocation_count, source_sgk_kurus, source_unemployment_kurus): (i64, i64, i64) =
+            conn.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(worker_sgk_delta), 0),
+                        COALESCE(SUM(worker_unemployment_delta), 0)
+                 FROM retro_adjustment_allocations
+                 WHERE batch_id = ?1",
+                params![batch_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+
+        if allocation_count == 0 {
+            return Ok(());
+        }
+
+        let statutory = bordro.statutorySnapshot.as_ref().ok_or_else(|| {
+            DomainError::InvalidData(
+                "RETRO allocation ledger mevcut ancak payment-month statutory snapshot eksik."
+                    .into(),
+            )
+        })?;
+        let pek = bordro.pekDetay.as_ref().ok_or_else(|| {
+            DomainError::InvalidData(
+                "RETRO allocation ledger mevcut ancak PEK snapshot eksik.".into(),
+            )
+        })?;
+        let source_sgk = kurus_to_dec(source_sgk_kurus);
+        let source_unemployment = kurus_to_dec(source_unemployment_kurus);
+
+        for (field, rate, source_delta, deduction) in [
+            (
+                "RETRO SGK işçi oranı",
+                statutory.sgkIsciOraniYuzde,
+                source_sgk,
+                bordro.kesintiler.isciSgkPrimi.unwrap_or_default(),
+            ),
+            (
+                "RETRO işsizlik işçi oranı",
+                statutory.issizlikIsciOraniYuzde,
+                source_unemployment,
+                bordro.kesintiler.isciIssizlikPrimi.unwrap_or_default(),
+            ),
+        ] {
+            let rate = rate.ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} allocation ledger bulunan RETRO statutory snapshot'ta eksik.",
+                    field
+                ))
+            })?;
+            if !(Decimal::ZERO..=Decimal::from(100)).contains(&rate) {
+                return Err(DomainError::InvalidData(format!(
+                    "{} 0-100 aralığında olmalıdır: {}.",
+                    field, rate
+                )));
+            }
+            let expected = round_sgk_amount(
+                source_delta + pek.primMatrahi * rate / Decimal::from(100),
+            );
+            if deduction != expected {
+                return Err(DomainError::InvalidData(format!(
+                    "{} ile RETRO source delta + payment-month PEK primi eşleşmiyor (beklenen {}, kesinti {}).",
+                    field, expected, deduction
+                )));
+            }
         }
         Ok(())
     }
@@ -1166,7 +1490,7 @@ impl PayrollRepository {
     ) -> Result<()> {
         Self::validate_payment_date_matches_period(conn, b)?;
         if validate_financial_invariants {
-            Self::validate_payroll_financial_invariants(b)?;
+            Self::validate_payroll_financial_invariants(conn, b)?;
         }
         let now = Utc::now().to_rfc3339();
         let calculated_at = if b.olusturulmaTarihi.trim().is_empty() {

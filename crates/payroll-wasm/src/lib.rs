@@ -1,7 +1,7 @@
 use payroll_core::{
     calculate_payroll_checked, evaluate_payroll_invalidation, finalize_payroll,
-    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation, Result as CoreResult,
-    RetroCalculationRequest, RetroEntitlementEngine,
+    AnnualPayrollParameters, PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation,
+    Result as CoreResult, RetroCalculationRequest, RetroEntitlementEngine,
 };
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
@@ -71,6 +71,20 @@ pub fn finalize_payroll_json(request_json: &str) -> Result<String, JsValue> {
 pub fn validate_payroll_json(request_json: &str) -> Result<(), JsValue> {
     let request = parse_request(request_json).map_err(error_to_js)?;
     payroll_core::validate_payroll_request(&request).map_err(error_to_js)
+}
+
+/// Validates the annual tariff with the same core-owned semantic contract
+/// used by checked payroll calculation. Browser persistence tests use this
+/// narrow endpoint for direct Rust/WASM parity without duplicating tax logic.
+#[wasm_bindgen]
+pub fn validate_annual_payroll_parameters_json(parameters_json: &str) -> Result<(), JsValue> {
+    let parameters: AnnualPayrollParameters = serde_json::from_str(parameters_json).map_err(|error| {
+        error_to_js(payroll_core::DomainError::InvalidData(format!(
+            "Yıllık bordro parametresi geçersiz JSON içeriyor: {}",
+            error
+        )))
+    })?;
+    payroll_core::validate_annual_payroll_parameters(&parameters).map_err(error_to_js)
 }
 
 /// Returns the core-owned invalidation impact for one browser mutation.

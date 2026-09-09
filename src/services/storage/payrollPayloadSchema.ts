@@ -5,6 +5,7 @@ import {
   type PayrollStorageDto,
 } from '../payrollEngine/decimalBoundary';
 import { RUST_ENUM_VALUES } from '../payrollEngine/generated/payrollContract';
+import { annualPayrollParameterSemanticIssue } from './annualPayrollParametersValidation';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -572,6 +573,11 @@ export function validateAnnualPayrollParameters(
   brackets.forEach((item, index) => validateTaxBracket(item, `${bracketsPath}[${index}]`));
   optionalDecimal(value, 'sigortaGvYillikBrutAsgariUcretTavani', path);
   optionalNullableString(value, 'updatedAt', path);
+
+  const issue = annualPayrollParameterSemanticIssue(value);
+  if (issue) {
+    fail(issue.field ? `${path}.${issue.field}` : path, issue.message);
+  }
 }
 
 export function validateTaxOpening(

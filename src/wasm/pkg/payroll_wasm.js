@@ -136,6 +136,21 @@ export function get_payroll_notices_json(request_json) {
 }
 
 /**
+ * Validates the annual tariff with the same core-owned semantic contract
+ * used by checked payroll calculation. Browser persistence tests use this
+ * narrow endpoint for direct Rust/WASM parity without duplicating tax logic.
+ * @param {string} parameters_json
+ */
+export function validate_annual_payroll_parameters_json(parameters_json) {
+    const ptr0 = passStringToWasm0(parameters_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.validate_annual_payroll_parameters_json(ptr0, len0);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
  * Validates and parses the same request boundary without persisting anything.
  * @param {string} request_json
  */

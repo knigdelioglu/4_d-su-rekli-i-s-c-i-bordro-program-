@@ -10,6 +10,50 @@ fn round2(val: Decimal) -> Decimal {
     val.round_dp(2)
 }
 
+/// One real attendance/earning slice paired with its statutory meal
+/// capacities.  The slice may be narrower than a statutory segment when a
+/// wage change occurs inside that segment.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MealExemptionSegment {
+    pub actual: Decimal,
+    pub sgk_capacity: Decimal,
+    pub gv_capacity: Decimal,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct MealExemptionTotals {
+    pub sgk: Decimal,
+    pub gv: Decimal,
+}
+
+/// Authoritative normal-income meal earning policy.  Keeping the rounding in
+/// this helper means aggregate income and segment allocation use the same
+/// monetary rule.
+pub fn calculate_meal_income(worked_days: i32, daily_meal: Decimal) -> Decimal {
+    round2(Decimal::from(worked_days.max(0)) * daily_meal)
+}
+
+/// Applies the legal meal exemption independently to every real segment.
+/// SGK and GV capacities intentionally remain separate while sharing the same
+/// actual meal amount and segment boundaries.
+pub fn calculate_segmented_meal_exemptions(
+    segments: &[MealExemptionSegment],
+) -> MealExemptionTotals {
+    segments.iter().fold(MealExemptionTotals::default(), |totals, segment| {
+        let actual = segment.actual.max(Decimal::ZERO);
+        MealExemptionTotals {
+            sgk: round2(
+                totals.sgk
+                    + actual.min(segment.sgk_capacity.max(Decimal::ZERO)),
+            ),
+            gv: round2(
+                totals.gv
+                    + actual.min(segment.gv_capacity.max(Decimal::ZERO)),
+            ),
+        }
+    })
+}
+
 /// Gelir vergisi kalemlerinin parasal yuvarlama politikası (GİB uygulaması).
 /// Yarım kuruşluk değerler sıfırdan uzağa yuvarlanır (MidpointAwayFromZero / banker's
 /// rounding değil): Ocak asgari istisnası tax(28.075,50) = 4.211,325 → 4.211,33.
@@ -810,11 +854,13 @@ pub fn calculate_gunluk_gelirler_from_puantaj(
         + puantaj_ozeti.gc
         + puantaj_ozeti.gct;
     let hakedis_dec = Decimal::from(hakedis_gun);
-    let fiili_calisma_gun = Decimal::from(puantaj_ozeti.c + puantaj_ozeti.gc);
+    let fiili_calisma_gun = puantaj_ozeti.c + puantaj_ozeti.gc;
 
     let taban_brut_aylik = round2(hakedis_dec * kurum_degerleri.gunlukTabanUcret);
-    let yemek = round2(fiili_calisma_gun * kurum_degerleri.gunlukYemek);
-    let vasita_yol = round2(fiili_calisma_gun * kurum_degerleri.gunlukVasitaYol);
+    let yemek = calculate_meal_income(fiili_calisma_gun, kurum_degerleri.gunlukYemek);
+    let vasita_yol = round2(
+        Decimal::from(fiili_calisma_gun) * kurum_degerleri.gunlukVasitaYol,
+    );
 
     // Is primi: oran personelin grubundan gelir; hak gunu = C + GC.
     let is_primi_hak_gunu = puantaj_ozeti.c + puantaj_ozeti.gc;
@@ -936,6 +982,7 @@ pub fn calculate_incremental_prime_esas_kazanc(
         PekCalculationOptions {
             tax_months_elapsed: 0,
             apply_lower_bound: false,
+            meal_exemption: None,
         },
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
@@ -960,6 +1007,7 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
         PekCalculationOptions {
             tax_months_elapsed: 1,
             apply_lower_bound,
+            meal_exemption: None,
         },
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
@@ -975,6 +1023,7 @@ fn calculate_prime_esas_kazanc_with_month_to_date(
 pub(crate) struct PekCalculationOptions {
     pub(crate) tax_months_elapsed: i32,
     pub(crate) apply_lower_bound: bool,
+    pub(crate) meal_exemption: Option<MealExemptionTotals>,
 }
 
 pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
@@ -989,6 +1038,7 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     let PekCalculationOptions {
         tax_months_elapsed,
         apply_lower_bound,
+        meal_exemption,
     } = options;
     if tax_months_elapsed < 0 {
         return Err(DomainError::InvalidData(
@@ -1005,7 +1055,9 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     let brut_yemek = gelirler.yemek.unwrap_or(dec!(0));
-    let yemek_istisnasi_tutar = if let Some(snapshot) = statutory_snapshot {
+    let yemek_istisnasi_tutar = if let Some(meal_exemption) = meal_exemption {
+        brut_yemek.min(meal_exemption.sgk).max(Decimal::ZERO)
+    } else if let Some(snapshot) = statutory_snapshot {
         brut_yemek.min(snapshot.sgkYemekIstisnasiToplam)
     } else {
         let gunluk_yemek_istisnasi = k.gunlukYemekIstisnasiSGK.unwrap_or(dec!(300.00));
@@ -1154,6 +1206,7 @@ pub(crate) struct StatutoryCalculationOptions {
     pub(crate) month_to_date_pek: Decimal,
     pub(crate) tax_months_elapsed: i32,
     pub(crate) apply_lower_bound: bool,
+    pub(crate) meal_exemption: Option<MealExemptionTotals>,
 }
 
 pub fn calculate_statutory_deductions_with_tax_brackets(
@@ -1203,6 +1256,7 @@ pub fn calculate_statutory_deductions_with_month_to_date(
             month_to_date_pek,
             tax_months_elapsed: 1,
             apply_lower_bound,
+            meal_exemption: None,
         },
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
@@ -1239,6 +1293,7 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
             PekCalculationOptions {
                 tax_months_elapsed: options.tax_months_elapsed,
                 apply_lower_bound: options.apply_lower_bound,
+                meal_exemption: options.meal_exemption,
             },
         )?;
 

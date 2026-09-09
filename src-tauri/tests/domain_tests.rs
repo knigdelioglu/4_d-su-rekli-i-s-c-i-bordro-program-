@@ -2925,7 +2925,7 @@ mod tests {
             let gv_detay = GvHesapDetayi {
                 oncekiKumulatifGvMatrahi: dec!(0),
                 cariGvMatrahi: dec!(28075.50),
-                yeniKumulatifGvMatrahi: dec!(336906.00),
+                yeniKumulatifGvMatrahi: dec!(28075.50),
                 brutGelirVergisi: dec!(4211.33),
                 asgariUcretGvMatrahi: dec!(28075.50),
                 asgariUcretReferansKumulatifMatrahi: dec!(168453.00),
