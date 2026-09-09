@@ -185,8 +185,26 @@ fn prior_payroll_with_devreden(
         }]),
         pekDetay: None,
         isPrimiDetay: None,
-        gvDetay: None,
-        persistedGvBase: None,
+        gvDetay: Some(GvHesapDetayi {
+            oncekiKumulatifGvMatrahi: dec!(0),
+            cariGvMatrahi: dec!(0),
+            yeniKumulatifGvMatrahi: dec!(0),
+            brutGelirVergisi: dec!(0),
+            asgariUcretGvMatrahi: dec!(0),
+            asgariUcretReferansKumulatifMatrahi: dec!(0),
+            asgariUcretGvIstisnasi: dec!(0),
+            ayniAyOncekiKullanilanGvIstisnasi: dec!(0),
+            tahakkukOncesiKalanGvIstisnasi: dec!(0),
+            uygulananGvIstisnasi: dec!(0),
+            tahakkukSonrasiKalanGvIstisnasi: dec!(0),
+            kesilenGelirVergisi: dec!(0),
+            dogumAskerlikGvIndirimi: dec!(0),
+            sigortaGvIndirimAdayi: dec!(0),
+            sigortaGvAylikLimiti: dec!(0),
+            sigortaGvYillikKalanLimiti: dec!(0),
+            uygulanabilirSigortaGvIndirimi: dec!(0),
+        }),
+        persistedGvBase: Some(dec!(0)),
         damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
@@ -213,10 +231,10 @@ fn setup_devreden_case(
     SettingsRepository::save_institution_settings(&conn, &settings(&active.id))?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
 
-    let prior_payroll = prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2);
-    bordro_programi_lib::repositories::transaction::with_transaction(&conn, |tx| {
-        PayrollRepository::save_legacy_in_transaction(tx, &prior_payroll)
-    })?;
+    PayrollRepository::save(
+        &conn,
+        &prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2),
+    )?;
     AttendanceRepository::save(
         &conn,
         &attendance_from_codes(personnel_id, &active, active_codes),

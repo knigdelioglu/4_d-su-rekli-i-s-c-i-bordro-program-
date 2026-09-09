@@ -37,9 +37,6 @@ import {
   type PayrollStorageDto,
   type PayrollStorageFields,
 } from './services/payrollEngine/decimalBoundary';
-import {
-  parseImportedBackup,
-} from './services/storage/payrollPayload';
 import { useBrowserPayrollPersistence } from './services/storage/useBrowserPayrollPersistence';
 import { usePayrollMutationController } from './hooks/usePayrollMutationController';
 import { useBackupController } from './hooks/useBackupController';
@@ -339,10 +336,7 @@ export default function App() {
 
       const saved = await browserPersistence.loadSnapshot();
       if (saved) {
-        // Version-aware parsing keeps legacy compatibility explicit while a
-        // current snapshot remains strict and never reaches repair logic.
-        const payload: PayrollStorageDto = parseImportedBackup(saved);
-        applyDataset(payload);
+        applyDataset(saved);
       } else {
         applyDataset(toPayrollBoundaryDto({
           donemler: [],

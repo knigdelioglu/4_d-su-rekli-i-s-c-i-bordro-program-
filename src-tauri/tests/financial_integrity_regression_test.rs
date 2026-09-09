@@ -345,6 +345,25 @@ fn strict_restore_accepts_valid_payment_events_and_retro_source_deltas() {
 }
 
 #[test]
+fn current_non_authoritative_sparse_snapshot_keeps_draft_without_gv_pair() {
+    let conn = reconciliation_connection();
+    let mut draft = payroll(AccrualType::NORMAL, 24, dec!(90));
+    draft.status = BordroStatus::DRAFT;
+    draft.persistedGvBase = None;
+
+    PayrollRepository::save_in_transaction(&conn, &draft).unwrap();
+
+    let stored = PayrollRepository::get_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.id == draft.id)
+        .unwrap();
+    assert_eq!(stored.status, BordroStatus::DRAFT);
+    assert!(stored.gvDetay.is_none());
+    assert_eq!(stored.persistedGvBase, Some(dec!(0)));
+}
+
+#[test]
 fn legacy_sparse_normal_snapshot_remains_writable_and_full_snapshot_roundtrips() {
     let conn = reconciliation_connection();
     let legacy = payroll(AccrualType::NORMAL, 30, dec!(90));

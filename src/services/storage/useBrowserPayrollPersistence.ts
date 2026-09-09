@@ -122,10 +122,16 @@ export function useBrowserPayrollPersistence({
     }
   }, [payrollEngine]);
 
-  const loadSnapshot = useCallback(async (): Promise<string | null> => {
+  const loadSnapshot = useCallback(async (): Promise<PayrollStorageDto | null> => {
     const saved = await browserPayrollStore.loadSnapshot();
     await verifyStoredSnapshot(saved);
-    return adoptSnapshot(saved);
+    if (!saved) {
+      adoptSnapshot(null);
+      return null;
+    }
+    const payload = parseBrowserSnapshotPayload(saved);
+    adoptSnapshot(saved);
+    return payload;
   }, [adoptSnapshot, verifyStoredSnapshot]);
 
   const persistPayload = useCallback(
@@ -176,11 +182,14 @@ export function useBrowserPayrollPersistence({
   const reloadExternalSnapshot = useCallback(async (): Promise<void> => {
     const saved = await browserPayrollStore.loadSnapshot();
     await verifyStoredSnapshot(saved);
-    const payload = adoptSnapshot(saved);
-    if (payload) {
-      setAuthoritativePayload(parseImportedBackup(payload));
+    if (saved) {
+      const payload = parseBrowserSnapshotPayload(saved);
+      adoptSnapshot(saved);
+      setAuthoritativePayload(payload);
       setIsDataLoaded(true);
       setLoadError(null);
+    } else {
+      adoptSnapshot(null);
     }
   }, [
     adoptSnapshot,
@@ -245,8 +254,9 @@ export function useBrowserPayrollPersistence({
       try {
         const saved = await browserPayrollStore.loadSnapshot();
         if (!saved) return;
-        const payload = adoptSnapshot(saved);
-        if (payload) setAuthoritativePayload(parseImportedBackup(payload));
+        const payload = parseBrowserSnapshotPayload(saved);
+        adoptSnapshot(saved);
+        setAuthoritativePayload(payload);
       } catch (reloadError) {
         console.error('Son başarılı tarayıcı snapshotı geri yüklenemedi.', reloadError);
         setIsDataLoaded(false);

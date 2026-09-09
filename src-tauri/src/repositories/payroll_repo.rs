@@ -1601,6 +1601,12 @@ impl PayrollRepository {
             (None, None) => {
                 if allow_legacy_missing_gv_base {
                     (Decimal::ZERO, true)
+                } else if matches!(b.status, BordroStatus::DRAFT | BordroStatus::STALE) {
+                    // Current DRAFT/STALE rows are not authoritative tax
+                    // inputs. SQLite has a non-null scalar column, so retain
+                    // the lifecycle state with an explicit zero placeholder;
+                    // CALCULATED/FINALIZED rows still fail closed below.
+                    (Decimal::ZERO, false)
                 } else {
                     // Sparse legacy updates may reuse the authoritative scalar
                     // already stored in SQLite. A missing scalar on a new/current
