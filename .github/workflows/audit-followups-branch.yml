@@ -73,11 +73,33 @@ jobs:
           from pathlib import Path
           path = Path('crates/payroll-core/tests/retro_tax_oks_followup_20260909.rs')
           text = path.read_text()
-          needle = '#[path = "support/independent_audit.rs"]\nmod support;'
-          replacement = '#[allow(dead_code)]\n#[path = "support/independent_audit.rs"]\nmod support;'
-          if needle not in text:
+
+          support_needle = '#[path = "support/independent_audit.rs"]\nmod support;'
+          support_replacement = '#[allow(dead_code)]\n#[path = "support/independent_audit.rs"]\nmod support;'
+          if support_needle not in text:
               raise SystemExit('retro follow-up support module anchor not found')
-          path.write_text(text.replace(needle, replacement, 1))
+          text = text.replace(support_needle, support_replacement, 1)
+
+          chronology_needle = '''    let mut payment = support::dated_request(2026, 2);
+    let payment_normal = calculate_payroll_checked(&payment).unwrap();
+    payment.dataset.payrolls.push(payment_normal);
+    payment.dataset.periods.extend(source.dataset.periods.clone());
+    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());
+    payment.dataset.attendances.extend(source.dataset.attendances.clone());
+    payment.dataset.payrolls.push(original);
+'''
+          chronology_replacement = '''    let mut payment = support::dated_request(2026, 2);
+    payment.dataset.periods.extend(source.dataset.periods.clone());
+    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());
+    payment.dataset.attendances.extend(source.dataset.attendances.clone());
+    payment.dataset.payrolls.push(original);
+    let payment_normal = calculate_payroll_checked(&payment).unwrap();
+    payment.dataset.payrolls.push(payment_normal);
+'''
+          if chronology_needle not in text:
+              raise SystemExit('retro meal chronology anchor not found')
+          text = text.replace(chronology_needle, chronology_replacement, 1)
+          path.write_text(text)
           PY
 
       - name: Format Rust changes
