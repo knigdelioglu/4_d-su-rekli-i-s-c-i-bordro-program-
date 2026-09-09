@@ -309,3 +309,56 @@ fn calculated_snapshot_reports_incoming_pek_last_month_and_tax_bracket_transitio
     assert!(tax.message.contains("%15"));
     assert!(tax.message.contains("%20"));
 }
+
+#[test]
+fn multi_accrual_does_not_drop_earlier_records_or_bracket_transitions() {
+    let conn = create_in_memory_connection().unwrap();
+    let active = period("2026-07", 2026, 7, 2026, 8);
+    let worker = person("p-multi-notices");
+    setup_period_basics(&conn, &active, &worker);
+    AttendanceRepository::save(&conn, &full_attendance(&worker.id, &active)).unwrap();
+
+    // Accrual 1: Has incoming PEK carry and bracket transition (180,000 to 230,000)
+    let mut p1 = payroll_with_snapshots(&worker.id, &active.id);
+    p1.id = "p-1".into();
+    p1.accrualId = "normal".into();
+    p1.paymentDate = "2026-08-10".into();
+    p1.sequence = 1;
+
+    // Accrual 2: Subsequent accrual in same period, no incoming PEK carry, higher cumulative GV
+    let mut p2 = p1.clone();
+    p2.id = "p-2".into();
+    p2.accrualId = "tis".into();
+    p2.accrualType = AccrualType::TIS_IKRAMIYE;
+    p2.paymentDate = "2026-08-14".into();
+    p2.sequence = 2;
+    p2.devredenPekGelen = Some(Vec::new());
+    if let Some(pek) = p2.pekDetay.as_mut() {
+        pek.devredenPekKullanilan = dec!(0);
+    }
+    if let Some(gv) = p2.gvDetay.as_mut() {
+        gv.oncekiKumulatifGvMatrahi = dec!(230000);
+        gv.cariGvMatrahi = dec!(20000);
+        gv.yeniKumulatifGvMatrahi = dec!(250000);
+    }
+
+    PayrollRepository::save(&conn, &p1).unwrap();
+    PayrollRepository::save(&conn, &p2).unwrap();
+
+    let notices = PayrollNoticeService::get_period_notices(&conn, &active.id).unwrap();
+
+    assert!(
+        notices.iter().any(|n| n.code == "INCOMING_PEK_CARRY"),
+        "INCOMING_PEK_CARRY must be preserved across multi-accrual period"
+    );
+    assert!(
+        notices.iter().any(|n| n.code == "PEK_CARRY_LAST_MONTH"),
+        "PEK_CARRY_LAST_MONTH must be preserved across multi-accrual period"
+    );
+    let tax = notices
+        .iter()
+        .find(|n| n.code == "INCOME_TAX_BRACKET_TRANSITION")
+        .expect("tax bracket transition must exist across multi-accrual period");
+    assert_eq!(tax.severity, PayrollNoticeSeverity::Warning);
+}
+

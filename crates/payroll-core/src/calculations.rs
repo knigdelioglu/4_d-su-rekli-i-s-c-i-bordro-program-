@@ -244,8 +244,8 @@ pub fn calculate_aylik_asgari_ucret_gv_matrahi(
     issizlik_isci_orani: Decimal,
 ) -> Decimal {
     let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
-    let aylik_asgari_sgk =
-        round_sgk_amount(aylik_brut_asgari * (sgk_isci_orani + issizlik_isci_orani));
+    let aylik_asgari_sgk = round_sgk_amount(aylik_brut_asgari * sgk_isci_orani)
+        + round_sgk_amount(aylik_brut_asgari * issizlik_isci_orani);
     (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0))
 }
 
@@ -1264,8 +1264,8 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
 
     let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
     let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
-    let aylik_asgari_sgk = round_sgk_amount(aylik_brut_asgari * (sgk_rate + issizlik_rate));
-    let asgari_ucret_gv_matrah = (aylik_brut_asgari - aylik_asgari_sgk).max(dec!(0));
+    let asgari_ucret_gv_matrah =
+        calculate_aylik_asgari_ucret_gv_matrahi(gunluk_asgari, sgk_rate, issizlik_rate);
 
     let gv_detay = calculate_gv_hesap_detayi_with_brackets(
         gelir_vergisi_matrah,

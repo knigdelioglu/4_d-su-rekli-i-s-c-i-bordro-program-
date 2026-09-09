@@ -99,11 +99,15 @@ impl PayrollNoticeService {
         let personnel = PersonnelRepository::get_all(conn)?;
         let annual_parameters =
             AnnualPayrollParametersRepository::get_by_year(conn, period.taxYear)?;
-        let payrolls_by_person: HashMap<String, BordroKaydi> = PayrollRepository::get_all(conn)?
-            .into_iter()
-            .filter(|payroll| payroll.donemId == period_id)
-            .map(|payroll| (payroll.personelId.clone(), payroll))
-            .collect();
+        let mut payrolls_by_person: HashMap<String, Vec<BordroKaydi>> = HashMap::new();
+        for payroll in PayrollRepository::get_all(conn)? {
+            if payroll.donemId == period_id {
+                payrolls_by_person
+                    .entry(payroll.personelId.clone())
+                    .or_default()
+                    .push(payroll);
+            }
+        }
 
         let mut notices =
             payroll_core::get_period_notices(&Self::shared_snapshot(conn)?, period_id)?
@@ -121,13 +125,16 @@ impl PayrollNoticeService {
 
         for person in personnel {
             let full_name = format!("{} {}", person.ad, person.soyad);
-            let payroll = payrolls_by_person.get(&person.id);
-
-            if let Some(record) = payroll {
+            if let Some(records) = payrolls_by_person.get_mut(&person.id) {
+                records.sort_by(|a, b| {
+                    a.paymentDate
+                        .cmp(&b.paymentDate)
+                        .then_with(|| a.sequence.cmp(&b.sequence))
+                });
                 Self::append_payroll_result_notices(
                     &person.id,
                     &full_name,
-                    record,
+                    records,
                     annual_parameters.as_ref(),
                     &mut notices,
                 );
@@ -150,19 +157,28 @@ impl PayrollNoticeService {
     fn append_payroll_result_notices(
         personnel_id: &str,
         full_name: &str,
-        payroll: &BordroKaydi,
+        records: &[BordroKaydi],
         annual_parameters: Option<&AnnualPayrollParameters>,
         notices: &mut Vec<PayrollNotice>,
     ) {
-        if !matches!(
-            payroll.status,
-            BordroStatus::CALCULATED | BordroStatus::FINALIZED
-        ) {
+        if records.is_empty() {
+            return;
+        }
+        let all_authoritative = records.iter().all(|p| {
+            matches!(
+                p.status,
+                BordroStatus::CALCULATED | BordroStatus::FINALIZED
+            )
+        });
+        if !all_authoritative {
             return;
         }
 
-        let incoming = payroll.devredenPekGelen.as_deref().unwrap_or(&[]);
-        let outgoing = payroll.sonrakiDevredenPek.as_deref().unwrap_or(&[]);
+        let first_record = &records[0];
+        let last_record = &records[records.len() - 1];
+
+        let incoming = first_record.devredenPekGelen.as_deref().unwrap_or(&[]);
+        let outgoing = last_record.sonrakiDevredenPek.as_deref().unwrap_or(&[]);
         let incoming_total = incoming
             .iter()
             .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
@@ -173,10 +189,14 @@ impl PayrollNoticeService {
             .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
             .fold(Decimal::ZERO, |total, item| total + item.tutar)
             .round_dp(2);
-        let used = payroll
-            .pekDetay
-            .as_ref()
-            .map_or(Decimal::ZERO, |detail| detail.devredenPekKullanilan)
+        let used = records
+            .iter()
+            .map(|p| {
+                p.pekDetay
+                    .as_ref()
+                    .map_or(Decimal::ZERO, |detail| detail.devredenPekKullanilan)
+            })
+            .sum::<Decimal>()
             .round_dp(2);
 
         if incoming_total > Decimal::ZERO {
@@ -240,14 +260,17 @@ impl PayrollNoticeService {
         let Some(parameters) = annual_parameters else {
             return;
         };
-        let Some(gv_detail) = payroll.gvDetay.as_ref() else {
+        let Some(first_gv) = first_record.gvDetay.as_ref() else {
+            return;
+        };
+        let Some(last_gv) = last_record.gvDetay.as_ref() else {
             return;
         };
         let previous_cumulative =
-            (gv_detail.yeniKumulatifGvMatrahi - gv_detail.cariGvMatrahi).max(Decimal::ZERO);
+            (first_gv.yeniKumulatifGvMatrahi - first_gv.cariGvMatrahi).max(Decimal::ZERO);
         let slices = Self::tax_slices(
             previous_cumulative,
-            gv_detail.yeniKumulatifGvMatrahi,
+            last_gv.yeniKumulatifGvMatrahi,
             &parameters.gelirVergisiDilimleri,
         );
         let Some((_, first_rate)) = slices.first() else {

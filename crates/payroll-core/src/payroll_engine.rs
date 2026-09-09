@@ -3198,7 +3198,7 @@ fn calculate_payroll_with_index(
         - retro_income_tax_exempt
         - deductions.isciSgkPrimi.unwrap_or_default()
         - deductions.isciIssizlikPrimi.unwrap_or_default()
-        - income.yemek.unwrap_or_default().min(statutory_snapshot.gvYemekIstisnasiToplam)
+        - normal_meal_tax_exemption
         - deductions.sendikaAidati.unwrap_or_default())
         .max(Decimal::ZERO);
     gv_discount.dogum_askerlik_indirimi = gv_discount.dogum_askerlik_indirimi.min(gv_base_before_discounts);

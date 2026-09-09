@@ -121,10 +121,10 @@ pub fn get_period_notices(
 
     for person in &dataset.personnel {
         let full_name = format!("{} {}", person.ad, person.soyad);
-        let payroll = index
+        let has_stale = index
             .payrolls_for_person_period(dataset, &person.id, period_id)
-            .next();
-        if payroll.is_some_and(|payroll| payroll.status == BordroStatus::STALE) {
+            .any(|payroll| payroll.status == BordroStatus::STALE);
+        if has_stale {
             notices.push(PayrollNotice {
                 code: "STALE_PAYROLL".into(),
                 severity: PayrollNoticeSeverity::Critical,
