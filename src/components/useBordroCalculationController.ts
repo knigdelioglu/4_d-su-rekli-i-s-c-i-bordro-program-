@@ -22,6 +22,9 @@ import {
 
 function formatActionableParameterError(message: string): string {
   const annualYear = message.match(/\b(20\d{2})\b/)?.[1];
+  if (isPayrollTaxOpeningConfigurationError(message)) {
+    return 'Kümülatif gelir vergisi açılışının başlangıç dönemi eksik veya geçersiz. Bordro ekranındaki "Önceki Kümülatif Matrah Girişi" bölümünü açıp tutarı aktif dönemle kaydedin; ardından bordroyu yeniden hesaplayın.';
+  }
   if (
     annualYear &&
     /(yıllık bordro parametreleri|sigorta gv yıllık)/i.test(message) &&
@@ -39,6 +42,12 @@ function formatActionableParameterError(message: string): string {
     return 'Dönem kurum ücretleri henüz tamamlanmamış. Ücretler bölümünde kurum değerlerini tamamlayın.';
   }
   return message;
+}
+
+export function isPayrollTaxOpeningConfigurationError(message: string): boolean {
+  return /(?:legacy\s+(?:asgari\s+)?gv\s+opening|(?:normal|asgari)\s+gv\s+opening)[\s\S]*(?:effective|başlangıç\s+(?:ayı|dönemi))/i.test(
+    message
+  );
 }
 
 export function formatPayrollError(err: unknown): string {
@@ -133,6 +142,7 @@ export function useBordroCalculationController({
   const [manualKumulatifGvMap, setManualKumulatifGvMap] = useState<Record<string, string>>({});
   const [manualKumulatifAsgariGvMap, setManualKumulatifAsgariGvMap] = useState<Record<string, string>>({});
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState(false);
+  const firstBatchCalculationErrorRef = useRef<string | null>(null);
 
   const getAccrualId = (payroll: BordroKaydi): string => payroll.accrualId || payroll.id;
 
@@ -233,12 +243,17 @@ export function useBordroCalculationController({
       return toPayrollUiModel(calculated) as unknown as BordroKaydi;
     } catch (err) {
       console.error('Payroll engine calculation failed:', err);
-      setErrorMessage(`Hesaplama hatası: ${formatPayrollError(err)}`);
+      const formattedError = `Hesaplama hatası: ${formatPayrollError(err)}`;
+      if (firstBatchCalculationErrorRef.current === null) {
+        firstBatchCalculationErrorRef.current = formattedError;
+      }
+      setErrorMessage(formattedError);
       return null;
     }
   };
 
   const handleCalculateAll = async () => {
+    firstBatchCalculationErrorRef.current = null;
     setIsBatchProcessing(true);
     let successCount = 0;
     let failCount = 0;
@@ -259,11 +274,14 @@ export function useBordroCalculationController({
     } else if (successCount > 0) {
       setSuccessMessage(`${successCount} personelin bordrosu hesaplandı.`);
       setErrorMessage(
-        `${failCount} personelin bordrosu hesaplanamadı (${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '...' : ''}). Hata ayrıntısı için ilgili personelin kaydını ve dönem parametrelerini kontrol edin.`
+        `${failCount} personelin bordrosu hesaplanamadı (${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '...' : ''}). ${firstBatchCalculationErrorRef.current ?? 'Hata ayrıntısı için ilgili personelin kaydını ve dönem parametrelerini kontrol edin.'}`
       );
     } else {
       setSuccessMessage(null);
-      setErrorMessage('Hiçbir personelin bordrosu hesaplanamadı. Kayıtlı puantaj, dönem kurum ayarları ve yıllık vergi parametrelerini kontrol edin.');
+      setErrorMessage(
+        firstBatchCalculationErrorRef.current ??
+          'Hiçbir personelin bordrosu hesaplanamadı. Kayıtlı puantaj, dönem kurum ayarları ve yıllık vergi parametrelerini kontrol edin.'
+      );
     }
   };
 

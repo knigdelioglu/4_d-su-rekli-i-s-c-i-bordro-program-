@@ -59,6 +59,7 @@ import {
 } from '../services/payrollEngine/decimalBoundary';
 import {
   ACCRUAL_TYPE_LABELS,
+  isPayrollTaxOpeningConfigurationError,
   type PayrollRowFilter,
   type SupplementaryAccrualType,
   useBordroCalculationController,
@@ -181,6 +182,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     { id: 'calculated', label: 'Hesaplandı' },
     { id: 'finalized', label: 'Kesinleştirildi' },
   ];
+  const taxOpeningConfigurationError = Boolean(
+    errorMessage && isPayrollTaxOpeningConfigurationError(errorMessage)
+  );
 
   // Filtered personnel list
   const normalizedSearchTerm = searchTerm.toLocaleLowerCase('tr-TR');
@@ -335,7 +339,18 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
             <span>{errorMessage}</span>
           </div>
-          {onGoToPuantaj && (
+          {taxOpeningConfigurationError ? (
+            <button
+              onClick={() => {
+                setErrorMessage(null);
+                setIsKumulatifModalOpen(true);
+              }}
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors flex items-center gap-1 shadow-xs"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Önceki Kümülatif Matrah Girişine Git →</span>
+            </button>
+          ) : onGoToPuantaj && (
             <button
               onClick={() => onGoToPuantaj()}
               className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors flex items-center gap-1 shadow-xs"
@@ -1145,7 +1160,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
             <div className="p-6 space-y-4 overflow-y-auto flex-1">
               <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 leading-relaxed">
-                <strong>Mevzuat ve Kullanım Bilgisi:</strong> Buradaki iki tutar birbirinden bağımsızdır: normal çalışan GV opening'i ve asgari ücret GV referans opening'i. Normal opening, aktif bordro/vergi dönemi olan <strong>{aktifDonem.id}</strong> ile saklanır; asgari opening yalnızca bu alana açıkça girildiğinde veya mevcut bir asgari opening korunurken aynı period ID ile saklanır. Çalışma ayı veya vergi ayı ayrıca girilmez.
+                <strong>Mevzuat ve Kullanım Bilgisi:</strong> Buradaki iki tutar birbirinden bağımsızdır: normal çalışan GV opening'i ve asgari ücret GV referans opening'i. Normal opening, aktif bordro/vergi dönemi olan <strong>{aktifDonem.id}</strong> ile saklanır; asgari opening yalnızca bu alana açıkça girildiğinde veya mevcut bir asgari opening korunurken aynı period ID ile saklanır. Eski personel kaydında tutar varsa alanı değiştirmeden Kaydet düğmesine basmak da bu period ID bilgisini tamamlar. Çalışma ayı veya vergi ayı ayrıca girilmez.
               </div>
 
               <div className="max-h-96 overflow-y-auto border border-slate-200 rounded-xl">
@@ -1271,9 +1286,35 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     onClick={async () => {
                       try {
                         let updatedAny = false;
+                        const legacyOpeningPersonIds = personeller
+                          .filter((candidate) => {
+                            const source = authoritativeDataset.personnel.find(
+                              (item) => item.id === candidate.id
+                            );
+                            const opening = authoritativeDataset.taxOpenings.find(
+                              (item) =>
+                                item.personnelId === candidate.id &&
+                                item.year === aktifDonem.taxYear
+                            );
+                            const hasLegacyNormalOpening =
+                              getDevirGvMatrahiForActiveYear(candidate) > 0 &&
+                              opening?.gvCumulativeOpening == null;
+                            const hasLegacyAsgariOpening =
+                              Number(
+                                source?.devirKumulatifAsgariGvMatrahi ??
+                                  candidate.devirKumulatifAsgariGvMatrahi ??
+                                  0
+                              ) > 0 &&
+                              (!source?.devirKumulatifAsgariGvMatrahiYili ||
+                                source.devirKumulatifAsgariGvMatrahiYili === aktifDonem.taxYear) &&
+                              opening?.asgariGvCumulativeOpening == null;
+                            return hasLegacyNormalOpening || hasLegacyAsgariOpening;
+                          })
+                          .map((candidate) => candidate.id);
                         const editedPersonIds = new Set([
                           ...Object.keys(manualKumulatifGvMap),
                           ...Object.keys(manualKumulatifAsgariGvMap),
+                          ...legacyOpeningPersonIds,
                         ]);
                         for (const pId of editedPersonIds) {
                           const person = personeller.find((p) => p.id === pId);
@@ -1320,14 +1361,20 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               existingOpening?.asgariGvCumulativeOpening != null;
                             const hasExistingAsgariPeriod =
                               existingOpening?.asgariGvEffectiveFromPeriodId != null;
+                            const shouldPersistNormalOpening =
+                              normalOpeningWasEdited ||
+                              (!hasExistingNormalOpening && getDevirGvMatrahiForActiveYear(person) > 0);
+                            const shouldPersistAsgariOpening =
+                              asgariOpeningWasEdited ||
+                              (!hasExistingAsgariOpening && Number(legacyAsgariGv ?? 0) > 0);
                             const val = (manualKumulatifGvMap[pId] ?? String(automaticGv)).trim() || '0';
                             const asgariVal = (
                               manualKumulatifAsgariGvMap[pId] ?? String(automaticAsgariGv)
                             ).trim() || '0';
-                            if (normalOpeningWasEdited && (!isExactDecimalString(val) || val.startsWith('-'))) {
+                            if (shouldPersistNormalOpening && (!isExactDecimalString(val) || val.startsWith('-'))) {
                               throw new Error('Kümülatif GV matrahı geçerli, negatif olmayan bir tutar olmalıdır.');
                             }
-                            if (asgariOpeningWasEdited && (!isExactDecimalString(asgariVal) || asgariVal.startsWith('-'))) {
+                            if (shouldPersistAsgariOpening && (!isExactDecimalString(asgariVal) || asgariVal.startsWith('-'))) {
                               throw new Error('Kümülatif asgari GV matrahı geçerli, negatif olmayan bir tutar olmalıdır.');
                             }
                             if (hasExistingNormalOpening !== hasExistingNormalPeriod) {
@@ -1340,23 +1387,23 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               exactPersonSource,
                               {
                                 ...person,
-                                ...(normalOpeningWasEdited
+                                ...(shouldPersistNormalOpening
                                   ? { devirKumulatifGvMatrahi: val }
                                   : { devirKumulatifGvMatrahi: exactPersonSource?.devirKumulatifGvMatrahi }),
-                                ...(asgariOpeningWasEdited
+                                ...(shouldPersistAsgariOpening
                                   ? { devirKumulatifAsgariGvMatrahi: asgariVal }
                                   : { devirKumulatifAsgariGvMatrahi: exactPersonSource?.devirKumulatifAsgariGvMatrahi }),
                               }
                             ) as PayrollBoundaryPersonel;
                             const personelUpdate = {
                               ...exactPerson,
-                              ...(normalOpeningWasEdited
+                              ...(shouldPersistNormalOpening
                                 ? {
                                     devirKumulatifGvMatrahiYili: aktifDonem.taxYear,
                                     devirKumulatifGvMatrahiBaslangicAyi: aktifDonem.ay,
                                   }
                                 : {}),
-                              ...(asgariOpeningWasEdited
+                              ...(shouldPersistAsgariOpening
                                 ? { devirKumulatifAsgariGvMatrahiYili: aktifDonem.taxYear }
                                 : {}),
                             } as PayrollBoundaryPersonel;
@@ -1364,7 +1411,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               id: `${person.id}_${aktifDonem.taxYear}`,
                               personnelId: person.id,
                               year: aktifDonem.taxYear,
-                              ...(normalOpeningWasEdited
+                              ...(shouldPersistNormalOpening
                                 ? {
                                     gvCumulativeOpening: val,
                                     effectiveFromPeriodId: aktifDonem.id,
@@ -1375,7 +1422,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                       effectiveFromPeriodId: existingOpening!.effectiveFromPeriodId,
                                     }
                                   : {}),
-                              ...(asgariOpeningWasEdited
+                              ...(shouldPersistAsgariOpening
                                 ? {
                                     asgariGvCumulativeOpening: asgariVal,
                                     asgariGvEffectiveFromPeriodId: aktifDonem.id,
