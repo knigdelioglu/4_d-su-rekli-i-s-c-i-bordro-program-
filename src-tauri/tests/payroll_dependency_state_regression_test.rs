@@ -164,6 +164,7 @@ fn calculated_payroll(
         pekDetay: None,
         isPrimiDetay: None,
         gvDetay: None,
+        persistedGvBase: Some(dec!(100)),
         damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
@@ -190,8 +191,16 @@ fn attendance_mutation_marks_current_and_later_payrolls_stale() {
     PeriodRepository::save(&conn, &february).unwrap();
 
     AttendanceRepository::save(&conn, &attendance(&p.id, &january, "Ç")).unwrap();
-    PayrollRepository::save(&conn, &calculated_payroll(&p.id, &january.id, None)).unwrap();
-    PayrollRepository::save(&conn, &calculated_payroll(&p.id, &february.id, None)).unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &january.id, None),
+    )
+    .unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &february.id, None),
+    )
+    .unwrap();
 
     let mut changed = attendance(&p.id, &january, "Ç");
     let first_date = changed.gunler.keys().next().unwrap().clone();
@@ -245,7 +254,11 @@ fn institution_setting_mutation_marks_calculated_payroll_stale() {
 
     let original = settings(&active.id, dec!(1000));
     SettingsRepository::save_institution_settings(&conn, &original).unwrap();
-    PayrollRepository::save(&conn, &calculated_payroll(&p.id, &active.id, None)).unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &active.id, None),
+    )
+    .unwrap();
 
     let mut changed = original;
     changed.gunlukTabanUcret = dec!(1100);
@@ -261,7 +274,11 @@ fn sick_leave_and_tax_opening_mutations_invalidate_calculated_payroll() {
     PersonnelRepository::save(&conn, &p).unwrap();
     let active = period("2026-04", 2026, 4, 2026, 4);
     PeriodRepository::save(&conn, &active).unwrap();
-    PayrollRepository::save(&conn, &calculated_payroll(&p.id, &active.id, None)).unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &active.id, None),
+    )
+    .unwrap();
 
     SickLeaveRepository::save(
         &conn,
@@ -277,7 +294,11 @@ fn sick_leave_and_tax_opening_mutations_invalidate_calculated_payroll() {
     .unwrap();
     assert_eq!(status(&conn, &p.id, &active.id), BordroStatus::STALE);
 
-    PayrollRepository::save(&conn, &calculated_payroll(&p.id, &active.id, None)).unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &active.id, None),
+    )
+    .unwrap();
     TaxOpeningRepository::save(
         &conn,
         &PersonelTaxOpening {
@@ -306,7 +327,11 @@ fn annual_parameter_mutation_invalidates_same_tax_year() {
 
     let original = AnnualPayrollParameters::default_for_2026();
     AnnualPayrollParametersRepository::save(&conn, &original).unwrap();
-    PayrollRepository::save(&conn, &calculated_payroll(&p.id, &active.id, None)).unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &active.id, None),
+    )
+    .unwrap();
 
     let mut changed = original;
     changed.sigortaGvYillikBrutAsgariUcretTavani = Some(dec!(400000));
@@ -416,7 +441,7 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
     SettingsRepository::save_institution_settings(&conn, &settings(&august.id, dec!(1000)))
         .unwrap();
 
-    PayrollRepository::save(
+    PayrollRepository::save_legacy_in_transaction(
         &conn,
         &calculated_payroll(
             &p.id,

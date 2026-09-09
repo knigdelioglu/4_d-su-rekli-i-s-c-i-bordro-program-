@@ -192,12 +192,13 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: Some(dec!(65000)),
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
-        PayrollRepository::save(&conn, &mayis_bordro)?;
+        PayrollRepository::save_legacy_in_transaction(&conn, &mayis_bordro)?;
 
         // 2. June 2026 previous cumulative should be 120,000 + 65,000 = 185,000 TL
         let prev_haziran =
@@ -239,12 +240,13 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: Some(dec!(70000)),
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
-        PayrollRepository::save(&conn, &haziran_bordro)?;
+        PayrollRepository::save_legacy_in_transaction(&conn, &haziran_bordro)?;
 
         // 3. July 2026 previous cumulative should be 120,000 + 65,000 + 70,000 = 255,000 TL
         let prev_temmuz =
@@ -303,12 +305,13 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: Some(dec!(36700)),
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
-        PayrollRepository::save(&conn, &ocak_bordro)?;
+        PayrollRepository::save_legacy_in_transaction(&conn, &ocak_bordro)?;
 
         // Calculating for May 2026 now MUST trigger TaxOpeningConflict error!
         let collision_result =
@@ -375,12 +378,13 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: Some(dec!(100000)),
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
         };
-        PayrollRepository::save(&conn, &bordro)?;
+        PayrollRepository::save_legacy_in_transaction(&conn, &bordro)?;
 
         // 1. Downgrading from FINALIZED must fail
         let res = PayrollService::set_payroll_status(
@@ -1384,7 +1388,7 @@ mod tests {
     #[test]
     fn test_net_odeme_degismez_isveren_maliyeti_etkisizdir_test_f() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_gelir_toplam, calculate_kesinti_toplam, calculate_statutory_deductions,
+            calculate_gelir_toplam, calculate_kesinti_toplam, calculate_legacy_statutory_deductions,
         };
         let mut puantaj = PuantajOzeti::default();
         puantaj.c = 30;
@@ -1396,7 +1400,7 @@ mod tests {
             ..Default::default()
         };
 
-        let (kesintiler, pek_detay, _) = calculate_statutory_deductions(
+        let (kesintiler, pek_detay, _) = calculate_legacy_statutory_deductions(
             &gelirler,
             Some(&kurum_default),
             None,
@@ -1912,7 +1916,7 @@ mod tests {
     #[test]
     fn test_pek_alt_sinir_tamamlama_isveren_prim_ayrimi() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_prime_esas_kazanc, calculate_statutory_deductions,
+            calculate_prime_esas_kazanc, calculate_legacy_statutory_deductions,
         };
 
         let mut puantaj = PuantajOzeti::default();
@@ -1953,7 +1957,7 @@ mod tests {
         assert_eq!(pek_detay.isverenPrimToplami, Some(dec!(9049.13)));
 
         // 2. Yasal Kesintiler (İşçi Payları)
-        let (kesintiler, _, _) = calculate_statutory_deductions(
+        let (kesintiler, _, _) = calculate_legacy_statutory_deductions(
             &gelirler,
             Some(&kurum),
             None,
@@ -1988,7 +1992,7 @@ mod tests {
     #[test]
     fn test_sgk_resmi_2026_ornegi_midpoint_away_from_zero() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_prime_esas_kazanc, calculate_statutory_deductions,
+            calculate_prime_esas_kazanc, calculate_legacy_statutory_deductions,
         };
         use rust_decimal::RoundingStrategy;
 
@@ -2012,7 +2016,7 @@ mod tests {
 
         let (pek_detay, _) =
             calculate_prime_esas_kazanc(&gelirler, Some(&puantaj), Some(&kurum), &[]);
-        let (kesintiler, _, _) = calculate_statutory_deductions(
+        let (kesintiler, _, _) = calculate_legacy_statutory_deductions(
             &gelirler,
             Some(&kurum),
             None,
@@ -2043,7 +2047,7 @@ mod tests {
     #[test]
     fn test_pek_alt_sinir_ustunde_normal_bordro() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_prime_esas_kazanc, calculate_statutory_deductions,
+            calculate_prime_esas_kazanc, calculate_legacy_statutory_deductions,
         };
 
         let mut puantaj = PuantajOzeti::default();
@@ -2064,7 +2068,7 @@ mod tests {
         assert_eq!(pek_detay.altSinirTamamlamaFarki, dec!(0.00));
         assert_eq!(pek_detay.pekAltSinirTamamlamaIsverenPrimi, Some(dec!(0.00)));
 
-        let (kesintiler, _, _) = calculate_statutory_deductions(
+        let (kesintiler, _, _) = calculate_legacy_statutory_deductions(
             &gelirler,
             Some(&kurum),
             None,
@@ -2199,7 +2203,7 @@ mod tests {
     // ===== Test G: Çoklu gelir kalemi — istisna BİR kez uygulanır
     #[test]
     fn test_gv_istisna_coklu_gelir_bir_kez() {
-        use bordro_programi_lib::domain::calculations::calculate_statutory_deductions;
+        use bordro_programi_lib::domain::calculations::calculate_legacy_statutory_deductions;
         let gelirler = GelirKalemleri {
             tabanBrutAylik: Some(dec!(50000)),
             isPrimi: Some(dec!(10000)),
@@ -2210,7 +2214,7 @@ mod tests {
             c: 30,
             ..Default::default()
         };
-        let (kesintiler, _, _) = calculate_statutory_deductions(
+        let (kesintiler, _, _) = calculate_legacy_statutory_deductions(
             &gelirler,
             None,
             None,
@@ -2293,6 +2297,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: Some(gv_detay),
+            persistedGvBase: Some(dec!(28075.50)),
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
@@ -2460,7 +2465,7 @@ mod tests {
 
         // With no legacy normal component, an asgari-only row must not create
         // a synthetic normal opening or a TaxOpeningConflict.
-        PayrollRepository::save(
+        PayrollRepository::save_legacy_in_transaction(
             &conn,
             &bordro_kaydi(&person.id, &periods[0].id, dec!(50000)),
         )?;
@@ -2536,11 +2541,11 @@ mod tests {
             updatedAt: None,
         };
         TaxOpeningRepository::save(&conn, &opening)?;
-        PayrollRepository::save_in_transaction(
+        PayrollRepository::save_legacy_in_transaction(
             &conn,
             &bordro_kaydi(&person.id, &periods[0].id, dec!(20000)),
         )?;
-        PayrollRepository::save_in_transaction(
+        PayrollRepository::save_legacy_in_transaction(
             &conn,
             &bordro_kaydi(&person.id, &periods[1].id, dec!(30000)),
         )?;
@@ -2711,11 +2716,11 @@ mod tests {
         PeriodRepository::save(&conn, &tm2)?;
         PeriodRepository::save(&conn, &tm3)?;
 
-        PayrollRepository::save(
+        PayrollRepository::save_legacy_in_transaction(
             &conn,
             &bordro_kaydi("test-tax-month", "2027-01", dec!(50000)),
         )?;
-        PayrollRepository::save(
+        PayrollRepository::save_legacy_in_transaction(
             &conn,
             &bordro_kaydi("test-tax-month", "2027-02", dec!(60000)),
         )?;
@@ -2760,7 +2765,10 @@ mod tests {
             taxMonth: 12,
         };
         PeriodRepository::save(&conn, &kasim2026)?;
-        PayrollRepository::save(&conn, &bordro_kaydi("test-cal-12", "2026-11", dec!(40000)))?;
+        PayrollRepository::save_legacy_in_transaction(
+            &conn,
+            &bordro_kaydi("test-cal-12", "2026-11", dec!(40000)),
+        )?;
 
         let prev =
             CumulativeTaxService::get_previous_cumulative_gv(&conn, "test-cal-12", &aralik2026)?;
@@ -2796,7 +2804,7 @@ mod tests {
             status: BordroStatus::FINALIZED,
             ..bordro
         };
-        PayrollRepository::save(&conn, &bordro)?;
+        PayrollRepository::save_legacy_in_transaction(&conn, &bordro)?;
 
         // taxMonth 7 → 6 değişikliği ERROR olmalı
         let changed = BordroDonemi {
@@ -2837,7 +2845,7 @@ mod tests {
         PeriodRepository::save(&conn, &donem)?;
 
         let bordro = bordro_kaydi("test-meta-calculated", "2026-07", dec!(0));
-        PayrollRepository::save(&conn, &bordro)?;
+        PayrollRepository::save_legacy_in_transaction(&conn, &bordro)?;
 
         let changed = BordroDonemi {
             taxMonth: 6,
@@ -2972,6 +2980,7 @@ mod tests {
                 pekDetay: None,
                 isPrimiDetay: None,
                 gvDetay: Some(gv_detay),
+                persistedGvBase: Some(dec!(28075.50)),
                 damgaDetay: None,
                 statutorySnapshot: None,
                 odenenRaporluGun: None,
@@ -3043,6 +3052,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: Some(gelir_toplam),
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,

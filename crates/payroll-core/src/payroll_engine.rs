@@ -1504,11 +1504,114 @@ fn same_month_pek_used(prior: &[&BordroKaydi]) -> Result<Decimal> {
                 effective_accrual_id(payroll)
             )));
         }
-        let total = total.checked_add(detail.primMatrahi).ok_or_else(|| {
+        // New records carry the reconciled same-month state explicitly.  This
+        // prevents a later authoritative NORMAL calculation from summing an
+        // earlier provisional 30-day PEK snapshot as if it were final.
+        let next = match detail.aylikSonrasiPekTuketimi {
+            Some(value) => value,
+            None => total.checked_add(detail.primMatrahi).ok_or_else(|| {
+                DomainError::InvalidData("Aynı-ay PEK toplamında Decimal taşması oluştu.".into())
+            })?,
+        };
+        let total = total.checked_add(next - total).ok_or_else(|| {
             DomainError::InvalidData("Aynı-ay PEK toplamında Decimal taşması oluştu.".into())
         })?;
         Ok(round2(total))
     })
+}
+
+#[derive(Debug, Default)]
+struct SameMonthPekReconciliation {
+    month_to_date_for_calculation: Decimal,
+    month_used_after: Option<Decimal>,
+    outgoing_non_wage: Vec<DevredenPekKaydi>,
+    active: bool,
+}
+
+fn canonical_event_pek_components(payroll: &BordroKaydi) -> (Decimal, Decimal) {
+    let meal = payroll.gelirler.yemek.unwrap_or_default();
+    let meal_exemption = payroll
+        .pekDetay
+        .as_ref()
+        .map(|detail| detail.yemekIstisnasiTutar)
+        .unwrap_or_default();
+    let sgk_tabi_yemek = (meal - meal_exemption).max(Decimal::ZERO);
+    let (wage, non_wage) = canonical_sgk_income_components(&payroll.gelirler, sgk_tabi_yemek);
+    (wage.max(Decimal::ZERO), non_wage.max(Decimal::ZERO))
+}
+
+/// Reconciles a prior provisional payment-month PEK allocation when an
+/// attendance-backed event reveals a lower monthly ceiling.  Wage earnings
+/// are allocated before non-wage earnings; only the canonical non-wage excess
+/// becomes carry.  Prior FINALIZED rows are never rewritten.
+fn reconcile_same_month_pek(
+    prior: &[&BordroKaydi],
+    current_income: &GelirKalemleri,
+    current_is_normal: bool,
+    current_meal_exemption: Decimal,
+    statutory_snapshot: &ResolvedStatutorySnapshot,
+    persisted_month_to_date: Decimal,
+) -> SameMonthPekReconciliation {
+    let has_provisional_prior = prior.iter().any(|payroll| {
+        payroll.accrualType != AccrualType::NORMAL
+            && (is_provisional_supplementary_payroll(payroll)
+                || payroll.pekDetay.as_ref().is_some_and(|detail| {
+                    detail.pekUstSinir > statutory_snapshot.pekUstSinir
+                }))
+    });
+    if !current_is_normal
+        || persisted_month_to_date <= statutory_snapshot.pekUstSinir
+        || !has_provisional_prior
+    {
+        return SameMonthPekReconciliation {
+            month_to_date_for_calculation: persisted_month_to_date,
+            ..SameMonthPekReconciliation::default()
+        };
+    }
+
+    let (prior_wage, prior_non_wage) = prior.iter().fold(
+        (Decimal::ZERO, Decimal::ZERO),
+        |(wage_total, non_wage_total), payroll| {
+            let (wage, non_wage) = canonical_event_pek_components(payroll);
+            (wage_total + wage, non_wage_total + non_wage)
+        },
+    );
+    let sgk_tabi_yemek = (current_income.yemek.unwrap_or_default() - current_meal_exemption)
+        .max(Decimal::ZERO);
+    let (current_wage, current_non_wage) =
+        canonical_sgk_income_components(current_income, sgk_tabi_yemek);
+    let current_wage = current_wage.max(Decimal::ZERO);
+    let current_non_wage = current_non_wage.max(Decimal::ZERO);
+    let capacity = statutory_snapshot.pekUstSinir.max(Decimal::ZERO);
+    let prior_wage_used = prior_wage.min(capacity);
+    let month_to_date_for_calculation = if current_wage > Decimal::ZERO {
+        prior_wage_used
+    } else {
+        (prior_wage + prior_non_wage).min(capacity)
+    };
+    let wage_used = (prior_wage + current_wage).min(capacity);
+    let non_wage_capacity = (capacity - wage_used).max(Decimal::ZERO);
+    let non_wage_used = (prior_non_wage + current_non_wage).min(non_wage_capacity);
+    let month_used_after = round2(wage_used + non_wage_used);
+    let excess_non_wage = round2(
+        (prior_non_wage + current_non_wage - non_wage_used).max(Decimal::ZERO),
+    );
+    let outgoing_non_wage = if excess_non_wage > Decimal::ZERO {
+        vec![DevredenPekKaydi {
+            tutar: excess_non_wage,
+            kalanAySayisi: 2,
+            kaynakDonemId: None,
+        }]
+    } else {
+        Vec::new()
+    };
+
+    SameMonthPekReconciliation {
+        month_to_date_for_calculation: round2(month_to_date_for_calculation),
+        month_used_after: Some(month_used_after),
+        outgoing_non_wage,
+        active: true,
+    }
 }
 
 fn same_month_gv_exemption_used(prior: &[&BordroKaydi]) -> Result<Decimal> {
@@ -1751,15 +1854,18 @@ pub(crate) fn incoming_devreden_pek_for_replay(
 }
 
 fn payroll_gv_base(payroll: &BordroKaydi) -> Result<Decimal> {
-    let base = payroll.gvDetay.as_ref().map_or_else(
-        || {
-            (calculate_gelir_toplam(&payroll.gelirler)
-                - payroll.kesintiler.isciSgkPrimi.unwrap_or_default()
-                - payroll.kesintiler.isciIssizlikPrimi.unwrap_or_default())
-            .max(Decimal::ZERO)
-        },
-        |detail| detail.cariGvMatrahi,
-    );
+    crate::validate_gv_base_reconciliation(payroll)?;
+    let base = payroll
+        .gvDetay
+        .as_ref()
+        .map(|detail| detail.cariGvMatrahi)
+        .or(payroll.persistedGvBase)
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} tahakkukunda authoritative GV matrahı eksik; legacy kayıt açık migration olmadan kümülatif zincire alınamaz.",
+                effective_accrual_id(payroll)
+            ))
+        })?;
     if base < Decimal::ZERO {
         return Err(DomainError::InvalidData(format!(
             "{} tahakkukunda negatif GV matrahı bulundu; kümülatif GV zinciri çözülemez.",
@@ -2576,6 +2682,9 @@ fn validate_payroll_request_with_index(
             DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId))
         })?;
     crate::validate_personnel_for_payroll(person)?;
+    for payroll in &request.dataset.payrolls {
+        crate::validate_payroll_snapshot_authority(payroll)?;
+    }
     let annual = index.annual_parameters(&request.dataset, period.taxYear).ok_or_else(|| {
         DomainError::InvalidData(format!("{} vergi yılı yıllık bordro parametreleri eksik.", period.taxYear))
     })?;
@@ -3096,13 +3205,16 @@ fn calculate_payroll_with_index(
         MealExemptionTotals::default()
     };
 
-    let month_to_date_pek = same_month_pek_used(&prior_accruals)?;
-    if month_to_date_pek > statutory_snapshot.pekUstSinir {
-        return Err(DomainError::InvalidData(format!(
-            "Aynı vergi ayında kullanılan PEK {}, {} döneminin aylık tavanı {} değerini aşıyor; zincir güvenli biçimde devam ettirilemez.",
-            month_to_date_pek, period.id, statutory_snapshot.pekUstSinir
-        )));
-    }
+    let persisted_month_to_date_pek = same_month_pek_used(&prior_accruals)?;
+    let pek_reconciliation = reconcile_same_month_pek(
+        &prior_accruals,
+        &income,
+        is_normal_accrual,
+        normal_meal_exemptions.sgk,
+        &statutory_snapshot,
+        persisted_month_to_date_pek,
+    );
+    let month_to_date_pek = pek_reconciliation.month_to_date_for_calculation;
     let same_month_gv_used = same_month_gv_exemption_used(&prior_accruals)?;
     let previous_cumulative_gv = previous_gv(dataset, index, &person, &period, &accrual)?;
     let previous_cumulative_asgari_gv = previous_asgari_gv(dataset, index, &person, &period)?;
@@ -3113,8 +3225,8 @@ fn calculate_payroll_with_index(
         previous_cumulative_asgari_gv,
         tax_brackets: &annual_parameters.gelirVergisiDilimleri,
     };
-    let (mut deductions, pek_detail, next_devreden) = if is_normal_accrual {
-        calculate_statutory_deductions_with_month_to_date_and_devreden_state(
+    let (mut deductions, mut pek_detail, mut next_devreden) = if is_normal_accrual {
+        calculate_statutory_contributions_with_month_to_date_and_devreden_state(
             &income,
             Some(&effective_settings),
             Some(&person),
@@ -3218,6 +3330,18 @@ fn calculate_payroll_with_index(
             next_devreden,
         )
     };
+    if pek_reconciliation.active {
+        // The old provisional snapshot remains immutable.  The current
+        // attendance-backed event records the reconciled monthly state and
+        // carries only the canonical non-wage excess forward.
+        next_devreden = pek_reconciliation.outgoing_non_wage;
+    }
+    pek_detail.aylikOncekiPekTuketimi = Some(month_to_date_pek);
+    pek_detail.aylikSonrasiPekTuketimi = Some(
+        pek_reconciliation
+            .month_used_after
+            .unwrap_or_else(|| round2(month_to_date_pek + pek_detail.primMatrahi)),
+    );
     let income_total = calculate_gelir_toplam(&income);
 
     let stamp_rate = effective_settings
@@ -3234,19 +3358,6 @@ fn calculate_payroll_with_index(
     } else {
         Decimal::ZERO
     };
-    let stamp_detail = calculate_monthly_stamp_tax_state(
-        (income_total - retro_stamp_tax_exempt - normal_meal_tax_exemption).max(Decimal::ZERO),
-        monthly_minimum,
-        stamp_rate,
-        same_month_stamp_used,
-    );
-    if same_month_stamp_used > stamp_detail.aylikDamgaIstisnaHakki {
-        return Err(DomainError::InvalidData(format!(
-            "Aynı vergi ayında kullanılan damga vergisi istisnası {}, aylık hak {} değerini aşıyor; zincir güvenli biçimde devam ettirilemez.",
-            same_month_stamp_used, stamp_detail.aylikDamgaIstisnaHakki
-        )));
-    }
-    deductions.damgaVergisi = Some(stamp_detail.kesilenDamgaVergisi);
 
     let sgk_rate = settings
         .sgkIsciOraniYuzde
@@ -3293,52 +3404,50 @@ fn calculate_payroll_with_index(
     let insurance_wage_base =
         (income_total - income.yemek.unwrap_or_default() - income.vasitaYol.unwrap_or_default())
             .max(Decimal::ZERO);
-    let mut gv_discount = calculate_gv_indirimleri(
-        insurance_wage_base,
-        birth_military,
-        life_insurance,
-        health_insurance,
-        insurance_cap,
-        insurance_used,
-    );
-    let gv_base_before_discounts = (income_total
-        - retro_income_tax_exempt
-        - deductions.isciSgkPrimi.unwrap_or_default()
-        - deductions.isciIssizlikPrimi.unwrap_or_default()
-        - normal_meal_tax_exemption
-        - deductions.sendikaAidati.unwrap_or_default())
-        .max(Decimal::ZERO);
-    gv_discount.dogum_askerlik_indirimi = gv_discount.dogum_askerlik_indirimi.min(gv_base_before_discounts);
-    // Only a deduction actually absorbed by the current tax base may consume
-    // the annual insurance allowance used by subsequent payment events.
-    gv_discount.uygulanabilir_sigorta_indirimi = gv_discount.uygulanabilir_sigorta_indirimi
-        .min(gv_base_before_discounts - gv_discount.dogum_askerlik_indirimi);
-    let gv_base = gv_base_before_discounts
-        - gv_discount.dogum_askerlik_indirimi
-        - gv_discount.uygulanabilir_sigorta_indirimi;
     let daily_minimum = statutory_snapshot.gvReferansGunlukAsgariUcret;
     let monthly_asgari_gv =
         calculate_aylik_asgari_ucret_gv_matrahi(daily_minimum, sgk_rate, unemployment_rate);
-    let mut gv_detail = calculate_gv_hesap_detayi_with_monthly_exemption_state(
-        gv_base,
+    let canonical_tax = calculate_canonical_tax_state(&CanonicalTaxCalculationInput {
+        income_total,
+        retro_income_tax_exempt,
+        retro_stamp_tax_exempt,
+        normal_meal_tax_exemption,
+        worker_sgk: deductions.isciSgkPrimi.unwrap_or_default(),
+        worker_unemployment: deductions.isciIssizlikPrimi.unwrap_or_default(),
+        union_deduction: deductions.sendikaAidati.unwrap_or_default(),
+        insurance_wage_base,
+        birth_military_gv_input: birth_military,
+        life_insurance_premium: life_insurance,
+        health_insurance_premium: health_insurance,
+        insurance_annual_cap: insurance_cap,
+        insurance_used_before: insurance_used,
         previous_cumulative_gv,
-        monthly_asgari_gv,
+        monthly_asgari_gv_matrahi: monthly_asgari_gv,
         previous_cumulative_asgari_gv,
         same_month_gv_used,
-        &annual_parameters.gelirVergisiDilimleri,
-    );
-    if same_month_gv_used > gv_detail.asgariUcretGvIstisnasi {
+        tax_brackets: &annual_parameters.gelirVergisiDilimleri,
+        monthly_minimum_gross: monthly_minimum,
+        stamp_rate,
+        same_month_stamp_used,
+    });
+    if same_month_gv_used > canonical_tax.gv.asgariUcretGvIstisnasi {
         return Err(DomainError::InvalidData(format!(
             "Aynı vergi ayında kullanılan GV istisnası {}, aylık hak {} değerini aşıyor; zincir güvenli biçimde devam ettirilemez.",
-            same_month_gv_used, gv_detail.asgariUcretGvIstisnasi
+            same_month_gv_used, canonical_tax.gv.asgariUcretGvIstisnasi
         )));
     }
-    gv_detail.dogumAskerlikGvIndirimi = gv_discount.dogum_askerlik_indirimi;
-    gv_detail.sigortaGvIndirimAdayi = gv_discount.sigorta_adayi;
-    gv_detail.sigortaGvAylikLimiti = gv_discount.sigorta_aylik_limiti;
-    gv_detail.sigortaGvYillikKalanLimiti = gv_discount.sigorta_yillik_kalan_limiti;
-    gv_detail.uygulanabilirSigortaGvIndirimi = gv_discount.uygulanabilir_sigorta_indirimi;
-    deductions.gelirVergisi = Some(gv_detail.kesilenGelirVergisi);
+    if same_month_stamp_used > canonical_tax.stamp.aylikDamgaIstisnaHakki {
+        return Err(DomainError::InvalidData(format!(
+            "Aynı vergi ayında kullanılan damga vergisi istisnası {}, aylık hak {} değerini aşıyor; zincir güvenli biçimde devam ettirilemez.",
+            same_month_stamp_used, canonical_tax.stamp.aylikDamgaIstisnaHakki
+        )));
+    }
+    deductions.gelirVergisi = Some(canonical_tax.gv.kesilenGelirVergisi);
+    deductions.damgaVergisi = Some(canonical_tax.stamp.kesilenDamgaVergisi);
+    let gv_base = canonical_tax.gv_base;
+    let gv_detail = canonical_tax.gv;
+    let stamp_detail = canonical_tax.stamp;
+    crate::validate_ordinary_payroll_line_items(&income, &deductions)?;
 
     let deduction_total = calculate_kesinti_toplam(&deductions);
     let net_payment = round2(income_total - deduction_total);
@@ -3388,6 +3497,7 @@ fn calculate_payroll_with_index(
         pekDetay: Some(pek_detail),
         isPrimiDetay: is_primi_detail,
         gvDetay: Some(gv_detail),
+        persistedGvBase: Some(gv_base),
         damgaDetay: Some(stamp_detail),
         statutorySnapshot: Some(statutory_snapshot),
         odenenRaporluGun: Some(paid_sick_days),
@@ -3455,6 +3565,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: None,
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,
@@ -3567,6 +3678,48 @@ mod tests {
             taxOpenings: tax_openings,
             ..PayrollDatasetSnapshot::default()
         }
+    }
+
+    #[test]
+    fn legacy_persisted_gv_base_survives_reload_and_starts_next_cumulative_chain() {
+        let prior_period = valid_tax_period("2026-04", 2026, 4, 2026, 5);
+        let active_period = valid_tax_period("2026-05", 2026, 5, 2026, 6);
+        let person = test_person("person-1");
+        let mut prior = event(
+            &prior_period.id,
+            prior_period.taxMonth,
+            "legacy-gv-event",
+            AccrualType::NORMAL,
+            BordroStatus::CALCULATED,
+            0,
+        );
+        prior.gvDetay = None;
+        prior.persistedGvBase = Some(dec!(27500));
+        let mut dataset = test_dataset(
+            vec![prior_period.clone(), active_period.clone()],
+            person.clone(),
+            vec![
+                test_settings(&prior_period.id, dec!(1000)),
+                test_settings(&active_period.id, dec!(1000)),
+            ],
+            Vec::new(),
+        );
+        dataset.payrolls.push(prior.clone());
+        let index = PayrollDatasetIndex::build(&dataset);
+
+        assert_eq!(payroll_gv_base(&prior).unwrap(), dec!(27500));
+        assert_eq!(
+            previous_gv(&dataset, &index, &person, &active_period, &PayrollAccrualInput {
+                accrualId: "next-event".into(),
+                accrualType: AccrualType::NORMAL,
+                paymentDate: "2026-06-10".into(),
+                sequence: 0,
+                grossAmount: None,
+                description: None,
+            })
+            .unwrap(),
+            dec!(27500)
+        );
     }
 
     #[test]

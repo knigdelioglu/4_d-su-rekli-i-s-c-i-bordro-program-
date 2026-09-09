@@ -1,11 +1,15 @@
+import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import { serializePayrollStorage } from '../payrollEngine/decimalBoundary';
 import {
   isSupportedLegacyBackupPayload,
   parseCurrentBrowserSnapshot,
+  parseImportedBackup,
   parseLegacyBackup,
 } from './payrollPayload';
 
 export { isSupportedLegacyBackupPayload as isMigratableBackupPayload } from './payrollPayload';
+
+export type BrowserSnapshotSourceFormat = 'current' | 'legacy' | 'unknown';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const DATABASE_NAME = '4d-bordro-programi';
@@ -16,6 +20,8 @@ const CURRENT_SNAPSHOT_KEY = 'current';
 export interface BrowserPayrollSnapshot {
   payload: string;
   revision: number;
+  /** `unknown` keeps pre-marker envelopes on the compatibility path. */
+  sourceFormat?: BrowserSnapshotSourceFormat;
 }
 
 export interface BrowserRemoteSnapshotDecisionInput {
@@ -106,7 +112,11 @@ function decodeStoredSnapshot(value: unknown): BrowserPayrollSnapshot | null {
       'IndexedDB mevcut snapshotı geçersiz; kayıt payload/revision zarfı olmalıdır ve snapshot değiştirilmedi.'
     );
   }
-  const record = value as { payload?: unknown; revision?: unknown };
+  const record = value as {
+    payload?: unknown;
+    revision?: unknown;
+    sourceFormat?: unknown;
+  };
   if (
     typeof record.payload !== 'string' ||
     typeof record.revision !== 'number' ||
@@ -117,7 +127,21 @@ function decodeStoredSnapshot(value: unknown): BrowserPayrollSnapshot | null {
       'IndexedDB mevcut snapshotı geçersiz; payload string ve revision negatif olmayan tam sayı olmalıdır.'
     );
   }
-  return { payload: record.payload, revision: record.revision };
+  if (
+    record.sourceFormat !== undefined
+    && record.sourceFormat !== 'current'
+    && record.sourceFormat !== 'legacy'
+    && record.sourceFormat !== 'unknown'
+  ) {
+    throw new Error(
+      'IndexedDB mevcut snapshotı geçersiz; sourceFormat current/legacy/unknown olmalıdır.'
+    );
+  }
+  return {
+    payload: record.payload,
+    revision: record.revision,
+    sourceFormat: (record.sourceFormat as BrowserSnapshotSourceFormat | undefined) ?? 'unknown',
+  };
 }
 
 function readSnapshotFromDatabase(database: IDBDatabase): Promise<BrowserPayrollSnapshot | null> {
@@ -138,7 +162,8 @@ function readSnapshotFromDatabase(database: IDBDatabase): Promise<BrowserPayroll
 function writeSnapshotToDatabase(
   database: IDBDatabase,
   payload: string,
-  expectedRevision: number
+  expectedRevision: number,
+  sourceFormat: BrowserSnapshotSourceFormat
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(OBJECT_STORE, 'readwrite');
@@ -177,12 +202,14 @@ function writeSnapshotToDatabase(
           return;
         }
 
-        nextRevision = current?.payload === payload
+        const sameSnapshot = current?.payload === payload
+          && current?.sourceFormat === sourceFormat;
+        nextRevision = sameSnapshot
           ? currentRevision
           : currentRevision + 1;
-        if (nextRevision !== currentRevision) {
+        if (nextRevision !== currentRevision || !sameSnapshot) {
           const writeRequest = store.put(
-            { payload, revision: nextRevision },
+            { payload, revision: nextRevision, sourceFormat },
             CURRENT_SNAPSHOT_KEY
           );
           writeRequest.onerror = () =>
@@ -199,17 +226,66 @@ function writeSnapshotToDatabase(
 async function writeAndVerify(
   database: IDBDatabase,
   payload: string,
-  expectedRevision: number
+  expectedRevision: number,
+  sourceFormat: BrowserSnapshotSourceFormat
 ): Promise<number> {
-  const revision = await writeSnapshotToDatabase(database, payload, expectedRevision);
+  const revision = await writeSnapshotToDatabase(
+    database,
+    payload,
+    expectedRevision,
+    sourceFormat
+  );
   const readBack = await readSnapshotFromDatabase(database);
-  if (!readBack || readBack.payload !== payload || readBack.revision < revision) {
+  if (
+    !readBack
+    || readBack.payload !== payload
+    || readBack.revision < revision
+    || readBack.sourceFormat !== sourceFormat
+  ) {
     if (readBack && readBack.revision !== revision) {
       throw new BrowserSnapshotConflictError(revision, readBack.revision);
     }
     throw new Error('IndexedDB snapshot doğrulaması başarısız; yazılan veri geri okunamadı.');
   }
   return readBack.revision;
+}
+
+function parseStoredSnapshotPayload(
+  stored: BrowserPayrollSnapshot
+): { payload: string; sourceFormat: BrowserSnapshotSourceFormat } {
+  const raw = JSON.parse(stored.payload) as { backupVersion?: unknown };
+  if (stored.sourceFormat === 'current') {
+    return {
+      payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload)),
+      sourceFormat: 'current',
+    };
+  }
+  if (raw.backupVersion === BACKUP_FORMAT_VERSION) {
+    // V5 envelopes written before the source marker may still be either a
+    // complete current snapshot or an older sparse shape. Promote only the
+    // former after the strict parser succeeds; keep the latter on the
+    // explicit legacy compatibility path.
+    try {
+      return {
+        payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload)),
+        sourceFormat: 'current',
+      };
+    } catch {
+      // The compatibility parser below is intentionally limited to the
+      // missing persisted-GV authority that predates this marker. Any other
+      // malformed/current financial data still fails there.
+    }
+    return {
+      payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload, {
+        allowLegacyMissingGvBase: true,
+      })),
+      sourceFormat: 'legacy',
+    };
+  }
+  return {
+    payload: serializePayrollStorage(parseImportedBackup(stored.payload)),
+    sourceFormat: 'legacy',
+  };
 }
 
 /** Browser-only persistence. IndexedDB is the only authoritative payroll store. */
@@ -260,16 +336,22 @@ export class BrowserPayrollStore {
         // fields from before taxOpenings became authoritative. The parser
         // repairs only an exact, unambiguous period match; persist that repair
         // under the same CAS revision before exposing the snapshot to App.
-        const repairedPayload = serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload));
+        const parsedStored = parseStoredSnapshotPayload(stored);
+        const repairedPayload = parsedStored.payload;
         if (repairedPayload !== stored.payload) {
           try {
             const revision = await writeAndVerify(
               database,
               repairedPayload,
-              stored.revision
+              stored.revision,
+              parsedStored.sourceFormat
             );
             this.knownRevision = revision;
-            return { payload: repairedPayload, revision };
+            return {
+              payload: repairedPayload,
+              revision,
+              sourceFormat: parsedStored.sourceFormat,
+            };
           } catch (error) {
             if (!(error instanceof BrowserSnapshotConflictError)) throw error;
             const concurrent = await readSnapshotFromDatabase(database);
@@ -279,7 +361,10 @@ export class BrowserPayrollStore {
           }
         }
         this.knownRevision = stored.revision;
-        return stored;
+        return {
+          ...stored,
+          sourceFormat: parsedStored.sourceFormat,
+        };
       }
 
       // Migrate only after the versioned payload has been read successfully.
@@ -299,7 +384,7 @@ export class BrowserPayrollStore {
       // authoritative IndexedDB snapshot.
       const canonicalLegacy = canonicalizeLegacyBackupPayload(legacy);
       try {
-        const revision = await writeAndVerify(database, canonicalLegacy, 0);
+        const revision = await writeAndVerify(database, canonicalLegacy, 0, 'legacy');
         this.knownRevision = revision;
       } catch (error) {
         if (!(error instanceof BrowserSnapshotConflictError)) throw error;
@@ -318,7 +403,11 @@ export class BrowserPayrollStore {
     return (await this.loadSnapshot())?.payload ?? null;
   }
 
-  async savePayload(payload: string, expectedRevision?: number): Promise<number> {
+  async savePayload(
+    payload: string,
+    expectedRevision?: number,
+    sourceFormat: BrowserSnapshotSourceFormat = 'current'
+  ): Promise<number> {
     if (!hasIndexedDb()) {
       throw new Error(
         'Tarayıcı bordro verisi kaydedilemedi: IndexedDB desteği bulunamadı. Payroll persistence devre dışı bırakıldı.'
@@ -328,7 +417,10 @@ export class BrowserPayrollStore {
     // Do not let a caller turn an unvalidated string into authoritative state.
     // The same current V5 schema used on load protects every normal browser
     // write; legacy conversion writes only its already-validated canonical form.
-    parseCurrentBrowserSnapshot(payload);
+    parseCurrentBrowserSnapshot(
+      payload,
+      sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }
+    );
 
     return this.writeQueue.enqueue(async () => {
       const database = await openDatabase();
@@ -336,10 +428,11 @@ export class BrowserPayrollStore {
         const revision = await writeAndVerify(
           database,
           payload,
-          expectedRevision ?? this.knownRevision ?? 0
+          expectedRevision ?? this.knownRevision ?? 0,
+          sourceFormat
         );
         this.knownRevision = revision;
-        this.channel?.postMessage({ payload, revision });
+        this.channel?.postMessage({ payload, revision, sourceFormat });
         return revision;
       } finally {
         database.close();

@@ -301,6 +301,7 @@ fn payroll_record(
         pekDetay: None,
         isPrimiDetay: None,
         gvDetay: None,
+        persistedGvBase: None,
         damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),

@@ -188,6 +188,7 @@ export default function App() {
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const payrollEngine = getPayrollEngine();
 
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
     string | undefined
@@ -198,6 +199,7 @@ export default function App() {
     authoritativePayload,
     isDataLoaded,
     isNative: tauriBridge.isTauriAvailable(),
+    payrollEngine,
     setAuthoritativePayload,
     setIsDataLoaded,
     setLoadError,
@@ -396,7 +398,6 @@ export default function App() {
   };
 
   const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
-  const payrollEngine = getPayrollEngine();
   const payrollDataset = useMemo<PayrollDatasetSnapshot>(() => {
     if (authoritativePayload) {
       return {
@@ -467,6 +468,7 @@ export default function App() {
     isDataLoaded,
     browserPersistence,
     evaluateBrowserMutations,
+    payrollEngine,
     loadData,
     setAuthoritativePayload,
     setIsDataLoaded,

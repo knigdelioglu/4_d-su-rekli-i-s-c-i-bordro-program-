@@ -273,7 +273,7 @@ fn test_audit_direct_statutory_deductions_union_fee_deduction() {
         tax_brackets: &brackets,
     };
 
-    let (kesintiler, _pek, _) = calculate_statutory_deductions_with_tax_brackets(
+    let (kesintiler, _pek, _) = calculate_legacy_statutory_deductions_with_tax_brackets(
         &gelirler,
         Some(&kurum),
         Some(&person),

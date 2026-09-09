@@ -76,6 +76,9 @@ fn payroll(accrual_type: AccrualType, sequence: i32, net: rust_decimal::Decimal)
         pekDetay: None,
         isPrimiDetay: None,
         gvDetay: None,
+        // Sparse legacy rows have no rich GV snapshot, but the SQLite scalar
+        // remains the authoritative value used by the next cumulative event.
+        persistedGvBase: Some(dec!(27500)),
         damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: None,
@@ -89,6 +92,8 @@ fn reconciled_payroll(accrual_type: AccrualType, sequence: i32) -> BordroKaydi {
         hamPek: dec!(100),
         devredenPekKullanilan: dec!(0),
         primMatrahi: dec!(100),
+        aylikOncekiPekTuketimi: None,
+        aylikSonrasiPekTuketimi: None,
         finalPek: dec!(100),
         devredenPekAşanTutar: dec!(0),
         pekAltSinir: dec!(0),
@@ -179,6 +184,7 @@ fn reconciled_payroll(accrual_type: AccrualType, sequence: i32) -> BordroKaydi {
         pekDetay: Some(pek),
         isPrimiDetay: None,
         gvDetay: Some(gv),
+        persistedGvBase: Some(dec!(85)),
         damgaDetay: Some(damga),
         statutorySnapshot: Some(statutory),
         odenenRaporluGun: Some(0),
@@ -208,7 +214,10 @@ fn source_mutation_rolls_back_when_invalidation_fails() -> Result<(), Box<dyn st
         gunler: HashMap::from([(String::from("2026-05-15"), String::from("Ç"))]),
     };
     AttendanceRepository::save(&conn, &original)?;
-    PayrollRepository::save(&conn, &payroll(AccrualType::NORMAL, 0, dec!(90)))?;
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &payroll(AccrualType::NORMAL, 0, dec!(90)),
+    )?;
 
     conn.execute_batch(
         "CREATE TRIGGER fail_payroll_stale
@@ -263,6 +272,13 @@ fn strict_restore_boundary_rejects_tampered_totals_for_every_accrual_type() {
 #[test]
 fn strict_restore_reconciles_gv_damga_and_pek_snapshots() {
     let conn = reconciliation_connection();
+
+    let mut gv_base_mismatch = reconciled_payroll(AccrualType::NORMAL, 9);
+    gv_base_mismatch.persistedGvBase = Some(dec!(86));
+    assert!(matches!(
+        PayrollRepository::save_in_transaction(&conn, &gv_base_mismatch),
+        Err(DomainError::InvalidData(_))
+    ));
 
     let mut gv_snapshot = reconciled_payroll(AccrualType::NORMAL, 10);
     gv_snapshot.gvDetay.as_mut().unwrap().kesilenGelirVergisi = dec!(1);
@@ -332,13 +348,14 @@ fn strict_restore_accepts_valid_payment_events_and_retro_source_deltas() {
 fn legacy_sparse_normal_snapshot_remains_writable_and_full_snapshot_roundtrips() {
     let conn = reconciliation_connection();
     let legacy = payroll(AccrualType::NORMAL, 30, dec!(90));
-    PayrollRepository::save_in_transaction(&conn, &legacy).unwrap();
+    PayrollRepository::save_legacy_in_transaction(&conn, &legacy).unwrap();
 
     let mut loaded = PayrollRepository::get_all(&conn)
         .unwrap()
         .into_iter()
         .find(|item| item.id == legacy.id)
         .unwrap();
+    assert_eq!(loaded.persistedGvBase, Some(dec!(27500)));
     loaded.kesintiler.digerKesinti = Some(dec!(11));
     loaded.kesintiToplam = dec!(11);
     loaded.netOdeme = dec!(89);

@@ -22,6 +22,12 @@ export interface PayrollPayloadValidationOptions {
    * repaired explicitly; current canonical snapshots remain strict.
    */
   allowLegacyTaxOpeningYearMismatch?: boolean;
+  /**
+   * Legacy browser envelopes may already have been canonicalized to the V5
+   * DTO while still lacking the later persisted GV scalar. Keep that
+   * compatibility exception explicit; raw/current V5 imports remain strict.
+   */
+  allowLegacyMissingGvBase?: boolean;
 }
 
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
@@ -362,6 +368,9 @@ function validatePekDetayi(value: unknown, path: string): void {
   ['hamPek', 'devredenPekKullanilan', 'primMatrahi', 'altSinirTamamlamaFarki'].forEach((key) =>
     optionalNonNullableDecimal(value, key, path)
   );
+  ['aylikOncekiPekTuketimi', 'aylikSonrasiPekTuketimi'].forEach((key) =>
+    optionalDecimal(value, key, path)
+  );
   requiredInteger(value, 'fiiliYemekGunu', path);
   [
     'isverenSgkPrimi',
@@ -670,6 +679,7 @@ export function validateBordroKaydi(
   optionalNullableRecord(value, 'pekDetay', path, validatePekDetayi);
   optionalNullableRecord(value, 'isPrimiDetay', path, validateIsPrimiHesapDetayi);
   optionalNullableRecord(value, 'gvDetay', path, validateGvHesapDetayi);
+  optionalDecimal(value, 'persistedGvBase', path);
   optionalNullableRecord(value, 'damgaDetay', path, validateDamgaVergisiHesapDetayi);
   optionalNullableRecord(value, 'statutorySnapshot', path, validateResolvedStatutorySnapshot);
   optionalNullableInteger(value, 'odenenRaporluGun', path);
@@ -852,10 +862,70 @@ function sumPayrollPaymentFields(
   }, 0n);
 }
 
+function assertNonNegativePayrollLineItems(
+  payroll: PayrollStorageDto['bordrolar'][number],
+  path: string
+): void {
+  // RETRO payment snapshots can expose signed source-month premium
+  // adjustments. Those signed deltas belong to the retro ledger; ordinary
+  // NORMAL/supplementary line items remain non-negative.
+  if (payroll.accrualType === 'RETRO_ADJUSTMENT') return;
+  const checks: ReadonlyArray<readonly [string, unknown, string]> = [
+    ...PAYROLL_PAYMENT_INCOME_KEYS.map((key) => [
+      key,
+      (payroll.gelirler as unknown as UnknownRecord)[key],
+      `${path}.gelirler`,
+    ] as const),
+    ...PAYROLL_PAYMENT_DEDUCTION_KEYS.map((key) => [
+      key,
+      (payroll.kesintiler as unknown as UnknownRecord)[key],
+      `${path}.kesintiler`,
+    ] as const),
+  ];
+  checks.forEach(([key, value, fieldPathPrefix]) => {
+    if (value === undefined || value === null) return;
+    if (typeof value !== 'string') {
+      fail(fieldPath(fieldPathPrefix, key), 'parasal değer exact Decimal metni olmalıdır.');
+    }
+    if (paymentCents(value, fieldPath(fieldPathPrefix, key)) < 0n) {
+      fail(fieldPath(fieldPathPrefix, key), 'ordinary payroll line item negatif olamaz.');
+    }
+  });
+}
+
+function assertGvBaseReconciliation(
+  payroll: PayrollStorageDto['bordrolar'][number],
+  path: string,
+  options: PayrollPayloadValidationOptions
+): void {
+  const persisted = payroll.persistedGvBase;
+  const detail = payroll.gvDetay?.cariGvMatrahi;
+  const isAuthoritativeStatus = payroll.status === 'CALCULATED' || payroll.status === 'FINALIZED';
+  if (!options.allowLegacyMissingGvBase && isAuthoritativeStatus && (persisted === undefined || persisted === null || detail === undefined || detail === null)) {
+    fail(
+      path,
+      'current authoritative snapshot persisted GV matrahı ile GV snapshot cari matrahını birlikte taşımalıdır.'
+    );
+  }
+  if (persisted === undefined || persisted === null || detail === undefined || detail === null) {
+    return;
+  }
+  if (
+    paymentCents(persisted, `${path}.persistedGvBase`) !==
+    paymentCents(detail, `${path}.gvDetay.cariGvMatrahi`)
+  ) {
+    fail(
+      path,
+      'persisted GV matrahı ile GV snapshot cari matrahı eşleşmiyor; current snapshot authority reddedildi.'
+    );
+  }
+}
+
 function assertPayrollFinancialTotals(
   payroll: PayrollStorageDto['bordrolar'][number],
   path: string
 ): void {
+  assertNonNegativePayrollLineItems(payroll, path);
   const gross = sumPayrollPaymentFields(
     payroll.gelirler as unknown as UnknownRecord,
     PAYROLL_PAYMENT_INCOME_KEYS,
@@ -1132,6 +1202,7 @@ function assertCrossRecordIntegrity(
     if (!sparseLegacyFinancials) {
       assertPayrollFinancialTotals(payroll, payrollPath);
     }
+    assertGvBaseReconciliation(payroll, payrollPath, options);
     if (!personnelIds.has(payroll.personelId)) {
       fail(`$.bordrolar[${index}].personelId`, `mevcut olmayan personel kimliği: ${payroll.personelId}.`);
     }

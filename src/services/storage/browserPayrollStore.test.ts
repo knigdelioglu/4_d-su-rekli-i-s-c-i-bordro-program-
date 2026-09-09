@@ -14,8 +14,10 @@ import {
   parseLegacyBackup,
   repairAndCanonicalizeBackup,
   repairLegacyPersonTaxOpenings,
+  verifyCurrentPayrollBackupReplay,
 } from './payrollPayload';
 import { serializePayrollStorage, type PayrollStorageDto } from '../payrollEngine/decimalBoundary';
+import type { PayrollEngine } from '../payrollEngine/types';
 
 type TestRecord = Record<string, unknown>;
 
@@ -192,6 +194,7 @@ function makeRealisticSnapshot(): PayrollStorageDto {
       sigortaGvYillikKalanLimiti: '0.00',
       uygulanabilirSigortaGvIndirimi: '0.00',
     },
+    persistedGvBase: '3000.00',
     damgaDetay: {
       brutDamgaVergisi: '0.00',
       aylikDamgaIstisnaHakki: '0.00',
@@ -384,6 +387,32 @@ function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
 }
 
 describe('BrowserPayrollStore', () => {
+  test('current backup replay verifier accepts the canonical result and rejects a forged snapshot', async () => {
+    const payload = parseCurrentBrowserSnapshot(makeV2Snapshot('3000.00'));
+    const canonicalResult = payload.bordrolar[0];
+    const engine = {
+      kind: 'wasm',
+      calculatePayroll: async () => canonicalResult,
+    } as unknown as PayrollEngine;
+
+    await verifyCurrentPayrollBackupReplay(payload, engine);
+
+    const forged = structuredClone(payload);
+    forged.bordrolar[0].persistedGvBase = '3001.00';
+    forged.bordrolar[0].gvDetay = {
+      ...forged.bordrolar[0].gvDetay!,
+      cariGvMatrahi: '3001.00',
+      yeniKumulatifGvMatrahi: '3001.00',
+    };
+    let error: unknown;
+    try {
+      await verifyCurrentPayrollBackupReplay(forged, engine);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(String(error).includes('V5 backup replay')).toBe(true);
+  });
+
   test('does not fall back to localStorage when IndexedDB is unavailable', async () => {
     const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -1205,6 +1234,36 @@ describe('BrowserPayrollStore', () => {
 describe('SQLite persistence invariant parity', () => {
   test('accepts the unique realistic snapshot', () => {
     expect(() => parseCurrentBrowserSnapshot(makeV2Snapshot())).not.toThrow();
+  });
+
+  test('rejects negative ordinary income and deduction line items at the current boundary', () => {
+    const negativeIncome = parseTestSnapshot(makeV2Snapshot('3000.00'));
+    (firstRecord(negativeIncome, 'bordrolar').gelirler as TestRecord).digerGelir = '-0.01';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(negativeIncome))).toThrow(
+      'ordinary payroll line item negatif olamaz'
+    );
+
+    const negativeDeduction = parseTestSnapshot(makeV2Snapshot('3000.00'));
+    (firstRecord(negativeDeduction, 'bordrolar').kesintiler as TestRecord).icra = '-10.00';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(negativeDeduction))).toThrow(
+      'ordinary payroll line item negatif olamaz'
+    );
+  });
+
+  test('rejects a current GV base scalar that disagrees with the snapshot detail', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot('3000.00'));
+    firstRecord(payload, 'bordrolar').persistedGvBase = '3001.00';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).toThrow(
+      'persisted GV matrahı ile GV snapshot cari matrahı eşleşmiyor'
+    );
+  });
+
+  test('rejects a current authoritative snapshot without the persisted GV base', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot('3000.00'));
+    delete firstRecord(payload, 'bordrolar').persistedGvBase;
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).toThrow(
+      'current authoritative snapshot persisted GV matrahı ile GV snapshot cari matrahını birlikte taşımalıdır'
+    );
   });
 
   test('repairs an unambiguous legacy person opening into the canonical pair', () => {

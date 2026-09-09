@@ -1,5 +1,5 @@
 use bordro_programi_lib::domain::calculations::{
-    calculate_statutory_deductions_with_tax_brackets, default_gelir_vergisi_dilimleri_2026,
+    calculate_legacy_statutory_deductions_with_tax_brackets, default_gelir_vergisi_dilimleri_2026,
     StatutoryDeductionTaxInputs,
 };
 use bordro_programi_lib::domain::models::*;
@@ -76,7 +76,7 @@ fn zero_gross_with_used_deferred_pek_still_accrues_worker_premiums_and_oks() {
         tax_brackets: &brackets,
     };
 
-    let (kesintiler, pek, sonraki) = calculate_statutory_deductions_with_tax_brackets(
+    let (kesintiler, pek, sonraki) = calculate_legacy_statutory_deductions_with_tax_brackets(
         &gelirler,
         Some(&kurum),
         Some(&personel),

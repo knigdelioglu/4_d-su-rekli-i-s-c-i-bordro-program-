@@ -9,6 +9,7 @@ use payroll_core::{
     PersonelPuantaj, RetroAdjustmentBatch, RetroAllocation, RetroEarningCode,
     RetroEntitlementEngine, RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment,
     RetroTaxTreatment, SickLeaveRecord,
+    StatutoryParameterSegment,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -714,6 +715,65 @@ fn source_month_worker_sgk_is_deducted_once_from_retro_gv_base() {
         payment.netOdeme,
         payment.gelirToplam - payment.kesintiToplam
     );
+}
+
+#[test]
+fn retro_source_replay_uses_segmented_meal_capacity() {
+    let source_period = period("2026-01", "2026-01-15", "2026-02-14", 2);
+    let mut source = dataset(&[source_period], dec!(100), dec!(100));
+    let settings = source
+        .institutionSettings
+        .get_mut("2026-01")
+        .expect("source settings");
+    settings.gunlukYemek = dec!(200);
+    settings.gunlukYemekIstisnasiSGK = Some(dec!(1000));
+    settings.gunlukYemekIstisnasiGV = Some(dec!(1000));
+    settings.statutoryParameterSegments = Some(vec![StatutoryParameterSegment {
+        effectiveFrom: "2026-02-01".into(),
+        gunlukYemekIstisnasiSGK: Some(dec!(200)),
+        gunlukYemekIstisnasiGV: Some(dec!(200)),
+        ..StatutoryParameterSegment::default()
+    }]);
+    let attendance = source
+        .attendances
+        .get_mut(0)
+        .expect("source attendance");
+    for (date, code) in &mut attendance.gunler {
+        *code = if date == "2026-01-15" || date == "2026-02-01" {
+            "Ç".into()
+        } else {
+            "T".into()
+        };
+    }
+
+    let original = normal_payroll(&source, "2026-01", "2026-02-10", 0);
+    assert_eq!(original.gelirler.yemek, Some(dec!(400)));
+    source.payrolls.push(original);
+
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-segmented-meal",
+        revision("rev-segmented-meal", "2026-02-01"),
+        vec![CompensationRevisionOverride {
+            id: "ov-segmented-meal".into(),
+            revisionId: "rev-segmented-meal".into(),
+            parameter: RetroParameterKey::GUNLUK_YEMEK,
+            value: dec!(4000),
+            personnelId: None,
+        }],
+        "2026-06-20",
+    ))
+    .expect("segmented meal retro should calculate");
+
+    let meal = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::MEAL)
+        .expect("meal allocation should exist");
+    assert_eq!(meal.originalRecognizedAmount, dec!(400));
+    assert_eq!(meal.targetAmount, dec!(4200));
+    assert_eq!(meal.deltaAmount, dec!(3800));
+    assert_eq!(meal.retroPekDelta, dec!(3800));
 }
 
 #[test]

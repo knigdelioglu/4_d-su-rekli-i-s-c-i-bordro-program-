@@ -157,6 +157,12 @@ fi
 # Gatekeeper karantina bayrağını temizle
 xattr -cr "$TARGET_DIR" 2>/dev/null || true
 
+# Proje içindeki app/ klasörüne de kopyala
+mkdir -p "$SCRIPT_DIR/app"
+rm -rf "$SCRIPT_DIR/app/$APP_BASENAME"
+cp -R "$FOUND_APP" "$SCRIPT_DIR/app/" 2>/dev/null || true
+xattr -cr "$SCRIPT_DIR/app/$APP_BASENAME" 2>/dev/null || true
+
 echo
 echo "=========================================="
 echo "🎉 Kurulum Başarıyla Tamamlandı!"

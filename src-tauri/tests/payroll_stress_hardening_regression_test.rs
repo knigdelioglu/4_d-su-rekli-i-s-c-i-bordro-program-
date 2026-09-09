@@ -186,6 +186,7 @@ fn prior_payroll_with_devreden(
         pekDetay: None,
         isPrimiDetay: None,
         gvDetay: None,
+        persistedGvBase: None,
         damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
@@ -212,10 +213,10 @@ fn setup_devreden_case(
     SettingsRepository::save_institution_settings(&conn, &settings(&active.id))?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
 
-    PayrollRepository::save(
-        &conn,
-        &prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2),
-    )?;
+    let prior_payroll = prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2);
+    bordro_programi_lib::repositories::transaction::with_transaction(&conn, |tx| {
+        PayrollRepository::save_legacy_in_transaction(tx, &prior_payroll)
+    })?;
     AttendanceRepository::save(
         &conn,
         &attendance_from_codes(personnel_id, &active, active_codes),

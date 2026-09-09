@@ -124,9 +124,12 @@ fn payroll_with_snapshots(personnel_id: &str, period_id: &str) -> BordroKaydi {
             ..GelirKalemleri::default()
         },
         gelirToplam: dec!(100000),
-        kesintiler: KesintiKalemleri::default(),
-        kesintiToplam: dec!(0),
-        netOdeme: dec!(100000),
+        kesintiler: KesintiKalemleri {
+            gelirVergisi: Some(dec!(8500)),
+            ..KesintiKalemleri::default()
+        },
+        kesintiToplam: dec!(8500),
+        netOdeme: dec!(91500),
         status: BordroStatus::CALCULATED,
         olusturulmaTarihi: "2026-08-01T00:00:00Z".into(),
         sonGuncellemeTarihi: "2026-08-01T00:00:00Z".into(),
@@ -145,6 +148,8 @@ fn payroll_with_snapshots(personnel_id: &str, period_id: &str) -> BordroKaydi {
             hamPek: dec!(100000),
             devredenPekKullanilan: dec!(5000),
             primMatrahi: dec!(105000),
+            aylikOncekiPekTuketimi: None,
+            aylikSonrasiPekTuketimi: None,
             finalPek: dec!(105000),
             devredenPekAşanTutar: dec!(0),
             pekAltSinir: dec!(33030),
@@ -179,6 +184,7 @@ fn payroll_with_snapshots(personnel_id: &str, period_id: &str) -> BordroKaydi {
             sigortaGvYillikKalanLimiti: dec!(0),
             uygulanabilirSigortaGvIndirimi: dec!(0),
         }),
+        persistedGvBase: Some(dec!(50000)),
         damgaDetay: None,
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
@@ -333,6 +339,7 @@ fn multi_accrual_does_not_drop_earlier_records_or_bracket_transitions() {
     p2.paymentDate = "2026-08-14".into();
     p2.sequence = 2;
     p2.devredenPekGelen = Some(Vec::new());
+    p2.oncekiKumulatifGvMatrahi = Some(dec!(230000));
     if let Some(pek) = p2.pekDetay.as_mut() {
         pek.devredenPekKullanilan = dec!(0);
     }
@@ -341,6 +348,7 @@ fn multi_accrual_does_not_drop_earlier_records_or_bracket_transitions() {
         gv.cariGvMatrahi = dec!(20000);
         gv.yeniKumulatifGvMatrahi = dec!(250000);
     }
+    p2.persistedGvBase = Some(dec!(20000));
 
     PayrollRepository::save(&conn, &p1).unwrap();
     PayrollRepository::save(&conn, &p2).unwrap();
@@ -361,4 +369,3 @@ fn multi_accrual_does_not_drop_earlier_records_or_bracket_transitions() {
         .expect("tax bracket transition must exist across multi-accrual period");
     assert_eq!(tax.severity, PayrollNoticeSeverity::Warning);
 }
-

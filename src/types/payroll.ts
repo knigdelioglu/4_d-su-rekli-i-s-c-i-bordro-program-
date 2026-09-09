@@ -503,6 +503,10 @@ export interface PekDetayi {
   devredenPekKullanilan?: number;
   /** Authoritative worker-prime base before artificial lower-bound completion. */
   primMatrahi?: number;
+  /** Same tax-month PEK consumption immediately before this accrual. */
+  aylikOncekiPekTuketimi?: number | null;
+  /** Same tax-month PEK consumption immediately after this accrual. */
+  aylikSonrasiPekTuketimi?: number | null;
   finalPek: number;
   devredenPekAşanTutar: number;
   pekAltSinir: number;
@@ -548,6 +552,8 @@ export interface BordroKaydi {
   pekDetay?: PekDetayi;
   isPrimiDetay?: IsPrimiHesapDetayi;
   gvDetay?: GvHesapDetayi;
+  /** SQLite/replay authority retained even when the rich GV detail is absent. */
+  persistedGvBase?: number | null;
   damgaDetay?: DamgaVergisiHesapDetayi;
   statutorySnapshot?: ResolvedStatutorySnapshot;
   odenenRaporluGun?: number;

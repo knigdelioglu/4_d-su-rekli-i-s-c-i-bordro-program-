@@ -174,12 +174,13 @@ impl CumulativeTaxService {
                 .gvDetay
                 .as_ref()
                 .map(|detail| detail.cariGvMatrahi)
-                .unwrap_or_else(|| {
-                    (record.gelirToplam
-                        - record.kesintiler.isciSgkPrimi.unwrap_or_default()
-                        - record.kesintiler.isciIssizlikPrimi.unwrap_or_default())
-                    .max(Decimal::ZERO)
-                });
+                .or(record.persistedGvBase)
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} tahakkukunda authoritative GV matrahı eksik; gross-SGK tahmini kümülatif zincire alınamaz.",
+                        record_id
+                    ))
+                })?;
             cumulative = cumulative.checked_add(gv_base).ok_or_else(|| {
                 DomainError::InvalidData("Kümülatif GV Decimal taşması oluştu.".into())
             })?;

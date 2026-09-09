@@ -2,17 +2,23 @@ import type { ChangeEvent } from 'react';
 import { BACKUP_FORMAT_VERSION } from '../types/payroll';
 import { getInitialDataset } from '../utils/sampleData';
 import { tauriBridge } from '../services/tauriBridge';
-import type { PayrollMutation } from '../services/payrollEngine';
+import type { PayrollEngine, PayrollMutation } from '../services/payrollEngine';
 import {
   serializePayrollStorage,
   toPayrollBoundaryDto,
   type PayrollStorageDto,
 } from '../services/payrollEngine/decimalBoundary';
-import { parseImportedBackup } from '../services/storage/payrollPayload';
+import {
+  parseImportedBackup,
+  verifyCurrentPayrollBackupReplay,
+} from '../services/storage/payrollPayload';
 
 interface BrowserPersistenceAdapter {
   markClean: () => void;
-  savePayload: (payload: string) => Promise<void>;
+  savePayload: (
+    payload: string,
+    sourceFormat?: 'current' | 'legacy' | 'unknown'
+  ) => Promise<void>;
 }
 
 export interface BackupControllerOptions {
@@ -21,6 +27,7 @@ export interface BackupControllerOptions {
   isDataLoaded: boolean;
   browserPersistence: BrowserPersistenceAdapter;
   evaluateBrowserMutations: (mutation: PayrollMutation) => Promise<unknown>;
+  payrollEngine: PayrollEngine;
   loadData: () => Promise<void>;
   setAuthoritativePayload: (payload: PayrollStorageDto) => void;
   setIsDataLoaded: (loaded: boolean) => void;
@@ -46,6 +53,7 @@ export function useBackupController({
   isDataLoaded,
   browserPersistence,
   evaluateBrowserMutations,
+  payrollEngine,
   loadData,
   setAuthoritativePayload,
   setIsDataLoaded,
@@ -156,17 +164,28 @@ export function useBackupController({
 
   const handleImportBackup = async (jsonStr: string) => {
     try {
+      const raw: unknown = JSON.parse(jsonStr);
+      const isCurrentBackup = Boolean(
+        raw && typeof raw === 'object' && !Array.isArray(raw)
+          && (raw as { backupVersion?: unknown }).backupVersion === BACKUP_FORMAT_VERSION
+      );
       const payload = parseImportedBackup(jsonStr);
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();
       } else {
+        if (isCurrentBackup) {
+          await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
+        }
         if (isDataLoaded) {
           await evaluateBrowserMutations({ kind: 'ALL' });
         }
         // Import is a user-visible commit point. Verify the IndexedDB write
         // before replacing the in-memory dataset or announcing success.
-        await browserPersistence.savePayload(serializePayrollStorage(payload));
+        await browserPersistence.savePayload(
+          serializePayrollStorage(payload),
+          isCurrentBackup ? 'current' : 'legacy'
+        );
         commitBrowserPayload(payload);
       }
       alert('Yedek başarıyla yüklendi!');

@@ -1,9 +1,10 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
+    calculate_aylik_asgari_ucret_gv_matrahi, calculate_canonical_tax_state,
     calculate_incremental_prime_esas_kazanc, calculate_payroll, calculate_prime_esas_kazanc,
     calculate_segmented_meal_exemptions, evaluate_payroll_invalidation, finalize_payroll,
     validate_payroll_request, AccrualType, AnnualPayrollParameters, BordroDonemi, BordroStatus,
-    DevredenPekKaydi, DonemselKurumDegerleri,
+    CanonicalTaxCalculationInput, DevredenPekKaydi, DonemselKurumDegerleri,
     GelirKalemleri, ManualPayrollIncomeInput, PayrollAccrualInput, PayrollCalculationRequest,
     PayrollDatasetSnapshot, PayrollMutation, Personel, PersonelPuantaj, PuantajOzeti,
     MealExemptionSegment, StatutoryParameterSegment, StatutorySnapshotSource,
@@ -120,6 +121,26 @@ fn standalone_supplementary_request(payment_date: &str) -> PayrollCalculationReq
     request
 }
 
+fn set_normal_attendance_days(request: &mut PayrollCalculationRequest, paid_days: usize) {
+    let attendance = request
+        .dataset
+        .attendances
+        .first_mut()
+        .expect("attendance fixture");
+    let mut dates = attendance.gunler.keys().cloned().collect::<Vec<_>>();
+    dates.sort();
+    for (index, date) in dates.into_iter().enumerate() {
+        attendance.gunler.insert(
+            date,
+            if index < paid_days {
+                "Ç".into()
+            } else {
+                "R".into()
+            },
+        );
+    }
+}
+
 #[test]
 fn calculation_uses_shared_engine_and_preserves_manual_decimal_values() {
     let request = fixture_request();
@@ -131,6 +152,81 @@ fn calculation_uses_shared_engine_and_preserves_manual_decimal_values() {
     assert_eq!(
         result.netOdeme,
         (result.gelirToplam - result.kesintiToplam).round_dp(2)
+    );
+}
+
+#[test]
+fn canonical_tax_calculator_matches_the_payroll_engine_final_snapshot() {
+    let request = explicit_normal_request("2026-02-14");
+    let result = calculate_payroll(&request).expect("normal payroll should calculate");
+    let settings = request
+        .dataset
+        .institutionSettings
+        .get(&request.periodId)
+        .expect("settings");
+    let statutory = result
+        .statutorySnapshot
+        .as_ref()
+        .expect("statutory snapshot");
+    let meal_exemption = calculate_segmented_meal_exemptions(&[MealExemptionSegment {
+        actual: result.gelirler.yemek.unwrap_or_default(),
+        sgk_capacity: statutory.sgkYemekIstisnasiToplam,
+        gv_capacity: statutory.gvYemekIstisnasiToplam,
+    }])
+    .gv;
+    let worker_sgk = result.kesintiler.isciSgkPrimi.unwrap_or_default();
+    let worker_unemployment = result.kesintiler.isciIssizlikPrimi.unwrap_or_default();
+    let daily_minimum = statutory.gvReferansGunlukAsgariUcret;
+    let canonical = calculate_canonical_tax_state(&CanonicalTaxCalculationInput {
+        income_total: result.gelirToplam,
+        retro_income_tax_exempt: Default::default(),
+        retro_stamp_tax_exempt: Default::default(),
+        normal_meal_tax_exemption: meal_exemption,
+        worker_sgk,
+        worker_unemployment,
+        union_deduction: result.kesintiler.sendikaAidati.unwrap_or_default(),
+        insurance_wage_base: (result.gelirToplam
+            - result.gelirler.yemek.unwrap_or_default()
+            - result.gelirler.vasitaYol.unwrap_or_default())
+        .max(Decimal::ZERO),
+        birth_military_gv_input: Default::default(),
+        life_insurance_premium: Default::default(),
+        health_insurance_premium: Default::default(),
+        insurance_annual_cap: request.dataset.annualPayrollParameters[0]
+            .sigortaGvYillikBrutAsgariUcretTavani
+            .expect("insurance cap"),
+        insurance_used_before: Default::default(),
+        previous_cumulative_gv: result
+            .gvDetay
+            .as_ref()
+            .unwrap()
+            .oncekiKumulatifGvMatrahi,
+        monthly_asgari_gv_matrahi: calculate_aylik_asgari_ucret_gv_matrahi(
+            daily_minimum,
+            settings.sgkIsciOraniYuzde.unwrap_or_default() / dec!(100),
+            settings.issizlikIsciOraniYuzde.unwrap_or_default() / dec!(100),
+        ),
+        previous_cumulative_asgari_gv: result
+            .gvDetay
+            .as_ref()
+            .unwrap()
+            .asgariUcretReferansKumulatifMatrahi
+            - result.gvDetay.as_ref().unwrap().asgariUcretGvMatrahi,
+        same_month_gv_used: Default::default(),
+        tax_brackets: &request.dataset.annualPayrollParameters[0].gelirVergisiDilimleri,
+        monthly_minimum_gross: daily_minimum * dec!(30),
+        stamp_rate: settings.damgaVergisiOraniBinde.unwrap_or_default() / dec!(1000),
+        same_month_stamp_used: Default::default(),
+    });
+
+    assert_eq!(canonical.gv_base, result.gvDetay.as_ref().unwrap().cariGvMatrahi);
+    assert_eq!(
+        serde_json::to_value(canonical.gv).unwrap(),
+        serde_json::to_value(result.gvDetay).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(canonical.stamp).unwrap(),
+        serde_json::to_value(result.damgaDetay).unwrap()
     );
 }
 
@@ -357,6 +453,153 @@ fn normal_after_attendance_free_tediye_reuses_payment_event_state() {
     assert_eq!(
         serde_json::to_value(&normal.devredenPekGelen).unwrap(),
         serde_json::to_value(&tediye.sonrakiDevredenPek).unwrap()
+    );
+}
+
+#[test]
+fn early_provisional_tediye_reconciles_before_low_day_normal() {
+    let mut tediye_request = supplementary_request("2026-02-10");
+    tediye_request.dataset.attendances.clear();
+    tediye_request.accrual.as_mut().unwrap().grossAmount = Some(dec!(200000));
+    let tediye = calculate_payroll(&tediye_request)
+        .expect("early provisional tediye should calculate");
+
+    let mut normal_request = explicit_normal_request("2026-02-14");
+    set_normal_attendance_days(&mut normal_request, 10);
+    normal_request.dataset.payrolls.push(tediye);
+    let normal = calculate_payroll(&normal_request)
+        .expect("low-day NORMAL should reconcile the provisional PEK state");
+
+    let statutory = normal
+        .statutorySnapshot
+        .as_ref()
+        .expect("normal statutory snapshot");
+    let pek = normal.pekDetay.as_ref().expect("normal PEK snapshot");
+    assert_eq!(statutory.sgkPrimGunSayisi, 10);
+    assert!(pek.aylikSonrasiPekTuketimi.unwrap() <= statutory.pekUstSinir);
+    assert!(normal
+        .sonrakiDevredenPek
+        .as_ref()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|record| record.tutar)
+        .sum::<Decimal>()
+        > Decimal::ZERO);
+}
+
+#[test]
+fn early_over_cap_supplementary_carry_is_reconciled_without_deadlock() {
+    let mut tediye_request = supplementary_request("2026-02-10");
+    tediye_request.dataset.attendances.clear();
+    tediye_request.accrual.as_mut().unwrap().grossAmount = Some(dec!(500000));
+    let tediye = calculate_payroll(&tediye_request)
+        .expect("over-cap provisional tediye should calculate");
+
+    let mut normal_request = explicit_normal_request("2026-02-14");
+    set_normal_attendance_days(&mut normal_request, 10);
+    normal_request.dataset.payrolls.push(tediye);
+    let normal = calculate_payroll(&normal_request)
+        .expect("low-day NORMAL should reconcile provisional carry");
+
+    let statutory = normal
+        .statutorySnapshot
+        .as_ref()
+        .expect("normal statutory snapshot");
+    let pek = normal.pekDetay.as_ref().expect("normal PEK snapshot");
+    assert!(pek.aylikSonrasiPekTuketimi.unwrap() <= statutory.pekUstSinir);
+    assert!(normal
+        .sonrakiDevredenPek
+        .as_ref()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .map(|record| record.tutar)
+        .sum::<Decimal>()
+        > Decimal::ZERO);
+}
+
+#[test]
+fn zero_day_normal_after_supplementary_does_not_deadlock() {
+    let mut tediye_request = supplementary_request("2026-02-10");
+    tediye_request.dataset.attendances.clear();
+    tediye_request.accrual.as_mut().unwrap().grossAmount = Some(dec!(200000));
+    let tediye = calculate_payroll(&tediye_request)
+        .expect("early provisional tediye should calculate");
+
+    let mut normal_request = explicit_normal_request("2026-02-14");
+    set_normal_attendance_days(&mut normal_request, 0);
+    normal_request.dataset.payrolls.push(tediye);
+    let normal = calculate_payroll(&normal_request)
+        .expect("zero-day NORMAL should reconcile the provisional PEK state");
+
+    assert_eq!(
+        normal
+            .statutorySnapshot
+            .as_ref()
+            .expect("normal statutory snapshot")
+            .sgkPrimGunSayisi,
+        0
+    );
+    assert_eq!(
+        normal.pekDetay.as_ref().expect("normal PEK snapshot").primMatrahi,
+        Decimal::ZERO
+    );
+}
+
+#[test]
+fn same_month_event_order_reconciles_to_the_same_final_pek_state() {
+    let mut normal_first_request = explicit_normal_request("2026-02-10");
+    set_normal_attendance_days(&mut normal_first_request, 10);
+    let normal_first = calculate_payroll(&normal_first_request)
+        .expect("NORMAL-first event should calculate");
+
+    let mut tediye_after_normal_request = supplementary_request("2026-02-10");
+    set_normal_attendance_days(&mut tediye_after_normal_request, 10);
+    tediye_after_normal_request
+        .accrual
+        .as_mut()
+        .unwrap()
+        .grossAmount = Some(dec!(200000));
+    tediye_after_normal_request
+        .dataset
+        .payrolls
+        .push(normal_first.clone());
+    let tediye_after_normal = calculate_payroll(&tediye_after_normal_request)
+        .expect("TEDIYE-after-NORMAL event should calculate");
+
+    let mut tediye_first_request = supplementary_request("2026-02-10");
+    tediye_first_request.dataset.attendances.clear();
+    tediye_first_request
+        .accrual
+        .as_mut()
+        .unwrap()
+        .grossAmount = Some(dec!(200000));
+    let tediye_first = calculate_payroll(&tediye_first_request)
+        .expect("provisional TEDIYE-first event should calculate");
+
+    let mut normal_after_tediye_request = explicit_normal_request("2026-02-14");
+    set_normal_attendance_days(&mut normal_after_tediye_request, 10);
+    normal_after_tediye_request
+        .dataset
+        .payrolls
+        .push(tediye_first);
+    let normal_after_tediye = calculate_payroll(&normal_after_tediye_request)
+        .expect("NORMAL-after-TEDIYE event should calculate");
+
+    assert_eq!(
+        tediye_after_normal
+            .pekDetay
+            .as_ref()
+            .unwrap()
+            .aylikSonrasiPekTuketimi,
+        normal_after_tediye
+            .pekDetay
+            .as_ref()
+            .unwrap()
+            .aylikSonrasiPekTuketimi
+    );
+    assert_eq!(
+        serde_json::to_value(&tediye_after_normal.sonrakiDevredenPek).unwrap(),
+        serde_json::to_value(&normal_after_tediye.sonrakiDevredenPek).unwrap()
     );
 }
 

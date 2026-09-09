@@ -11,6 +11,7 @@ use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
+use crate::services::payroll_service::PayrollService;
 use rusqlite::Connection;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
@@ -333,6 +334,367 @@ fn validate_v5_retro_lifecycle_fields(payload_json: &str) -> Result<()> {
     Ok(())
 }
 
+fn replay_payroll_request_for_current_backup(
+    dataset: &payroll_core::PayrollDatasetSnapshot,
+    target: &BordroKaydi,
+) -> Result<payroll_core::PayrollCalculationRequest> {
+    let target_accrual_id = if target.accrualId.trim().is_empty() {
+        target.id.clone()
+    } else {
+        target.accrualId.clone()
+    };
+    let period = dataset
+        .periods
+        .iter()
+        .find(|period| period.id == target.donemId)
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "V5 backup replay: {} bordrosunun dönemi bulunamadı.",
+                target.id
+            ))
+        })?;
+    let payment_date = if target.paymentDate.trim().is_empty() {
+        payroll_core::payroll_engine::default_payment_date(period)
+    } else {
+        target.paymentDate.clone()
+    };
+
+    let gross_amount = match target.accrualType {
+        AccrualType::NORMAL => None,
+        AccrualType::TEDIYE => target.gelirler.tediye,
+        AccrualType::TIS_IKRAMIYE => target.gelirler.tisIkramiyesi,
+        AccrualType::SUPPLEMENTAL => target.gelirler.ekOdeme,
+        AccrualType::RETRO_ADJUSTMENT => {
+            let batch = dataset
+                .retroBatches
+                .iter()
+                .find(|batch| batch.id == target_accrual_id)
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "V5 backup replay: {} retro payment event'i için batch bulunamadı.",
+                        target_accrual_id
+                    ))
+                })?;
+            Some(payroll_core::retro_payable_settlement_amount(batch))
+        }
+    };
+
+    let mut replay_dataset = dataset.clone();
+    replay_dataset.payrolls.retain(|payroll| {
+        payroll.id != target.id
+            && (if payroll.accrualId.trim().is_empty() {
+                payroll.id.as_str()
+            } else {
+                payroll.accrualId.as_str()
+            }) != target_accrual_id
+    });
+
+    Ok(payroll_core::PayrollCalculationRequest {
+        personnelId: target.personelId.clone(),
+        periodId: target.donemId.clone(),
+        calculatedAt: if !target.sonGuncellemeTarihi.trim().is_empty() {
+            target.sonGuncellemeTarihi.clone()
+        } else if !target.olusturulmaTarihi.trim().is_empty() {
+            target.olusturulmaTarihi.clone()
+        } else {
+            "backup-replay".into()
+        },
+        manualIncome: (target.accrualType == AccrualType::NORMAL).then(|| {
+            ManualPayrollIncomeInput {
+                tediye: target.gelirler.tediye,
+                tisIkramiyesi: target.gelirler.tisIkramiyesi,
+            }
+        }),
+        accrual: Some(PayrollAccrualInput {
+            accrualId: target_accrual_id,
+            accrualType: target.accrualType,
+            paymentDate: payment_date,
+            sequence: target.sequence,
+            grossAmount: gross_amount,
+            description: target.accrualDescription.clone(),
+        }),
+        dataset: replay_dataset,
+    })
+}
+
+fn compare_backup_decimal(
+    payroll_id: &str,
+    field: &str,
+    imported: rust_decimal::Decimal,
+    replayed: rust_decimal::Decimal,
+) -> Result<()> {
+    if imported != replayed {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {}.{} snapshotı canonical Rust replay ile eşleşmiyor (import {}, replay {}).",
+            payroll_id, field, imported, replayed
+        )));
+    }
+    Ok(())
+}
+
+fn compare_backup_optional_decimal(
+    payroll_id: &str,
+    field: &str,
+    imported: Option<rust_decimal::Decimal>,
+    replayed: Option<rust_decimal::Decimal>,
+) -> Result<()> {
+    if imported != replayed {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {}.{} snapshotı canonical Rust replay ile eşleşmiyor (import {:?}, replay {:?}).",
+            payroll_id, field, imported, replayed
+        )));
+    }
+    Ok(())
+}
+
+fn compare_backup_income_and_deductions(
+    imported: &BordroKaydi,
+    replayed: &BordroKaydi,
+) -> Result<()> {
+    let id = imported.id.as_str();
+    for (field, left, right) in [
+        ("gelirler.tabanBrutAylik", imported.gelirler.tabanBrutAylik, replayed.gelirler.tabanBrutAylik),
+        ("gelirler.tediye", imported.gelirler.tediye, replayed.gelirler.tediye),
+        ("gelirler.tisIkramiyesi", imported.gelirler.tisIkramiyesi, replayed.gelirler.tisIkramiyesi),
+        ("gelirler.ekOdeme", imported.gelirler.ekOdeme, replayed.gelirler.ekOdeme),
+        ("gelirler.yemek", imported.gelirler.yemek, replayed.gelirler.yemek),
+        ("gelirler.birlestirilmisSosyalYardim", imported.gelirler.birlestirilmisSosyalYardim, replayed.gelirler.birlestirilmisSosyalYardim),
+        ("gelirler.vasitaYol", imported.gelirler.vasitaYol, replayed.gelirler.vasitaYol),
+        ("gelirler.giyimYardimi", imported.gelirler.giyimYardimi, replayed.gelirler.giyimYardimi),
+        ("gelirler.isPrimi", imported.gelirler.isPrimi, replayed.gelirler.isPrimi),
+        ("gelirler.geceCalismasiUcreti", imported.gelirler.geceCalismasiUcreti, replayed.gelirler.geceCalismasiUcreti),
+        ("gelirler.geceCalismasiTatiliUcreti", imported.gelirler.geceCalismasiTatiliUcreti, replayed.gelirler.geceCalismasiTatiliUcreti),
+        ("gelirler.hizmetZammi", imported.gelirler.hizmetZammi, replayed.gelirler.hizmetZammi),
+        ("gelirler.digerGelir", imported.gelirler.digerGelir, replayed.gelirler.digerGelir),
+        ("kesintiler.isciSgkPrimi", imported.kesintiler.isciSgkPrimi, replayed.kesintiler.isciSgkPrimi),
+        ("kesintiler.isciIssizlikPrimi", imported.kesintiler.isciIssizlikPrimi, replayed.kesintiler.isciIssizlikPrimi),
+        ("kesintiler.gelirVergisi", imported.kesintiler.gelirVergisi, replayed.kesintiler.gelirVergisi),
+        ("kesintiler.damgaVergisi", imported.kesintiler.damgaVergisi, replayed.kesintiler.damgaVergisi),
+        ("kesintiler.sendikaAidati", imported.kesintiler.sendikaAidati, replayed.kesintiler.sendikaAidati),
+        ("kesintiler.bes", imported.kesintiler.bes, replayed.kesintiler.bes),
+        ("kesintiler.icra", imported.kesintiler.icra, replayed.kesintiler.icra),
+        ("kesintiler.kisiBorcu", imported.kesintiler.kisiBorcu, replayed.kesintiler.kisiBorcu),
+        ("kesintiler.dogumAskerlikBorclanmasi", imported.kesintiler.dogumAskerlikBorclanmasi, replayed.kesintiler.dogumAskerlikBorclanmasi),
+        ("kesintiler.hayatSaglikSigortasi", imported.kesintiler.hayatSaglikSigortasi, replayed.kesintiler.hayatSaglikSigortasi),
+        ("kesintiler.digerKesinti", imported.kesintiler.digerKesinti, replayed.kesintiler.digerKesinti),
+    ] {
+        compare_backup_optional_decimal(id, field, left, right)?;
+    }
+    for (field, left, right) in [
+        ("gelirToplam", imported.gelirToplam, replayed.gelirToplam),
+        ("kesintiToplam", imported.kesintiToplam, replayed.kesintiToplam),
+        ("netOdeme", imported.netOdeme, replayed.netOdeme),
+    ] {
+        compare_backup_decimal(id, field, left, right)?;
+    }
+    Ok(())
+}
+
+fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> Result<()> {
+    let id = imported.id.as_str();
+    compare_backup_income_and_deductions(imported, replayed)?;
+    compare_backup_optional_decimal(
+        id,
+        "oncekiKumulatifGvMatrahi",
+        imported.oncekiKumulatifGvMatrahi,
+        replayed.oncekiKumulatifGvMatrahi,
+    )?;
+    compare_backup_optional_decimal(
+        id,
+        "oncekiKumulatifAsgariGvMatrahi",
+        imported.oncekiKumulatifAsgariGvMatrahi,
+        replayed.oncekiKumulatifAsgariGvMatrahi,
+    )?;
+    compare_backup_optional_decimal(
+        id,
+        "manuelKumulatifGvMatrahi",
+        imported.manuelKumulatifGvMatrahi,
+        replayed.manuelKumulatifGvMatrahi,
+    )?;
+    if imported.puantajOzeti.c != replayed.puantajOzeti.c
+        || imported.puantajOzeti.t != replayed.puantajOzeti.t
+        || imported.puantajOzeti.g != replayed.puantajOzeti.g
+        || imported.puantajOzeti.i != replayed.puantajOzeti.i
+        || imported.puantajOzeti.gc != replayed.puantajOzeti.gc
+        || imported.puantajOzeti.gct != replayed.puantajOzeti.gct
+        || imported.puantajOzeti.r != replayed.puantajOzeti.r
+    {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {} puantaj özeti canonical Rust replay ile eşleşmiyor.",
+            id
+        )));
+    }
+    if imported.devredenPekGelen != replayed.devredenPekGelen
+        || imported.sonrakiDevredenPek != replayed.sonrakiDevredenPek
+    {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {} devreden PEK giriş/çıkış state'i canonical Rust replay ile eşleşmiyor.",
+            id
+        )));
+    }
+    if imported.statutorySnapshot != replayed.statutorySnapshot {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {} statutory snapshot canonical Rust replay ile eşleşmiyor.",
+            id
+        )));
+    }
+    let imported_is_primi = serde_json::to_value(&imported.isPrimiDetay)
+        .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+    let replayed_is_primi = serde_json::to_value(&replayed.isPrimiDetay)
+        .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+    if imported_is_primi != replayed_is_primi {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {} iş primi snapshot'ı canonical Rust replay ile eşleşmiyor.",
+            id
+        )));
+    }
+
+    let imported_gv_base = imported
+        .persistedGvBase
+        .or_else(|| imported.gvDetay.as_ref().map(|detail| detail.cariGvMatrahi));
+    let replayed_gv_base = replayed
+        .persistedGvBase
+        .or_else(|| replayed.gvDetay.as_ref().map(|detail| detail.cariGvMatrahi));
+    compare_backup_optional_decimal(id, "gvBase", imported_gv_base, replayed_gv_base)?;
+
+    match (&imported.pekDetay, &replayed.pekDetay) {
+        (Some(left), Some(right)) => {
+            for (field, imported_value, replayed_value) in [
+                ("pekDetay.hesaplananPek", left.hesaplananPek, right.hesaplananPek),
+                ("pekDetay.hamPek", left.hamPek, right.hamPek),
+                ("pekDetay.devredenPekKullanilan", left.devredenPekKullanilan, right.devredenPekKullanilan),
+                ("pekDetay.primMatrahi", left.primMatrahi, right.primMatrahi),
+                ("pekDetay.finalPek", left.finalPek, right.finalPek),
+                ("pekDetay.devredenPekAşanTutar", left.devredenPekAşanTutar, right.devredenPekAşanTutar),
+                ("pekDetay.pekAltSinir", left.pekAltSinir, right.pekAltSinir),
+                ("pekDetay.pekUstSinir", left.pekUstSinir, right.pekUstSinir),
+                ("pekDetay.altSinirTamamlamaFarki", left.altSinirTamamlamaFarki, right.altSinirTamamlamaFarki),
+                ("pekDetay.yemekIstisnasiTutar", left.yemekIstisnasiTutar, right.yemekIstisnasiTutar),
+            ] {
+                compare_backup_decimal(id, field, imported_value, replayed_value)?;
+            }
+            compare_backup_optional_decimal(
+                id,
+                "pekDetay.aylikOncekiPekTuketimi",
+                left.aylikOncekiPekTuketimi,
+                right.aylikOncekiPekTuketimi,
+            )?;
+            compare_backup_optional_decimal(
+                id,
+                "pekDetay.aylikSonrasiPekTuketimi",
+                left.aylikSonrasiPekTuketimi,
+                right.aylikSonrasiPekTuketimi,
+            )?;
+            if left.fiiliYemekGunu != right.fiiliYemekGunu {
+                return Err(DomainError::InvalidData(format!(
+                    "V5 backup replay: {} pekDetay.fiiliYemekGunu canonical Rust replay ile eşleşmiyor.",
+                    id
+                )));
+            }
+            for (field, imported_value, replayed_value) in [
+                ("pekDetay.isverenSgkPrimi", left.isverenSgkPrimi, right.isverenSgkPrimi),
+                ("pekDetay.isverenIssizlikPrimi", left.isverenIssizlikPrimi, right.isverenIssizlikPrimi),
+                ("pekDetay.pekAltSinirTamamlamaIsverenPrimi", left.pekAltSinirTamamlamaIsverenPrimi, right.pekAltSinirTamamlamaIsverenPrimi),
+                ("pekDetay.isverenPrimToplami", left.isverenPrimToplami, right.isverenPrimToplami),
+                ("pekDetay.sgkIsverenOraniYuzde", left.sgkIsverenOraniYuzde, right.sgkIsverenOraniYuzde),
+                ("pekDetay.isverenIssizlikOraniYuzde", left.isverenIssizlikOraniYuzde, right.isverenIssizlikOraniYuzde),
+            ] {
+                compare_backup_optional_decimal(id, field, imported_value, replayed_value)?;
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return Err(DomainError::InvalidData(format!(
+                "V5 backup replay: {} PEK snapshot varlığı canonical Rust replay ile eşleşmiyor.",
+                id
+            )))
+        }
+    }
+
+    match (&imported.gvDetay, &replayed.gvDetay) {
+        (Some(left), Some(right)) => {
+            for (field, imported_value, replayed_value) in [
+                ("gvDetay.oncekiKumulatifGvMatrahi", left.oncekiKumulatifGvMatrahi, right.oncekiKumulatifGvMatrahi),
+                ("gvDetay.cariGvMatrahi", left.cariGvMatrahi, right.cariGvMatrahi),
+                ("gvDetay.yeniKumulatifGvMatrahi", left.yeniKumulatifGvMatrahi, right.yeniKumulatifGvMatrahi),
+                ("gvDetay.brutGelirVergisi", left.brutGelirVergisi, right.brutGelirVergisi),
+                ("gvDetay.asgariUcretGvMatrahi", left.asgariUcretGvMatrahi, right.asgariUcretGvMatrahi),
+                ("gvDetay.asgariUcretReferansKumulatifMatrahi", left.asgariUcretReferansKumulatifMatrahi, right.asgariUcretReferansKumulatifMatrahi),
+                ("gvDetay.asgariUcretGvIstisnasi", left.asgariUcretGvIstisnasi, right.asgariUcretGvIstisnasi),
+                ("gvDetay.ayniAyOncekiKullanilanGvIstisnasi", left.ayniAyOncekiKullanilanGvIstisnasi, right.ayniAyOncekiKullanilanGvIstisnasi),
+                ("gvDetay.tahakkukOncesiKalanGvIstisnasi", left.tahakkukOncesiKalanGvIstisnasi, right.tahakkukOncesiKalanGvIstisnasi),
+                ("gvDetay.uygulananGvIstisnasi", left.uygulananGvIstisnasi, right.uygulananGvIstisnasi),
+                ("gvDetay.tahakkukSonrasiKalanGvIstisnasi", left.tahakkukSonrasiKalanGvIstisnasi, right.tahakkukSonrasiKalanGvIstisnasi),
+                ("gvDetay.kesilenGelirVergisi", left.kesilenGelirVergisi, right.kesilenGelirVergisi),
+                ("gvDetay.dogumAskerlikGvIndirimi", left.dogumAskerlikGvIndirimi, right.dogumAskerlikGvIndirimi),
+                ("gvDetay.sigortaGvIndirimAdayi", left.sigortaGvIndirimAdayi, right.sigortaGvIndirimAdayi),
+                ("gvDetay.sigortaGvAylikLimiti", left.sigortaGvAylikLimiti, right.sigortaGvAylikLimiti),
+                ("gvDetay.sigortaGvYillikKalanLimiti", left.sigortaGvYillikKalanLimiti, right.sigortaGvYillikKalanLimiti),
+                ("gvDetay.uygulanabilirSigortaGvIndirimi", left.uygulanabilirSigortaGvIndirimi, right.uygulanabilirSigortaGvIndirimi),
+            ] {
+                compare_backup_decimal(id, field, imported_value, replayed_value)?;
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return Err(DomainError::InvalidData(format!(
+                "V5 backup replay: {} GV snapshot varlığı canonical Rust replay ile eşleşmiyor.",
+                id
+            )))
+        }
+    }
+
+    match (&imported.damgaDetay, &replayed.damgaDetay) {
+        (Some(left), Some(right)) => {
+            for (field, imported_value, replayed_value) in [
+                ("damgaDetay.brutDamgaVergisi", left.brutDamgaVergisi, right.brutDamgaVergisi),
+                ("damgaDetay.aylikDamgaIstisnaHakki", left.aylikDamgaIstisnaHakki, right.aylikDamgaIstisnaHakki),
+                ("damgaDetay.ayniAyOncekiKullanilanDamgaIstisnasi", left.ayniAyOncekiKullanilanDamgaIstisnasi, right.ayniAyOncekiKullanilanDamgaIstisnasi),
+                ("damgaDetay.uygulananDamgaIstisnasi", left.uygulananDamgaIstisnasi, right.uygulananDamgaIstisnasi),
+                ("damgaDetay.kalanDamgaIstisnasi", left.kalanDamgaIstisnasi, right.kalanDamgaIstisnasi),
+                ("damgaDetay.kesilenDamgaVergisi", left.kesilenDamgaVergisi, right.kesilenDamgaVergisi),
+            ] {
+                compare_backup_decimal(id, field, imported_value, replayed_value)?;
+            }
+        }
+        (None, None) => {}
+        _ => {
+            return Err(DomainError::InvalidData(format!(
+                "V5 backup replay: {} DV snapshot varlığı canonical Rust replay ile eşleşmiyor.",
+                id
+            )))
+        }
+    }
+    Ok(())
+}
+
+fn validate_current_backup_replay(conn: &Connection) -> Result<()> {
+    let dataset = PayrollService::build_dataset_snapshot(conn)?;
+    let targets = dataset
+        .payrolls
+        .iter()
+        .filter(|payroll| {
+            matches!(
+                payroll.status,
+                BordroStatus::CALCULATED | BordroStatus::FINALIZED
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for imported in targets {
+        let request = replay_payroll_request_for_current_backup(&dataset, &imported)?;
+        let replayed = payroll_core::calculate_payroll_checked(&request).map_err(|error| {
+            DomainError::InvalidData(format!(
+                "V5 backup replay: {} canonical Rust replay ile doğrulanamadı: {}.",
+                imported.id, error
+            ))
+        })?;
+        compare_backup_snapshots(&imported, &replayed)?;
+    }
+    Ok(())
+}
+
 pub struct MigrationService;
 
 impl MigrationService {
@@ -416,6 +778,13 @@ impl MigrationService {
         let had_retro_batches = retroBatches.is_some();
         let mut retro_batches = retroBatches.unwrap_or_default();
         let mut retro_allocations = retroAllocations.unwrap_or_default();
+        if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+            if let Some(payrolls) = bordrolar.as_ref() {
+                for payroll in payrolls {
+                    payroll_core::validate_current_payroll_snapshot_authority(payroll)?;
+                }
+            }
+        }
         if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION {
             normalize_legacy_retro_settlement(&mut retro_batches, &mut retro_allocations);
         }
@@ -761,7 +1130,11 @@ impl MigrationService {
                 if payroll.accrualDescription.is_none() {
                     payroll.accrualDescription = payroll.notlar.clone();
                 }
-                PayrollRepository::save_in_transaction(conn, &payroll)?;
+                if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION {
+                    PayrollRepository::save_legacy_in_transaction(conn, &payroll)?;
+                } else {
+                    PayrollRepository::save_in_transaction(conn, &payroll)?;
+                }
             }
         }
 
@@ -772,7 +1145,12 @@ impl MigrationService {
         match backupVersion.unwrap_or(1) {
             4 => validate_retro_payment_links(conn, "V4")?,
             version if version >= CURRENT_BACKUP_VERSION => {
-                validate_retro_payment_links(conn, "V5")?
+                validate_retro_payment_links(conn, "V5")?;
+                // V5 is an authoritative snapshot contract.  Every stored
+                // calculated/finalized payment must be reproducible from the
+                // imported source dataset before the transaction can commit.
+                // V1-V4 deliberately stay on their compatibility path.
+                validate_current_backup_replay(conn)?;
             }
             _ => {}
         }

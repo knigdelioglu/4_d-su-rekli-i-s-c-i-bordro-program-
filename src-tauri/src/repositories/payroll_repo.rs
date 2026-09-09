@@ -140,6 +140,7 @@ impl PayrollRepository {
                     .round_dp(2),
             });
         }
+        payroll_core::validate_payroll_snapshot_authority(bordro)?;
         if calculated_gross != bordro.gelirToplam
             || calculated_deductions != bordro.kesintiToplam
             || calculated_net != bordro.netOdeme
@@ -477,9 +478,10 @@ impl PayrollRepository {
     }
 
     /// Old pre-snapshot SQLite databases persisted aggregate totals but did
-    /// not persist every income/deduction item.  Updating an already-loaded
-    /// legacy row must preserve that representation; new inserts and backup
-    /// restores still go through the strict validator below.
+    /// not persist every income/deduction item. Updating an already-loaded
+    /// legacy row must preserve that representation even when aggregate fields
+    /// change; new inserts and backup restores still go through the strict
+    /// validator below.
     fn is_legacy_sparse_snapshot(conn: &Connection, bordro: &BordroKaydi) -> Result<bool> {
         if bordro.accrualType != AccrualType::NORMAL {
             return Ok(false);
@@ -487,34 +489,27 @@ impl PayrollRepository {
 
         let row = conn
             .query_row(
-                "SELECT gross_total, total_deductions, net_payment,
-                        is_primi_snapshot_json, gv_snapshot_json,
+                "SELECT is_primi_snapshot_json, gv_snapshot_json,
                         statutory_snapshot_json, damga_snapshot_json
                  FROM payroll_records WHERE id = ?1",
                 params![bordro.id],
                 |row| {
                     Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, i64>(2)?,
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
-                        row.get::<_, Option<String>>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        row.get::<_, Option<String>>(6)?,
                     ))
                 },
             )
             .optional()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
 
-        let Some((gross, deductions, net, is_primi, gv, statutory, damga)) = row else {
+        let Some((is_primi, gv, statutory, damga)) = row else {
             return Ok(false);
         };
 
-        Ok(gross == dec_to_kurus(Some(bordro.gelirToplam))?
-            && deductions == dec_to_kurus(Some(bordro.kesintiToplam))?
-            && net == dec_to_kurus(Some(bordro.netOdeme))?
-            && is_primi.is_none()
+        Ok(is_primi.is_none()
             && gv.is_none()
             && statutory.is_none()
             && damga.is_none())
@@ -1098,7 +1093,7 @@ impl PayrollRepository {
         let mut stmt = conn
             .prepare(
                 "SELECT id, personnel_id, period_id, accrual_id, accrual_type, payment_date,
-                        sequence, accrual_description, gross_total, previous_cumulative_gv,
+                        sequence, accrual_description, gross_total, gv_base, previous_cumulative_gv,
                         total_deductions, net_payment, status, puantaj_summary_json,
                         pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                         calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
@@ -1124,20 +1119,21 @@ impl PayrollRepository {
                     row.get::<_, i64>(9)?,
                     row.get::<_, i64>(10)?,
                     row.get::<_, i64>(11)?,
-                    row.get::<_, String>(12)?,
+                    row.get::<_, i64>(12)?,
                     row.get::<_, String>(13)?,
-                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, String>(14)?,
                     row.get::<_, Option<String>>(15)?,
                     row.get::<_, Option<String>>(16)?,
-                    row.get::<_, String>(17)?,
+                    row.get::<_, Option<String>>(17)?,
                     row.get::<_, String>(18)?,
-                    row.get::<_, Option<i32>>(19)?,
+                    row.get::<_, String>(19)?,
                     row.get::<_, Option<i32>>(20)?,
-                    row.get::<_, Option<String>>(21)?,
+                    row.get::<_, Option<i32>>(21)?,
                     row.get::<_, Option<String>>(22)?,
                     row.get::<_, Option<String>>(23)?,
                     row.get::<_, Option<String>>(24)?,
                     row.get::<_, Option<String>>(25)?,
+                    row.get::<_, Option<String>>(26)?,
                 ))
             })
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -1218,6 +1214,7 @@ impl PayrollRepository {
             sequence,
             accrual_description,
             gross_total,
+            gv_base,
             previous_cumulative_gv,
             total_deductions,
             net_payment,
@@ -1303,6 +1300,7 @@ impl PayrollRepository {
                 pekDetay: pek_detay,
                 isPrimiDetay: is_primi_detay,
                 gvDetay: gv_detay,
+                persistedGvBase: Some(kurus_to_dec(gv_base)),
                 damgaDetay: damga_detay,
                 statutorySnapshot: statutory_snapshot,
                 odenenRaporluGun: odenen_raporlu_gun,
@@ -1465,7 +1463,13 @@ impl PayrollRepository {
 
         let before =
             Self::dependency_fingerprint(tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
-        Self::save_in_transaction_with_options(tx, bordro, !preserve_legacy_snapshot)?;
+        Self::save_in_transaction_with_options(
+            tx,
+            bordro,
+            !preserve_legacy_snapshot,
+            false,
+            !preserve_legacy_snapshot,
+        )?;
         let after =
             Self::dependency_fingerprint(tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
 
@@ -1480,15 +1484,35 @@ impl PayrollRepository {
     /// Bulk restore/import snapshot'ları olduğu gibi korur; production dependency
     /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
-        Self::save_in_transaction_with_options(conn, b, true)
+        Self::save_in_transaction_with_options(conn, b, true, false, true)
+    }
+
+    /// Explicit compatibility path for pre-current backups. Sparse legacy
+    /// rows may have neither the rich GV snapshot nor the persisted scalar;
+    /// they are stored with an unverified zero placeholder and downgraded to
+    /// STALE so that the placeholder can never enter an authoritative tax
+    /// chain. The row remains available for an explicit recalculation/migration.
+    pub fn save_legacy_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
+        Self::save_in_transaction_with_options(conn, b, false, true, false)
     }
 
     fn save_in_transaction_with_options(
         conn: &Connection,
         b: &BordroKaydi,
         validate_financial_invariants: bool,
+        allow_legacy_missing_gv_base: bool,
+        require_current_gv_base_pair: bool,
     ) -> Result<()> {
         Self::validate_payment_date_matches_period(conn, b)?;
+        // Even the explicit legacy compatibility path must keep ordinary
+        // payroll line items non-negative and must reject a split GV
+        // authority. It intentionally skips only the aggregate/tax snapshot
+        // equations that old sparse rows cannot satisfy.
+        if require_current_gv_base_pair {
+            payroll_core::validate_current_payroll_snapshot_authority(b)?;
+        } else {
+            payroll_core::validate_payroll_snapshot_authority(b)?;
+        }
         if validate_financial_invariants {
             Self::validate_payroll_financial_invariants(conn, b)?;
         }
@@ -1498,7 +1522,6 @@ impl PayrollRepository {
         } else {
             b.olusturulmaTarihi.clone()
         };
-        let status_str = Self::status_to_str(b.status);
         let accrual_id = Self::effective_accrual_id(b);
         let accrual_type = Self::accrual_type_to_str(b.accrualType);
         let payment_date = Self::effective_payment_date(conn, b)?;
@@ -1563,16 +1586,48 @@ impl PayrollRepository {
                 .map(|p| p.primMatrahi)
                 .or_else(|| b.pekDetay.as_ref().map(|p| p.finalPek)),
         )?;
-        let isci_sgk = b.kesintiler.isciSgkPrimi.unwrap_or_default();
-        let isci_issizlik = b.kesintiler.isciIssizlikPrimi.unwrap_or_default();
-        // Production bordrosunda authoritative GV matrahı, hesap sırasında oluşturulan
-        // GvHesapDetayi snapshot'ıdır. Eski kayıt/migration yolları için snapshot yoksa
-        // geriye dönük yalın formül fallback olarak korunur.
-        let gv_base_decimal = b
-            .gvDetay
-            .as_ref()
-            .map(|g| g.cariGvMatrahi)
-            .unwrap_or_else(|| (b.gelirToplam - isci_sgk - isci_issizlik).max(Decimal::ZERO));
+        let (gv_base_decimal, legacy_gv_base_unverified) = match (b.gvDetay.as_ref(), b.persistedGvBase) {
+            (Some(detail), Some(persisted)) => {
+                if detail.cariGvMatrahi != persisted {
+                    return Err(DomainError::InvalidData(format!(
+                        "{} persisted GV matrahı ({}) ile GV snapshot cari matrahı ({}) eşleşmiyor.",
+                        accrual_id, persisted, detail.cariGvMatrahi
+                    )));
+                }
+                (persisted, false)
+            }
+            (Some(detail), None) => (detail.cariGvMatrahi, false),
+            (None, Some(persisted)) => (persisted, false),
+            (None, None) => {
+                if allow_legacy_missing_gv_base {
+                    (Decimal::ZERO, true)
+                } else {
+                    // Sparse legacy updates may reuse the authoritative scalar
+                    // already stored in SQLite. A missing scalar on a new/current
+                    // record is never approximated from gross and premiums.
+                    let existing = conn
+                        .query_row(
+                            "SELECT gv_base FROM payroll_records WHERE id = ?1",
+                            params![b.id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()
+                        .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+                    let Some(existing) = existing else {
+                        return Err(DomainError::InvalidData(
+                            "Authoritative GV matrahı eksik; gross-SGK tahmini canlı finansal authority olamaz."
+                                .into(),
+                        ));
+                    };
+                    (kurus_to_dec(existing), false)
+                }
+            }
+        };
+        let status_str = if legacy_gv_base_unverified {
+            Self::status_to_str(BordroStatus::STALE)
+        } else {
+            Self::status_to_str(b.status)
+        };
         let gv_base = dec_to_kurus(Some(gv_base_decimal))?;
         let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi)?;
         let new_gv = prev_gv.checked_add(gv_base).ok_or_else(|| {

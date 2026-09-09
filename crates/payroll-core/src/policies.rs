@@ -689,6 +689,7 @@ mod tests {
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: None,
             damgaDetay: None,
             statutorySnapshot: None,
             odenenRaporluGun: None,

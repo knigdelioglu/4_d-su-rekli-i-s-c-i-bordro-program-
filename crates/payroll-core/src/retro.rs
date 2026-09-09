@@ -8,9 +8,11 @@
 #![allow(non_snake_case)]
 
 use crate::calculations::{
+    calculate_meal_income, calculate_segmented_meal_exemptions,
     calculate_gunluk_gelirler_from_puantaj,
     calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state, canonical_sgk_earning_class,
-    round_sgk_amount, CanonicalSgkEarningClass, PekCalculationOptions,
+    round_sgk_amount, CanonicalSgkEarningClass, MealExemptionSegment, MealExemptionTotals,
+    PekCalculationOptions,
 };
 use crate::index::PayrollDatasetIndex;
 use crate::models::*;
@@ -132,10 +134,18 @@ struct RevisionApplication {
 #[derive(Debug, Clone)]
 struct ReplaySegment {
     key: String,
+    statutory_segment_index: usize,
     settings: DonemselKurumDegerleri,
     summary: PuantajOzeti,
     paid_sick_days: i32,
+    meal_days: i32,
     days: i32,
+}
+
+#[derive(Debug, Clone)]
+struct TargetIncomeForPeriod {
+    income: GelirKalemleri,
+    meal_exemption: MealExemptionTotals,
 }
 
 fn parse_date(value: &str, field: &str) -> Result<NaiveDate> {
@@ -611,13 +621,16 @@ fn target_income_for_period(
     period: &BordroDonemi,
     payment_date: NaiveDate,
     applications: &[RevisionApplication],
-) -> Result<GelirKalemleri> {
+) -> Result<TargetIncomeForPeriod> {
     let attendance = historical_attendance(index, dataset, &personnel.id, &period.id)?;
     let start = period_date(period, true)?;
     let period_end = period_date(period, false)?;
     let covered_end = period_end.min(payment_date);
     if covered_end < start {
-        return Ok(GelirKalemleri::default());
+        return Ok(TargetIncomeForPeriod {
+            income: GelirKalemleri::default(),
+            meal_exemption: MealExemptionTotals::default(),
+        });
     }
     let sick_records: Vec<SickLeaveRecord> = index
         .sick_leave_for_person(dataset, &personnel.id)
@@ -636,6 +649,7 @@ fn target_income_for_period(
         })?
         .clone();
     crate::calculations::validate_kurum_degerleri_for_payroll(&historical_settings)?;
+    let statutory_snapshot = source_statutory_snapshot(index, dataset, &personnel.id, period)?;
     // Replay the same scheduled daily-rate split as the original NORMAL.
     // Monthly allowances remain owned by this period's settings.
     let raise_date = crate::payroll_engine::find_zam_tarihi(period, &dataset.zamAylari)?;
@@ -676,7 +690,22 @@ fn target_income_for_period(
             .collect::<Vec<_>>()
             .join("|");
         let before_raise = raise_date.is_some_and(|cutoff| current < cutoff);
-        let segment_key = format!("{before_raise}:{active_revision_ids}");
+        let statutory_segment_index = statutory_snapshot
+            .segments
+            .iter()
+            .position(|segment| {
+                segment.effectiveFrom.as_str() <= date_text.as_str()
+                    && date_text.as_str() <= segment.effectiveTo.as_str()
+            })
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} retro tarihinin statutory segment'i bulunamadı: {}.",
+                    period.id, date_text
+                ))
+            })?;
+        let segment_key = format!(
+            "{before_raise}:{active_revision_ids}:{statutory_segment_index}"
+        );
         let baseline = if before_raise {
             before_raise_settings.as_ref().unwrap_or(&historical_settings)
         } else { &historical_settings };
@@ -690,9 +719,11 @@ fn target_income_for_period(
                 settings_for_replay_date(baseline, personnel, current, applications)?;
             segments.push(ReplaySegment {
                 key: segment_key,
+                statutory_segment_index,
                 settings,
                 summary: PuantajOzeti::default(),
                 paid_sick_days: 0,
+                meal_days: 0,
                 days: 0,
             });
             segments.len() - 1
@@ -700,6 +731,9 @@ fn target_income_for_period(
         let segment = &mut segments[segment_index];
         add_summary(&mut segment.summary, code, &period.id)?;
         segment.days += 1;
+        if matches!(code.as_str(), "Ç" | "GÇ") {
+            segment.meal_days += 1;
+        }
         if code == "R" && paid_sick_dates.contains(&current) {
             segment.paid_sick_days += 1;
         }
@@ -716,6 +750,7 @@ fn target_income_for_period(
         )));
     }
     let mut target = GelirKalemleri::default();
+    let mut meal_segments = Vec::new();
     for segment in segments {
         if segment.days > 0 {
             let weight = Decimal::from(segment.days) / Decimal::from(total_weight_days);
@@ -727,12 +762,36 @@ fn target_income_for_period(
                 weight,
             )?;
             add_income(&mut target, &segment_income);
+            let statutory_segment = statutory_snapshot
+                .segments
+                .get(segment.statutory_segment_index)
+                .ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "{} retro statutory segment index'i çözülemedi.",
+                        period.id
+                    ))
+                })?;
+            if segment.meal_days > 0 {
+                meal_segments.push(MealExemptionSegment {
+                    actual: calculate_meal_income(
+                        segment.meal_days,
+                        segment.settings.gunlukYemek,
+                    ),
+                    sgk_capacity: statutory_segment.gunlukYemekIstisnasiSGK
+                        * Decimal::from(segment.meal_days),
+                    gv_capacity: statutory_segment.gunlukYemekIstisnasiGV
+                        * Decimal::from(segment.meal_days),
+                });
+            }
         }
     }
     // Existing Tediye/TİS values are event-specific and are not generated by
     // the normal attendance formula. Their target is carried forward unless
     // this revision explicitly supplies a replacement value.
-    Ok(target)
+    Ok(TargetIncomeForPeriod {
+        income: target,
+        meal_exemption: calculate_segmented_meal_exemptions(&meal_segments),
+    })
 }
 
 fn ensure_revision_scope(revision: &CompensationRevision, personnel: &Personel) -> Result<()> {
@@ -1262,6 +1321,7 @@ fn reject_later_authoritative_retro_for_same_source_period(
 #[derive(Debug, Clone, Default)]
 struct SourcePekState {
     worker_pek: Decimal,
+    meal_exemption: Decimal,
     worker_sgk: Decimal,
     worker_unemployment: Decimal,
     employer_sgk: Decimal,
@@ -1389,6 +1449,7 @@ fn source_original_state(
             ))
         })?;
         state.worker_pek = round2(state.worker_pek + detail.primMatrahi);
+        state.meal_exemption = round2(state.meal_exemption + detail.yemekIstisnasiTutar);
         state.employer_sgk =
             round_sgk_amount(state.employer_sgk + detail.isverenSgkPrimi.unwrap_or_default());
         state.employer_unemployment = round_sgk_amount(
@@ -1470,6 +1531,7 @@ fn source_target_state(
     period: &BordroDonemi,
     events: &[BordroKaydi],
     target_normal_income: &GelirKalemleri,
+    target_meal_exemption: MealExemptionTotals,
 ) -> Result<SourcePekReplay> {
     let settings = dataset
         .institutionSettings
@@ -1518,6 +1580,7 @@ fn source_target_state(
             pekDetay: None,
             isPrimiDetay: None,
             gvDetay: None,
+            persistedGvBase: None,
             damgaDetay: None,
             statutorySnapshot: Some(statutory_fallback.clone()),
             odenenRaporluGun: None,
@@ -1576,10 +1639,11 @@ fn source_target_state(
                 PekCalculationOptions {
                     tax_months_elapsed,
                     apply_lower_bound: is_normal,
-                    meal_exemption: None,
+                    meal_exemption: is_normal.then_some(target_meal_exemption),
                 },
             )?;
         state.worker_pek = round2(state.worker_pek + detail.primMatrahi);
+        state.meal_exemption = round2(state.meal_exemption + detail.yemekIstisnasiTutar);
         state.employer_sgk =
             round_sgk_amount(state.employer_sgk + detail.isverenSgkPrimi.unwrap_or_default());
         state.employer_unemployment = round_sgk_amount(
@@ -1662,23 +1726,20 @@ fn previous_source_retro_state(
 }
 
 fn source_eligible_delta(
-    index: &PayrollDatasetIndex,
-    dataset: &PayrollDatasetSnapshot,
-    personnel_id: &str,
-    period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
     allocation: &RetroAllocation,
+    original_meal_exemption: Decimal,
+    target_meal_exemption: Decimal,
 ) -> Result<Decimal> {
     if allocation.earningCode != RetroEarningCode::MEAL {
         return Ok(allocation.deltaAmount);
     }
-    let statutory = source_statutory_snapshot(index, dataset, personnel_id, period)?;
-    let exempt = statutory.sgkYemekIstisnasiToplam;
     let recognized_before =
         allocation.originalRecognizedAmount + allocation.previousAuthoritativeRetroAmount;
-    let subject_before = (recognized_before - exempt).max(Decimal::ZERO);
-    let subject_after = (allocation.targetAmount - exempt).max(Decimal::ZERO);
-    let _ = settings;
+    // The source and target exemptions are produced by the corresponding
+    // canonical segment replay. Never collapse the two segment capacities into
+    // one aggregate min(total meal, total capacity) here.
+    let subject_before = (recognized_before - original_meal_exemption).max(Decimal::ZERO);
+    let subject_after = (allocation.targetAmount - target_meal_exemption).max(Decimal::ZERO);
     Ok(round2(subject_after - subject_before))
 }
 
@@ -1769,6 +1830,7 @@ fn apply_source_month_sgk(
     personnel_id: &str,
     period: &BordroDonemi,
     target_normal_income: &GelirKalemleri,
+    target_meal_exemption: MealExemptionTotals,
     allocations: &mut [RetroAllocation],
     payment: SourceMonthSgkPayment<'_>,
 ) -> Result<()> {
@@ -1781,9 +1843,12 @@ fn apply_source_month_sgk(
         period,
         &events,
         target_normal_income,
+        target_meal_exemption,
     )?;
     let original = original_replay.state;
     let target = target_replay.state;
+    let original_meal_exemption = original.meal_exemption;
+    let target_meal_exemption = target.meal_exemption;
     let previous = previous_source_retro_state(
         index,
         dataset,
@@ -1842,12 +1907,9 @@ fn apply_source_month_sgk(
         .iter()
         .map(|allocation_index| {
             source_eligible_delta(
-                index,
-                dataset,
-                personnel_id,
-                period,
-                settings,
                 &allocations[*allocation_index],
+                original_meal_exemption,
+                target_meal_exemption,
             )
         })
         .collect::<Result<Vec<_>>>()?;
@@ -2197,7 +2259,7 @@ impl RetroEntitlementEngine {
                 &period.id,
             )?;
 
-            let mut target_by_code = income_by_code(&target_income);
+            let mut target_by_code = income_by_code(&target_income.income);
             // Preserve independently paid legacy events. They are already part
             // of recognized entitlement and are not regenerated by shadow
             // NORMAL replay.
@@ -2335,7 +2397,7 @@ impl RetroEntitlementEngine {
                 .ok_or_else(|| {
                     DomainError::NotFound(format!("{} source period bulunamadı.", period_id))
                 })?;
-            let target_normal_income = target_income_by_period.get(period_id).ok_or_else(|| {
+            let target_income = target_income_by_period.get(period_id).ok_or_else(|| {
                 DomainError::InvalidData(format!(
                     "{} retro target income snapshot'ı eksik.",
                     period_id
@@ -2346,7 +2408,8 @@ impl RetroEntitlementEngine {
                 &request.dataset,
                 &request.personnelId,
                 period,
-                target_normal_income,
+                &target_income.income,
+                target_income.meal_exemption,
                 &mut allocations,
                 SourceMonthSgkPayment {
                     payment_date,

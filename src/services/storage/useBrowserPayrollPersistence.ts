@@ -1,20 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import {
   browserPayrollStore,
   BrowserSnapshotConflictError,
   shouldAdoptRemoteSnapshot,
   type BrowserPayrollSnapshot,
 } from './browserPayrollStore';
-import { parseImportedBackup } from './payrollPayload';
 import {
   serializePayrollStorage,
   type PayrollStorageDto,
 } from '../payrollEngine/decimalBoundary';
+import type { PayrollEngine } from '../payrollEngine/types';
+import {
+  parseCurrentBrowserSnapshot,
+  parseImportedBackup,
+  verifyCurrentPayrollBackupReplay,
+} from './payrollPayload';
 
 interface UseBrowserPayrollPersistenceOptions {
   authoritativePayload: PayrollStorageDto | null;
   isDataLoaded: boolean;
   isNative: boolean;
+  payrollEngine: PayrollEngine;
   setAuthoritativePayload: (payload: PayrollStorageDto) => void;
   setIsDataLoaded: (loaded: boolean) => void;
   setLoadError: (message: string | null) => void;
@@ -39,6 +46,19 @@ function formatBrowserStorageSaveError(error: unknown): UserFacingStorageError {
   };
 }
 
+function parseBrowserSnapshotPayload(snapshot: BrowserPayrollSnapshot): PayrollStorageDto {
+  const raw = JSON.parse(snapshot.payload) as { backupVersion?: unknown };
+  if (raw.backupVersion === BACKUP_FORMAT_VERSION) {
+    return parseCurrentBrowserSnapshot(
+      snapshot.payload,
+      snapshot.sourceFormat === 'current'
+        ? undefined
+        : { allowLegacyMissingGvBase: true }
+    );
+  }
+  return parseImportedBackup(snapshot.payload);
+}
+
 /**
  * Owns browser snapshot revision/CAS state so App does not coordinate an
  * IndexedDB write queue, cross-tab reconciliation, and optimistic rollback.
@@ -48,6 +68,7 @@ export function useBrowserPayrollPersistence({
   authoritativePayload,
   isDataLoaded,
   isNative,
+  payrollEngine,
   setAuthoritativePayload,
   setIsDataLoaded,
   setLoadError,
@@ -93,13 +114,26 @@ export function useBrowserPayrollPersistence({
     [markClean]
   );
 
+  const verifyStoredSnapshot = useCallback(async (saved: BrowserPayrollSnapshot | null) => {
+    if (!saved) return;
+    const payload = parseBrowserSnapshotPayload(saved);
+    if (saved.sourceFormat === 'current') {
+      await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
+    }
+  }, [payrollEngine]);
+
   const loadSnapshot = useCallback(async (): Promise<string | null> => {
     const saved = await browserPayrollStore.loadSnapshot();
+    await verifyStoredSnapshot(saved);
     return adoptSnapshot(saved);
-  }, [adoptSnapshot]);
+  }, [adoptSnapshot, verifyStoredSnapshot]);
 
   const persistPayload = useCallback(
-    async (payload: string, generation?: number): Promise<void> => {
+    async (
+      payload: string,
+      generation?: number,
+      sourceFormat: 'current' | 'legacy' | 'unknown' = 'current'
+    ): Promise<void> => {
       pendingWriteCount.current += 1;
       const persist = saveChain.current
         .catch(() => undefined)
@@ -107,7 +141,8 @@ export function useBrowserPayrollPersistence({
           try {
             const revision = await browserPayrollStore.savePayload(
               payload,
-              snapshotRevision.current
+              snapshotRevision.current,
+              sourceFormat
             );
             snapshotRevision.current = revision;
             if (generation === undefined || generation === persistenceGeneration.current) {
@@ -131,25 +166,38 @@ export function useBrowserPayrollPersistence({
   );
 
   const savePayload = useCallback(
-    async (payload: string): Promise<void> => persistPayload(payload),
+    async (
+      payload: string,
+      sourceFormat: 'current' | 'legacy' | 'unknown' = 'current'
+    ): Promise<void> => persistPayload(payload, undefined, sourceFormat),
     [persistPayload]
   );
 
   const reloadExternalSnapshot = useCallback(async (): Promise<void> => {
     const saved = await browserPayrollStore.loadSnapshot();
+    await verifyStoredSnapshot(saved);
     const payload = adoptSnapshot(saved);
     if (payload) {
       setAuthoritativePayload(parseImportedBackup(payload));
       setIsDataLoaded(true);
       setLoadError(null);
     }
-  }, [adoptSnapshot, setAuthoritativePayload, setIsDataLoaded, setLoadError]);
+  }, [
+    adoptSnapshot,
+    setAuthoritativePayload,
+    setIsDataLoaded,
+    setLoadError,
+    verifyStoredSnapshot,
+  ]);
 
   useEffect(() => {
     if (isNative) return undefined;
     return browserPayrollStore.subscribe((snapshot: BrowserPayrollSnapshot) => {
-      try {
-        const payload = parseImportedBackup(snapshot.payload);
+      void (async () => {
+        const payload = parseBrowserSnapshotPayload(snapshot);
+        if (snapshot.sourceFormat === 'current') {
+          await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
+        }
         const canAdopt = shouldAdoptRemoteSnapshot({
           currentRevision: snapshotRevision.current,
           remoteRevision: snapshot.revision,
@@ -167,12 +215,19 @@ export function useBrowserPayrollPersistence({
         setAuthoritativePayload(payload);
         setIsDataLoaded(true);
         setLoadError(null);
-      } catch (error) {
+      })().catch((error) => {
         console.error('Başka bir sekmeden gelen bordro snapshotı geçersiz.', error);
         setLoadError('Başka bir sekmedeki bordro verisi okunamadı. Mevcut kayıt korunuyor.');
-      }
+      });
     });
-  }, [isNative, recordExternalConflict, setAuthoritativePayload, setIsDataLoaded, setLoadError]);
+  }, [
+    isNative,
+    payrollEngine,
+    recordExternalConflict,
+    setAuthoritativePayload,
+    setIsDataLoaded,
+    setLoadError,
+  ]);
 
   useEffect(() => {
     if (!isDataLoaded || isNative || !authoritativePayload || !persistenceDirty.current) {

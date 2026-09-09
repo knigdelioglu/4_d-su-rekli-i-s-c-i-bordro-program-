@@ -11,6 +11,8 @@ export const RUST_DECIMAL_KEYS = [
   "asgariUcretGvMatrahi",
   "asgariUcretReferansKumulatifMatrahi",
   "aylikDamgaIstisnaHakki",
+  "aylikOncekiPekTuketimi",
+  "aylikSonrasiPekTuketimi",
   "ayniAyOncekiKullanilanDamgaIstisnasi",
   "ayniAyOncekiKullanilanGvIstisnasi",
   "bes",
@@ -101,6 +103,7 @@ export const RUST_DECIMAL_KEYS = [
   "pekAltSinirTamamlamaIsverenPrimi",
   "pekTavanKatsayisi",
   "pekUstSinir",
+  "persistedGvBase",
   "previousAuthoritativeRetroAmount",
   "primMatrahi",
   "recoverableAmount",
@@ -1934,6 +1937,24 @@ export const RUST_STRUCT_CONTRACT = {
         "decimal": true,
         "nestedTypes": []
       },
+      "aylikOncekiPekTuketimi": {
+        "rustName": "aylikOncekiPekTuketimi",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "aylikSonrasiPekTuketimi": {
+        "rustName": "aylikSonrasiPekTuketimi",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
       "finalPek": {
         "rustName": "finalPek",
         "rustType": "Decimal",
@@ -2430,6 +2451,15 @@ export const RUST_STRUCT_CONTRACT = {
         "nestedTypes": [
           "GvHesapDetayi"
         ]
+      },
+      "persistedGvBase": {
+        "rustName": "persistedGvBase",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
       },
       "damgaDetay": {
         "rustName": "damgaDetay",

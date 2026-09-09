@@ -1,8 +1,15 @@
 import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import {
   parseLegacyPayrollStorage,
+  DECIMAL_KEYS,
+  type DecimalKey,
   type PayrollStorageDto,
 } from '../payrollEngine/decimalBoundary';
+import type {
+  PayrollCalculationRequest,
+  PayrollEngine,
+  PayrollDatasetSnapshot,
+} from '../payrollEngine/types';
 import {
   assertRecord,
   parseAndValidatePayrollPayload,
@@ -229,12 +236,32 @@ function canonicalizeLegacyBordro(value: unknown, periods: unknown, version: num
       '0'
     );
   }
-  if (isRecord(bordro.gvDetay)) {
+  const legacyGvDetay = bordro.gvDetay;
+  if (isRecord(legacyGvDetay)) {
     bordro.gvDetay = canonicalizeLegacyMissingFields(
-      bordro.gvDetay,
+      legacyGvDetay,
       LEGACY_GV_DEFAULT_DECIMAL_KEYS,
       '0'
     );
+    // Legacy rows did not always carry the SQLite scalar separately. The
+    // persisted snapshot detail is the only safe migration source; never
+    // approximate it from gross and worker premiums.
+    if (
+      (bordro.persistedGvBase === undefined || bordro.persistedGvBase === null)
+      && typeof legacyGvDetay.cariGvMatrahi === 'string'
+    ) {
+      bordro.persistedGvBase = legacyGvDetay.cariGvMatrahi;
+    }
+  }
+  // A legacy sparse row without either GV authority must not remain a
+  // CALCULATED/FINALIZED historical fact after canonicalization. Preserve the
+  // row for explicit compatibility/review, but keep it out of the current
+  // authoritative chain just like native migration does.
+  if (
+    (bordro.persistedGvBase === undefined || bordro.persistedGvBase === null)
+    && !isRecord(bordro.gvDetay)
+  ) {
+    bordro.status = 'STALE';
   }
   return bordro;
 }
@@ -698,6 +725,7 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
     {
       allowLegacySparsePayrollFinancials: true,
       allowLegacyTaxOpeningYearMismatch: true,
+      allowLegacyMissingGvBase: true,
     }
   );
   const repaired = repairLegacyPersonTaxOpenings(validated);
@@ -706,6 +734,7 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
     : parseAndValidatePayrollPayload(repaired, {
         allowLegacySparsePayrollFinancials: true,
         allowLegacyTaxOpeningYearMismatch: true,
+        allowLegacyMissingGvBase: true,
       });
 }
 
@@ -720,12 +749,14 @@ export function repairAndCanonicalizeBackup(raw: UnknownRecord): PayrollStorageD
   }
   const validated = parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted, true), {
     allowLegacyTaxOpeningYearMismatch: true,
+    allowLegacyMissingGvBase: true,
   });
   const repaired = repairLegacyPersonTaxOpenings(validated);
   return repaired === validated
     ? validated
     : parseAndValidatePayrollPayload(repaired, {
         allowLegacyTaxOpeningYearMismatch: true,
+        allowLegacyMissingGvBase: true,
       });
 }
 
@@ -844,12 +875,15 @@ export function repairLegacyPersonTaxOpenings(
  * legacy numeric compatibility adapter. It performs only the narrow,
  * period-ID-safe repair for old person-level tax openings.
  */
-export function parseCurrentBrowserSnapshot(json: string): PayrollStorageDto {
+export function parseCurrentBrowserSnapshot(
+  json: string,
+  options: { allowLegacyMissingGvBase?: boolean } = {}
+): PayrollStorageDto {
   const parsed: unknown = JSON.parse(json);
-  const validated = parseAndValidatePayrollPayload(parsed);
+  const validated = parseAndValidatePayrollPayload(parsed, options);
   const repaired = repairLegacyPersonTaxOpenings(validated);
   if (repaired === validated) return validated;
-  return parseAndValidatePayrollPayload(repaired);
+  return parseAndValidatePayrollPayload(repaired, options);
 }
 
 /** Parses and canonicalizes a structurally supported legacy backup. */
@@ -873,4 +907,144 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   }
 
   return parseLegacyBackupRecord(raw);
+}
+
+function normalizeReplayDecimal(value: string): string {
+  const match = value.match(/^(-?)(?:0|[1-9]\d*)(?:\.(\d+))?$/u);
+  if (!match) return value;
+  const sign = match[1] === '-' ? '-' : '';
+  const unsigned = value.replace(/^-/, '');
+  const [wholePart, fractionPart = ''] = unsigned.split('.');
+  const whole = wholePart.replace(/^0+(?=\d)/u, '') || '0';
+  const fraction = fractionPart.replace(/0+$/u, '');
+  if (whole === '0' && fraction === '') return '0';
+  return `${whole === '0' && sign === '-' ? '-' : sign}${whole}${fraction ? `.${fraction}` : ''}`;
+}
+
+function stableReplayValue(value: unknown, key?: string): unknown {
+  if (key && DECIMAL_KEYS.has(key as DecimalKey) && typeof value === 'string') {
+    return normalizeReplayDecimal(value);
+  }
+  if (Array.isArray(value)) return value.map((item) => stableReplayValue(item));
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((entryKey) => [entryKey, stableReplayValue(value[entryKey], entryKey)])
+    );
+  }
+  return value;
+}
+
+function currentPayrollReplayProjection(
+  payroll: PayrollStorageDto['bordrolar'][number]
+): unknown {
+  // Metadata (status and timestamps) is lifecycle state, not a financial
+  // result. Every monetary/downstream snapshot and its source attendance
+  // summary remains in the projection.
+  return {
+    puantajOzeti: payroll.puantajOzeti,
+    gelirler: payroll.gelirler,
+    gelirToplam: payroll.gelirToplam,
+    kesintiler: payroll.kesintiler,
+    kesintiToplam: payroll.kesintiToplam,
+    netOdeme: payroll.netOdeme,
+    oncekiKumulatifGvMatrahi: payroll.oncekiKumulatifGvMatrahi,
+    oncekiKumulatifAsgariGvMatrahi: payroll.oncekiKumulatifAsgariGvMatrahi,
+    manuelKumulatifGvMatrahi: payroll.manuelKumulatifGvMatrahi,
+    devredenPekGelen: payroll.devredenPekGelen,
+    sonrakiDevredenPek: payroll.sonrakiDevredenPek,
+    pekDetay: payroll.pekDetay,
+    isPrimiDetay: payroll.isPrimiDetay,
+    gvDetay: payroll.gvDetay,
+    persistedGvBase: payroll.persistedGvBase,
+    damgaDetay: payroll.damgaDetay,
+    statutorySnapshot: payroll.statutorySnapshot,
+  };
+}
+
+function assertCurrentReplayMatches(
+  imported: PayrollStorageDto['bordrolar'][number],
+  replayed: PayrollStorageDto['bordrolar'][number]
+): void {
+  const importedProjection = JSON.stringify(stableReplayValue(currentPayrollReplayProjection(imported)));
+  const replayedProjection = JSON.stringify(stableReplayValue(currentPayrollReplayProjection(replayed)));
+  if (importedProjection !== replayedProjection) {
+    throw new Error(
+      `V5 backup replay: ${imported.id} snapshotı canonical Rust replay ile eşleşmiyor.`
+    );
+  }
+}
+
+/**
+ * Verifies a raw current-format browser import against the same WASM core that
+ * will later calculate the live dataset. Legacy payloads must call the legacy
+ * parser instead and are intentionally not promoted to this trust contract.
+ */
+export async function verifyCurrentPayrollBackupReplay(
+  payload: PayrollStorageDto,
+  engine: PayrollEngine
+): Promise<void> {
+  if (engine.kind !== 'wasm') return;
+
+  const datasetBase: Omit<PayrollDatasetSnapshot, 'payrolls'> = {
+    personnel: payload.personeller,
+    periods: payload.donemler,
+    institutionSettings: payload.kurumDegerleriMap,
+    attendances: payload.puantajlar,
+    taxOpenings: payload.taxOpenings,
+    sickLeaveRecords: payload.sickLeaveRecords,
+    annualPayrollParameters: payload.annualPayrollParameters,
+    zamAylari: payload.zamAylari,
+    compensationRevisions: payload.compensationRevisions,
+    compensationRevisionOverrides: payload.compensationRevisionOverrides,
+    retroBatches: payload.retroBatches,
+    retroAllocations: payload.retroAllocations,
+  };
+
+  for (const imported of payload.bordrolar) {
+    if (imported.status !== 'CALCULATED' && imported.status !== 'FINALIZED') continue;
+    const targetAccrualId = imported.accrualId || imported.id;
+    const replayDataset: PayrollDatasetSnapshot = {
+      ...datasetBase,
+      payrolls: payload.bordrolar.filter((candidate) =>
+        candidate.id !== imported.id && (candidate.accrualId || candidate.id) !== targetAccrualId
+      ),
+    };
+    let grossAmount = null;
+    if (imported.accrualType === 'TEDIYE') grossAmount = imported.gelirler.tediye ?? null;
+    if (imported.accrualType === 'TIS_IKRAMIYE') grossAmount = imported.gelirler.tisIkramiyesi ?? null;
+    if (imported.accrualType === 'SUPPLEMENTAL') grossAmount = imported.gelirler.ekOdeme ?? null;
+    if (imported.accrualType === 'RETRO_ADJUSTMENT') {
+      const batch = payload.retroBatches.find((candidate) => candidate.id === targetAccrualId);
+      if (!batch) throw new Error(`V5 backup replay: ${targetAccrualId} retro batch'i bulunamadı.`);
+      grossAmount = batch.payableSettlementAmount;
+    }
+
+    const request: PayrollCalculationRequest = {
+      personnelId: imported.personelId,
+      periodId: imported.donemId,
+      calculatedAt: imported.sonGuncellemeTarihi || imported.olusturulmaTarihi,
+      manualIncome: imported.accrualType === 'NORMAL'
+        ? { tediye: imported.gelirler.tediye ?? null, tisIkramiyesi: imported.gelirler.tisIkramiyesi ?? null }
+        : null,
+      accrual: {
+        accrualId: targetAccrualId,
+        accrualType: imported.accrualType,
+        paymentDate: imported.paymentDate,
+        sequence: imported.sequence,
+        grossAmount,
+        description: imported.accrualDescription ?? null,
+      },
+      dataset: replayDataset,
+    };
+
+    let replayed: PayrollStorageDto['bordrolar'][number];
+    try {
+      replayed = await engine.calculatePayroll(request);
+    } catch (error) {
+      throw new Error(`V5 backup replay: ${imported.id} canonical Rust replay ile doğrulanamadı: ${String(error)}`);
+    }
+    assertCurrentReplayMatches(imported, replayed);
+  }
 }

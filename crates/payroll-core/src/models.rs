@@ -583,6 +583,13 @@ pub struct PekDetayi {
     /// İşçi SGK ve işsizlik primlerinin authoritative matrahı: ham PEK + bu ay kullanılan devreden PEK, tavanla sınırlı; yapay alt sınır tamamlama hariç.
     #[serde(default)]
     pub primMatrahi: Decimal,
+    /// Same-tax-month PEK consumption after the canonical payment-event
+    /// reconciliation.  Older snapshots omit these fields and fall back to
+    /// their persisted `primMatrahi` chain until they are replayed.
+    #[serde(default)]
+    pub aylikOncekiPekTuketimi: Option<Decimal>,
+    #[serde(default)]
+    pub aylikSonrasiPekTuketimi: Option<Decimal>,
     pub finalPek: Decimal,
     pub devredenPekAşanTutar: Decimal,
     pub pekAltSinir: Decimal,
@@ -666,6 +673,11 @@ pub struct BordroKaydi {
     pub pekDetay: Option<PekDetayi>,
     pub isPrimiDetay: Option<IsPrimiHesapDetayi>,
     pub gvDetay: Option<GvHesapDetayi>,
+    /// Authoritative GV base loaded from/persisted to SQLite.  It is optional
+    /// only for sparse legacy payloads; current calculated records populate it
+    /// and strict boundaries reconcile it with `gvDetay.cariGvMatrahi`.
+    #[serde(default)]
+    pub persistedGvBase: Option<Decimal>,
     #[serde(default)]
     pub damgaDetay: Option<DamgaVergisiHesapDetayi>,
     /// Bordro hesaplanırken çözümlenen period-local yasal parametrelerin snapshot'ı.

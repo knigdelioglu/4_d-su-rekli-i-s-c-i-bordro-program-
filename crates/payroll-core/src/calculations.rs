@@ -377,6 +377,98 @@ pub fn calculate_monthly_stamp_tax_state(
     }
 }
 
+/// Complete state needed by the authoritative GV/DV calculator.  The
+/// payroll engine supplies the already-resolved PEK/worker-premium and
+/// source-policy values; callers must not reconstruct a second tax formula
+/// from aggregate income alone.
+#[derive(Debug, Clone, Copy)]
+pub struct CanonicalTaxCalculationInput<'a> {
+    pub income_total: Decimal,
+    pub retro_income_tax_exempt: Decimal,
+    pub retro_stamp_tax_exempt: Decimal,
+    pub normal_meal_tax_exemption: Decimal,
+    pub worker_sgk: Decimal,
+    pub worker_unemployment: Decimal,
+    pub union_deduction: Decimal,
+    pub insurance_wage_base: Decimal,
+    pub birth_military_gv_input: Decimal,
+    pub life_insurance_premium: Decimal,
+    pub health_insurance_premium: Decimal,
+    pub insurance_annual_cap: Decimal,
+    pub insurance_used_before: Decimal,
+    pub previous_cumulative_gv: Decimal,
+    pub monthly_asgari_gv_matrahi: Decimal,
+    pub previous_cumulative_asgari_gv: Decimal,
+    pub same_month_gv_used: Decimal,
+    pub tax_brackets: &'a [TaxBracket],
+    pub monthly_minimum_gross: Decimal,
+    pub stamp_rate: Decimal,
+    pub same_month_stamp_used: Decimal,
+}
+
+#[derive(Debug, Clone)]
+pub struct CanonicalTaxCalculation {
+    pub gv: GvHesapDetayi,
+    pub stamp: DamgaVergisiHesapDetayi,
+    pub gv_base: Decimal,
+}
+
+/// The single production GV/DV authority used after PEK and worker premiums
+/// have been resolved.  The older public statutory wrapper below is retained
+/// only as an explicitly named fixture-compatibility path.
+pub fn calculate_canonical_tax_state(
+    input: &CanonicalTaxCalculationInput<'_>,
+) -> CanonicalTaxCalculation {
+    let gv_base_before_discounts = (input.income_total
+        - input.retro_income_tax_exempt
+        - input.worker_sgk
+        - input.worker_unemployment
+        - input.normal_meal_tax_exemption
+        - input.union_deduction)
+        .max(Decimal::ZERO);
+    let mut gv_discount = calculate_gv_indirimleri(
+        input.insurance_wage_base,
+        input.birth_military_gv_input,
+        input.life_insurance_premium,
+        input.health_insurance_premium,
+        input.insurance_annual_cap,
+        input.insurance_used_before,
+    );
+    gv_discount.dogum_askerlik_indirimi = gv_discount
+        .dogum_askerlik_indirimi
+        .min(gv_base_before_discounts);
+    gv_discount.uygulanabilir_sigorta_indirimi = gv_discount
+        .uygulanabilir_sigorta_indirimi
+        .min(gv_base_before_discounts - gv_discount.dogum_askerlik_indirimi);
+    let gv_base = gv_base_before_discounts
+        - gv_discount.dogum_askerlik_indirimi
+        - gv_discount.uygulanabilir_sigorta_indirimi;
+
+    let mut gv = calculate_gv_hesap_detayi_with_monthly_exemption_state(
+        gv_base,
+        input.previous_cumulative_gv,
+        input.monthly_asgari_gv_matrahi,
+        input.previous_cumulative_asgari_gv,
+        input.same_month_gv_used,
+        input.tax_brackets,
+    );
+    gv.dogumAskerlikGvIndirimi = gv_discount.dogum_askerlik_indirimi;
+    gv.sigortaGvIndirimAdayi = gv_discount.sigorta_adayi;
+    gv.sigortaGvAylikLimiti = gv_discount.sigorta_aylik_limiti;
+    gv.sigortaGvYillikKalanLimiti = gv_discount.sigorta_yillik_kalan_limiti;
+    gv.uygulanabilirSigortaGvIndirimi = gv_discount.uygulanabilir_sigorta_indirimi;
+
+    let stamp = calculate_monthly_stamp_tax_state(
+        (input.income_total - input.retro_stamp_tax_exempt - input.normal_meal_tax_exemption)
+            .max(Decimal::ZERO),
+        input.monthly_minimum_gross,
+        input.stamp_rate,
+        input.same_month_stamp_used,
+    );
+
+    CanonicalTaxCalculation { gv, stamp, gv_base }
+}
+
 pub struct NightWorkPolicy;
 
 impl NightWorkPolicy {
@@ -1155,6 +1247,8 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
         hamPek: round2(ham_pek),
         devredenPekKullanilan: round2(eklenecek_devreden_toplam),
         primMatrahi: prim_matrahi,
+        aylikOncekiPekTuketimi: None,
+        aylikSonrasiPekTuketimi: None,
         finalPek: round2(final_pek),
         devredenPekAşanTutar: devreden_pek_asan_tutar,
         pekAltSinir: pek_alt_sinir,
@@ -1188,7 +1282,9 @@ pub(crate) struct StatutoryCalculationOptions {
     pub(crate) meal_exemption: Option<MealExemptionTotals>,
 }
 
-pub fn calculate_statutory_deductions_with_tax_brackets(
+/// Explicit legacy fixture API. Production callers must use the payroll
+/// engine's state-aware calculator.
+pub fn calculate_legacy_statutory_deductions_with_tax_brackets(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     personel: Option<&Personel>,
@@ -1196,7 +1292,7 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
-    calculate_statutory_deductions_with_month_to_date(
+    calculate_legacy_statutory_deductions_with_month_to_date_impl(
         gelirler,
         kurum_degerleri,
         personel,
@@ -1206,15 +1302,13 @@ pub fn calculate_statutory_deductions_with_tax_brackets(
         Decimal::ZERO,
         true,
     )
+    .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
 
-/// Calculates statutory deductions for one accrual with an already consumed
-/// same-month PEK amount. The historical wrapper above remains byte-for-byte
-/// equivalent for a first NORMAL accrual; this variant lets a NORMAL accrual
-/// that is chronologically after a supplementary node consume only the
-/// remaining monthly PEK capacity.
+/// Fixture compatibility wrapper.  Production payroll calculation is owned by
+/// `payroll_engine`; this function is not a second financial authority.
 #[allow(clippy::too_many_arguments)]
-pub fn calculate_statutory_deductions_with_month_to_date(
+pub fn calculate_legacy_statutory_deductions_with_month_to_date(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     personel: Option<&Personel>,
@@ -1224,28 +1318,23 @@ pub fn calculate_statutory_deductions_with_month_to_date(
     month_to_date_pek: Decimal,
     apply_lower_bound: bool,
 ) -> (KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>) {
-    calculate_statutory_deductions_with_month_to_date_and_devreden_state(
+    calculate_legacy_statutory_deductions_with_month_to_date_impl(
         gelirler,
         kurum_degerleri,
         personel,
         puantaj_ozeti,
         tax_inputs,
         statutory_snapshot,
-        StatutoryCalculationOptions {
-            month_to_date_pek,
-            tax_months_elapsed: 1,
-            apply_lower_bound,
-            meal_exemption: None,
-        },
+        month_to_date_pek,
+        apply_lower_bound,
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
 
-/// Calculates statutory deductions while making the devreden PEK calendar
-/// distance explicit. The compatibility wrapper above keeps the historical
-/// first-accrual behavior; the payroll engine supplies the exact tax-month
-/// distance for the current payment event.
-pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_state(
+/// Canonical production contribution calculation.  It resolves PEK and all
+/// non-tax deductions; GV/DV are calculated once by the state-aware tax
+/// calculator after the engine has resolved meal, retro, and annual state.
+pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_state(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     personel: Option<&Personel>,
@@ -1289,7 +1378,6 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
 
     let sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
     let issizlik_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
-    let dv_rate = k.damgaVergisiOraniBinde.unwrap_or(dec!(7.59)) / dec!(1000);
 
     let isci_sgk_primi = round_sgk_amount(worker_pek_matrah * sgk_rate);
     let isci_issizlik_primi = round_sgk_amount(worker_pek_matrah * issizlik_rate);
@@ -1309,27 +1397,6 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
     } else {
         dec!(0)
     };
-
-    let gelir_vergisi_matrah =
-        calculate_gv_matrah(brut_gelir - sendika_aidati, isci_sgk_primi, isci_issizlik_primi);
-
-    let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
-    let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
-    let asgari_ucret_gv_matrah =
-        calculate_aylik_asgari_ucret_gv_matrahi(gunluk_asgari, sgk_rate, issizlik_rate);
-
-    let gv_detay = calculate_gv_hesap_detayi_with_brackets(
-        gelir_vergisi_matrah,
-        tax_inputs.previous_cumulative_gv,
-        asgari_ucret_gv_matrah,
-        tax_inputs.previous_cumulative_asgari_gv,
-        tax_inputs.tax_brackets,
-    );
-    let gelir_vergisi = gv_detay.kesilenGelirVergisi;
-
-    let asgari_ucret_dv_istisnasi = round2(aylik_brut_asgari * dv_rate);
-    let ham_damga_vergisi = round2(brut_gelir * dv_rate);
-    let damga_vergisi = (round2(ham_damga_vergisi - asgari_ucret_dv_istisnasi)).max(dec!(0));
 
     let bes = calculate_oks_deduction(oks_pek_matrah, k, personel, true).unwrap_or_default();
 
@@ -1352,8 +1419,10 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
     let kesintiler = KesintiKalemleri {
         isciSgkPrimi: Some(isci_sgk_primi),
         isciIssizlikPrimi: Some(isci_issizlik_primi),
-        gelirVergisi: Some(gelir_vergisi),
-        damgaVergisi: Some(damga_vergisi),
+        // GV/DV are intentionally left to the state-aware canonical tax
+        // calculator used by the payroll engine.
+        gelirVergisi: None,
+        damgaVergisi: None,
         sendikaAidati: Some(sendika_aidati),
         bes: Some(bes),
         icra,
@@ -1366,8 +1435,77 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
     Ok((kesintiler, pek_detay, sonraki_devreden))
 }
 
+/// Historical fixture compatibility only.  This preserves the old reduced
+/// GV/DV convention for external fixtures while keeping it out of the
+/// production payroll path and clearly separate from the canonical calculator.
+fn calculate_legacy_statutory_deductions_with_month_to_date_impl(
+    gelirler: &GelirKalemleri,
+    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    personel: Option<&Personel>,
+    puantaj_ozeti: Option<&PuantajOzeti>,
+    tax_inputs: &StatutoryDeductionTaxInputs<'_>,
+    statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
+    month_to_date_pek: Decimal,
+    apply_lower_bound: bool,
+) -> Result<(KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>)> {
+    let (mut deductions, pek_detail, next_devreden) =
+        calculate_statutory_contributions_with_month_to_date_and_devreden_state(
+            gelirler,
+            kurum_degerleri,
+            personel,
+            puantaj_ozeti,
+            tax_inputs,
+            statutory_snapshot,
+            StatutoryCalculationOptions {
+                month_to_date_pek,
+                tax_months_elapsed: 1,
+                apply_lower_bound,
+                meal_exemption: None,
+            },
+        )?;
+    let brut_gelir = calculate_gelir_toplam(gelirler);
+    if brut_gelir <= Decimal::ZERO && pek_detail.primMatrahi <= Decimal::ZERO {
+        return Ok((deductions, pek_detail, next_devreden));
+    }
+
+    let default_k = DonemselKurumDegerleri::default();
+    let k = kurum_degerleri.unwrap_or(&default_k);
+    let sgk_rate = k.sgkIsciOraniYuzde.unwrap_or(dec!(14)) / dec!(100);
+    let unemployment_rate = k.issizlikIsciOraniYuzde.unwrap_or(dec!(1)) / dec!(100);
+    let dv_rate = k.damgaVergisiOraniBinde.unwrap_or(dec!(7.59)) / dec!(1000);
+    let union = deductions.sendikaAidati.unwrap_or_default();
+    let gv_base = calculate_gv_matrah(
+        brut_gelir - union,
+        deductions.isciSgkPrimi.unwrap_or_default(),
+        deductions.isciIssizlikPrimi.unwrap_or_default(),
+    );
+    let daily_minimum = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
+    let monthly_minimum = round2(daily_minimum * dec!(30));
+    let monthly_asgari_gv = calculate_aylik_asgari_ucret_gv_matrahi(
+        daily_minimum,
+        sgk_rate,
+        unemployment_rate,
+    );
+    let gv = calculate_gv_hesap_detayi_with_brackets(
+        gv_base,
+        tax_inputs.previous_cumulative_gv,
+        monthly_asgari_gv,
+        tax_inputs.previous_cumulative_asgari_gv,
+        tax_inputs.tax_brackets,
+    );
+    deductions.gelirVergisi = Some(gv.kesilenGelirVergisi);
+    let stamp = calculate_monthly_stamp_tax_state(
+        brut_gelir,
+        monthly_minimum,
+        dv_rate,
+        Decimal::ZERO,
+    );
+    deductions.damgaVergisi = Some(stamp.kesilenDamgaVergisi);
+    Ok((deductions, pek_detail, next_devreden))
+}
+
 /// Test fixture/geriye dönük API. Üretim yolu yıllık parametre tablosunu kullanır.
-pub fn calculate_statutory_deductions(
+pub fn calculate_legacy_statutory_deductions(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     personel: Option<&Personel>,
@@ -1383,12 +1521,15 @@ pub fn calculate_statutory_deductions(
         tax_brackets: &default_gelir_vergisi_dilimleri_2026(),
     };
 
-    calculate_statutory_deductions_with_tax_brackets(
+    calculate_legacy_statutory_deductions_with_month_to_date_impl(
         gelirler,
         kurum_degerleri,
         personel,
         puantaj_ozeti,
         &tax_inputs,
         None,
+        Decimal::ZERO,
+        true,
     )
+    .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
