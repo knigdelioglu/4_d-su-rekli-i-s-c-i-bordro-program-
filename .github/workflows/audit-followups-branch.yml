@@ -69,6 +69,16 @@ jobs:
           Path('/tmp/apply_hardening.py').write_text(script)
           PY
           python3 /tmp/apply_hardening.py
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path('crates/payroll-core/tests/retro_tax_oks_followup_20260909.rs')
+          text = path.read_text()
+          needle = '#[path = "support/independent_audit.rs"]\nmod support;'
+          replacement = '#[allow(dead_code)]\n#[path = "support/independent_audit.rs"]\nmod support;'
+          if needle not in text:
+              raise SystemExit('retro follow-up support module anchor not found')
+          path.write_text(text.replace(needle, replacement, 1))
+          PY
 
       - name: Format Rust changes
         run: cargo fmt --all
@@ -96,6 +106,8 @@ jobs:
         shell: bash
         run: |
           rm -f .github/workflows/audit-followups-branch.yml
+          rm -f .github/workflows/one-time-payroll-hardening.yml
+          rm -f .github/workflows/one-time-payroll-hardening-v2.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
