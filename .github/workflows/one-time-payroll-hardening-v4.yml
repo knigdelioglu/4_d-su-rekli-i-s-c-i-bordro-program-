@@ -1,0 +1,101 @@
+name: One-time payroll hardening v4
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-time-payroll-hardening-v4.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+          cache: false
+
+      - name: Install WASM toolchain
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
+
+      - name: Install JavaScript dependencies
+        run: |
+          bun install --frozen-lockfile || {
+            bun pm cache rm
+            bun install --frozen-lockfile
+          }
+
+      - name: Apply structural patch and chronological fixture correction
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          workflow = Path('.github/workflows/one-time-payroll-hardening-v2.yml').read_text()
+          marker = "          python3 <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY", start)
+          script = dedent(workflow[start:end])
+          exec(compile(script, '<embedded-v2-hardening>', 'exec'), {'__name__': '__main__'})
+
+          test_path = Path('crates/payroll-core/tests/retro_tax_oks_followup_20260909.rs')
+          text = test_path.read_text()
+          if not text.startswith('#[allow(dead_code)]'):
+              text = '#[allow(dead_code)]\n' + text
+
+          old = '''    let mut payment = support::dated_request(2026, 2);\n    let payment_normal = calculate_payroll_checked(&payment).unwrap();\n    payment.dataset.payrolls.push(payment_normal);\n    payment.dataset.periods.extend(source.dataset.periods.clone());\n    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());\n    payment.dataset.attendances.extend(source.dataset.attendances.clone());\n    payment.dataset.payrolls.push(original);\n'''
+          new = '''    let mut payment = support::dated_request(2026, 2);\n    // Build the authoritative January chain before calculating February.\n    payment.dataset.periods.extend(source.dataset.periods.clone());\n    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());\n    payment.dataset.attendances.extend(source.dataset.attendances.clone());\n    payment.dataset.payrolls.push(original);\n    let payment_normal = calculate_payroll_checked(&payment).unwrap();\n    payment.dataset.payrolls.push(payment_normal);\n'''
+          if old not in text:
+              raise SystemExit('retro meal fixture chronology anchor not found')
+          test_path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Format Rust changes
+        run: cargo fmt --all
+
+      - name: Run targeted core regressions
+        run: |
+          cargo test -p payroll-core --test independent_audit_20260908
+          cargo test -p payroll-core --test retro_tax_oks_followup_20260909
+
+      - name: Run native reconciliation regressions
+        run: cargo test -p bordro-programi --test snapshot_reconciliation_20260909
+
+      - name: Run browser semantic regression
+        run: bun test src/services/storage/payrollPayloadSchema.semantic.test.ts
+
+      - name: Rebuild committed browser WASM
+        run: bun run wasm:build
+
+      - name: Verify WASM package
+        run: |
+          bun run verify:wasm-package
+          bun run wasm:test
+
+      - name: Commit hardening changes
+        run: |
+          rm -f .github/workflows/one-time-payroll-hardening.yml
+          rm -f .github/workflows/one-time-payroll-hardening-v2.yml
+          rm -f .github/workflows/one-time-payroll-hardening-v3.yml
+          rm -f .github/workflows/one-time-payroll-hardening-v4.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Harden payroll validation and retro tax policy'
+          git push origin HEAD:main
