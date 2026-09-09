@@ -31,7 +31,7 @@ jobs:
             exit 0
           fi
 
-          if ! rg -qi 'tarball|extract|download|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network' "${install_log}"; then
+          if ! grep -Eqi 'tarball|extract|download|ECONNRESET|ETIMEDOUT|EAI_AGAIN|network' "${install_log}"; then
             echo "Bun dependency installation failed for a non-transient reason; not retrying." >&2
             exit 1
           fi
