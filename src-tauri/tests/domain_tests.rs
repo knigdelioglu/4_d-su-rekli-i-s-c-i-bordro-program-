@@ -1916,7 +1916,7 @@ mod tests {
     #[test]
     fn test_pek_alt_sinir_tamamlama_isveren_prim_ayrimi() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_prime_esas_kazanc, calculate_legacy_statutory_deductions,
+            calculate_legacy_statutory_deductions, calculate_prime_esas_kazanc,
         };
 
         let mut puantaj = PuantajOzeti::default();
@@ -1992,7 +1992,7 @@ mod tests {
     #[test]
     fn test_sgk_resmi_2026_ornegi_midpoint_away_from_zero() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_prime_esas_kazanc, calculate_legacy_statutory_deductions,
+            calculate_legacy_statutory_deductions, calculate_prime_esas_kazanc,
         };
         use rust_decimal::RoundingStrategy;
 
@@ -2047,7 +2047,7 @@ mod tests {
     #[test]
     fn test_pek_alt_sinir_ustunde_normal_bordro() {
         use bordro_programi_lib::domain::calculations::{
-            calculate_prime_esas_kazanc, calculate_legacy_statutory_deductions,
+            calculate_legacy_statutory_deductions, calculate_prime_esas_kazanc,
         };
 
         let mut puantaj = PuantajOzeti::default();

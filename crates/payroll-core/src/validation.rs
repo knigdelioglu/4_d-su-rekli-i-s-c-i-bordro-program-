@@ -3,7 +3,7 @@ use crate::{models::*, DomainError, Result};
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 
-pub const VALID_ATTENDANCE_CODES: [&'static str; 7] = ["Ç", "T", "G", "İ", "GÇ", "GÇT", "R"];
+pub const VALID_ATTENDANCE_CODES: [&str; 7] = ["Ç", "T", "G", "İ", "GÇ", "GÇT", "R"];
 
 pub fn validate_monetary_amount(field: &str, amount: Decimal) -> Result<()> {
     if amount.normalize().scale() > 2 {
@@ -34,12 +34,18 @@ fn validate_payroll_line_items_internal(
         ("tisIkramiyesi", gelirler.tisIkramiyesi),
         ("ekOdeme", gelirler.ekOdeme),
         ("yemek", gelirler.yemek),
-        ("birlestirilmisSosyalYardim", gelirler.birlestirilmisSosyalYardim),
+        (
+            "birlestirilmisSosyalYardim",
+            gelirler.birlestirilmisSosyalYardim,
+        ),
         ("vasitaYol", gelirler.vasitaYol),
         ("giyimYardimi", gelirler.giyimYardimi),
         ("isPrimi", gelirler.isPrimi),
         ("geceCalismasiUcreti", gelirler.geceCalismasiUcreti),
-        ("geceCalismasiTatiliUcreti", gelirler.geceCalismasiTatiliUcreti),
+        (
+            "geceCalismasiTatiliUcreti",
+            gelirler.geceCalismasiTatiliUcreti,
+        ),
         ("hizmetZammi", gelirler.hizmetZammi),
         ("digerGelir", gelirler.digerGelir),
     ];
@@ -64,7 +70,10 @@ fn validate_payroll_line_items_internal(
         ("bes", kesintiler.bes),
         ("icra", kesintiler.icra),
         ("kisiBorcu", kesintiler.kisiBorcu),
-        ("dogumAskerlikBorclanmasi", kesintiler.dogumAskerlikBorclanmasi),
+        (
+            "dogumAskerlikBorclanmasi",
+            kesintiler.dogumAskerlikBorclanmasi,
+        ),
         ("hayatSaglikSigortasi", kesintiler.hayatSaglikSigortasi),
         ("digerKesinti", kesintiler.digerKesinti),
     ];
@@ -305,9 +314,7 @@ pub fn validate_current_payroll_snapshot_authority(payroll: &BordroKaydi) -> Res
             )
         })?;
         let detail = payroll.gvDetay.as_ref().ok_or_else(|| {
-            DomainError::InvalidData(
-                "Current authoritative snapshot GV detayını içermiyor.".into(),
-            )
+            DomainError::InvalidData("Current authoritative snapshot GV detayını içermiyor.".into())
         })?;
         if persisted != detail.cariGvMatrahi {
             return Err(DomainError::InvalidData(

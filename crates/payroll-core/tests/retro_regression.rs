@@ -8,8 +8,7 @@ use payroll_core::{
     PayrollAccrualInput, PayrollCalculationRequest, PayrollDatasetSnapshot, Personel,
     PersonelPuantaj, RetroAdjustmentBatch, RetroAllocation, RetroEarningCode,
     RetroEntitlementEngine, RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment,
-    RetroTaxTreatment, SickLeaveRecord,
-    StatutoryParameterSegment,
+    RetroTaxTreatment, SickLeaveRecord, StatutoryParameterSegment,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -734,10 +733,7 @@ fn retro_source_replay_uses_segmented_meal_capacity() {
         gunlukYemekIstisnasiGV: Some(dec!(200)),
         ..StatutoryParameterSegment::default()
     }]);
-    let attendance = source
-        .attendances
-        .get_mut(0)
-        .expect("source attendance");
+    let attendance = source.attendances.get_mut(0).expect("source attendance");
     for (date, code) in &mut attendance.gunler {
         *code = if date == "2026-01-15" || date == "2026-02-01" {
             "Ç".into()

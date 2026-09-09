@@ -10,7 +10,7 @@ use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
-use bordro_programi_lib::repositories::{dec_to_kurus, opt_dec_to_kurus};
+use bordro_programi_lib::repositories::{money_to_kurus, opt_money_to_kurus};
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
 use rusqlite::params;
@@ -256,9 +256,60 @@ fn personnel_repository_rejects_oks_rate_below_three_percent() {
 }
 
 #[test]
+fn money_precision_is_strict_but_oks_rate_precision_round_trips() {
+    assert_eq!(money_to_kurus(Some(dec!(100.12))).unwrap(), 10012);
+    assert_eq!(money_to_kurus(Some(dec!(100.1))).unwrap(), 10010);
+    assert_eq!(money_to_kurus(Some(dec!(100))).unwrap(), 10000);
+    assert!(money_to_kurus(Some(dec!(100.123))).is_err());
+
+    let conn = create_in_memory_connection().unwrap();
+    let mut p = person("oks-precision");
+    p.kesintiler = Some(PersonelKesintileri {
+        sendikaUyesi: Some(false),
+        sabitSendikaAidati: Some(dec!(100.12)),
+        besUyesi: Some(true),
+        oksOraniYuzde: Some(dec!(3.125)),
+        sabitBesTutar: None,
+        icraTutar: None,
+        kisiBorcuTutar: None,
+        dogumAskerlikBorclanmasiTutar: None,
+        hayatSaglikSigortasiTutar: None,
+        digerKesintiTutar: None,
+        gvIndirimleri: None,
+    });
+    PersonnelRepository::save(&conn, &p).unwrap();
+
+    let stored_rate: (String, String) = conn
+        .query_row(
+            "SELECT typeof(oks_orani_yuzde), oks_orani_yuzde FROM personnel WHERE id = ?1",
+            params![&p.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_rate, ("text".to_string(), "rate:3.125".to_string()));
+
+    let loaded = PersonnelRepository::get_by_id(&conn, "oks-precision")
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.kesintiler.unwrap().oksOraniYuzde, Some(dec!(3.125)));
+
+    let mut invalid_money = person("money-precision");
+    invalid_money
+        .kesintiler
+        .as_mut()
+        .unwrap()
+        .sabitSendikaAidati = Some(dec!(100.123));
+    let err = PersonnelRepository::save(&conn, &invalid_money).unwrap_err();
+    assert!(
+        matches!(err, DomainError::ValidationError(message) if message.contains("kuruş hassasiyeti"))
+    );
+    assert!(opt_money_to_kurus(Some(dec!(100.123))).is_err());
+}
+
+#[test]
 fn decimal_to_kurus_overflow_is_an_error_not_zero() {
-    assert!(dec_to_kurus(Some(Decimal::MAX)).is_err());
-    assert!(opt_dec_to_kurus(Some(Decimal::MAX)).is_err());
+    assert!(money_to_kurus(Some(Decimal::MAX)).is_err());
+    assert!(opt_money_to_kurus(Some(Decimal::MAX)).is_err());
 }
 
 fn payroll_record(

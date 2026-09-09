@@ -3,7 +3,10 @@ mod support;
 use payroll_core::*;
 use rust_decimal_macros::dec;
 
-fn with_full_year_periods(mut req: PayrollCalculationRequest, year: i32) -> PayrollCalculationRequest {
+fn with_full_year_periods(
+    mut req: PayrollCalculationRequest,
+    year: i32,
+) -> PayrollCalculationRequest {
     for month in 1..=12 {
         let p_req = support::dated_request(year, month);
         let period = p_req.dataset.periods[0].clone();
@@ -11,7 +14,10 @@ fn with_full_year_periods(mut req: PayrollCalculationRequest, year: i32) -> Payr
             req.dataset.periods.push(period.clone());
         }
         if let Some(settings) = p_req.dataset.institutionSettings.get(&period.id) {
-            req.dataset.institutionSettings.entry(period.id).or_insert_with(|| settings.clone());
+            req.dataset
+                .institutionSettings
+                .entry(period.id)
+                .or_insert_with(|| settings.clone());
         }
     }
     req
@@ -38,14 +44,23 @@ fn test_audit_sendika_aidati_deducted_from_gv_matrah() {
     let gross = payroll.gelirToplam;
     let sgk_worker = payroll.kesintiler.isciSgkPrimi.unwrap_or_default();
     let unemployment_worker = payroll.kesintiler.isciIssizlikPrimi.unwrap_or_default();
-    let meal_gv_exemption = payroll.statutorySnapshot.as_ref().unwrap().gvYemekIstisnasiToplam;
-    let actual_meal_exemption = payroll.gelirler.yemek.unwrap_or_default().min(meal_gv_exemption);
+    let meal_gv_exemption = payroll
+        .statutorySnapshot
+        .as_ref()
+        .unwrap()
+        .gvYemekIstisnasiToplam;
+    let actual_meal_exemption = payroll
+        .gelirler
+        .yemek
+        .unwrap_or_default()
+        .min(meal_gv_exemption);
 
     // GVK 63/4: gv_matrah = gross - sgk - unemployment - meal_exemption - union_fee
-    let expected_gv_base = (gross - sgk_worker - unemployment_worker - actual_meal_exemption - dec!(1000)).max(dec!(0));
+    let expected_gv_base =
+        (gross - sgk_worker - unemployment_worker - actual_meal_exemption - dec!(1000))
+            .max(dec!(0));
     assert_eq!(
-        gv_detay.cariGvMatrahi,
-        expected_gv_base,
+        gv_detay.cariGvMatrahi, expected_gv_base,
         "GV matrahı sendika aidatı (1,000 TL) düşülerek hesaplanmalıdır"
     );
     assert_eq!(payroll.kesintiler.sendikaAidati, Some(dec!(1000)));
@@ -58,7 +73,12 @@ fn test_audit_february_28_days_with_1_unpaid_day_results_in_27_prim_days() {
     req.dataset.annualPayrollParameters = vec![AnnualPayrollParameters::default_for_2026()];
 
     let person_id = req.dataset.personnel[0].id.clone();
-    let mut settings = req.dataset.institutionSettings.get(&req.periodId).unwrap().clone();
+    let mut settings = req
+        .dataset
+        .institutionSettings
+        .get(&req.periodId)
+        .unwrap()
+        .clone();
 
     // In 4/D bordro geometry: yil/ay is the start date's year/month.
     // 15 Feb - 14 Mar period starts on 2026-02-15 -> yil: 2026, ay: 2, taxYear: 2026, taxMonth: 3.
@@ -91,12 +111,14 @@ fn test_audit_february_28_days_with_1_unpaid_day_results_in_27_prim_days() {
         gunler: att_days,
     };
 
-    let resolved_feb_mar = payroll_engine::resolve_statutory_snapshot_for_period_with_paid_sick_dates(
-        &attendance_feb_mar,
-        &period_feb_mar,
-        &settings,
-        &[], // No employer-paid sick dates
-    ).expect("Period starting 2026-02-15 should resolve");
+    let resolved_feb_mar =
+        payroll_engine::resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+            &attendance_feb_mar,
+            &period_feb_mar,
+            &settings,
+            &[], // No employer-paid sick dates
+        )
+        .expect("Period starting 2026-02-15 should resolve");
 
     // Total calendar days = 28. 1 unpaid day = 27 prim days!
     assert_eq!(
@@ -147,7 +169,10 @@ fn test_audit_multi_accrual_same_month_stamp_exemption_exhaustion() {
     let p_normal = calculate_payroll_checked(&req_normal).unwrap();
     let stamp_normal = p_normal.damgaDetay.as_ref().unwrap();
 
-    assert_eq!(stamp_normal.ayniAyOncekiKullanilanDamgaIstisnasi, dec!(151.80));
+    assert_eq!(
+        stamp_normal.ayniAyOncekiKullanilanDamgaIstisnasi,
+        dec!(151.80)
+    );
     assert_eq!(stamp_normal.uygulananDamgaIstisnasi, dec!(98.90));
     assert_eq!(stamp_normal.kalanDamgaIstisnasi, dec!(0));
     assert_eq!(
@@ -183,9 +208,16 @@ fn test_audit_pek_lower_bound_zero_deduction_for_worker() {
     req = with_full_year_periods(req, 2026);
     let period_id = req.periodId.clone();
 
-    let mut settings = req.dataset.institutionSettings.get(&period_id).unwrap().clone();
+    let mut settings = req
+        .dataset
+        .institutionSettings
+        .get(&period_id)
+        .unwrap()
+        .clone();
     settings.gunlukTabanUcret = dec!(400);
-    req.dataset.institutionSettings.insert(period_id.clone(), settings);
+    req.dataset
+        .institutionSettings
+        .insert(period_id.clone(), settings);
 
     let payroll = calculate_payroll_checked(&req).unwrap();
     let pek = payroll.pekDetay.as_ref().unwrap();
@@ -205,8 +237,12 @@ fn test_audit_pek_lower_bound_zero_deduction_for_worker() {
     assert_eq!(pek.altSinirTamamlamaFarki, expected_fark);
 
     // Employer pays both worker SGK (14%) and unemployment (1%) difference:
-    let expected_tamamlama_primi = (expected_fark * dec!(0.14)).round_dp(2) + (expected_fark * dec!(0.01)).round_dp(2);
-    assert_eq!(pek.pekAltSinirTamamlamaIsverenPrimi, Some(expected_tamamlama_primi));
+    let expected_tamamlama_primi =
+        (expected_fark * dec!(0.14)).round_dp(2) + (expected_fark * dec!(0.01)).round_dp(2);
+    assert_eq!(
+        pek.pekAltSinirTamamlamaIsverenPrimi,
+        Some(expected_tamamlama_primi)
+    );
 }
 
 #[test]
@@ -241,9 +277,14 @@ fn test_audit_direct_statutory_deductions_union_fee_deduction() {
             gvIndirimleri: None,
         }),
     };
-    let mut gelirler = GelirKalemleri::default();
-    gelirler.tabanBrutAylik = Some(dec!(35000));
-    let puantaj = PuantajOzeti { c: 30, ..PuantajOzeti::default() };
+    let gelirler = GelirKalemleri {
+        tabanBrutAylik: Some(dec!(35000)),
+        ..GelirKalemleri::default()
+    };
+    let puantaj = PuantajOzeti {
+        c: 30,
+        ..PuantajOzeti::default()
+    };
     let kurum = DonemselKurumDegerleri {
         gunlukTabanUcret: dec!(1166.67),
         gunlukAsgariUcret: Some(dec!(1101)),

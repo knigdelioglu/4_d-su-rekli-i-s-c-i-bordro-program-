@@ -82,7 +82,7 @@ jobs:
         run: cargo install tauri-cli --version "^2.0.0" --locked
 
       - name: Build NSIS installer
-        run: cargo tauri build --target x86_64-pc-windows-msvc --bundles nsis
+        run: cargo tauri build --config src-tauri/tauri.conf.json --target x86_64-pc-windows-msvc --bundles nsis
 
       - name: Locate installer
         shell: pwsh

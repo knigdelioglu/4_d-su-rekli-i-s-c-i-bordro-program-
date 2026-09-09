@@ -275,9 +275,10 @@ impl CumulativeTaxService {
                     period.id
                 )));
             } else {
-                let mut settings = DonemselKurumDegerleri::default();
-                settings.donemId = period.id.clone();
-                settings
+                DonemselKurumDegerleri {
+                    donemId: period.id.clone(),
+                    ..DonemselKurumDegerleri::default()
+                }
             };
             let settings = historical_statutory_settings(conn, period, &settings)?;
             if require_settings {

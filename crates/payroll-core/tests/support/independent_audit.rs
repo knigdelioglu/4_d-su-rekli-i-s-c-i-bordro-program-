@@ -61,6 +61,7 @@ pub fn request() -> PayrollCalculationRequest {
     }
 }
 
+#[allow(dead_code)]
 pub fn supplementary(
     mut req: PayrollCalculationRequest,
     kind: AccrualType,

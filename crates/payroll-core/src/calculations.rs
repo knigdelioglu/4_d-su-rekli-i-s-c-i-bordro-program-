@@ -39,19 +39,15 @@ pub fn calculate_meal_income(worked_days: i32, daily_meal: Decimal) -> Decimal {
 pub fn calculate_segmented_meal_exemptions(
     segments: &[MealExemptionSegment],
 ) -> MealExemptionTotals {
-    segments.iter().fold(MealExemptionTotals::default(), |totals, segment| {
-        let actual = segment.actual.max(Decimal::ZERO);
-        MealExemptionTotals {
-            sgk: round2(
-                totals.sgk
-                    + actual.min(segment.sgk_capacity.max(Decimal::ZERO)),
-            ),
-            gv: round2(
-                totals.gv
-                    + actual.min(segment.gv_capacity.max(Decimal::ZERO)),
-            ),
-        }
-    })
+    segments
+        .iter()
+        .fold(MealExemptionTotals::default(), |totals, segment| {
+            let actual = segment.actual.max(Decimal::ZERO);
+            MealExemptionTotals {
+                sgk: round2(totals.sgk + actual.min(segment.sgk_capacity.max(Decimal::ZERO))),
+                gv: round2(totals.gv + actual.min(segment.gv_capacity.max(Decimal::ZERO))),
+            }
+        })
 }
 
 /// Gelir vergisi kalemlerinin parasal yuvarlama politikası (GİB uygulaması).
@@ -160,14 +156,20 @@ pub(crate) fn calculate_oks_deduction(
     if !personal.and_then(|p| p.besUyesi).unwrap_or(false) {
         return None;
     }
-    let fixed = personal.and_then(|p| p.sabitBesTutar)
+    let fixed = personal
+        .and_then(|p| p.sabitBesTutar)
         .filter(|value| *value > Decimal::ZERO)
-        .or(settings.sabitBesTutar.filter(|value| *value > Decimal::ZERO));
+        .or(settings
+            .sabitBesTutar
+            .filter(|value| *value > Decimal::ZERO));
     if let Some(fixed) = fixed {
         return apply_fixed.then_some(fixed);
     }
-    let rate = personal.and_then(|p| p.oksOraniYuzde)
-        .or(settings.besOraniYuzde).unwrap_or(dec!(3)) / dec!(100);
+    let rate = personal
+        .and_then(|p| p.oksOraniYuzde)
+        .or(settings.besOraniYuzde)
+        .unwrap_or(dec!(3))
+        / dec!(100);
     Some(floor_dec(pek.max(Decimal::ZERO) * rate))
 }
 
@@ -929,9 +931,7 @@ pub fn calculate_gunluk_gelirler_from_puantaj(
 
     let taban_brut_aylik = round2(hakedis_dec * kurum_degerleri.gunlukTabanUcret);
     let yemek = calculate_meal_income(fiili_calisma_gun, kurum_degerleri.gunlukYemek);
-    let vasita_yol = round2(
-        Decimal::from(fiili_calisma_gun) * kurum_degerleri.gunlukVasitaYol,
-    );
+    let vasita_yol = round2(Decimal::from(fiili_calisma_gun) * kurum_degerleri.gunlukVasitaYol);
 
     // Is primi: oran personelin grubundan gelir; hak gunu = C + GC.
     let is_primi_hak_gunu = puantaj_ozeti.c + puantaj_ozeti.gc;
@@ -1299,8 +1299,12 @@ pub fn calculate_legacy_statutory_deductions_with_tax_brackets(
         puantaj_ozeti,
         tax_inputs,
         statutory_snapshot,
-        Decimal::ZERO,
-        true,
+        StatutoryCalculationOptions {
+            month_to_date_pek: Decimal::ZERO,
+            tax_months_elapsed: 1,
+            apply_lower_bound: true,
+            meal_exemption: None,
+        },
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
@@ -1325,8 +1329,12 @@ pub fn calculate_legacy_statutory_deductions_with_month_to_date(
         puantaj_ozeti,
         tax_inputs,
         statutory_snapshot,
-        month_to_date_pek,
-        apply_lower_bound,
+        StatutoryCalculationOptions {
+            month_to_date_pek,
+            tax_months_elapsed: 1,
+            apply_lower_bound,
+            meal_exemption: None,
+        },
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }
@@ -1445,8 +1453,7 @@ fn calculate_legacy_statutory_deductions_with_month_to_date_impl(
     puantaj_ozeti: Option<&PuantajOzeti>,
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
-    month_to_date_pek: Decimal,
-    apply_lower_bound: bool,
+    options: StatutoryCalculationOptions,
 ) -> Result<(KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>)> {
     let (mut deductions, pek_detail, next_devreden) =
         calculate_statutory_contributions_with_month_to_date_and_devreden_state(
@@ -1456,12 +1463,7 @@ fn calculate_legacy_statutory_deductions_with_month_to_date_impl(
             puantaj_ozeti,
             tax_inputs,
             statutory_snapshot,
-            StatutoryCalculationOptions {
-                month_to_date_pek,
-                tax_months_elapsed: 1,
-                apply_lower_bound,
-                meal_exemption: None,
-            },
+            options,
         )?;
     let brut_gelir = calculate_gelir_toplam(gelirler);
     if brut_gelir <= Decimal::ZERO && pek_detail.primMatrahi <= Decimal::ZERO {
@@ -1481,11 +1483,8 @@ fn calculate_legacy_statutory_deductions_with_month_to_date_impl(
     );
     let daily_minimum = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
     let monthly_minimum = round2(daily_minimum * dec!(30));
-    let monthly_asgari_gv = calculate_aylik_asgari_ucret_gv_matrahi(
-        daily_minimum,
-        sgk_rate,
-        unemployment_rate,
-    );
+    let monthly_asgari_gv =
+        calculate_aylik_asgari_ucret_gv_matrahi(daily_minimum, sgk_rate, unemployment_rate);
     let gv = calculate_gv_hesap_detayi_with_brackets(
         gv_base,
         tax_inputs.previous_cumulative_gv,
@@ -1494,12 +1493,8 @@ fn calculate_legacy_statutory_deductions_with_month_to_date_impl(
         tax_inputs.tax_brackets,
     );
     deductions.gelirVergisi = Some(gv.kesilenGelirVergisi);
-    let stamp = calculate_monthly_stamp_tax_state(
-        brut_gelir,
-        monthly_minimum,
-        dv_rate,
-        Decimal::ZERO,
-    );
+    let stamp =
+        calculate_monthly_stamp_tax_state(brut_gelir, monthly_minimum, dv_rate, Decimal::ZERO);
     deductions.damgaVergisi = Some(stamp.kesilenDamgaVergisi);
     Ok((deductions, pek_detail, next_devreden))
 }
@@ -1528,8 +1523,12 @@ pub fn calculate_legacy_statutory_deductions(
         puantaj_ozeti,
         &tax_inputs,
         None,
-        Decimal::ZERO,
-        true,
+        StatutoryCalculationOptions {
+            month_to_date_pek: Decimal::ZERO,
+            tax_months_elapsed: 1,
+            apply_lower_bound: true,
+            meal_exemption: None,
+        },
     )
     .expect("sabit PEK vergi ayı farkı geçersiz olamaz")
 }

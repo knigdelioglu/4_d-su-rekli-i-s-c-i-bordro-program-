@@ -4,7 +4,10 @@ use chrono::NaiveDate;
 use payroll_core::*;
 use rust_decimal_macros::dec;
 
-fn with_full_year_periods(mut req: PayrollCalculationRequest, year: i32) -> PayrollCalculationRequest {
+fn with_full_year_periods(
+    mut req: PayrollCalculationRequest,
+    year: i32,
+) -> PayrollCalculationRequest {
     for month in 1..=12 {
         let p_req = support::dated_request(year, month);
         let period = p_req.dataset.periods[0].clone();
@@ -12,7 +15,10 @@ fn with_full_year_periods(mut req: PayrollCalculationRequest, year: i32) -> Payr
             req.dataset.periods.push(period.clone());
         }
         if let Some(settings) = p_req.dataset.institutionSettings.get(&period.id) {
-            req.dataset.institutionSettings.entry(period.id).or_insert_with(|| settings.clone());
+            req.dataset
+                .institutionSettings
+                .entry(period.id)
+                .or_insert_with(|| settings.clone());
         }
     }
     req
@@ -115,9 +121,15 @@ fn audit_multi_accrual_stale_detection_in_get_period_notices() {
     // Put p1 first and p2 second
     req.dataset.payrolls = vec![p1.clone(), p2.clone()];
 
-    let notices = get_period_notices(&req.dataset, &period_id).expect("get_period_notices should succeed");
-    let has_stale_notice = notices.iter().any(|n| n.code == "STALE_PAYROLL" && n.personnel_id.as_deref() == Some(&person_id));
-    assert!(has_stale_notice, "STALE_PAYROLL notice MUST be generated even if the first accrual is CALCULATED");
+    let notices =
+        get_period_notices(&req.dataset, &period_id).expect("get_period_notices should succeed");
+    let has_stale_notice = notices
+        .iter()
+        .any(|n| n.code == "STALE_PAYROLL" && n.personnel_id.as_deref() == Some(&person_id));
+    assert!(
+        has_stale_notice,
+        "STALE_PAYROLL notice MUST be generated even if the first accrual is CALCULATED"
+    );
 
     // When p2 becomes CALCULATED, STALE notice must disappear
     req.dataset.payrolls[1].status = BordroStatus::CALCULATED;
@@ -134,13 +146,22 @@ fn audit_year_transition_with_pek_carry_and_gv_reset() {
         AnnualPayrollParameters::default_for_2026(),
         AnnualPayrollParameters {
             year: 2027,
-            gelirVergisiDilimleri: AnnualPayrollParameters::default_for_2026().gelirVergisiDilimleri,
+            gelirVergisiDilimleri: AnnualPayrollParameters::default_for_2026()
+                .gelirVergisiDilimleri,
             ..AnnualPayrollParameters::default_for_2026()
         },
     ];
-    let mut dec_settings = req_dec.dataset.institutionSettings.get(&req_dec.periodId).unwrap().clone();
+    let mut dec_settings = req_dec
+        .dataset
+        .institutionSettings
+        .get(&req_dec.periodId)
+        .unwrap()
+        .clone();
     dec_settings.gunlukTabanUcret = dec!(3000);
-    req_dec.dataset.institutionSettings.insert(req_dec.periodId.clone(), dec_settings);
+    req_dec
+        .dataset
+        .institutionSettings
+        .insert(req_dec.periodId.clone(), dec_settings);
 
     // Supplementary bonus in December: 350,000 TL non-wage
     let mut req_dec_bonus = req_dec.clone();
@@ -152,11 +173,15 @@ fn audit_year_transition_with_pek_carry_and_gv_reset() {
         grossAmount: Some(dec!(350000)),
         description: Some("Yıl Sonu Prim".into()),
     });
-    let dec_bonus_payroll = calculate_payroll_checked(&req_dec_bonus).expect("Dec bonus should calculate");
+    let dec_bonus_payroll =
+        calculate_payroll_checked(&req_dec_bonus).expect("Dec bonus should calculate");
     assert_eq!(dec_bonus_payroll.status, BordroStatus::CALCULATED);
 
     // Verify outgoing carry was produced with kalanAySayisi: 2
-    let outgoing = dec_bonus_payroll.sonrakiDevredenPek.as_ref().expect("Should have outgoing carry");
+    let outgoing = dec_bonus_payroll
+        .sonrakiDevredenPek
+        .as_ref()
+        .expect("Should have outgoing carry");
     assert!(!outgoing.is_empty());
     assert!(outgoing[0].tutar > dec!(0));
     assert_eq!(outgoing[0].kalanAySayisi, 2);
@@ -178,17 +203,27 @@ fn audit_year_transition_with_pek_carry_and_gv_reset() {
     // Cumulative GV MUST reset to 0 in January!
     let jan_gv = jan_payroll.gvDetay.as_ref().unwrap();
     let jan_prev_cum = jan_gv.yeniKumulatifGvMatrahi - jan_gv.cariGvMatrahi;
-    assert_eq!(jan_prev_cum, dec!(0), "Cumulative GV must reset to 0 at January 1");
+    assert_eq!(
+        jan_prev_cum,
+        dec!(0),
+        "Cumulative GV must reset to 0 at January 1"
+    );
 
     // PEK carry from December MUST carry over into January!
-    let incoming_pek = jan_payroll.devredenPekGelen.as_ref().expect("Jan must have incoming PEK");
+    let incoming_pek = jan_payroll
+        .devredenPekGelen
+        .as_ref()
+        .expect("Jan must have incoming PEK");
     assert!(!incoming_pek.is_empty());
     assert_eq!(incoming_pek[0].tutar, carry_amount);
     // kalanAySayisi ages by 1 month across year boundary (now 1)
     let jan_outgoing = jan_payroll.sonrakiDevredenPek.as_ref();
     if let Some(jan_out) = jan_outgoing {
         if !jan_out.is_empty() {
-            assert_eq!(jan_out[0].kalanAySayisi, 1, "Remaining carry in Jan must have kalanAySayisi: 1");
+            assert_eq!(
+                jan_out[0].kalanAySayisi, 1,
+                "Remaining carry in Jan must have kalanAySayisi: 1"
+            );
         }
     }
 }
@@ -224,9 +259,17 @@ fn audit_pek_carry_aging_and_exact_expiration() {
     req_nov = with_full_year_periods(req_nov, 2026);
     req_nov = with_full_year_periods(req_nov, 2027);
     req_nov.dataset.annualPayrollParameters = req_oct.dataset.annualPayrollParameters.clone();
-    let mut nov_settings = req_nov.dataset.institutionSettings.get(&req_nov.periodId).unwrap().clone();
+    let mut nov_settings = req_nov
+        .dataset
+        .institutionSettings
+        .get(&req_nov.periodId)
+        .unwrap()
+        .clone();
     nov_settings.gunlukTabanUcret = dec!(9800); // 9800 * 30 = 294,000 TL (near ceiling of 297,270)
-    req_nov.dataset.institutionSettings.insert(req_nov.periodId.clone(), nov_settings);
+    req_nov
+        .dataset
+        .institutionSettings
+        .insert(req_nov.periodId.clone(), nov_settings);
 
     let mut oct_stored = oct_payroll.clone();
     oct_stored.donemId = req_oct.periodId.clone();
@@ -236,17 +279,31 @@ fn audit_pek_carry_aging_and_exact_expiration() {
     let nov_in = nov_payroll.devredenPekGelen.as_ref().unwrap();
     assert_eq!(nov_in[0].kalanAySayisi, 2); // incoming had 2
     let nov_out = nov_payroll.sonrakiDevredenPek.as_ref().unwrap();
-    assert!(!nov_out.is_empty(), "Carry must survive November because ceiling was saturated");
-    assert_eq!(nov_out[0].kalanAySayisi, 1, "After 1 month, outgoing carry has kalanAySayisi 1");
+    assert!(
+        !nov_out.is_empty(),
+        "Carry must survive November because ceiling was saturated"
+    );
+    assert_eq!(
+        nov_out[0].kalanAySayisi, 1,
+        "After 1 month, outgoing carry has kalanAySayisi 1"
+    );
 
     // December (2 months elapsed, last eligible month):
     let mut req_dec = support::dated_request(2026, 12);
     req_dec = with_full_year_periods(req_dec, 2026);
     req_dec = with_full_year_periods(req_dec, 2027);
     req_dec.dataset.annualPayrollParameters = req_oct.dataset.annualPayrollParameters.clone();
-    let mut dec_settings = req_dec.dataset.institutionSettings.get(&req_dec.periodId).unwrap().clone();
+    let mut dec_settings = req_dec
+        .dataset
+        .institutionSettings
+        .get(&req_dec.periodId)
+        .unwrap()
+        .clone();
     dec_settings.gunlukTabanUcret = dec!(9800);
-    req_dec.dataset.institutionSettings.insert(req_dec.periodId.clone(), dec_settings);
+    req_dec
+        .dataset
+        .institutionSettings
+        .insert(req_dec.periodId.clone(), dec_settings);
 
     let mut nov_stored = nov_payroll.clone();
     nov_stored.donemId = req_nov.periodId.clone();
@@ -256,8 +313,12 @@ fn audit_pek_carry_aging_and_exact_expiration() {
     let dec_payroll = calculate_payroll_checked(&req_dec).unwrap();
     let dec_out = dec_payroll.sonrakiDevredenPek.as_ref();
     // After December, 2 months have fully elapsed. Carry from October must NOT carry to January!
-    let carried_to_jan = dec_out.map_or(0, |list| list.iter().filter(|i| i.tutar > dec!(0)).count());
-    assert_eq!(carried_to_jan, 0, "After 2 months elapsed, PEK carry from October must expire and not carry to January");
+    let carried_to_jan =
+        dec_out.map_or(0, |list| list.iter().filter(|i| i.tutar > dec!(0)).count());
+    assert_eq!(
+        carried_to_jan, 0,
+        "After 2 months elapsed, PEK carry from October must expire and not carry to January"
+    );
 }
 
 #[test]
@@ -285,28 +346,37 @@ fn audit_sick_leave_exact_quota_and_split_episodes() {
     // Period covering Episode 1 (February 2026)
     let period_feb = BordroDonemi {
         id: "p-feb".into(),
-        yil: 2026, ay: 2,
+        yil: 2026,
+        ay: 2,
         baslangicTarihi: "2026-01-15".into(),
         bitisTarihi: "2026-02-14".into(),
         donemAdi: "Feb 2026".into(),
-        taxYear: 2026, taxMonth: 2,
+        taxYear: 2026,
+        taxMonth: 2,
     };
-    let paid_feb = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_feb).unwrap();
+    let paid_feb =
+        payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_feb).unwrap();
     assert_eq!(paid_feb.len(), 2);
     assert!(paid_feb.contains(&NaiveDate::from_ymd_opt(2026, 2, 1).unwrap()));
     assert!(paid_feb.contains(&NaiveDate::from_ymd_opt(2026, 2, 2).unwrap()));
-    assert!(!paid_feb.contains(&NaiveDate::from_ymd_opt(2026, 2, 3).unwrap()), "3rd day of episode is unpaid by employer");
+    assert!(
+        !paid_feb.contains(&NaiveDate::from_ymd_opt(2026, 2, 3).unwrap()),
+        "3rd day of episode is unpaid by employer"
+    );
 
     // Period covering Episode 5 (June 2026) -> 5th episode, MUST be paid
     let period_jun = BordroDonemi {
         id: "p-jun".into(),
-        yil: 2026, ay: 6,
+        yil: 2026,
+        ay: 6,
         baslangicTarihi: "2026-05-15".into(),
         bitisTarihi: "2026-06-14".into(),
         donemAdi: "Jun 2026".into(),
-        taxYear: 2026, taxMonth: 6,
+        taxYear: 2026,
+        taxMonth: 6,
     };
-    let paid_jun = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jun).unwrap();
+    let paid_jun =
+        payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jun).unwrap();
     assert_eq!(paid_jun.len(), 2);
     assert!(paid_jun.contains(&NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()));
     assert!(paid_jun.contains(&NaiveDate::from_ymd_opt(2026, 6, 2).unwrap()));
@@ -314,14 +384,20 @@ fn audit_sick_leave_exact_quota_and_split_episodes() {
     // Period covering Episode 6 (July 2026) -> 6th episode, MUST BE ZERO paid days!
     let period_jul = BordroDonemi {
         id: "p-jul".into(),
-        yil: 2026, ay: 7,
+        yil: 2026,
+        ay: 7,
         baslangicTarihi: "2026-06-15".into(),
         bitisTarihi: "2026-07-14".into(),
         donemAdi: "Jul 2026".into(),
-        taxYear: 2026, taxMonth: 7,
+        taxYear: 2026,
+        taxMonth: 7,
     };
-    let paid_jul = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jul).unwrap();
-    assert!(paid_jul.is_empty(), "6th episode must have 0 employer-paid sick days");
+    let paid_jul =
+        payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jul).unwrap();
+    assert!(
+        paid_jul.is_empty(),
+        "6th episode must have 0 employer-paid sick days"
+    );
 }
 
 #[test]
@@ -329,9 +405,16 @@ fn audit_lower_bound_completion_with_earlier_same_month_event() {
     let mut req = support::dated_request(2026, 7);
     req = with_full_year_periods(req, 2026);
     let period_id = req.periodId.clone();
-    let mut settings = req.dataset.institutionSettings.get(&period_id).unwrap().clone();
+    let mut settings = req
+        .dataset
+        .institutionSettings
+        .get(&period_id)
+        .unwrap()
+        .clone();
     settings.gunlukTabanUcret = dec!(500); // 500 TL/day
-    req.dataset.institutionSettings.insert(period_id.clone(), settings);
+    req.dataset
+        .institutionSettings
+        .insert(period_id.clone(), settings);
 
     // Scenario A: Single NORMAL accrual
     // Prim days = 30. Ham PEK = 15,500 TL (15,000 wage + meal subject to sgk). Alt sınır = 33,030 TL.
@@ -371,5 +454,9 @@ fn audit_lower_bound_completion_with_earlier_same_month_event() {
     // Remaining floor for normal = 33,030 - 25,000 = 8,030 TL.
     // Normal ham PEK is 15,500 TL, which exceeds 8,030 TL!
     // Therefore altSinirTamamlamaFarki in normal_b must be 0 TL!
-    assert_eq!(pek_b.altSinirTamamlamaFarki, dec!(0), "Earlier payment in same month satisfies employer floor");
+    assert_eq!(
+        pek_b.altSinirTamamlamaFarki,
+        dec!(0),
+        "Earlier payment in same month satisfies employer floor"
+    );
 }

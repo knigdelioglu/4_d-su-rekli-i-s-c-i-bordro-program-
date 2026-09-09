@@ -7,7 +7,6 @@ import type {
   RetroAllocation,
 } from '../../types/payroll';
 import { isAuthoritativePayroll } from './accrualListData';
-import { DEFAULT_KURUM_DEGERLERI } from '../../utils/payrollPresentation';
 
 export type SgkPrimKontroluRowStatus =
   | 'authoritative'
@@ -81,20 +80,6 @@ export interface SgkPrimComparison {
   farkKurus: number | null;
 }
 
-const DEFAULT_SGK_RATES = {
-  isverenSgkOraniYuzde: DEFAULT_KURUM_DEGERLERI.sgkIsverenOraniYuzde,
-  isverenIssizlikOraniYuzde: DEFAULT_KURUM_DEGERLERI.issizlikIsverenOraniYuzde,
-  isciSgkOraniYuzde: DEFAULT_KURUM_DEGERLERI.sgkIsciOraniYuzde,
-  isciIssizlikOraniYuzde: DEFAULT_KURUM_DEGERLERI.issizlikIsciOraniYuzde,
-};
-
-type SgkPrimKontroluResolvedRates = typeof DEFAULT_SGK_RATES;
-type SgkPeriodRateKey =
-  | 'sgkIsverenOraniYuzde'
-  | 'issizlikIsverenOraniYuzde'
-  | 'sgkIsciOraniYuzde'
-  | 'issizlikIsciOraniYuzde';
-
 const EMPTY_SNAPSHOT_TOTALS = {
   isverenSgkPrimi: 0,
   isverenIssizlikPrimi: 0,
@@ -109,42 +94,6 @@ function isNonNegativeFiniteNumber(value: unknown): value is number {
 
 function isValidRate(value: unknown): value is number {
   return isNonNegativeFiniteNumber(value) && value <= 100;
-}
-
-function resolvePeriodRate(
-  institutionSettings: Partial<DönemselKurumDegerleri> | undefined,
-  key: SgkPeriodRateKey,
-  fallback: number
-): number {
-  const value = institutionSettings?.[key];
-  return isValidRate(value) ? value : fallback;
-}
-
-function resolveSgkRates(
-  institutionSettings: Partial<DönemselKurumDegerleri> | undefined
-): SgkPrimKontroluResolvedRates {
-  return {
-    isverenSgkOraniYuzde: resolvePeriodRate(
-      institutionSettings,
-      'sgkIsverenOraniYuzde',
-      DEFAULT_SGK_RATES.isverenSgkOraniYuzde
-    ),
-    isverenIssizlikOraniYuzde: resolvePeriodRate(
-      institutionSettings,
-      'issizlikIsverenOraniYuzde',
-      DEFAULT_SGK_RATES.isverenIssizlikOraniYuzde
-    ),
-    isciSgkOraniYuzde: resolvePeriodRate(
-      institutionSettings,
-      'sgkIsciOraniYuzde',
-      DEFAULT_SGK_RATES.isciSgkOraniYuzde
-    ),
-    isciIssizlikOraniYuzde: resolvePeriodRate(
-      institutionSettings,
-      'issizlikIsciOraniYuzde',
-      DEFAULT_SGK_RATES.isciIssizlikOraniYuzde
-    ),
-  };
 }
 
 export function hasCompleteSgkSnapshot(payroll: BordroKaydi | null | undefined): boolean {
@@ -536,23 +485,15 @@ export function getSgkPrimKontroluTotals(rows: SgkPrimKontroluRow[]): SgkPrimKon
   };
 }
 
-function uniqueResolvedRates(values: Array<number | undefined>, fallback: number): number[] {
-  const resolvedValues = values.length
-    ? values.map((value) => (isValidRate(value) ? value : fallback))
-    : [fallback];
-  return [...new Set(resolvedValues)];
-}
-
 function formatRate(value: number): string {
-  return new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 20 }).format(value);
 }
 
-function formatRateLabel(
-  label: string,
-  values: Array<number | undefined>,
-  fallback: number
-): string {
-  const uniqueRates = uniqueResolvedRates(values, fallback);
+function formatHistoricalRateLabel(label: string, values: Array<number | undefined>): string {
+  const validRates = values.filter((value): value is number => isValidRate(value));
+  if (values.length === 0 || validRates.length !== values.length) return `${label} —`;
+
+  const uniqueRates = [...new Set(validRates)];
   return uniqueRates.length === 1
     ? `${label} %${formatRate(uniqueRates[0])}`
     : `${label} (Değişken Oran)`;
@@ -560,9 +501,8 @@ function formatRateLabel(
 
 export function getSgkPrimKontroluRateLabels(
   rows: SgkPrimKontroluRow[],
-  institutionSettings?: Partial<DönemselKurumDegerleri>
+  _institutionSettings?: Partial<DönemselKurumDegerleri>
 ): SgkPrimKontroluRateLabels {
-  const fallbackRates = resolveSgkRates(institutionSettings);
   const authoritativeRows = rows.filter((row) => row.status === 'authoritative');
   const rateCandidates = authoritativeRows.reduce(
     (candidates, row) => ({
@@ -589,25 +529,21 @@ export function getSgkPrimKontroluRateLabels(
   );
 
   return {
-    isverenSgk: formatRateLabel(
+    isverenSgk: formatHistoricalRateLabel(
       'SGK İşveren',
-      rateCandidates.isverenSgkOranlari,
-      fallbackRates.isverenSgkOraniYuzde
+      rateCandidates.isverenSgkOranlari
     ),
-    isverenIssizlik: formatRateLabel(
+    isverenIssizlik: formatHistoricalRateLabel(
       'İşveren İşsizlik',
-      rateCandidates.isverenIssizlikOranlari,
-      fallbackRates.isverenIssizlikOraniYuzde
+      rateCandidates.isverenIssizlikOranlari
     ),
-    isciSgk: formatRateLabel(
+    isciSgk: formatHistoricalRateLabel(
       'SGK İşçi',
-      rateCandidates.isciSgkOranlari,
-      fallbackRates.isciSgkOraniYuzde
+      rateCandidates.isciSgkOranlari
     ),
-    isciIssizlik: formatRateLabel(
+    isciIssizlik: formatHistoricalRateLabel(
       'İşçi İşsizlik',
-      rateCandidates.isciIssizlikOranlari,
-      fallbackRates.isciIssizlikOraniYuzde
+      rateCandidates.isciIssizlikOranlari
     ),
   };
 }

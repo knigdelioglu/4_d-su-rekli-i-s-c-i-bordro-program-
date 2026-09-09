@@ -164,12 +164,9 @@ impl PayrollNoticeService {
         if records.is_empty() {
             return;
         }
-        let all_authoritative = records.iter().all(|p| {
-            matches!(
-                p.status,
-                BordroStatus::CALCULATED | BordroStatus::FINALIZED
-            )
-        });
+        let all_authoritative = records
+            .iter()
+            .all(|p| matches!(p.status, BordroStatus::CALCULATED | BordroStatus::FINALIZED));
         if !all_authoritative {
             return;
         }

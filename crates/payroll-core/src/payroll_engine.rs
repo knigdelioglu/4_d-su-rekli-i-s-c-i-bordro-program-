@@ -600,12 +600,13 @@ pub fn calculate_paid_sick_dates_from_records(
     period: &BordroDonemi,
 ) -> Result<Vec<NaiveDate>> {
     crate::validation::validate_sick_leave_records(records)?;
-    let period_start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
-        DomainError::ValidationError(format!(
-            "{} dönemi başlangıç tarihi geçersiz: {}",
-            period.id, period.baslangicTarihi
-        ))
-    })?;
+    let period_start =
+        NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "{} dönemi başlangıç tarihi geçersiz: {}",
+                period.id, period.baslangicTarihi
+            ))
+        })?;
     let period_end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
         DomainError::ValidationError(format!(
             "{} dönemi bitiş tarihi geçersiz: {}",
@@ -615,12 +616,10 @@ pub fn calculate_paid_sick_dates_from_records(
 
     let mut year_groups: BTreeMap<i32, Vec<(NaiveDate, NaiveDate)>> = BTreeMap::new();
     for record in records {
-        let start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|e| {
-            DomainError::ValidationError(format!("Rapor tarihi geçersiz: {e}"))
-        })?;
-        let end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d").map_err(|e| {
-            DomainError::ValidationError(format!("Rapor tarihi geçersiz: {e}"))
-        })?;
+        let start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d")
+            .map_err(|e| DomainError::ValidationError(format!("Rapor tarihi geçersiz: {e}")))?;
+        let end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d")
+            .map_err(|e| DomainError::ValidationError(format!("Rapor tarihi geçersiz: {e}")))?;
         year_groups
             .entry(start.year())
             .or_default()
@@ -686,7 +685,10 @@ fn add_paid_sick_wage(field: &mut Option<Decimal>, paid_days: i32, daily_wage: D
     ));
 }
 
-pub(crate) fn find_zam_tarihi(period: &BordroDonemi, zam_aylari: &[i32]) -> Result<Option<NaiveDate>> {
+pub(crate) fn find_zam_tarihi(
+    period: &BordroDonemi,
+    zam_aylari: &[i32],
+) -> Result<Option<NaiveDate>> {
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
     let mut result = None;
@@ -1561,9 +1563,10 @@ fn reconcile_same_month_pek(
     let has_provisional_prior = prior.iter().any(|payroll| {
         payroll.accrualType != AccrualType::NORMAL
             && (is_provisional_supplementary_payroll(payroll)
-                || payroll.pekDetay.as_ref().is_some_and(|detail| {
-                    detail.pekUstSinir > statutory_snapshot.pekUstSinir
-                }))
+                || payroll
+                    .pekDetay
+                    .as_ref()
+                    .is_some_and(|detail| detail.pekUstSinir > statutory_snapshot.pekUstSinir))
     });
     if !current_is_normal
         || persisted_month_to_date <= statutory_snapshot.pekUstSinir
@@ -1582,8 +1585,8 @@ fn reconcile_same_month_pek(
             (wage_total + wage, non_wage_total + non_wage)
         },
     );
-    let sgk_tabi_yemek = (current_income.yemek.unwrap_or_default() - current_meal_exemption)
-        .max(Decimal::ZERO);
+    let sgk_tabi_yemek =
+        (current_income.yemek.unwrap_or_default() - current_meal_exemption).max(Decimal::ZERO);
     let (current_wage, current_non_wage) =
         canonical_sgk_income_components(current_income, sgk_tabi_yemek);
     let current_wage = current_wage.max(Decimal::ZERO);
@@ -1599,9 +1602,8 @@ fn reconcile_same_month_pek(
     let non_wage_capacity = (capacity - wage_used).max(Decimal::ZERO);
     let non_wage_used = (prior_non_wage + current_non_wage).min(non_wage_capacity);
     let month_used_after = round2(wage_used + non_wage_used);
-    let excess_non_wage = round2(
-        (prior_non_wage + current_non_wage - non_wage_used).max(Decimal::ZERO),
-    );
+    let excess_non_wage =
+        round2((prior_non_wage + current_non_wage - non_wage_used).max(Decimal::ZERO));
     let outgoing_non_wage = if excess_non_wage > Decimal::ZERO {
         vec![DevredenPekKaydi {
             tutar: excess_non_wage,
@@ -2691,9 +2693,14 @@ fn validate_payroll_request_with_index(
     for payroll in &request.dataset.payrolls {
         crate::validate_payroll_snapshot_authority(payroll)?;
     }
-    let annual = index.annual_parameters(&request.dataset, period.taxYear).ok_or_else(|| {
-        DomainError::InvalidData(format!("{} vergi yılı yıllık bordro parametreleri eksik.", period.taxYear))
-    })?;
+    let annual = index
+        .annual_parameters(&request.dataset, period.taxYear)
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} vergi yılı yıllık bordro parametreleri eksik.",
+                period.taxYear
+            ))
+        })?;
     crate::validate_annual_payroll_parameters(annual)?;
     let accrual = resolve_accrual_input(request, period, index)?;
     let normal_count = index
@@ -3206,9 +3213,8 @@ fn calculate_payroll_with_index(
 
     let normal_meal_exemptions = if is_normal_accrual {
         calculate_normal_meal_exemptions(
-            attendance.ok_or_else(|| {
-                DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into())
-            })?,
+            attendance
+                .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
             &period,
             &statutory_snapshot,
             &settings,
@@ -3298,7 +3304,10 @@ fn calculate_payroll_with_index(
                 )),
                 bes: calculate_oks_deduction(
                     payment_month_worker_pek
-                        + allocations.iter().map(|allocation| allocation.retroPekDelta).sum::<Decimal>(),
+                        + allocations
+                            .iter()
+                            .map(|allocation| allocation.retroPekDelta)
+                            .sum::<Decimal>(),
                     &effective_settings,
                     Some(&person),
                     false,
@@ -3368,7 +3377,9 @@ fn calculate_payroll_with_index(
     // (322 numbered Income Tax Communiqué, article 4/6). Keep it separate
     // from the shared monthly minimum-wage exemption balance.
     let normal_meal_tax_exemption = if is_normal_accrual {
-        normal_meal_exemptions.gv.min(income.yemek.unwrap_or_default())
+        normal_meal_exemptions
+            .gv
+            .min(income.yemek.unwrap_or_default())
     } else {
         Decimal::ZERO
     };
@@ -3723,14 +3734,20 @@ mod tests {
 
         assert_eq!(payroll_gv_base(&prior).unwrap(), dec!(27500));
         assert_eq!(
-            previous_gv(&dataset, &index, &person, &active_period, &PayrollAccrualInput {
-                accrualId: "next-event".into(),
-                accrualType: AccrualType::NORMAL,
-                paymentDate: "2026-06-10".into(),
-                sequence: 0,
-                grossAmount: None,
-                description: None,
-            })
+            previous_gv(
+                &dataset,
+                &index,
+                &person,
+                &active_period,
+                &PayrollAccrualInput {
+                    accrualId: "next-event".into(),
+                    accrualType: AccrualType::NORMAL,
+                    paymentDate: "2026-06-10".into(),
+                    sequence: 0,
+                    grossAmount: None,
+                    description: None,
+                }
+            )
             .unwrap(),
             dec!(27500)
         );

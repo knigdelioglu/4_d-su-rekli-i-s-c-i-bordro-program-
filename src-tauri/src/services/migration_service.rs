@@ -399,12 +399,12 @@ fn replay_payroll_request_for_current_backup(
         } else {
             "backup-replay".into()
         },
-        manualIncome: (target.accrualType == AccrualType::NORMAL).then(|| {
+        manualIncome: (target.accrualType == AccrualType::NORMAL).then_some(
             ManualPayrollIncomeInput {
                 tediye: target.gelirler.tediye,
                 tisIkramiyesi: target.gelirler.tisIkramiyesi,
-            }
-        }),
+            },
+        ),
         accrual: Some(PayrollAccrualInput {
             accrualId: target_accrual_id,
             accrualType: target.accrualType,
@@ -453,36 +453,136 @@ fn compare_backup_income_and_deductions(
 ) -> Result<()> {
     let id = imported.id.as_str();
     for (field, left, right) in [
-        ("gelirler.tabanBrutAylik", imported.gelirler.tabanBrutAylik, replayed.gelirler.tabanBrutAylik),
-        ("gelirler.tediye", imported.gelirler.tediye, replayed.gelirler.tediye),
-        ("gelirler.tisIkramiyesi", imported.gelirler.tisIkramiyesi, replayed.gelirler.tisIkramiyesi),
-        ("gelirler.ekOdeme", imported.gelirler.ekOdeme, replayed.gelirler.ekOdeme),
-        ("gelirler.yemek", imported.gelirler.yemek, replayed.gelirler.yemek),
-        ("gelirler.birlestirilmisSosyalYardim", imported.gelirler.birlestirilmisSosyalYardim, replayed.gelirler.birlestirilmisSosyalYardim),
-        ("gelirler.vasitaYol", imported.gelirler.vasitaYol, replayed.gelirler.vasitaYol),
-        ("gelirler.giyimYardimi", imported.gelirler.giyimYardimi, replayed.gelirler.giyimYardimi),
-        ("gelirler.isPrimi", imported.gelirler.isPrimi, replayed.gelirler.isPrimi),
-        ("gelirler.geceCalismasiUcreti", imported.gelirler.geceCalismasiUcreti, replayed.gelirler.geceCalismasiUcreti),
-        ("gelirler.geceCalismasiTatiliUcreti", imported.gelirler.geceCalismasiTatiliUcreti, replayed.gelirler.geceCalismasiTatiliUcreti),
-        ("gelirler.hizmetZammi", imported.gelirler.hizmetZammi, replayed.gelirler.hizmetZammi),
-        ("gelirler.digerGelir", imported.gelirler.digerGelir, replayed.gelirler.digerGelir),
-        ("kesintiler.isciSgkPrimi", imported.kesintiler.isciSgkPrimi, replayed.kesintiler.isciSgkPrimi),
-        ("kesintiler.isciIssizlikPrimi", imported.kesintiler.isciIssizlikPrimi, replayed.kesintiler.isciIssizlikPrimi),
-        ("kesintiler.gelirVergisi", imported.kesintiler.gelirVergisi, replayed.kesintiler.gelirVergisi),
-        ("kesintiler.damgaVergisi", imported.kesintiler.damgaVergisi, replayed.kesintiler.damgaVergisi),
-        ("kesintiler.sendikaAidati", imported.kesintiler.sendikaAidati, replayed.kesintiler.sendikaAidati),
-        ("kesintiler.bes", imported.kesintiler.bes, replayed.kesintiler.bes),
-        ("kesintiler.icra", imported.kesintiler.icra, replayed.kesintiler.icra),
-        ("kesintiler.kisiBorcu", imported.kesintiler.kisiBorcu, replayed.kesintiler.kisiBorcu),
-        ("kesintiler.dogumAskerlikBorclanmasi", imported.kesintiler.dogumAskerlikBorclanmasi, replayed.kesintiler.dogumAskerlikBorclanmasi),
-        ("kesintiler.hayatSaglikSigortasi", imported.kesintiler.hayatSaglikSigortasi, replayed.kesintiler.hayatSaglikSigortasi),
-        ("kesintiler.digerKesinti", imported.kesintiler.digerKesinti, replayed.kesintiler.digerKesinti),
+        (
+            "gelirler.tabanBrutAylik",
+            imported.gelirler.tabanBrutAylik,
+            replayed.gelirler.tabanBrutAylik,
+        ),
+        (
+            "gelirler.tediye",
+            imported.gelirler.tediye,
+            replayed.gelirler.tediye,
+        ),
+        (
+            "gelirler.tisIkramiyesi",
+            imported.gelirler.tisIkramiyesi,
+            replayed.gelirler.tisIkramiyesi,
+        ),
+        (
+            "gelirler.ekOdeme",
+            imported.gelirler.ekOdeme,
+            replayed.gelirler.ekOdeme,
+        ),
+        (
+            "gelirler.yemek",
+            imported.gelirler.yemek,
+            replayed.gelirler.yemek,
+        ),
+        (
+            "gelirler.birlestirilmisSosyalYardim",
+            imported.gelirler.birlestirilmisSosyalYardim,
+            replayed.gelirler.birlestirilmisSosyalYardim,
+        ),
+        (
+            "gelirler.vasitaYol",
+            imported.gelirler.vasitaYol,
+            replayed.gelirler.vasitaYol,
+        ),
+        (
+            "gelirler.giyimYardimi",
+            imported.gelirler.giyimYardimi,
+            replayed.gelirler.giyimYardimi,
+        ),
+        (
+            "gelirler.isPrimi",
+            imported.gelirler.isPrimi,
+            replayed.gelirler.isPrimi,
+        ),
+        (
+            "gelirler.geceCalismasiUcreti",
+            imported.gelirler.geceCalismasiUcreti,
+            replayed.gelirler.geceCalismasiUcreti,
+        ),
+        (
+            "gelirler.geceCalismasiTatiliUcreti",
+            imported.gelirler.geceCalismasiTatiliUcreti,
+            replayed.gelirler.geceCalismasiTatiliUcreti,
+        ),
+        (
+            "gelirler.hizmetZammi",
+            imported.gelirler.hizmetZammi,
+            replayed.gelirler.hizmetZammi,
+        ),
+        (
+            "gelirler.digerGelir",
+            imported.gelirler.digerGelir,
+            replayed.gelirler.digerGelir,
+        ),
+        (
+            "kesintiler.isciSgkPrimi",
+            imported.kesintiler.isciSgkPrimi,
+            replayed.kesintiler.isciSgkPrimi,
+        ),
+        (
+            "kesintiler.isciIssizlikPrimi",
+            imported.kesintiler.isciIssizlikPrimi,
+            replayed.kesintiler.isciIssizlikPrimi,
+        ),
+        (
+            "kesintiler.gelirVergisi",
+            imported.kesintiler.gelirVergisi,
+            replayed.kesintiler.gelirVergisi,
+        ),
+        (
+            "kesintiler.damgaVergisi",
+            imported.kesintiler.damgaVergisi,
+            replayed.kesintiler.damgaVergisi,
+        ),
+        (
+            "kesintiler.sendikaAidati",
+            imported.kesintiler.sendikaAidati,
+            replayed.kesintiler.sendikaAidati,
+        ),
+        (
+            "kesintiler.bes",
+            imported.kesintiler.bes,
+            replayed.kesintiler.bes,
+        ),
+        (
+            "kesintiler.icra",
+            imported.kesintiler.icra,
+            replayed.kesintiler.icra,
+        ),
+        (
+            "kesintiler.kisiBorcu",
+            imported.kesintiler.kisiBorcu,
+            replayed.kesintiler.kisiBorcu,
+        ),
+        (
+            "kesintiler.dogumAskerlikBorclanmasi",
+            imported.kesintiler.dogumAskerlikBorclanmasi,
+            replayed.kesintiler.dogumAskerlikBorclanmasi,
+        ),
+        (
+            "kesintiler.hayatSaglikSigortasi",
+            imported.kesintiler.hayatSaglikSigortasi,
+            replayed.kesintiler.hayatSaglikSigortasi,
+        ),
+        (
+            "kesintiler.digerKesinti",
+            imported.kesintiler.digerKesinti,
+            replayed.kesintiler.digerKesinti,
+        ),
     ] {
         compare_backup_optional_decimal(id, field, left, right)?;
     }
     for (field, left, right) in [
         ("gelirToplam", imported.gelirToplam, replayed.gelirToplam),
-        ("kesintiToplam", imported.kesintiToplam, replayed.kesintiToplam),
+        (
+            "kesintiToplam",
+            imported.kesintiToplam,
+            replayed.kesintiToplam,
+        ),
         ("netOdeme", imported.netOdeme, replayed.netOdeme),
     ] {
         compare_backup_decimal(id, field, left, right)?;
@@ -560,16 +660,36 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
     match (&imported.pekDetay, &replayed.pekDetay) {
         (Some(left), Some(right)) => {
             for (field, imported_value, replayed_value) in [
-                ("pekDetay.hesaplananPek", left.hesaplananPek, right.hesaplananPek),
+                (
+                    "pekDetay.hesaplananPek",
+                    left.hesaplananPek,
+                    right.hesaplananPek,
+                ),
                 ("pekDetay.hamPek", left.hamPek, right.hamPek),
-                ("pekDetay.devredenPekKullanilan", left.devredenPekKullanilan, right.devredenPekKullanilan),
+                (
+                    "pekDetay.devredenPekKullanilan",
+                    left.devredenPekKullanilan,
+                    right.devredenPekKullanilan,
+                ),
                 ("pekDetay.primMatrahi", left.primMatrahi, right.primMatrahi),
                 ("pekDetay.finalPek", left.finalPek, right.finalPek),
-                ("pekDetay.devredenPekAşanTutar", left.devredenPekAşanTutar, right.devredenPekAşanTutar),
+                (
+                    "pekDetay.devredenPekAşanTutar",
+                    left.devredenPekAşanTutar,
+                    right.devredenPekAşanTutar,
+                ),
                 ("pekDetay.pekAltSinir", left.pekAltSinir, right.pekAltSinir),
                 ("pekDetay.pekUstSinir", left.pekUstSinir, right.pekUstSinir),
-                ("pekDetay.altSinirTamamlamaFarki", left.altSinirTamamlamaFarki, right.altSinirTamamlamaFarki),
-                ("pekDetay.yemekIstisnasiTutar", left.yemekIstisnasiTutar, right.yemekIstisnasiTutar),
+                (
+                    "pekDetay.altSinirTamamlamaFarki",
+                    left.altSinirTamamlamaFarki,
+                    right.altSinirTamamlamaFarki,
+                ),
+                (
+                    "pekDetay.yemekIstisnasiTutar",
+                    left.yemekIstisnasiTutar,
+                    right.yemekIstisnasiTutar,
+                ),
             ] {
                 compare_backup_decimal(id, field, imported_value, replayed_value)?;
             }
@@ -592,12 +712,36 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
                 )));
             }
             for (field, imported_value, replayed_value) in [
-                ("pekDetay.isverenSgkPrimi", left.isverenSgkPrimi, right.isverenSgkPrimi),
-                ("pekDetay.isverenIssizlikPrimi", left.isverenIssizlikPrimi, right.isverenIssizlikPrimi),
-                ("pekDetay.pekAltSinirTamamlamaIsverenPrimi", left.pekAltSinirTamamlamaIsverenPrimi, right.pekAltSinirTamamlamaIsverenPrimi),
-                ("pekDetay.isverenPrimToplami", left.isverenPrimToplami, right.isverenPrimToplami),
-                ("pekDetay.sgkIsverenOraniYuzde", left.sgkIsverenOraniYuzde, right.sgkIsverenOraniYuzde),
-                ("pekDetay.isverenIssizlikOraniYuzde", left.isverenIssizlikOraniYuzde, right.isverenIssizlikOraniYuzde),
+                (
+                    "pekDetay.isverenSgkPrimi",
+                    left.isverenSgkPrimi,
+                    right.isverenSgkPrimi,
+                ),
+                (
+                    "pekDetay.isverenIssizlikPrimi",
+                    left.isverenIssizlikPrimi,
+                    right.isverenIssizlikPrimi,
+                ),
+                (
+                    "pekDetay.pekAltSinirTamamlamaIsverenPrimi",
+                    left.pekAltSinirTamamlamaIsverenPrimi,
+                    right.pekAltSinirTamamlamaIsverenPrimi,
+                ),
+                (
+                    "pekDetay.isverenPrimToplami",
+                    left.isverenPrimToplami,
+                    right.isverenPrimToplami,
+                ),
+                (
+                    "pekDetay.sgkIsverenOraniYuzde",
+                    left.sgkIsverenOraniYuzde,
+                    right.sgkIsverenOraniYuzde,
+                ),
+                (
+                    "pekDetay.isverenIssizlikOraniYuzde",
+                    left.isverenIssizlikOraniYuzde,
+                    right.isverenIssizlikOraniYuzde,
+                ),
             ] {
                 compare_backup_optional_decimal(id, field, imported_value, replayed_value)?;
             }
@@ -614,23 +758,91 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
     match (&imported.gvDetay, &replayed.gvDetay) {
         (Some(left), Some(right)) => {
             for (field, imported_value, replayed_value) in [
-                ("gvDetay.oncekiKumulatifGvMatrahi", left.oncekiKumulatifGvMatrahi, right.oncekiKumulatifGvMatrahi),
-                ("gvDetay.cariGvMatrahi", left.cariGvMatrahi, right.cariGvMatrahi),
-                ("gvDetay.yeniKumulatifGvMatrahi", left.yeniKumulatifGvMatrahi, right.yeniKumulatifGvMatrahi),
-                ("gvDetay.brutGelirVergisi", left.brutGelirVergisi, right.brutGelirVergisi),
-                ("gvDetay.asgariUcretGvMatrahi", left.asgariUcretGvMatrahi, right.asgariUcretGvMatrahi),
-                ("gvDetay.asgariUcretReferansKumulatifMatrahi", left.asgariUcretReferansKumulatifMatrahi, right.asgariUcretReferansKumulatifMatrahi),
-                ("gvDetay.asgariUcretGvIstisnasi", left.asgariUcretGvIstisnasi, right.asgariUcretGvIstisnasi),
-                ("gvDetay.ayniAyOncekiKullanilanGvIstisnasi", left.ayniAyOncekiKullanilanGvIstisnasi, right.ayniAyOncekiKullanilanGvIstisnasi),
-                ("gvDetay.tahakkukOncesiKalanGvIstisnasi", left.tahakkukOncesiKalanGvIstisnasi, right.tahakkukOncesiKalanGvIstisnasi),
-                ("gvDetay.uygulananGvIstisnasi", left.uygulananGvIstisnasi, right.uygulananGvIstisnasi),
-                ("gvDetay.tahakkukSonrasiKalanGvIstisnasi", left.tahakkukSonrasiKalanGvIstisnasi, right.tahakkukSonrasiKalanGvIstisnasi),
-                ("gvDetay.kesilenGelirVergisi", left.kesilenGelirVergisi, right.kesilenGelirVergisi),
-                ("gvDetay.dogumAskerlikGvIndirimi", left.dogumAskerlikGvIndirimi, right.dogumAskerlikGvIndirimi),
-                ("gvDetay.sigortaGvIndirimAdayi", left.sigortaGvIndirimAdayi, right.sigortaGvIndirimAdayi),
-                ("gvDetay.sigortaGvAylikLimiti", left.sigortaGvAylikLimiti, right.sigortaGvAylikLimiti),
-                ("gvDetay.sigortaGvYillikKalanLimiti", left.sigortaGvYillikKalanLimiti, right.sigortaGvYillikKalanLimiti),
-                ("gvDetay.uygulanabilirSigortaGvIndirimi", left.uygulanabilirSigortaGvIndirimi, right.uygulanabilirSigortaGvIndirimi),
+                (
+                    "gvDetay.oncekiKumulatifGvMatrahi",
+                    left.oncekiKumulatifGvMatrahi,
+                    right.oncekiKumulatifGvMatrahi,
+                ),
+                (
+                    "gvDetay.cariGvMatrahi",
+                    left.cariGvMatrahi,
+                    right.cariGvMatrahi,
+                ),
+                (
+                    "gvDetay.yeniKumulatifGvMatrahi",
+                    left.yeniKumulatifGvMatrahi,
+                    right.yeniKumulatifGvMatrahi,
+                ),
+                (
+                    "gvDetay.brutGelirVergisi",
+                    left.brutGelirVergisi,
+                    right.brutGelirVergisi,
+                ),
+                (
+                    "gvDetay.asgariUcretGvMatrahi",
+                    left.asgariUcretGvMatrahi,
+                    right.asgariUcretGvMatrahi,
+                ),
+                (
+                    "gvDetay.asgariUcretReferansKumulatifMatrahi",
+                    left.asgariUcretReferansKumulatifMatrahi,
+                    right.asgariUcretReferansKumulatifMatrahi,
+                ),
+                (
+                    "gvDetay.asgariUcretGvIstisnasi",
+                    left.asgariUcretGvIstisnasi,
+                    right.asgariUcretGvIstisnasi,
+                ),
+                (
+                    "gvDetay.ayniAyOncekiKullanilanGvIstisnasi",
+                    left.ayniAyOncekiKullanilanGvIstisnasi,
+                    right.ayniAyOncekiKullanilanGvIstisnasi,
+                ),
+                (
+                    "gvDetay.tahakkukOncesiKalanGvIstisnasi",
+                    left.tahakkukOncesiKalanGvIstisnasi,
+                    right.tahakkukOncesiKalanGvIstisnasi,
+                ),
+                (
+                    "gvDetay.uygulananGvIstisnasi",
+                    left.uygulananGvIstisnasi,
+                    right.uygulananGvIstisnasi,
+                ),
+                (
+                    "gvDetay.tahakkukSonrasiKalanGvIstisnasi",
+                    left.tahakkukSonrasiKalanGvIstisnasi,
+                    right.tahakkukSonrasiKalanGvIstisnasi,
+                ),
+                (
+                    "gvDetay.kesilenGelirVergisi",
+                    left.kesilenGelirVergisi,
+                    right.kesilenGelirVergisi,
+                ),
+                (
+                    "gvDetay.dogumAskerlikGvIndirimi",
+                    left.dogumAskerlikGvIndirimi,
+                    right.dogumAskerlikGvIndirimi,
+                ),
+                (
+                    "gvDetay.sigortaGvIndirimAdayi",
+                    left.sigortaGvIndirimAdayi,
+                    right.sigortaGvIndirimAdayi,
+                ),
+                (
+                    "gvDetay.sigortaGvAylikLimiti",
+                    left.sigortaGvAylikLimiti,
+                    right.sigortaGvAylikLimiti,
+                ),
+                (
+                    "gvDetay.sigortaGvYillikKalanLimiti",
+                    left.sigortaGvYillikKalanLimiti,
+                    right.sigortaGvYillikKalanLimiti,
+                ),
+                (
+                    "gvDetay.uygulanabilirSigortaGvIndirimi",
+                    left.uygulanabilirSigortaGvIndirimi,
+                    right.uygulanabilirSigortaGvIndirimi,
+                ),
             ] {
                 compare_backup_decimal(id, field, imported_value, replayed_value)?;
             }
@@ -647,12 +859,36 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
     match (&imported.damgaDetay, &replayed.damgaDetay) {
         (Some(left), Some(right)) => {
             for (field, imported_value, replayed_value) in [
-                ("damgaDetay.brutDamgaVergisi", left.brutDamgaVergisi, right.brutDamgaVergisi),
-                ("damgaDetay.aylikDamgaIstisnaHakki", left.aylikDamgaIstisnaHakki, right.aylikDamgaIstisnaHakki),
-                ("damgaDetay.ayniAyOncekiKullanilanDamgaIstisnasi", left.ayniAyOncekiKullanilanDamgaIstisnasi, right.ayniAyOncekiKullanilanDamgaIstisnasi),
-                ("damgaDetay.uygulananDamgaIstisnasi", left.uygulananDamgaIstisnasi, right.uygulananDamgaIstisnasi),
-                ("damgaDetay.kalanDamgaIstisnasi", left.kalanDamgaIstisnasi, right.kalanDamgaIstisnasi),
-                ("damgaDetay.kesilenDamgaVergisi", left.kesilenDamgaVergisi, right.kesilenDamgaVergisi),
+                (
+                    "damgaDetay.brutDamgaVergisi",
+                    left.brutDamgaVergisi,
+                    right.brutDamgaVergisi,
+                ),
+                (
+                    "damgaDetay.aylikDamgaIstisnaHakki",
+                    left.aylikDamgaIstisnaHakki,
+                    right.aylikDamgaIstisnaHakki,
+                ),
+                (
+                    "damgaDetay.ayniAyOncekiKullanilanDamgaIstisnasi",
+                    left.ayniAyOncekiKullanilanDamgaIstisnasi,
+                    right.ayniAyOncekiKullanilanDamgaIstisnasi,
+                ),
+                (
+                    "damgaDetay.uygulananDamgaIstisnasi",
+                    left.uygulananDamgaIstisnasi,
+                    right.uygulananDamgaIstisnasi,
+                ),
+                (
+                    "damgaDetay.kalanDamgaIstisnasi",
+                    left.kalanDamgaIstisnasi,
+                    right.kalanDamgaIstisnasi,
+                ),
+                (
+                    "damgaDetay.kesilenDamgaVergisi",
+                    left.kesilenDamgaVergisi,
+                    right.kesilenDamgaVergisi,
+                ),
             ] {
                 compare_backup_decimal(id, field, imported_value, replayed_value)?;
             }

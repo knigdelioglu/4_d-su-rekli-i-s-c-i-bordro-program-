@@ -96,6 +96,26 @@ function payroll(
   } as unknown as BordroKaydi;
 }
 
+function addWorkerRateEvidence(
+  item: BordroKaydi,
+  sgkIsciOraniYuzde: number,
+  issizlikIsciOraniYuzde: number
+): BordroKaydi {
+  item.statutorySnapshot = {
+    source: 'ATTENDANCE_BACKED',
+    segments: [],
+    sgkPrimGunSayisi: 30,
+    pekAltSinir: 20000,
+    pekUstSinir: 150000,
+    sgkYemekIstisnasiToplam: 0,
+    gvYemekIstisnasiToplam: 0,
+    gvReferansGunlukAsgariUcret: 666.75,
+    sgkIsciOraniYuzde,
+    issizlikIsciOraniYuzde,
+  };
+  return item;
+}
+
 describe('SGK prim kontrolü dataset', () => {
   test('tek authoritative NORMAL bordroyu dört prim alanıyla gösterir', () => {
     const rows = getSgkPrimKontroluRows(period, [person1], [
@@ -532,16 +552,41 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     issizlikIsciOraniYuzde: 0.5,
   };
 
-  test('aktif kurum oranları başlıklara yansır', () => {
-    const rows = getSgkPrimKontroluRows(period, [person1], [
-      payroll('p-1', 'period-rate', 'FINALIZED', completeAmounts),
-    ]);
+  test('authoritative snapshot oranları başlıklara yansır', () => {
+    const item = addWorkerRateEvidence(
+      payroll('p-1', 'period-rate', 'FINALIZED', {
+        ...completeAmounts,
+        sgkIsverenOraniYuzde: 21.75,
+        isverenIssizlikOraniYuzde: 2,
+      }),
+      14,
+      1
+    );
+    const rows = getSgkPrimKontroluRows(period, [person1], [item]);
 
     expect(getSgkPrimKontroluRateLabels(rows, institutionSettings)).toEqual({
-      isverenSgk: 'SGK İşveren %19,5',
-      isverenIssizlik: 'İşveren İşsizlik %1,5',
-      isciSgk: 'SGK İşçi %13',
-      isciIssizlik: 'İşçi İşsizlik %0,5',
+      isverenSgk: 'SGK İşveren %21,75',
+      isverenIssizlik: 'İşveren İşsizlik %2',
+      isciSgk: 'SGK İşçi %14',
+      isciIssizlik: 'İşçi İşsizlik %1',
+    });
+  });
+
+  test('authoritative snapshot var ama oran kanıtı yoksa güncel veya default oran gösterilmez', () => {
+    const rows = getSgkPrimKontroluRows(period, [person1], [
+      payroll('p-1', 'snapshot-without-rates', 'FINALIZED', completeAmounts),
+    ]);
+
+    expect(getSgkPrimKontroluRateLabels(rows, {
+      sgkIsverenOraniYuzde: 21.75,
+      issizlikIsverenOraniYuzde: 2,
+      sgkIsciOraniYuzde: 14,
+      issizlikIsciOraniYuzde: 1,
+    })).toEqual({
+      isverenSgk: 'SGK İşveren —',
+      isverenIssizlik: 'İşveren İşsizlik —',
+      isciSgk: 'SGK İşçi —',
+      isciIssizlik: 'İşçi İşsizlik —',
     });
   });
 
@@ -563,8 +608,8 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
   test('farklı authoritative snapshot oranları başlıkta Değişken Oran olarak gösterilir', () => {
     const first = payroll('p-1', 'snapshot-rate-1', 'FINALIZED', completeAmounts);
     const second = payroll('p-1', 'snapshot-rate-2', 'CALCULATED', completeAmounts);
-    first.pekDetay!.sgkIsverenOraniYuzde = 21;
-    second.pekDetay!.sgkIsverenOraniYuzde = 22;
+    first.pekDetay!.sgkIsverenOraniYuzde = 20.5;
+    second.pekDetay!.sgkIsverenOraniYuzde = 21.75;
     const rows = getSgkPrimKontroluRows(period, [person1], [first, second]);
 
     expect(getSgkPrimKontroluRateLabels(rows, institutionSettings).isverenSgk).toBe(
@@ -657,7 +702,7 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     );
   });
 
-  test('hiç authoritative satır yoksa aktif dönem kurum değerindeki oran kullanılır', () => {
+  test('hiç authoritative satır yoksa tarihsel oran bilinmiyor gösterilir', () => {
     const stalePayroll = payroll('p-1', 'accrual-stale', 'STALE', {
       ...completeAmounts,
       sgkIsverenOraniYuzde: 25,
@@ -676,10 +721,10 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     expect(rows.map((r) => r.status)).toEqual(['stale', 'draft', 'notCalculated']);
     expect(
       getSgkPrimKontroluRateLabels(rows, { sgkIsverenOraniYuzde: 22 }).isverenSgk
-    ).toBe('SGK İşveren %22');
+    ).toBe('SGK İşveren —');
   });
 
-  test('hiç authoritative satır ve kurum değeri yoksa DEFAULT_KURUM_DEGERLERI fallback çalışır', () => {
+  test('authoritative satırdaki oran kanıtı yoksa kurum veya DEFAULT fallback kullanılmaz', () => {
     const stalePayroll = payroll('p-1', 'accrual-stale', 'STALE', completeAmounts);
     const draftPayroll = payroll('p-2', 'accrual-draft', 'DRAFT', completeAmounts);
 
@@ -691,18 +736,18 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
 
     const labelsWithoutSettings = getSgkPrimKontroluRateLabels(rows, undefined);
     expect(labelsWithoutSettings).toEqual({
-      isverenSgk: 'SGK İşveren %21,75',
-      isverenIssizlik: 'İşveren İşsizlik %2',
-      isciSgk: 'SGK İşçi %14',
-      isciIssizlik: 'İşçi İşsizlik %1',
+      isverenSgk: 'SGK İşveren —',
+      isverenIssizlik: 'İşveren İşsizlik —',
+      isciSgk: 'SGK İşçi —',
+      isciIssizlik: 'İşçi İşsizlik —',
     });
 
     const labelsWithEmptySettings = getSgkPrimKontroluRateLabels(rows, {});
     expect(labelsWithEmptySettings).toEqual({
-      isverenSgk: 'SGK İşveren %21,75',
-      isverenIssizlik: 'İşveren İşsizlik %2',
-      isciSgk: 'SGK İşçi %14',
-      isciIssizlik: 'İşçi İşsizlik %1',
+      isverenSgk: 'SGK İşveren —',
+      isverenIssizlik: 'İşveren İşsizlik —',
+      isciSgk: 'SGK İşçi —',
+      isciIssizlik: 'İşçi İşsizlik —',
     });
   });
 
@@ -723,10 +768,50 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     const rows = getSgkPrimKontroluRows(period, [person1], [item]);
 
     expect(getSgkPrimKontroluRateLabels(rows, institutionSettings)).toEqual({
-      isverenSgk: 'SGK İşveren %19,5',
-      isverenIssizlik: 'İşveren İşsizlik %1,5',
+      isverenSgk: 'SGK İşveren —',
+      isverenIssizlik: 'İşveren İşsizlik —',
       isciSgk: 'SGK İşçi %15',
       isciIssizlik: 'İşçi İşsizlik %1,5',
+    });
+  });
+
+  test('RETRO kaynak ayı yalnız kaynak bordro snapshot oranlarını taşır', () => {
+    const sourcePeriod: BordroDonemi = { ...period, id: '2026-05' };
+    const paymentPeriod: BordroDonemi = { ...period, id: '2026-06' };
+    const sourcePayroll = addWorkerRateEvidence(
+      payroll('p-1', 'source-rate', 'FINALIZED', {
+        ...completeAmounts,
+        sgkIsverenOraniYuzde: 20.5,
+        isverenIssizlikOraniYuzde: 1.5,
+      }),
+      13,
+      0.5
+    );
+    sourcePayroll.donemId = sourcePeriod.id;
+
+    const paymentPayroll = addWorkerRateEvidence(
+      payroll('p-1', 'payment-rate', 'FINALIZED', {
+        ...completeAmounts,
+        sgkIsverenOraniYuzde: 21.75,
+        isverenIssizlikOraniYuzde: 2,
+      }),
+      14,
+      1
+    );
+    paymentPayroll.donemId = paymentPeriod.id;
+
+    const rows = getSgkPrimKontroluRows(sourcePeriod, [person1], [sourcePayroll, paymentPayroll]);
+
+    expect(getSgkPrimKontroluRateLabels(rows, {
+      sgkIsverenOraniYuzde: 21.75,
+      issizlikIsverenOraniYuzde: 2,
+      sgkIsciOraniYuzde: 14,
+      issizlikIsciOraniYuzde: 1,
+    })).toEqual({
+      isverenSgk: 'SGK İşveren %20,5',
+      isverenIssizlik: 'İşveren İşsizlik %1,5',
+      isciSgk: 'SGK İşçi %13',
+      isciIssizlik: 'İşçi İşsizlik %0,5',
     });
   });
 

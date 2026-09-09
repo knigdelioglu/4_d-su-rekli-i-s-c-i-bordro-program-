@@ -297,7 +297,11 @@ fn strict_restore_reconciles_gv_damga_and_pek_snapshots() {
     ));
 
     let mut stamp_snapshot = reconciled_payroll(AccrualType::NORMAL, 12);
-    stamp_snapshot.damgaDetay.as_mut().unwrap().kesilenDamgaVergisi = dec!(1);
+    stamp_snapshot
+        .damgaDetay
+        .as_mut()
+        .unwrap()
+        .kesilenDamgaVergisi = dec!(1);
     assert!(matches!(
         PayrollRepository::save_in_transaction(&conn, &stamp_snapshot),
         Err(DomainError::InvalidData(_))
@@ -402,6 +406,9 @@ fn legacy_sparse_normal_snapshot_remains_writable_and_full_snapshot_roundtrips()
         .find(|item| item.id == full.id)
         .unwrap();
     PayrollRepository::save_in_transaction(&conn, &roundtripped).unwrap();
-    assert_eq!(roundtripped.gvDetay.unwrap().yeniKumulatifGvMatrahi, dec!(85));
+    assert_eq!(
+        roundtripped.gvDetay.unwrap().yeniKumulatifGvMatrahi,
+        dec!(85)
+    );
     assert_eq!(roundtripped.pekDetay.unwrap().primMatrahi, dec!(100));
 }

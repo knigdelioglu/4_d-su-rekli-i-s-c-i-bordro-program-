@@ -1,4 +1,4 @@
-use super::{kurus_to_dec, opt_dec_to_kurus};
+use super::{kurus_to_dec, opt_money_to_kurus};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
@@ -193,8 +193,8 @@ impl TaxOpeningRepository {
             })
             .unwrap_or(true);
         let now = Utc::now().to_rfc3339();
-        let opening_kurus = opt_dec_to_kurus(t.gvCumulativeOpening)?;
-        let asgari_opening_kurus = opt_dec_to_kurus(t.asgariGvCumulativeOpening)?;
+        let opening_kurus = opt_money_to_kurus(t.gvCumulativeOpening)?;
+        let asgari_opening_kurus = opt_money_to_kurus(t.asgariGvCumulativeOpening)?;
 
         conn.execute(
             "INSERT INTO personnel_tax_opening (

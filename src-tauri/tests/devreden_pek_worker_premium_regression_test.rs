@@ -1,6 +1,6 @@
 use bordro_programi_lib::domain::calculations::{
-    calculate_incremental_prime_esas_kazanc, calculate_prime_esas_kazanc,
-    calculate_legacy_statutory_deductions,
+    calculate_incremental_prime_esas_kazanc, calculate_legacy_statutory_deductions,
+    calculate_prime_esas_kazanc,
 };
 use bordro_programi_lib::domain::models::{
     DevredenPekKaydi, DonemselKurumDegerleri, GelirKalemleri, PuantajOzeti,
@@ -67,8 +67,15 @@ fn devreden_tamamen_tavana_sigarsa_isci_prim_matrahina_girer() {
     let g = gelir(dec!(50000));
     let gelen = vec![devreden(dec!(20000), 2, "onceki")];
 
-    let (kesintiler, pek, sonraki) =
-        calculate_legacy_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
+    let (kesintiler, pek, sonraki) = calculate_legacy_statutory_deductions(
+        &g,
+        Some(&k),
+        None,
+        Some(&p),
+        dec!(0),
+        &gelen,
+        dec!(0),
+    );
 
     assert_eq!(pek.hamPek, dec!(50000));
     assert_eq!(pek.devredenPekKullanilan, dec!(20000));
@@ -86,8 +93,15 @@ fn devreden_kismen_sigarsa_yalniz_kullanilan_kisim_primlenir() {
     let g = gelir(dec!(80000));
     let gelen = vec![devreden(dec!(20000), 2, "onceki")];
 
-    let (kesintiler, pek, sonraki) =
-        calculate_legacy_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
+    let (kesintiler, pek, sonraki) = calculate_legacy_statutory_deductions(
+        &g,
+        Some(&k),
+        None,
+        Some(&p),
+        dec!(0),
+        &gelen,
+        dec!(0),
+    );
 
     assert_eq!(pek.devredenPekKullanilan, dec!(10000));
     assert_eq!(pek.primMatrahi, dec!(90000));
@@ -106,8 +120,15 @@ fn tavan_boslugu_yoksa_devreden_isci_primine_girmez() {
     let g = gelir(dec!(100000));
     let gelen = vec![devreden(dec!(20000), 2, "onceki")];
 
-    let (kesintiler, pek, sonraki) =
-        calculate_legacy_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
+    let (kesintiler, pek, sonraki) = calculate_legacy_statutory_deductions(
+        &g,
+        Some(&k),
+        None,
+        Some(&p),
+        dec!(0),
+        &gelen,
+        dec!(0),
+    );
 
     assert_eq!(pek.devredenPekKullanilan, dec!(0));
     assert_eq!(pek.primMatrahi, dec!(90000));
@@ -125,8 +146,15 @@ fn birden_fazla_devreden_kaydi_tavan_boslugunu_sirayla_doldurur() {
     let g = gelir(dec!(60000));
     let gelen = vec![devreden(dec!(20000), 2, "a"), devreden(dec!(30000), 2, "b")];
 
-    let (kesintiler, pek, sonraki) =
-        calculate_legacy_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
+    let (kesintiler, pek, sonraki) = calculate_legacy_statutory_deductions(
+        &g,
+        Some(&k),
+        None,
+        Some(&p),
+        dec!(0),
+        &gelen,
+        dec!(0),
+    );
 
     assert_eq!(pek.devredenPekKullanilan, dec!(30000));
     assert_eq!(pek.primMatrahi, dec!(90000));
@@ -219,8 +247,15 @@ fn devreden_alt_sinir_farkini_azaltir_ama_isciye_yapay_fark_yansitilmaz() {
     let g = gelir(dec!(10000));
     let gelen = vec![devreden(dec!(5000), 2, "onceki")];
 
-    let (kesintiler, pek, _) =
-        calculate_legacy_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
+    let (kesintiler, pek, _) = calculate_legacy_statutory_deductions(
+        &g,
+        Some(&k),
+        None,
+        Some(&p),
+        dec!(0),
+        &gelen,
+        dec!(0),
+    );
 
     assert_eq!(pek.primMatrahi, dec!(15000));
     assert_eq!(pek.pekAltSinir, dec!(30000));
@@ -238,8 +273,15 @@ fn devreden_alt_siniri_asarsa_yapay_tamamlama_farki_kalmaz() {
     let g = gelir(dec!(10000));
     let gelen = vec![devreden(dec!(25000), 2, "onceki")];
 
-    let (kesintiler, pek, _) =
-        calculate_legacy_statutory_deductions(&g, Some(&k), None, Some(&p), dec!(0), &gelen, dec!(0));
+    let (kesintiler, pek, _) = calculate_legacy_statutory_deductions(
+        &g,
+        Some(&k),
+        None,
+        Some(&p),
+        dec!(0),
+        &gelen,
+        dec!(0),
+    );
 
     assert_eq!(pek.devredenPekKullanilan, dec!(25000));
     assert_eq!(pek.primMatrahi, dec!(35000));

@@ -327,6 +327,10 @@ async function seedExactTaxOpening(page: Page, periodId: string, value: string):
                   : 0;
               if (payload === null) throw new Error('Snapshot payload bulunamadı.');
               const snapshot = JSON.parse(payload) as StoredSnapshot;
+              // Changing an authoritative tax opening changes the inputs for
+              // any calculated payroll. Keep this boundary fixture replayable
+              // before exercising the next exact opening value.
+              snapshot.bordrolar = [];
               snapshot.taxOpenings = [
                 {
                   id: `exact-${seededPeriodId}`,
@@ -480,10 +484,10 @@ test('SGK prim kontrolü tüm personeli ve manuel mutabakat farkını gösterir'
     'SGK Sicil No',
     'Ad Soyad',
     'Durum',
-    'SGK İşveren %21,75',
-    'İşveren İşsizlik %2',
-    'SGK İşçi %14',
-    'İşçi İşsizlik %1',
+    'SGK İşveren —',
+    'İşveren İşsizlik —',
+    'SGK İşçi —',
+    'İşçi İşsizlik —',
     'Retro kaynak PEK farkı',
     'PEK Alt Sınır İşveren Tamamlama',
     'Toplam',
@@ -770,7 +774,7 @@ test('browser migrates a numeric legacy localStorage backup into exact IndexedDB
   legacySnapshot.backupVersion = 1;
   const legacyPayroll = (legacySnapshot.bordrolar as Array<Record<string, unknown>>)[0];
   legacyPayroll.netOdeme = 64179.78;
-  (legacyPayroll.kesintiler as Record<string, unknown>).digerKesinti = '7245.59';
+  (legacyPayroll.kesintiler as Record<string, unknown>).digerKesinti = '7297.96';
   legacyPayroll.kesintiToplam = '31984.88';
   delete legacyPayroll.status;
   const legacyPayload = JSON.stringify(legacySnapshot);

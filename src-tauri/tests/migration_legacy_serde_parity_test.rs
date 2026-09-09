@@ -4,12 +4,10 @@ use bordro_programi_lib::{
     db::create_in_memory_connection,
     repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository,
     repositories::attendance_repo::AttendanceRepository,
-    repositories::payroll_repo::PayrollRepository,
-    repositories::period_repo::PeriodRepository,
+    repositories::payroll_repo::PayrollRepository, repositories::period_repo::PeriodRepository,
     repositories::personnel_repo::PersonnelRepository, repositories::retro_repo::get_allocations,
     repositories::retro_repo::get_batches, repositories::retro_repo::get_revisions,
-    repositories::settings_repo::SettingsRepository,
-    services::payroll_service::PayrollService,
+    repositories::settings_repo::SettingsRepository, services::payroll_service::PayrollService,
 };
 use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
@@ -619,7 +617,8 @@ fn current_v5_fixture() -> Result<(rusqlite::Connection, String), Box<dyn std::e
 }
 
 #[test]
-fn native_current_v5_backup_roundtrip_replays_authoritative_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+fn native_current_v5_backup_roundtrip_replays_authoritative_snapshot(
+) -> Result<(), Box<dyn std::error::Error>> {
     let (mut conn, payload) = current_v5_fixture()?;
     let before = PayrollRepository::get_all(&conn)?;
 
@@ -662,7 +661,12 @@ fn native_legacy_sparse_backup_preserves_persisted_gv_base_without_rich_detail(
     assert!(restored[0].gvDetay.is_none());
     assert_eq!(
         restored[0].persistedGvBase,
-        Some(persisted_base.as_str().expect("persisted GV base").parse()?)
+        Some(
+            persisted_base
+                .as_str()
+                .expect("persisted GV base")
+                .parse()?
+        )
     );
     assert_eq!(restored[0].status, BordroStatus::CALCULATED);
     assert_eq!(
@@ -673,7 +677,8 @@ fn native_legacy_sparse_backup_preserves_persisted_gv_base_without_rich_detail(
 }
 
 #[test]
-fn native_current_v5_backup_rejects_semantically_forged_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+fn native_current_v5_backup_rejects_semantically_forged_snapshot(
+) -> Result<(), Box<dyn std::error::Error>> {
     let (mut conn, payload) = current_v5_fixture()?;
     let mut forged: Value = serde_json::from_str(&payload)?;
     let payroll = forged["bordrolar"]
@@ -691,8 +696,7 @@ fn native_current_v5_backup_rejects_semantically_forged_snapshot() -> Result<(),
         .as_str()
         .expect("previous GV decimal string")
         .parse::<Decimal>()?;
-    payroll["gvDetay"]["yeniKumulatifGvMatrahi"] =
-        json!((previous + forged_base).to_string());
+    payroll["gvDetay"]["yeniKumulatifGvMatrahi"] = json!((previous + forged_base).to_string());
 
     let error = MigrationService::replace_backup_data(&mut conn, &forged.to_string())
         .expect_err("semantically forged V5 snapshot must be rejected");
@@ -702,7 +706,8 @@ fn native_current_v5_backup_rejects_semantically_forged_snapshot() -> Result<(),
 }
 
 #[test]
-fn native_backup_rejects_duplicate_annual_payroll_parameter_years() -> Result<(), Box<dyn std::error::Error>> {
+fn native_backup_rejects_duplicate_annual_payroll_parameter_years(
+) -> Result<(), Box<dyn std::error::Error>> {
     let (mut conn, payload) = current_v5_fixture()?;
     let mut modified: Value = serde_json::from_str(&payload)?;
     let duplicate_param = modified["annualPayrollParameters"][0].clone();
@@ -721,7 +726,8 @@ fn native_backup_rejects_duplicate_annual_payroll_parameter_years() -> Result<()
 }
 
 #[test]
-fn native_kurus_boundary_rejects_more_than_two_decimals() -> Result<(), Box<dyn std::error::Error>> {
+fn native_kurus_boundary_rejects_more_than_two_decimals() -> Result<(), Box<dyn std::error::Error>>
+{
     let conn = create_in_memory_connection()?;
     let mut personnel = Personel {
         id: "person-precision".into(),
@@ -755,8 +761,7 @@ fn native_kurus_boundary_rejects_more_than_two_decimals() -> Result<(), Box<dyn 
 
     // scale <= 2 must succeed
     personnel.kesintiler.as_mut().unwrap().sabitBesTutar = Some(dec!(10.50));
-    PersonnelRepository::save(&conn, &personnel)
-        .expect("values with scale <= 2 must succeed");
+    PersonnelRepository::save(&conn, &personnel).expect("values with scale <= 2 must succeed");
     Ok(())
 }
 
@@ -799,7 +804,9 @@ fn native_retro_ordinary_line_item_rejects_negative_income_and_deductions() {
     payroll.gelirler.digerGelir = Some(dec!(-50));
     let err = payroll_core::validate_ordinary_payroll_snapshot(&payroll)
         .expect_err("negative digerGelir in retro must be rejected");
-    assert!(err.to_string().contains("Ordinary gelir kalemi negatif olamaz"));
+    assert!(err
+        .to_string()
+        .contains("Ordinary gelir kalemi negatif olamaz"));
 
     payroll.gelirler.digerGelir = None;
     payroll.gelirler.tabanBrutAylik = Some(dec!(100));
@@ -813,6 +820,7 @@ fn native_retro_ordinary_line_item_rejects_negative_income_and_deductions() {
     payroll.kesintiler.bes = Some(dec!(-10)); // bes is ordinary, must NOT be negative
     let err = payroll_core::validate_ordinary_payroll_snapshot(&payroll)
         .expect_err("negative bes in retro must be rejected");
-    assert!(err.to_string().contains("Ordinary kesinti kalemi negatif olamaz"));
+    assert!(err
+        .to_string()
+        .contains("Ordinary kesinti kalemi negatif olamaz"));
 }
-

@@ -1,4 +1,6 @@
-use super::{opt_dec_to_kurus, opt_kurus_to_dec};
+use super::{
+    opt_kurus_to_dec, opt_money_to_kurus, opt_rate_to_sql_value, rate_sql_value_to_decimal,
+};
 use crate::domain::models::*;
 use crate::domain::Result;
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
@@ -17,7 +19,7 @@ impl PersonnelRepository {
         let sendika_uyesi: i32 = row.get(15)?;
         let sabit_sendika: Option<i64> = row.get(16)?;
         let bes_uyesi: i32 = row.get(17)?;
-        let oks_orani: Option<i64> = row.get(18)?;
+        let oks_orani = rate_sql_value_to_decimal(row.get(18)?, 18)?;
         let sabit_bes: Option<i64> = row.get(19)?;
         let icra: Option<i64> = row.get(20)?;
         let kisi_borcu: Option<i64> = row.get(21)?;
@@ -48,7 +50,7 @@ impl PersonnelRepository {
                 sendikaUyesi: Some(sendika_uyesi == 1),
                 sabitSendikaAidati: opt_kurus_to_dec(sabit_sendika),
                 besUyesi: Some(bes_uyesi == 1),
-                oksOraniYuzde: opt_kurus_to_dec(oks_orani),
+                oksOraniYuzde: oks_orani,
                 sabitBesTutar: opt_kurus_to_dec(sabit_bes),
                 icraTutar: opt_kurus_to_dec(icra),
                 kisiBorcuTutar: opt_kurus_to_dec(kisi_borcu),
@@ -154,18 +156,18 @@ impl PersonnelRepository {
             0
         };
 
-        let sabit_sendika = opt_dec_to_kurus(k.and_then(|k| k.sabitSendikaAidati))?;
-        let oks_orani = opt_dec_to_kurus(k.and_then(|k| k.oksOraniYuzde))?;
-        let sabit_bes = opt_dec_to_kurus(k.and_then(|k| k.sabitBesTutar))?;
-        let icra = opt_dec_to_kurus(k.and_then(|k| k.icraTutar))?;
-        let kisi_borcu = opt_dec_to_kurus(k.and_then(|k| k.kisiBorcuTutar))?;
-        let dogum = opt_dec_to_kurus(k.and_then(|k| k.dogumAskerlikBorclanmasiTutar))?;
-        let hayat = opt_dec_to_kurus(k.and_then(|k| k.hayatSaglikSigortasiTutar))?;
-        let diger = opt_dec_to_kurus(k.and_then(|k| k.digerKesintiTutar))?;
+        let sabit_sendika = opt_money_to_kurus(k.and_then(|k| k.sabitSendikaAidati))?;
+        let oks_orani = opt_rate_to_sql_value(k.and_then(|k| k.oksOraniYuzde))?;
+        let sabit_bes = opt_money_to_kurus(k.and_then(|k| k.sabitBesTutar))?;
+        let icra = opt_money_to_kurus(k.and_then(|k| k.icraTutar))?;
+        let kisi_borcu = opt_money_to_kurus(k.and_then(|k| k.kisiBorcuTutar))?;
+        let dogum = opt_money_to_kurus(k.and_then(|k| k.dogumAskerlikBorclanmasiTutar))?;
+        let hayat = opt_money_to_kurus(k.and_then(|k| k.hayatSaglikSigortasiTutar))?;
+        let diger = opt_money_to_kurus(k.and_then(|k| k.digerKesintiTutar))?;
         let gv = k.and_then(|k| k.gvIndirimleri.as_ref());
-        let dogum_gv_indirim = opt_dec_to_kurus(gv.and_then(|g| g.dogumAskerlikGvIndirimTutar))?;
-        let hayat_gv_prim = opt_dec_to_kurus(gv.and_then(|g| g.hayatSigortasiPrimiTutar))?;
-        let saglik_gv_prim = opt_dec_to_kurus(gv.and_then(|g| g.saglikSigortasiPrimiTutar))?;
+        let dogum_gv_indirim = opt_money_to_kurus(gv.and_then(|g| g.dogumAskerlikGvIndirimTutar))?;
+        let hayat_gv_prim = opt_money_to_kurus(gv.and_then(|g| g.hayatSigortasiPrimiTutar))?;
+        let saglik_gv_prim = opt_money_to_kurus(gv.and_then(|g| g.saglikSigortasiPrimiTutar))?;
 
         // Aşağıdaki dal, migration'ları henüz tamamlanmamış eski bir SQLite
         // dosyasını açan bakım/test akışları için geriye dönük uyumludur.
@@ -231,8 +233,8 @@ impl PersonnelRepository {
                 saglik_sigortasi_gv_prim_tutar=?28, updated_at=?30",
             params![
                 p.id, p.tcNo, p.ad, p.soyad, p.grup, p.unvan, p.sgkSicilNo, p.iban, p.hizmetYili, p.aciklama,
-                opt_dec_to_kurus(p.devirKumulatifGvMatrahi)?, p.devirKumulatifGvMatrahiYili,
-                p.devirKumulatifGvMatrahiBaslangicAyi, opt_dec_to_kurus(p.devirKumulatifAsgariGvMatrahi)?,
+                opt_money_to_kurus(p.devirKumulatifGvMatrahi)?, p.devirKumulatifGvMatrahiYili,
+                p.devirKumulatifGvMatrahiBaslangicAyi, opt_money_to_kurus(p.devirKumulatifAsgariGvMatrahi)?,
                 p.devirKumulatifAsgariGvMatrahiYili, sendika_uyesi, sabit_sendika, bes_uyesi, oks_orani, sabit_bes,
                 icra, kisi_borcu, dogum, hayat, diger, dogum_gv_indirim, hayat_gv_prim, saglik_gv_prim, now, now
             ],

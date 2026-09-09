@@ -122,8 +122,13 @@ impl PayrollService {
         checked: bool,
     ) -> Result<BordroKaydi> {
         crate::repositories::transaction::with_transaction(conn, |tx| {
-            let request =
-                Self::build_calculation_request(tx, personnel_id, period_id, accrual, manual_income)?;
+            let request = Self::build_calculation_request(
+                tx,
+                personnel_id,
+                period_id,
+                accrual,
+                manual_income,
+            )?;
             let calculated = if checked {
                 payroll_core::calculate_payroll_checked(&request)?
             } else {

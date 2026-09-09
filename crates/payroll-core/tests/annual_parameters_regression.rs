@@ -40,8 +40,7 @@ fn annual_parameter_semantics_match_the_authoritative_core_contract() {
     }
 
     let mut excessive_limit = valid_parameters();
-    excessive_limit.gelirVergisiDilimleri[0].limit =
-        dec!(1000000000000001);
+    excessive_limit.gelirVergisiDilimleri[0].limit = dec!(1000000000000001);
     assert!(validate_annual_payroll_parameters(&excessive_limit).is_err());
 
     for cap in [dec!(0), dec!(-1)] {

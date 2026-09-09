@@ -8,11 +8,10 @@
 #![allow(non_snake_case)]
 
 use crate::calculations::{
-    calculate_meal_income, calculate_segmented_meal_exemptions,
-    calculate_gunluk_gelirler_from_puantaj,
-    calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state, canonical_sgk_earning_class,
-    round_sgk_amount, CanonicalSgkEarningClass, MealExemptionSegment, MealExemptionTotals,
-    PekCalculationOptions,
+    calculate_gunluk_gelirler_from_puantaj, calculate_meal_income,
+    calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state,
+    calculate_segmented_meal_exemptions, canonical_sgk_earning_class, round_sgk_amount,
+    CanonicalSgkEarningClass, MealExemptionSegment, MealExemptionTotals, PekCalculationOptions,
 };
 use crate::index::PayrollDatasetIndex;
 use crate::models::*;
@@ -655,9 +654,18 @@ fn target_income_for_period(
     let raise_date = crate::payroll_engine::find_zam_tarihi(period, &dataset.zamAylari)?;
     let before_raise_settings = if raise_date.is_some() {
         let previous = crate::payroll_engine::find_previous_work_period(dataset, period)?
-            .ok_or_else(|| DomainError::InvalidData(format!("{} retro zam öncesi dönem eksik.", period.id)))?;
-        let previous = dataset.institutionSettings.get(&previous.id)
-            .ok_or_else(|| DomainError::InvalidData(format!("{} retro zam öncesi kurum ayarları eksik.", period.id)))?;
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!("{} retro zam öncesi dönem eksik.", period.id))
+            })?;
+        let previous = dataset
+            .institutionSettings
+            .get(&previous.id)
+            .ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} retro zam öncesi kurum ayarları eksik.",
+                    period.id
+                ))
+            })?;
         crate::calculations::validate_kurum_degerleri_for_payroll(previous)?;
         let mut baseline = historical_settings.clone();
         baseline.gunlukTabanUcret = previous.gunlukTabanUcret;
@@ -667,7 +675,9 @@ fn target_income_for_period(
         baseline.geceCalismaPrimiYuzde = previous.geceCalismaPrimiYuzde;
         baseline.geceCalismaTatiliPrimiYuzde = previous.geceCalismaTatiliPrimiYuzde;
         Some(baseline)
-    } else { None };
+    } else {
+        None
+    };
     let mut segments: Vec<ReplaySegment> = Vec::new();
     let mut current = start;
     while current <= covered_end {
@@ -703,20 +713,21 @@ fn target_income_for_period(
                     period.id, date_text
                 ))
             })?;
-        let segment_key = format!(
-            "{before_raise}:{active_revision_ids}:{statutory_segment_index}"
-        );
+        let segment_key = format!("{before_raise}:{active_revision_ids}:{statutory_segment_index}");
         let baseline = if before_raise {
-            before_raise_settings.as_ref().unwrap_or(&historical_settings)
-        } else { &historical_settings };
+            before_raise_settings
+                .as_ref()
+                .unwrap_or(&historical_settings)
+        } else {
+            &historical_settings
+        };
         let segment_index = if let Some(index) = segments
             .iter()
             .position(|segment| segment.key == segment_key)
         {
             index
         } else {
-            let settings =
-                settings_for_replay_date(baseline, personnel, current, applications)?;
+            let settings = settings_for_replay_date(baseline, personnel, current, applications)?;
             segments.push(ReplaySegment {
                 key: segment_key,
                 statutory_segment_index,
@@ -773,10 +784,7 @@ fn target_income_for_period(
                 })?;
             if segment.meal_days > 0 {
                 meal_segments.push(MealExemptionSegment {
-                    actual: calculate_meal_income(
-                        segment.meal_days,
-                        segment.settings.gunlukYemek,
-                    ),
+                    actual: calculate_meal_income(segment.meal_days, segment.settings.gunlukYemek),
                     sgk_capacity: statutory_segment.gunlukYemekIstisnasiSGK
                         * Decimal::from(segment.meal_days),
                     gv_capacity: statutory_segment.gunlukYemekIstisnasiGV
@@ -1824,13 +1832,17 @@ struct SourceMonthSgkPayment<'a> {
     current_batch_id: &'a str,
 }
 
+struct SourceMonthSgkTarget<'a> {
+    normal_income: &'a GelirKalemleri,
+    meal_exemption: MealExemptionTotals,
+}
+
 fn apply_source_month_sgk(
     index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     personnel_id: &str,
     period: &BordroDonemi,
-    target_normal_income: &GelirKalemleri,
-    target_meal_exemption: MealExemptionTotals,
+    target: SourceMonthSgkTarget<'_>,
     allocations: &mut [RetroAllocation],
     payment: SourceMonthSgkPayment<'_>,
 ) -> Result<()> {
@@ -1842,8 +1854,8 @@ fn apply_source_month_sgk(
         personnel_id,
         period,
         &events,
-        target_normal_income,
-        target_meal_exemption,
+        target.normal_income,
+        target.meal_exemption,
     )?;
     let original = original_replay.state;
     let target = target_replay.state;
@@ -2408,8 +2420,10 @@ impl RetroEntitlementEngine {
                 &request.dataset,
                 &request.personnelId,
                 period,
-                &target_income.income,
-                target_income.meal_exemption,
+                SourceMonthSgkTarget {
+                    normal_income: &target_income.income,
+                    meal_exemption: target_income.meal_exemption,
+                },
                 &mut allocations,
                 SourceMonthSgkPayment {
                     payment_date,

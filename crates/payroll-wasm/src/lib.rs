@@ -78,12 +78,13 @@ pub fn validate_payroll_json(request_json: &str) -> Result<(), JsValue> {
 /// narrow endpoint for direct Rust/WASM parity without duplicating tax logic.
 #[wasm_bindgen]
 pub fn validate_annual_payroll_parameters_json(parameters_json: &str) -> Result<(), JsValue> {
-    let parameters: AnnualPayrollParameters = serde_json::from_str(parameters_json).map_err(|error| {
-        error_to_js(payroll_core::DomainError::InvalidData(format!(
-            "Yıllık bordro parametresi geçersiz JSON içeriyor: {}",
-            error
-        )))
-    })?;
+    let parameters: AnnualPayrollParameters =
+        serde_json::from_str(parameters_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Yıllık bordro parametresi geçersiz JSON içeriyor: {}",
+                error
+            )))
+        })?;
     payroll_core::validate_annual_payroll_parameters(&parameters).map_err(error_to_js)
 }
 
@@ -452,7 +453,7 @@ mod tests {
         let mut thirty_days = standard_request();
         let active = fixture_period("2026-04", 2026, 4, 2026, 4, "2026-04-15", "2026-05-14");
         configure_active_period(&mut thirty_days, vec![active.clone()], &active);
-        thirty_days.dataset.personnel[0].devirKumulatifAsgariGvMatrahi = Some(dec!(0));
+        thirty_days.dataset.personnel[0].devirKumulatifAsgariGvMatrahi = Some(dec!(1));
         thirty_days.dataset.personnel[0].devirKumulatifAsgariGvMatrahiYili = Some(2026);
         thirty_days.dataset.personnel[0].devirKumulatifGvMatrahiBaslangicAyi = Some(4);
         fixtures.push(("thirty-day-period", thirty_days, true));
@@ -475,7 +476,7 @@ mod tests {
         let previous = fixture_period("2025-12", 2025, 12, 2025, 12, "2025-12-15", "2026-01-14");
         let active = fixture_period("2026-01", 2026, 1, 2026, 2, "2026-01-15", "2026-02-14");
         configure_two_periods(&mut raise_segment, previous, active.clone());
-        raise_segment.dataset.personnel[0].devirKumulatifAsgariGvMatrahi = Some(dec!(0));
+        raise_segment.dataset.personnel[0].devirKumulatifAsgariGvMatrahi = Some(dec!(1));
         raise_segment.dataset.personnel[0].devirKumulatifAsgariGvMatrahiYili = Some(2026);
         raise_segment.dataset.personnel[0].devirKumulatifGvMatrahiBaslangicAyi = Some(2);
         raise_segment.dataset.zamAylari = vec![2];

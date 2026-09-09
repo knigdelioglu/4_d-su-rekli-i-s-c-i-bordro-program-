@@ -1,4 +1,4 @@
-use super::{dec_to_kurus, kurus_to_dec};
+use super::{kurus_to_dec, money_to_kurus};
 use crate::domain::calculations::{
     calculate_gelir_toplam, calculate_kesinti_toplam, round_sgk_amount,
 };
@@ -190,7 +190,10 @@ impl PayrollRepository {
         }
 
         for (field, value) in [
-            ("GV önceki kümülatif matrahı", detail.oncekiKumulatifGvMatrahi),
+            (
+                "GV önceki kümülatif matrahı",
+                detail.oncekiKumulatifGvMatrahi,
+            ),
             ("GV cari matrahı", detail.cariGvMatrahi),
             ("GV yeni kümülatif matrahı", detail.yeniKumulatifGvMatrahi),
             ("GV brüt vergisi", detail.brutGelirVergisi),
@@ -229,9 +232,7 @@ impl PayrollRepository {
             Self::validate_non_negative_snapshot_amount(field, value)?;
         }
 
-        if detail.yeniKumulatifGvMatrahi
-            != detail.oncekiKumulatifGvMatrahi + detail.cariGvMatrahi
-        {
+        if detail.yeniKumulatifGvMatrahi != detail.oncekiKumulatifGvMatrahi + detail.cariGvMatrahi {
             return Err(DomainError::InvalidData(
                 "GV snapshot yeni kümülatif matrahı önceki + cari matraha eşit değil.".into(),
             ));
@@ -264,8 +265,7 @@ impl PayrollRepository {
             || detail.uygulananGvIstisnasi > remaining_before
             || detail.tahakkukSonrasiKalanGvIstisnasi
                 != remaining_before - detail.uygulananGvIstisnasi
-            || detail.kesilenGelirVergisi
-                != detail.brutGelirVergisi - detail.uygulananGvIstisnasi
+            || detail.kesilenGelirVergisi != detail.brutGelirVergisi - detail.uygulananGvIstisnasi
         {
             return Err(DomainError::InvalidData(
                 "GV snapshot istisna state'i brüt vergi, aylık hak ve kalan tutarla eşleşmiyor."
@@ -308,8 +308,7 @@ impl PayrollRepository {
         if detail.ayniAyOncekiKullanilanDamgaIstisnasi > detail.aylikDamgaIstisnaHakki
             || detail.uygulananDamgaIstisnasi > detail.brutDamgaVergisi
             || detail.uygulananDamgaIstisnasi > remaining_before
-            || detail.kalanDamgaIstisnasi
-                != remaining_before - detail.uygulananDamgaIstisnasi
+            || detail.kalanDamgaIstisnasi != remaining_before - detail.uygulananDamgaIstisnasi
             || detail.kesilenDamgaVergisi
                 != detail.brutDamgaVergisi - detail.uygulananDamgaIstisnasi
         {
@@ -409,8 +408,8 @@ impl PayrollRepository {
     /// helper as payroll-core.
     fn validate_retro_worker_premiums(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
         let batch_id = Self::effective_accrual_id(bordro);
-        let (allocation_count, source_sgk_kurus, source_unemployment_kurus): (i64, i64, i64) =
-            conn.query_row(
+        let (allocation_count, source_sgk_kurus, source_unemployment_kurus): (i64, i64, i64) = conn
+            .query_row(
                 "SELECT COUNT(*), COALESCE(SUM(worker_sgk_delta), 0),
                         COALESCE(SUM(worker_unemployment_delta), 0)
                  FROM retro_adjustment_allocations
@@ -464,9 +463,8 @@ impl PayrollRepository {
                     field, rate
                 )));
             }
-            let expected = round_sgk_amount(
-                source_delta + pek.primMatrahi * rate / Decimal::from(100),
-            );
+            let expected =
+                round_sgk_amount(source_delta + pek.primMatrahi * rate / Decimal::from(100));
             if deduction != expected {
                 return Err(DomainError::InvalidData(format!(
                     "{} ile RETRO source delta + payment-month PEK primi eşleşmiyor (beklenen {}, kesinti {}).",
@@ -509,10 +507,7 @@ impl PayrollRepository {
             return Ok(false);
         };
 
-        Ok(is_primi.is_none()
-            && gv.is_none()
-            && statutory.is_none()
-            && damga.is_none())
+        Ok(is_primi.is_none() && gv.is_none() && statutory.is_none() && damga.is_none())
     }
 
     fn status_to_str(status: BordroStatus) -> &'static str {
@@ -1386,7 +1381,10 @@ impl PayrollRepository {
 
     /// Production save including identity checks and downstream invalidation,
     /// inside the service's snapshot/read/calculate/write transaction.
-    pub(crate) fn save_with_policy_in_transaction(tx: &Connection, bordro: &BordroKaydi) -> Result<()> {
+    pub(crate) fn save_with_policy_in_transaction(
+        tx: &Connection,
+        bordro: &BordroKaydi,
+    ) -> Result<()> {
         // Reject a split-brain payment event before dependency invalidation or
         // any other mutation policy can mask the authoritative date/tax-month
         // validation error. `save_in_transaction` repeats this check for
@@ -1579,14 +1577,17 @@ impl PayrollRepository {
             });
         }
 
-        let gross_total = dec_to_kurus(Some(b.gelirToplam))?;
-        let sgk_base = dec_to_kurus(
+        let gross_total = money_to_kurus(Some(b.gelirToplam))?;
+        let sgk_base = money_to_kurus(
             b.pekDetay
                 .as_ref()
                 .map(|p| p.primMatrahi)
                 .or_else(|| b.pekDetay.as_ref().map(|p| p.finalPek)),
         )?;
-        let (gv_base_decimal, legacy_gv_base_unverified) = match (b.gvDetay.as_ref(), b.persistedGvBase) {
+        let (gv_base_decimal, legacy_gv_base_unverified) = match (
+            b.gvDetay.as_ref(),
+            b.persistedGvBase,
+        ) {
             (Some(detail), Some(persisted)) => {
                 if detail.cariGvMatrahi != persisted {
                     return Err(DomainError::InvalidData(format!(
@@ -1634,17 +1635,17 @@ impl PayrollRepository {
         } else {
             Self::status_to_str(b.status)
         };
-        let gv_base = dec_to_kurus(Some(gv_base_decimal))?;
-        let prev_gv = dec_to_kurus(b.oncekiKumulatifGvMatrahi)?;
+        let gv_base = money_to_kurus(Some(gv_base_decimal))?;
+        let prev_gv = money_to_kurus(b.oncekiKumulatifGvMatrahi)?;
         let new_gv = prev_gv.checked_add(gv_base).ok_or_else(|| {
             DomainError::InvalidData(
                 "Kümülatif GV kuruş toplamı SQLite i64 sınırını aşıyor.".into(),
             )
         })?;
-        let income_tax = dec_to_kurus(b.kesintiler.gelirVergisi)?;
-        let stamp_tax = dec_to_kurus(b.kesintiler.damgaVergisi)?;
-        let total_deductions = dec_to_kurus(Some(b.kesintiToplam))?;
-        let net_payment = dec_to_kurus(Some(b.netOdeme))?;
+        let income_tax = money_to_kurus(b.kesintiler.gelirVergisi)?;
+        let stamp_tax = money_to_kurus(b.kesintiler.damgaVergisi)?;
+        let total_deductions = money_to_kurus(Some(b.kesintiToplam))?;
+        let net_payment = money_to_kurus(Some(b.netOdeme))?;
 
         let puantaj_summary_json = Self::serialize_json(&b.puantajOzeti, "Puantaj özeti")?;
         let pek_detail_json = Self::serialize_optional_json(b.pekDetay.as_ref(), "PEK detayı")?;
@@ -1761,7 +1762,7 @@ impl PayrollRepository {
                     b.id,
                     item_type,
                     item_type,
-                    dec_to_kurus(Some(amount))?,
+                    money_to_kurus(Some(amount))?,
                     source,
                 ],
             )
@@ -1802,7 +1803,7 @@ impl PayrollRepository {
                     b.id,
                     item_type,
                     item_type,
-                    dec_to_kurus(Some(amount))?,
+                    money_to_kurus(Some(amount))?,
                     "CALCULATED",
                 ],
             )
