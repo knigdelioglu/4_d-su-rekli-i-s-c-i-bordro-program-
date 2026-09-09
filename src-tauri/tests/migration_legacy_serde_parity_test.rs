@@ -700,3 +700,119 @@ fn native_current_v5_backup_rejects_semantically_forged_snapshot() -> Result<(),
     assert_eq!(PayrollRepository::get_all(&conn)?.len(), 1);
     Ok(())
 }
+
+#[test]
+fn native_backup_rejects_duplicate_annual_payroll_parameter_years() -> Result<(), Box<dyn std::error::Error>> {
+    let (mut conn, payload) = current_v5_fixture()?;
+    let mut modified: Value = serde_json::from_str(&payload)?;
+    let duplicate_param = modified["annualPayrollParameters"][0].clone();
+    modified["annualPayrollParameters"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate_param);
+
+    let error = MigrationService::replace_backup_data(&mut conn, &modified.to_string())
+        .expect_err("duplicate annual parameter years must be rejected");
+    assert!(
+        error.to_string().contains("mükerrer") || error.to_string().contains("yinelenen"),
+        "error must mention duplicate year: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn native_kurus_boundary_rejects_more_than_two_decimals() -> Result<(), Box<dyn std::error::Error>> {
+    let conn = create_in_memory_connection()?;
+    let mut personnel = Personel {
+        id: "person-precision".into(),
+        tcNo: "11111111110".into(),
+        ad: "Hassas".into(),
+        soyad: "Test".into(),
+        grup: "1. Grup".into(),
+        unvan: Some("İşçi".into()),
+        sgkSicilNo: "".into(),
+        iban: "".into(),
+        hizmetYili: 1,
+        aciklama: None,
+        devirKumulatifGvMatrahi: None,
+        devirKumulatifGvMatrahiYili: None,
+        devirKumulatifGvMatrahiBaslangicAyi: None,
+        devirKumulatifAsgariGvMatrahi: None,
+        devirKumulatifAsgariGvMatrahiYili: None,
+        kesintiler: Some(PersonelKesintileri {
+            sabitBesTutar: Some(dec!(10.005)), // >2 decimal places
+            ..PersonelKesintileri::default()
+        }),
+    };
+
+    let error = PersonnelRepository::save(&conn, &personnel)
+        .expect_err("values with >2 decimal digits must be rejected at kuruş persistence boundary");
+    assert!(
+        error.to_string().contains("kuruş hassasiyeti aşıldı")
+            || error.to_string().contains("2'den fazla ondalık"),
+        "error must mention kuruş precision: {error}"
+    );
+
+    // scale <= 2 must succeed
+    personnel.kesintiler.as_mut().unwrap().sabitBesTutar = Some(dec!(10.50));
+    PersonnelRepository::save(&conn, &personnel)
+        .expect("values with scale <= 2 must succeed");
+    Ok(())
+}
+
+#[test]
+fn native_retro_ordinary_line_item_rejects_negative_income_and_deductions() {
+    let mut payroll = BordroKaydi {
+        id: "p-retro".into(),
+        personelId: "p1".into(),
+        donemId: "2026-06".into(),
+        accrualId: "b1".into(),
+        accrualType: AccrualType::RETRO_ADJUSTMENT,
+        paymentDate: "2026-06-15".into(),
+        sequence: 1,
+        accrualDescription: None,
+        puantajOzeti: PuantajOzeti::default(),
+        gelirler: GelirKalemleri::default(),
+        gelirToplam: Decimal::ZERO,
+        kesintiler: KesintiKalemleri::default(),
+        kesintiToplam: Decimal::ZERO,
+        netOdeme: Decimal::ZERO,
+        status: BordroStatus::CALCULATED,
+        olusturulmaTarihi: "2026-06-15T00:00:00Z".into(),
+        sonGuncellemeTarihi: "2026-06-15T00:00:00Z".into(),
+        notlar: None,
+        oncekiKumulatifGvMatrahi: None,
+        oncekiKumulatifAsgariGvMatrahi: None,
+        manuelKumulatifGvMatrahi: None,
+        devredenPekGelen: None,
+        sonrakiDevredenPek: None,
+        pekDetay: None,
+        isPrimiDetay: None,
+        gvDetay: None,
+        persistedGvBase: None,
+        damgaDetay: None,
+        statutorySnapshot: None,
+        odenenRaporluGun: None,
+        raporluGun: None,
+    };
+
+    payroll.gelirler.digerGelir = Some(dec!(-50));
+    let err = payroll_core::validate_ordinary_payroll_snapshot(&payroll)
+        .expect_err("negative digerGelir in retro must be rejected");
+    assert!(err.to_string().contains("Ordinary gelir kalemi negatif olamaz"));
+
+    payroll.gelirler.digerGelir = None;
+    payroll.gelirler.tabanBrutAylik = Some(dec!(100));
+    payroll.gelirToplam = dec!(100);
+    payroll.kesintiler.isciSgkPrimi = Some(dec!(-14)); // Allowed signed delta in retro
+    payroll.kesintiToplam = dec!(-14);
+    payroll.netOdeme = dec!(114);
+    payroll_core::validate_ordinary_payroll_snapshot(&payroll)
+        .expect("signed worker SGK in retro must be allowed");
+
+    payroll.kesintiler.bes = Some(dec!(-10)); // bes is ordinary, must NOT be negative
+    let err = payroll_core::validate_ordinary_payroll_snapshot(&payroll)
+        .expect_err("negative bes in retro must be rejected");
+    assert!(err.to_string().contains("Ordinary kesinti kalemi negatif olamaz"));
+}
+

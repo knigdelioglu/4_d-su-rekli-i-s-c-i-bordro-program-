@@ -283,7 +283,7 @@ fn audit_paid_sick_episode_cross_year_does_not_duplicate_or_restart() {
     }))
     .unwrap();
     let mut records = vec![record.clone(), record];
-    let days = calculate_paid_sick_dates_from_records(&records, &req.dataset.periods[0]);
+    let days = calculate_paid_sick_dates_from_records(&records, &req.dataset.periods[0]).unwrap();
     assert_eq!(
         days.iter().map(ToString::to_string).collect::<Vec<_>>(),
         vec!["2025-12-31", "2026-01-01"]
@@ -292,7 +292,7 @@ fn audit_paid_sick_episode_cross_year_does_not_duplicate_or_restart() {
     for day in [1, 4, 7, 10, 13] {
         records.push(serde_json::from_value(json!({"id":format!("r{day}"), "personnelId":"audit", "startDate":format!("2025-12-{day:02}"), "endDate":format!("2025-12-{day:02}")})).unwrap());
     }
-    assert!(calculate_paid_sick_dates_from_records(&records, &req.dataset.periods[0]).is_empty());
+    assert!(calculate_paid_sick_dates_from_records(&records, &req.dataset.periods[0]).unwrap().is_empty());
 }
 
 #[test]

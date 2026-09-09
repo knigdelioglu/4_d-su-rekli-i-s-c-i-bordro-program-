@@ -598,27 +598,33 @@ fn resolve_statutory_snapshot_internal(
 pub fn calculate_paid_sick_dates_from_records(
     records: &[SickLeaveRecord],
     period: &BordroDonemi,
-) -> Vec<NaiveDate> {
-    let Ok(period_start) = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d") else {
-        return Vec::new();
-    };
-    let Ok(period_end) = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d") else {
-        return Vec::new();
-    };
+) -> Result<Vec<NaiveDate>> {
+    crate::validation::validate_sick_leave_records(records)?;
+    let period_start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+        DomainError::ValidationError(format!(
+            "{} dönemi başlangıç tarihi geçersiz: {}",
+            period.id, period.baslangicTarihi
+        ))
+    })?;
+    let period_end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
+        DomainError::ValidationError(format!(
+            "{} dönemi bitiş tarihi geçersiz: {}",
+            period.id, period.bitisTarihi
+        ))
+    })?;
 
     let mut year_groups: BTreeMap<i32, Vec<(NaiveDate, NaiveDate)>> = BTreeMap::new();
     for record in records {
-        if let (Ok(start), Ok(end)) = (
-            NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d"),
-            NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d"),
-        ) {
-            if end >= start {
-                year_groups
-                    .entry(start.year())
-                    .or_default()
-                    .push((start, end));
-            }
-        }
+        let start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|e| {
+            DomainError::ValidationError(format!("Rapor tarihi geçersiz: {e}"))
+        })?;
+        let end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d").map_err(|e| {
+            DomainError::ValidationError(format!("Rapor tarihi geçersiz: {e}"))
+        })?;
+        year_groups
+            .entry(start.year())
+            .or_default()
+            .push((start, end));
     }
 
     let mut paid_dates = BTreeSet::new();
@@ -641,7 +647,7 @@ pub fn calculate_paid_sick_dates_from_records(
             }
         }
     }
-    paid_dates.into_iter().collect()
+    Ok(paid_dates.into_iter().collect())
 }
 
 fn validate_paid_sick_dates_against_attendance(
@@ -2969,6 +2975,9 @@ fn calculate_payroll_with_index(
     } else {
         None
     };
+    if let Some(att) = attendance {
+        crate::validation::validate_attendance_for_period(att, &period)?;
+    }
     let supplementary_attendance = if is_normal_accrual {
         None
     } else {
@@ -2976,6 +2985,9 @@ fn calculate_payroll_with_index(
             .attendances(dataset, &request.personnelId, &request.periodId)
             .next()
     };
+    if let Some(supp) = supplementary_attendance {
+        crate::validation::validate_attendance_for_period(supp, &period)?;
+    }
     let attendance_for_snapshot = if is_normal_accrual {
         attendance
     } else if let Some(candidate) = supplementary_attendance {
@@ -2993,12 +3005,14 @@ fn calculate_payroll_with_index(
         }
     }
 
+    let sick_records: Vec<SickLeaveRecord> = index
+        .sick_leave_for_person(dataset, &request.personnelId)
+        .cloned()
+        .collect();
+    crate::validation::validate_sick_leave_records(&sick_records)?;
+
     let paid_sick_dates = if let Some(attendance) = attendance_for_snapshot {
-        let sick_records: Vec<SickLeaveRecord> = index
-            .sick_leave_for_person(dataset, &request.personnelId)
-            .cloned()
-            .collect();
-        let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, &period);
+        let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, &period)?;
         validate_paid_sick_dates_against_attendance(attendance, &paid_sick_dates, &period.id)?;
         paid_sick_dates
     } else {
@@ -4131,6 +4145,7 @@ mod tests {
         );
         april_payroll.gelirler.tabanBrutAylik = Some(dec!(10000));
         april_payroll.gelirToplam = dec!(10000);
+        april_payroll.persistedGvBase = Some(dec!(10000));
         let mut may_payroll = event(
             &may.id,
             may.taxMonth,
@@ -4141,6 +4156,7 @@ mod tests {
         );
         may_payroll.gelirler.tabanBrutAylik = Some(dec!(20000));
         may_payroll.gelirToplam = dec!(20000);
+        may_payroll.persistedGvBase = Some(dec!(20000));
         let dataset = PayrollDatasetSnapshot {
             personnel: vec![person.clone()],
             periods: vec![april, may, active.clone()],
@@ -4263,7 +4279,7 @@ mod tests {
         let effective = valid_tax_period("2026-03", 2026, 3, 2026, 4);
         let active = valid_tax_period("2026-05", 2026, 5, 2026, 6);
         let person = test_person("person-1");
-        let prior_payroll = event(
+        let mut prior_payroll = event(
             &prior.id,
             prior.taxMonth,
             "prior-gv",
@@ -4271,6 +4287,7 @@ mod tests {
             BordroStatus::CALCULATED,
             0,
         );
+        prior_payroll.persistedGvBase = Some(Decimal::ZERO);
         let opening = PersonelTaxOpening {
             id: "person-1_2026".into(),
             personnelId: person.id.clone(),

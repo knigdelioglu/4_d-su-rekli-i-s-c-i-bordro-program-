@@ -1250,6 +1250,152 @@ describe('SQLite persistence invariant parity', () => {
     );
   });
 
+  test('rejects invalid puantaj dates, codes, and period bounds', () => {
+    const invalidDate = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(invalidDate, 'puantajlar').gunler = { '2026-02-30': 'Ç' };
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(invalidDate))).toThrow(
+      'puantaj tarihi YYYY-MM-DD biçiminde geçerli bir tarih olmalıdır: 2026-02-30'
+    );
+
+    const invalidCode = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(invalidCode, 'puantajlar').gunler = { '2026-01-15': 'INVALID_CODE' };
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(invalidCode))).toThrow(
+      'desteklenmeyen puantaj kodu: INVALID_CODE'
+    );
+
+    const outOfBounds = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(outOfBounds, 'puantajlar').gunler = { '2025-12-31': 'Ç' };
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(outOfBounds))).toThrow(
+      'aralığı dışında'
+    );
+  });
+
+  test('rejects invalid sick leave record dates, order, and overlapping ranges', () => {
+    const invalidDate = parseTestSnapshot(makeV2Snapshot());
+    (invalidDate.sickLeaveRecords as TestRecord[]).push({
+      id: 'sick-invalid-date',
+      personnelId: 'person-1',
+      startDate: '2026-02-30',
+      endDate: '2026-03-01',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(invalidDate))).toThrow(
+      'geçerli bir tarih olmalıdır: 2026-02-30'
+    );
+
+    const invalidOrder = parseTestSnapshot(makeV2Snapshot());
+    (invalidOrder.sickLeaveRecords as TestRecord[]).push({
+      id: 'sick-invalid-order',
+      personnelId: 'person-1',
+      startDate: '2026-02-10',
+      endDate: '2026-02-05',
+    });
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(invalidOrder))).toThrow(
+      'Rapor başlangıç tarihi bitiş tarihinden sonra olamaz: 2026-02-10 > 2026-02-05'
+    );
+
+    const overlapping = parseTestSnapshot(makeV2Snapshot());
+    (overlapping.sickLeaveRecords as TestRecord[]).push(
+      {
+        id: 'sick-overlap-1',
+        personnelId: 'person-1',
+        startDate: '2026-02-01',
+        endDate: '2026-02-05',
+      },
+      {
+        id: 'sick-overlap-2',
+        personnelId: 'person-1',
+        startDate: '2026-02-04',
+        endDate: '2026-02-10',
+      }
+    );
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(overlapping))).toThrow(
+      'Rapor tarihleri çakışıyor'
+    );
+  });
+
+  test('RETRO allows signed worker SGK deltas but rejects negative ordinary income and deductions', () => {
+    const retroPayload = parseTestSnapshot(makeV2Snapshot());
+    const retroPayroll = {
+      ...firstRecord(retroPayload, 'bordrolar'),
+      id: 'payroll-retro-1',
+      accrualId: 'batch-retro-1',
+      accrualType: 'RETRO_ADJUSTMENT',
+      paymentDate: '2026-02-14',
+      sequence: 1,
+      gelirler: {
+        ...(firstRecord(retroPayload, 'bordrolar').gelirler as TestRecord),
+        tabanBrutAylik: '100.00',
+        digerGelir: '-50.00',
+      },
+      gelirToplam: '50.00',
+      kesintiler: {
+        ...(firstRecord(retroPayload, 'bordrolar').kesintiler as TestRecord),
+        gelirVergisi: '20.00',
+        isciSgkPrimi: '-14.00',
+      },
+      kesintiToplam: '6.00',
+      netOdeme: '44.00',
+      persistedGvBase: '100.00',
+      gvDetay: {
+        ...(firstRecord(retroPayload, 'bordrolar').gvDetay as TestRecord),
+        cariGvMatrahi: '100.00',
+      },
+    };
+    (retroPayload.bordrolar as TestRecord[]).push(retroPayroll);
+    (retroPayload.retroBatches as TestRecord[]).push({
+      id: 'batch-retro-1',
+      revisionId: 'rev-1',
+      personnelId: 'person-1',
+      paymentDate: '2026-02-14',
+      totalGrossDelta: '100.00',
+      settlementStatus: 'UNSETTLED',
+      status: 'CALCULATED',
+      ...retroBatchSettlement('100.00'),
+    });
+    (retroPayload.retroAllocations as TestRecord[]).push({
+      id: 'alloc-retro-1',
+      batchId: 'batch-retro-1',
+      personnelId: 'person-1',
+      sourcePeriodId: '2026-01',
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: '0.00',
+      targetAmount: '100.00',
+      deltaAmount: '100.00',
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+      ...retroAllocationSettlement('100.00'),
+    });
+    (retroPayload.compensationRevisions as TestRecord[]).push({
+      id: 'rev-1',
+      title: 'Rev 1',
+      status: 'DRAFT',
+      reason: 'COLLECTIVE_AGREEMENT',
+      scope: 'ALL_PERSONNEL',
+      effectiveFrom: '2026-01-01',
+      targetYear: 2026,
+      targetMonth: 1,
+      parameters: {},
+    });
+
+    // Negative digerGelir in retro must fail
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(retroPayload))).toThrow(
+      'ordinary payroll line item negatif olamaz'
+    );
+
+    // Fix digerGelir to 0, signed isciSgkPrimi (-14.00) must succeed
+    (retroPayroll.gelirler as TestRecord).digerGelir = '0.00';
+    retroPayroll.gelirToplam = '100.00';
+    retroPayroll.netOdeme = '94.00';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(retroPayload))).not.toThrow();
+
+    // Negative bes in retro must fail
+    (retroPayroll.kesintiler as TestRecord).bes = '-10.00';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(retroPayload))).toThrow(
+      'ordinary payroll line item negatif olamaz'
+    );
+  });
+
   test('rejects a current GV base scalar that disagrees with the snapshot detail', () => {
     const payload = parseTestSnapshot(makeV2Snapshot('3000.00'));
     firstRecord(payload, 'bordrolar').persistedGvBase = '3001.00';

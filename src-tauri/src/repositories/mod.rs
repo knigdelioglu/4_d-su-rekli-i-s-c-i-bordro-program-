@@ -15,13 +15,19 @@ use rust_decimal::prelude::*;
 use rust_decimal::Decimal;
 
 fn decimal_to_kurus_i64(value: Decimal) -> Result<i64> {
+    if value.normalize().scale() > 2 {
+        return Err(DomainError::ValidationError(format!(
+            "Parasal değer 2'den fazla ondalık basamak içeremez (kuruş hassasiyeti aşıldı): {}",
+            value
+        )));
+    }
     let scaled = value.checked_mul(Decimal::from(100)).ok_or_else(|| {
         DomainError::InvalidData(format!(
             "Parasal değer kuruşa çevrilirken Decimal taşması oluştu: {}",
             value
         ))
     })?;
-    scaled.round().to_i64().ok_or_else(|| {
+    scaled.to_i64().ok_or_else(|| {
         DomainError::InvalidData(format!(
             "Parasal değer SQLite i64 kuruş sınırını aşıyor: {}",
             value

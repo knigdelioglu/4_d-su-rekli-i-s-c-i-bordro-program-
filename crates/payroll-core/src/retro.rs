@@ -636,7 +636,7 @@ fn target_income_for_period(
         .sick_leave_for_person(dataset, &personnel.id)
         .cloned()
         .collect();
-    let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period);
+    let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period)?;
 
     let historical_settings = dataset
         .institutionSettings
@@ -1355,7 +1355,7 @@ fn source_statutory_snapshot(
         .sick_leave_for_person(dataset, personnel_id)
         .cloned()
         .collect::<Vec<_>>();
-    let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period);
+    let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period)?;
     // A missing original payroll must use the same R-day rule as a normal
     // payroll. In particular, an attendance-backed R day is not automatically
     // a prim-bearing day; only the resolved paid sick dates are.

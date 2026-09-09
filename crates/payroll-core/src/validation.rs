@@ -1,13 +1,32 @@
 //! Shared financial input invariants for persistence and both calculation runtimes.
 use crate::{models::*, DomainError, Result};
+use chrono::NaiveDate;
 use rust_decimal::Decimal;
 
-/// Ordinary payroll line items are positive monetary facts.  Signed
-/// entitlement/receivable deltas live in the retro ledger and deliberately do
-/// not pass through this validator.
+pub const VALID_ATTENDANCE_CODES: [&'static str; 7] = ["Ç", "T", "G", "İ", "GÇ", "GÇT", "R"];
+
+pub fn validate_monetary_amount(field: &str, amount: Decimal) -> Result<()> {
+    if amount.normalize().scale() > 2 {
+        return Err(DomainError::ValidationError(format!(
+            "Parasal alan ({}) 2 ondalık basamaktan (kuruş) daha fazla hassasiyet içeremez: {}.",
+            field, amount
+        )));
+    }
+    Ok(())
+}
+
+/// Ordinary payroll line items are positive monetary facts.
 pub fn validate_ordinary_payroll_line_items(
     gelirler: &GelirKalemleri,
     kesintiler: &KesintiKalemleri,
+) -> Result<()> {
+    validate_payroll_line_items_internal(gelirler, kesintiler, false)
+}
+
+fn validate_payroll_line_items_internal(
+    gelirler: &GelirKalemleri,
+    kesintiler: &KesintiKalemleri,
+    is_retro: bool,
 ) -> Result<()> {
     let income = [
         ("tabanBrutAylik", gelirler.tabanBrutAylik),
@@ -25,11 +44,14 @@ pub fn validate_ordinary_payroll_line_items(
         ("digerGelir", gelirler.digerGelir),
     ];
     for (field, value) in income {
-        if value.is_some_and(|amount| amount < Decimal::ZERO) {
-            return Err(DomainError::ValidationError(format!(
-                "Ordinary gelir kalemi negatif olamaz: {}.",
-                field
-            )));
+        if let Some(amount) = value {
+            validate_monetary_amount(field, amount)?;
+            if amount < Decimal::ZERO {
+                return Err(DomainError::ValidationError(format!(
+                    "Ordinary gelir kalemi negatif olamaz: {}.",
+                    field
+                )));
+            }
         }
     }
 
@@ -47,11 +69,18 @@ pub fn validate_ordinary_payroll_line_items(
         ("digerKesinti", kesintiler.digerKesinti),
     ];
     for (field, value) in deductions {
-        if value.is_some_and(|amount| amount < Decimal::ZERO) {
-            return Err(DomainError::ValidationError(format!(
-                "Ordinary kesinti kalemi negatif olamaz: {}.",
-                field
-            )));
+        if let Some(amount) = value {
+            validate_monetary_amount(field, amount)?;
+            if amount < Decimal::ZERO {
+                // In RETRO, only worker SGK / unemployment can carry a signed adjustment delta
+                if is_retro && (field == "isciSgkPrimi" || field == "isciIssizlikPrimi") {
+                    continue;
+                }
+                return Err(DomainError::ValidationError(format!(
+                    "Ordinary kesinti kalemi negatif olamaz: {}.",
+                    field
+                )));
+            }
         }
     }
 
@@ -59,26 +88,174 @@ pub fn validate_ordinary_payroll_line_items(
 }
 
 pub fn validate_ordinary_payroll_snapshot(payroll: &BordroKaydi) -> Result<()> {
-    // A RETRO payment may carry a signed source-month premium adjustment in
-    // its payment snapshot.  That signed ledger is validated by the retro
-    // allocation policy below; ordinary NORMAL/supplementary line items keep
-    // the non-negative invariant.
-    if payroll.accrualType != AccrualType::RETRO_ADJUSTMENT {
-        validate_ordinary_payroll_line_items(&payroll.gelirler, &payroll.kesintiler)?;
+    let is_retro = payroll.accrualType == AccrualType::RETRO_ADJUSTMENT;
+    validate_payroll_line_items_internal(&payroll.gelirler, &payroll.kesintiler, is_retro)?;
+    for (field, value) in [
+        ("gelirToplam", payroll.gelirToplam),
+        ("kesintiToplam", payroll.kesintiToplam),
+        ("netOdeme", payroll.netOdeme),
+    ] {
+        validate_monetary_amount(field, value)?;
     }
     if let Some(pek) = payroll.pekDetay.as_ref() {
         for (field, value) in [
             ("aylikOncekiPekTuketimi", pek.aylikOncekiPekTuketimi),
             ("aylikSonrasiPekTuketimi", pek.aylikSonrasiPekTuketimi),
+            ("hesaplananPek", Some(pek.hesaplananPek)),
+            ("hamPek", Some(pek.hamPek)),
+            ("devredenPekKullanilan", Some(pek.devredenPekKullanilan)),
+            ("primMatrahi", Some(pek.primMatrahi)),
+            ("finalPek", Some(pek.finalPek)),
+            ("devredenPekAşanTutar", Some(pek.devredenPekAşanTutar)),
+            ("pekAltSinir", Some(pek.pekAltSinir)),
+            ("pekUstSinir", Some(pek.pekUstSinir)),
+            ("altSinirTamamlamaFarki", Some(pek.altSinirTamamlamaFarki)),
+            ("yemekIstisnasiTutar", Some(pek.yemekIstisnasiTutar)),
+            ("isverenSgkPrimi", pek.isverenSgkPrimi),
+            ("isverenIssizlikPrimi", pek.isverenIssizlikPrimi),
+            (
+                "pekAltSinirTamamlamaIsverenPrimi",
+                pek.pekAltSinirTamamlamaIsverenPrimi,
+            ),
+            ("isverenPrimToplami", pek.isverenPrimToplami),
         ] {
-            if value.is_some_and(|amount| amount < Decimal::ZERO) {
-                return Err(DomainError::ValidationError(format!(
-                    "{} monthly PEK state'i negatif olamaz.",
-                    field
-                )));
+            if let Some(amount) = value {
+                validate_monetary_amount(field, amount)?;
+                if amount < Decimal::ZERO {
+                    return Err(DomainError::ValidationError(format!(
+                        "{} snapshot değeri negatif olamaz.",
+                        field
+                    )));
+                }
             }
         }
     }
+    if let Some(devreden) = payroll.devredenPekGelen.as_ref() {
+        for record in devreden {
+            validate_monetary_amount("devredenPekGelen.tutar", record.tutar)?;
+        }
+    }
+    if let Some(devreden) = payroll.sonrakiDevredenPek.as_ref() {
+        for record in devreden {
+            validate_monetary_amount("sonrakiDevredenPek.tutar", record.tutar)?;
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_attendance_for_period(
+    attendance: &PersonelPuantaj,
+    period: &BordroDonemi,
+) -> Result<()> {
+    if !attendance.donemId.is_empty() && attendance.donemId != period.id {
+        return Err(DomainError::ValidationError(format!(
+            "Puantaj dönem kimliği '{}' ile bordro dönemi '{}' eşleşmiyor.",
+            attendance.donemId, period.id
+        )));
+    }
+
+    let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").map_err(|_| {
+        DomainError::ValidationError(format!(
+            "{} dönemi başlangıç tarihi geçersiz: {}",
+            period.id, period.baslangicTarihi
+        ))
+    })?;
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").map_err(|_| {
+        DomainError::ValidationError(format!(
+            "{} dönemi bitiş tarihi geçersiz: {}",
+            period.id, period.bitisTarihi
+        ))
+    })?;
+
+    if start > end {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi başlangıç tarihi bitiş tarihinden sonra olamaz: {} > {}",
+            period.id, period.baslangicTarihi, period.bitisTarihi
+        )));
+    }
+
+    let calendar_day_count = (end - start).num_days() + 1;
+    if attendance.gunler.len() as i64 > calendar_day_count {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi {} takvim günü içeriyor ancak puantajda {} kayıt var.",
+            period.id,
+            calendar_day_count,
+            attendance.gunler.len()
+        )));
+    }
+
+    for (date_text, code) in &attendance.gunler {
+        if !VALID_ATTENDANCE_CODES.contains(&code.as_str()) {
+            return Err(DomainError::ValidationError(format!(
+                "{} döneminde desteklenmeyen puantaj kodu: {} (tarih: {})",
+                period.id, code, date_text
+            )));
+        }
+
+        let date = NaiveDate::parse_from_str(date_text, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "{} döneminde puantaj tarihi YYYY-MM-DD biçiminde geçerli bir tarih olmalıdır: {}",
+                period.id, date_text
+            ))
+        })?;
+
+        if date < start || date > end {
+            return Err(DomainError::ValidationError(format!(
+                "{} puantaj tarihi {} döneminin {}–{} aralığı dışında.",
+                date_text, period.id, period.baslangicTarihi, period.bitisTarihi
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+pub fn validate_sick_leave_records(records: &[SickLeaveRecord]) -> Result<()> {
+    for record in records {
+        let start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "Rapor başlangıç tarihi geçersiz: {}.",
+                record.startDate
+            ))
+        })?;
+        let end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d").map_err(|_| {
+            DomainError::ValidationError(format!(
+                "Rapor bitiş tarihi geçersiz: {}.",
+                record.endDate
+            ))
+        })?;
+        if start > end {
+            return Err(DomainError::ValidationError(format!(
+                "Rapor başlangıç tarihi bitiş tarihinden sonra olamaz: {} > {}.",
+                record.startDate, record.endDate
+            )));
+        }
+        if record.personnelId.trim().is_empty() {
+            return Err(DomainError::ValidationError(
+                "Rapor kaydında personel zorunludur.".into(),
+            ));
+        }
+    }
+
+    for i in 0..records.len() {
+        for j in (i + 1)..records.len() {
+            let a = &records[i];
+            let b = &records[j];
+            if a.personnelId == b.personnelId && a.id != b.id {
+                let start_a = NaiveDate::parse_from_str(&a.startDate, "%Y-%m-%d").unwrap();
+                let end_a = NaiveDate::parse_from_str(&a.endDate, "%Y-%m-%d").unwrap();
+                let start_b = NaiveDate::parse_from_str(&b.startDate, "%Y-%m-%d").unwrap();
+                let end_b = NaiveDate::parse_from_str(&b.endDate, "%Y-%m-%d").unwrap();
+                if start_a <= end_b && end_a >= start_b {
+                    return Err(DomainError::ValidationError(format!(
+                        "Rapor tarihleri çakışıyor: {}–{} aralığı, {} kaydındaki {}–{} aralığıyla örtüşüyor. Örtüşen raporlar ayrı episode olarak kaydedilemez.",
+                        a.startDate, a.endDate, b.id, b.startDate, b.endDate
+                    )));
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

@@ -39,6 +39,17 @@ describe('browser payroll invalidation policy', () => {
     ).toThrow('Kesinleştirilmiş');
   });
 
+  test('assertBrowserMutationImpactAllowed rejects ALL mutation when finalized records exist', () => {
+    expect(() =>
+      assertBrowserMutationImpactAllowed({
+        affectedPayrolls: [{ personnelId: 'person-1', periodId: '2026-01' }],
+        blockedByFinalized: [{ personnelId: 'person-1', periodId: '2026-01' }],
+        affectedRetroBatches: [],
+        blockedByFinalizedRetroBatches: [],
+      })
+    ).toThrow('Kesinleştirilmiş');
+  });
+
   test('applies retro batch impact and preserves finalized ledgers', () => {
     const result = applyBrowserRetroBatchImpact(
       [

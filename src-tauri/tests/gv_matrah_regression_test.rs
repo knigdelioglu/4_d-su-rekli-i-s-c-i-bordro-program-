@@ -134,8 +134,8 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
     assert_eq!(gv.cariGvMatrahi, dec!(72627.60));
     assert_eq!(gv.brutGelirVergisi, dec!(19609.45));
     assert_eq!(gv.asgariUcretGvIstisnasi, dec!(5615.10));
-    assert_eq!(gv.kesilenGelirVergisi, dec!(13994.35));
-    assert_eq!(payroll.netOdeme, dec!(64175.71));
+    assert_eq!(payroll.kesintiler.damgaVergisi, Some(dec!(412.00)));
+    assert_eq!(payroll.netOdeme, dec!(64221.25));
 
     // Persist edilen gv_base de aynı authoritative snapshot'ı kullanmalı; aksi halde
     // sonraki ay kümülatif matrah eski hatalı formülle yeniden yükselir.

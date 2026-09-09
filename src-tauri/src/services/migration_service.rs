@@ -740,6 +740,17 @@ impl MigrationService {
                 validate_v5_retro_lifecycle_fields(payload_json)?;
             }
         }
+        if let Some(ref parameters) = payload.annualPayrollParameters {
+            let mut seen_years = BTreeSet::new();
+            for param in parameters {
+                if !seen_years.insert(param.year) {
+                    return Err(DomainError::ValidationError(format!(
+                        "Yedek payload'ı yinelenen yıllık bordro parametresi yılı içeriyor: {}",
+                        param.year
+                    )));
+                }
+            }
+        }
         Ok(payload)
     }
 
@@ -967,6 +978,15 @@ impl MigrationService {
         // dönemlerin vergi yıllarına JSON/SQLite-safe varsayılan tarife ekle.
         // Payload'da açıkça verilen yıllık parametreler her zaman önceliklidir.
         if let Some(parameters) = annualPayrollParameters {
+            let mut seen_years = BTreeSet::new();
+            for parameter in &parameters {
+                if !seen_years.insert(parameter.year) {
+                    return Err(DomainError::ValidationError(format!(
+                        "Yıllık bordro parametrelerinde mükerrer yıl kaydı bulundu: {}",
+                        parameter.year
+                    )));
+                }
+            }
             for parameter in parameters {
                 AnnualPayrollParametersRepository::save_in_transaction(conn, &parameter)?;
             }

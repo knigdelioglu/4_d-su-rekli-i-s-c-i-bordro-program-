@@ -291,7 +291,7 @@ fn audit_sick_leave_exact_quota_and_split_episodes() {
         donemAdi: "Feb 2026".into(),
         taxYear: 2026, taxMonth: 2,
     };
-    let paid_feb = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_feb);
+    let paid_feb = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_feb).unwrap();
     assert_eq!(paid_feb.len(), 2);
     assert!(paid_feb.contains(&NaiveDate::from_ymd_opt(2026, 2, 1).unwrap()));
     assert!(paid_feb.contains(&NaiveDate::from_ymd_opt(2026, 2, 2).unwrap()));
@@ -306,7 +306,7 @@ fn audit_sick_leave_exact_quota_and_split_episodes() {
         donemAdi: "Jun 2026".into(),
         taxYear: 2026, taxMonth: 6,
     };
-    let paid_jun = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jun);
+    let paid_jun = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jun).unwrap();
     assert_eq!(paid_jun.len(), 2);
     assert!(paid_jun.contains(&NaiveDate::from_ymd_opt(2026, 6, 1).unwrap()));
     assert!(paid_jun.contains(&NaiveDate::from_ymd_opt(2026, 6, 2).unwrap()));
@@ -320,7 +320,7 @@ fn audit_sick_leave_exact_quota_and_split_episodes() {
         donemAdi: "Jul 2026".into(),
         taxYear: 2026, taxMonth: 7,
     };
-    let paid_jul = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jul);
+    let paid_jul = payroll_engine::calculate_paid_sick_dates_from_records(&records, &period_jul).unwrap();
     assert!(paid_jul.is_empty(), "6th episode must have 0 employer-paid sick days");
 }
 

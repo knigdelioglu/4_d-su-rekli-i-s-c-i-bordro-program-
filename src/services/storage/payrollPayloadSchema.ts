@@ -29,6 +29,23 @@ export interface PayrollPayloadValidationOptions {
    */
   allowLegacyMissingGvBase?: boolean;
 }
+export function isValidIsoDate(dateString: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return false;
+  const [yStr, mStr, dStr] = dateString.split('-');
+  const year = Number(yStr);
+  const month = Number(mStr);
+  const day = Number(dStr);
+  if (month < 1 || month > 12 || day < 1) return false;
+  const isLeap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [
+    31,
+    isLeap ? 29 : 28,
+    31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+  ][month - 1];
+  return day <= daysInMonth;
+}
+
+export const VALID_ATTENDANCE_CODES = new Set(['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R']);
 
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
 const ACCRUAL_TYPE_VALUES = RUST_ENUM_VALUES.AccrualType;
@@ -303,7 +320,21 @@ export function validatePuantaj(
   const gunlerPath = fieldPath(path, 'gunler');
   const gunler = required(value, 'gunler', path);
   assertRecord(gunler, gunlerPath);
-  Object.entries(gunler).forEach(([key, item]) => assertString(item, fieldPath(gunlerPath, key)));
+  Object.entries(gunler).forEach(([key, item]) => {
+    assertString(item, fieldPath(gunlerPath, key));
+    if (!isValidIsoDate(key)) {
+      fail(
+        fieldPath(gunlerPath, key),
+        `puantaj tarihi YYYY-MM-DD biçiminde geçerli bir tarih olmalıdır: ${key}`
+      );
+    }
+    if (!VALID_ATTENDANCE_CODES.has(item as string)) {
+      fail(
+        fieldPath(gunlerPath, key),
+        `desteklenmeyen puantaj kodu: ${item} (tarih: ${key})`
+      );
+    }
+  });
 }
 
 function validatePuantajOzeti(value: unknown, path: string): void {
@@ -629,6 +660,20 @@ export function validateSickLeaveRecord(
 ): asserts value is PayrollStorageDto['sickLeaveRecords'][number] {
   assertRecord(value, path);
   ['id', 'personnelId', 'startDate', 'endDate'].forEach((key) => requiredString(value, key, path));
+  if ((value.personnelId as string).trim() === '') {
+    fail(fieldPath(path, 'personnelId'), 'personel kimliği boş olamaz.');
+  }
+  const startDate = value.startDate as string;
+  const endDate = value.endDate as string;
+  if (!isValidIsoDate(startDate)) {
+    fail(fieldPath(path, 'startDate'), `geçerli bir tarih olmalıdır: ${startDate}`);
+  }
+  if (!isValidIsoDate(endDate)) {
+    fail(fieldPath(path, 'endDate'), `geçerli bir tarih olmalıdır: ${endDate}`);
+  }
+  if (startDate > endDate) {
+    fail(path, `Rapor başlangıç tarihi bitiş tarihinden sonra olamaz: ${startDate} > ${endDate}.`);
+  }
   optionalNullableString(value, 'createdAt', path);
   optionalNullableString(value, 'updatedAt', path);
 }
@@ -866,10 +911,7 @@ function assertNonNegativePayrollLineItems(
   payroll: PayrollStorageDto['bordrolar'][number],
   path: string
 ): void {
-  // RETRO payment snapshots can expose signed source-month premium
-  // adjustments. Those signed deltas belong to the retro ledger; ordinary
-  // NORMAL/supplementary line items remain non-negative.
-  if (payroll.accrualType === 'RETRO_ADJUSTMENT') return;
+  const isRetro = payroll.accrualType === 'RETRO_ADJUSTMENT';
   const checks: ReadonlyArray<readonly [string, unknown, string]> = [
     ...PAYROLL_PAYMENT_INCOME_KEYS.map((key) => [
       key,
@@ -886,6 +928,10 @@ function assertNonNegativePayrollLineItems(
     if (value === undefined || value === null) return;
     if (typeof value !== 'string') {
       fail(fieldPath(fieldPathPrefix, key), 'parasal değer exact Decimal metni olmalıdır.');
+    }
+    // In RETRO, only worker SGK / unemployment can carry a signed adjustment delta
+    if (isRetro && (key === 'isciSgkPrimi' || key === 'isciIssizlikPrimi')) {
+      return;
     }
     if (paymentCents(value, fieldPath(fieldPathPrefix, key)) < 0n) {
       fail(fieldPath(fieldPathPrefix, key), 'ordinary payroll line item negatif olamaz.');
@@ -1193,6 +1239,31 @@ function assertCrossRecordIntegrity(
     if (!periodIds.has(attendance.donemId)) {
       fail(`$.puantajlar[${index}].donemId`, `mevcut olmayan dönem kimliği: ${attendance.donemId}.`);
     }
+    const period = payload.donemler.find((candidate) => candidate.id === attendance.donemId);
+    if (period) {
+      if (isValidIsoDate(period.baslangicTarihi) && isValidIsoDate(period.bitisTarihi)) {
+        const [sy, sm, sd] = period.baslangicTarihi.split('-').map(Number);
+        const [ey, em, ed] = period.bitisTarihi.split('-').map(Number);
+        const startMs = Date.UTC(sy, sm - 1, sd);
+        const endMs = Date.UTC(ey, em - 1, ed);
+        const calendarDayCount = Math.round((endMs - startMs) / 86400000) + 1;
+        const keys = Object.keys(attendance.gunler);
+        if (keys.length > calendarDayCount) {
+          fail(
+            `$.puantajlar[${index}]`,
+            `${period.id} dönemi ${calendarDayCount} takvim günü içeriyor ancak puantajda ${keys.length} kayıt var.`
+          );
+        }
+      }
+      for (const dateText of Object.keys(attendance.gunler)) {
+        if (dateText < period.baslangicTarihi || dateText > period.bitisTarihi) {
+          fail(
+            `$.puantajlar[${index}].gunler[${dateText}]`,
+            `${dateText} puantaj tarihi ${period.id} döneminin ${period.baslangicTarihi}–${period.bitisTarihi} aralığı dışında.`
+          );
+        }
+      }
+    }
   });
 
   payload.bordrolar.forEach((payroll, index) => {
@@ -1273,6 +1344,7 @@ function assertCrossRecordIntegrity(
     }
   });
 
+  const sickByPerson = new Map<string, Array<{ id: string; startDate: string; endDate: string }>>();
   payload.sickLeaveRecords.forEach((record, index) => {
     if (!personnelIds.has(record.personnelId)) {
       fail(
@@ -1280,7 +1352,27 @@ function assertCrossRecordIntegrity(
         `mevcut olmayan personel kimliği: ${record.personnelId}.`
       );
     }
+    if (!sickByPerson.has(record.personnelId)) {
+      sickByPerson.set(record.personnelId, []);
+    }
+    sickByPerson.get(record.personnelId)!.push(record);
   });
+  for (const [, records] of sickByPerson.entries()) {
+    for (let i = 0; i < records.length; i++) {
+      for (let j = i + 1; j < records.length; j++) {
+        const a = records[i];
+        const b = records[j];
+        if (a.id !== b.id) {
+          if (a.startDate <= b.endDate && a.endDate >= b.startDate) {
+            fail(
+              '$.sickLeaveRecords',
+              `Rapor tarihleri çakışıyor: ${a.startDate}–${a.endDate} aralığı, ${b.id} kaydındaki ${b.startDate}–${b.endDate} aralığıyla örtüşüyor. Örtüşen raporlar ayrı episode olarak kaydedilemez.`
+            );
+          }
+        }
+      }
+    }
+  }
 
   const revisions = payload.compensationRevisions ?? [];
   const revisionIds = new Set(revisions.map((revision) => revision.id));

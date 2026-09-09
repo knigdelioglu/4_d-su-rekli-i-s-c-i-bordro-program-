@@ -133,6 +133,9 @@ export function useBackupController({
       retroAllocations: [],
     });
     try {
+      if (isDataLoaded) {
+        await evaluateBrowserMutations({ kind: 'ALL' });
+      }
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();

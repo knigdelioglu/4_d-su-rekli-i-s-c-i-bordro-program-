@@ -296,7 +296,10 @@ function getRetroLedgerKurus(
     );
 }
 
-function getSgkSnapshotKurus(payroll: BordroKaydi): SgkSnapshotKurus | null {
+function getSgkSnapshotKurus(
+  payroll: BordroKaydi,
+  retroAllocations: RetroAllocation[] = []
+): SgkSnapshotKurus | null {
   if (!hasCompleteSgkSnapshot(payroll)) return null;
 
   const pekAltSinirTamamlama = payroll.pekDetay?.pekAltSinirTamamlamaIsverenPrimi;
@@ -309,11 +312,48 @@ function getSgkSnapshotKurus(payroll: BordroKaydi): SgkSnapshotKurus | null {
   }
 
   try {
+    let isciSgkPrimiKurus = amountToKurus(payroll.kesintiler?.isciSgkPrimi);
+    let isciIssizlikPrimiKurus = amountToKurus(payroll.kesintiler?.isciIssizlikPrimi);
+
+    if (payroll.accrualType === 'RETRO_ADJUSTMENT') {
+      // In a RETRO adjustment, kesintiler.isciSgkPrimi holds both the source-month
+      // worker SGK delta and any payment-month worker PEK premium.
+      // In SGK Prim Kontrolü, source-month retro premiums are represented
+      // exclusively through the canonical retro ledger in their respective source months.
+      // In the payment-month row, we retain ONLY the genuine payment-month component.
+      const relevantAllocations = retroAllocations.filter(
+        (allocation) =>
+          allocation.personnelId === payroll.personelId &&
+          (allocation.batchId === payroll.accrualId || (!payroll.accrualId && allocation.batchId))
+      );
+      if (relevantAllocations.length > 0) {
+        const sourceWorkerSgkKurus = relevantAllocations.reduce(
+          (sum, allocation) => sum + amountToKurus(allocation.workerSgkDelta),
+          0
+        );
+        const sourceWorkerUnemploymentKurus = relevantAllocations.reduce(
+          (sum, allocation) => sum + amountToKurus(allocation.workerUnemploymentDelta),
+          0
+        );
+        isciSgkPrimiKurus = Math.max(0, isciSgkPrimiKurus - sourceWorkerSgkKurus);
+        isciIssizlikPrimiKurus = Math.max(
+          0,
+          isciIssizlikPrimiKurus - sourceWorkerUnemploymentKurus
+        );
+      } else {
+        const paymentMonthPek = payroll.pekDetay?.primMatrahi ?? 0;
+        if (paymentMonthPek === 0) {
+          isciSgkPrimiKurus = 0;
+          isciIssizlikPrimiKurus = 0;
+        }
+      }
+    }
+
     return {
       isverenSgkPrimi: amountToKurus(payroll.pekDetay?.isverenSgkPrimi),
       isverenIssizlikPrimi: amountToKurus(payroll.pekDetay?.isverenIssizlikPrimi),
-      isciSgkPrimi: amountToKurus(payroll.kesintiler?.isciSgkPrimi),
-      isciIssizlikPrimi: amountToKurus(payroll.kesintiler?.isciIssizlikPrimi),
+      isciSgkPrimi: isciSgkPrimiKurus,
+      isciIssizlikPrimi: isciIssizlikPrimiKurus,
       // The optional field is absent in legacy snapshots; that means no
       // lower-bound completion was recorded, so it is safely treated as zero.
       pekAltSinirTamamlamaIsverenPrimi: amountToKurus(pekAltSinirTamamlama),
@@ -346,10 +386,12 @@ function getRateCandidates(authoritativePayrolls: BordroKaydi[]): SgkPrimKontrol
     isverenIssizlikOranlari: authoritativePayrolls.map(
       (payroll) => payroll.pekDetay?.isverenIssizlikOraniYuzde ?? undefined
     ),
-    // Worker-side rates are not persisted in the payroll snapshot; these are
-    // resolved from the active period settings when the header is built.
-    isciSgkOranlari: authoritativePayrolls.map(() => undefined),
-    isciIssizlikOranlari: authoritativePayrolls.map(() => undefined),
+    isciSgkOranlari: authoritativePayrolls.map(
+      (payroll) => payroll.statutorySnapshot?.sgkIsciOraniYuzde ?? undefined
+    ),
+    isciIssizlikOranlari: authoritativePayrolls.map(
+      (payroll) => payroll.statutorySnapshot?.issizlikIsciOraniYuzde ?? undefined
+    ),
   };
 }
 
@@ -375,7 +417,9 @@ export function getSgkPrimKontroluRows(
     const authoritativePayrolls = personPayrolls.filter(isAuthoritativePayroll);
     const hasStalePayroll = personPayrolls.some((payroll) => payroll.status === 'STALE');
     const hasDraftPayroll = personPayrolls.some((payroll) => payroll.status === 'DRAFT');
-    const snapshots = authoritativePayrolls.map(getSgkSnapshotKurus);
+    const snapshots = authoritativePayrolls.map((payroll) =>
+      getSgkSnapshotKurus(payroll, retroAllocations)
+    );
     const hasMissingSnapshot = snapshots.some((snapshot) => snapshot === null);
     const retroLedger = getRetroLedgerKurus(
       period.id,

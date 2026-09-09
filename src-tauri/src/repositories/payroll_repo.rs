@@ -1508,13 +1508,13 @@ impl PayrollRepository {
         // payroll line items non-negative and must reject a split GV
         // authority. It intentionally skips only the aggregate/tax snapshot
         // equations that old sparse rows cannot satisfy.
+        if validate_financial_invariants {
+            Self::validate_payroll_financial_invariants(conn, b)?;
+        }
         if require_current_gv_base_pair {
             payroll_core::validate_current_payroll_snapshot_authority(b)?;
         } else {
             payroll_core::validate_payroll_snapshot_authority(b)?;
-        }
-        if validate_financial_invariants {
-            Self::validate_payroll_financial_invariants(conn, b)?;
         }
         let now = Utc::now().to_rfc3339();
         let calculated_at = if b.olusturulmaTarihi.trim().is_empty() {

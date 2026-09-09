@@ -705,4 +705,236 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
       isciIssizlik: 'İşçi İşsizlik %1',
     });
   });
+
+  test('işçi statutory snapshot oranı aktif kurum oranına tercih edilir', () => {
+    const item = payroll('p-1', 'worker-rate', 'FINALIZED', completeAmounts);
+    item.statutorySnapshot = {
+      source: 'ATTENDANCE_BACKED',
+      segments: [],
+      sgkPrimGunSayisi: 30,
+      pekAltSinir: 20000,
+      pekUstSinir: 150000,
+      sgkYemekIstisnasiToplam: 0,
+      gvYemekIstisnasiToplam: 0,
+      gvReferansGunlukAsgariUcret: 666.75,
+      sgkIsciOraniYuzde: 15,
+      issizlikIsciOraniYuzde: 1.5,
+    };
+    const rows = getSgkPrimKontroluRows(period, [person1], [item]);
+
+    expect(getSgkPrimKontroluRateLabels(rows, institutionSettings)).toEqual({
+      isverenSgk: 'SGK İşveren %19,5',
+      isverenIssizlik: 'İşveren İşsizlik %1,5',
+      isciSgk: 'SGK İşçi %15',
+      isciIssizlik: 'İşçi İşsizlik %1,5',
+    });
+  });
+
+  test('Test 1: RETRO kaynak işçi prim farkı sadece kaynak ayda temsil edilir, ödeme ayında duplicate olmaz', () => {
+    const sourcePeriod: BordroDonemi = { ...period, id: '2026-05' };
+    const paymentPeriod: BordroDonemi = { ...period, id: '2026-06' };
+    const batchId = 'batch-retro-1';
+
+    const batch: RetroAdjustmentBatch = {
+      id: batchId,
+      revisionId: 'rev-1',
+      personnelId: person1.id,
+      paymentDate: '2026-06-15',
+      totalGrossDelta: 10000,
+      payableSettlementAmount: 10000,
+      offsetSettlementAmount: 0,
+      recoveredAmount: 0,
+      recoverableAmount: 0,
+      outstandingReceivable: 0,
+      status: 'FINALIZED',
+      createdAt: '2026-06-15',
+    };
+
+    const allocation: RetroAllocation = {
+      id: 'alloc-1',
+      batchId,
+      personnelId: person1.id,
+      sourcePeriodId: sourcePeriod.id,
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: 30000,
+      previousAuthoritativeRetroAmount: 0,
+      targetAmount: 40000,
+      deltaAmount: 10000,
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+      originalPek: 30000,
+      retroPekDelta: 10000,
+      adjustedPek: 40000,
+      workerSgkDelta: 1400,
+      workerUnemploymentDelta: 100,
+      employerSgkDelta: 2175,
+      employerUnemploymentDelta: 200,
+      originalEmployerLowerBound: 0,
+      targetEmployerLowerBound: 0,
+      employerLowerBoundDelta: 0,
+      employerLowerBoundPremiumDelta: 0,
+      payableSettlementAmount: 10000,
+      offsetSettlementAmount: 0,
+      recoverableAmount: 0,
+    };
+
+    // Kaynak ay normal bordrosu (taban primler)
+    const sourcePayroll = payroll(person1.id, 'source-normal', 'FINALIZED', {
+      isverenSgkPrimi: 6525,
+      isverenIssizlikPrimi: 600,
+      isciSgkPrimi: 4200,
+      isciIssizlikPrimi: 300,
+      pekAltSinirTamamlamaIsverenPrimi: 0,
+    });
+    sourcePayroll.donemId = sourcePeriod.id;
+
+    // Ödeme ayı RETRO bordrosu: kesintiler.isciSgkPrimi içinde kaynak farkı (1400) taşır, ödeme ayı PEK'i yoktur (primMatrahi = 0)
+    const retroPayroll: BordroKaydi = {
+      ...payroll(person1.id, 'retro-payment', 'FINALIZED', {
+        isverenSgkPrimi: 0,
+        isverenIssizlikPrimi: 0,
+        isciSgkPrimi: 1400,
+        isciIssizlikPrimi: 100,
+        pekAltSinirTamamlamaIsverenPrimi: 0,
+      }),
+      donemId: paymentPeriod.id,
+      accrualId: batchId,
+      accrualType: 'RETRO_ADJUSTMENT',
+      pekDetay: {
+        hesaplananPek: 0,
+        hamPek: 0,
+        devredenPekKullanilan: 0,
+        primMatrahi: 0,
+        finalPek: 0,
+        devredenPekAşanTutar: 0,
+        pekAltSinir: 20000,
+        pekUstSinir: 150000,
+        altSinirTamamlamaFarki: 0,
+        fiiliYemekGunu: 0,
+        yemekIstisnasiTutar: 0,
+        isverenSgkPrimi: 0,
+        isverenIssizlikPrimi: 0,
+        pekAltSinirTamamlamaIsverenPrimi: 0,
+        isverenPrimToplami: 0,
+        sgkIsverenOraniYuzde: 21.75,
+        isverenIssizlikOraniYuzde: 2,
+      },
+    };
+
+    // 1) Kaynak ay satırları: +1400 retro worker SGK eklenir (4200 + 1400 = 5600)
+    const sourceRows = getSgkPrimKontroluRows(
+      sourcePeriod,
+      [person1],
+      [sourcePayroll, retroPayroll],
+      [batch],
+      [allocation]
+    );
+    expect(sourceRows[0].isciSgkPrimi).toBe(5600); // 4200 normal + 1400 retro ledger
+
+    // 2) Ödeme ayı satırları: retro payroll snapshot'ındaki 1400 TL düşülür, ödeme ayı satırına +0 yansır
+    const paymentRows = getSgkPrimKontroluRows(
+      paymentPeriod,
+      [person1],
+      [sourcePayroll, retroPayroll],
+      [batch],
+      [allocation]
+    );
+    expect(paymentRows[0].isciSgkPrimi).toBe(0); // duplicate 1400 eklenmez!
+  });
+
+  test('Test 2: RETRO ödeme ayında gerçek payment-month PEK varsa o kısım payment month satırında gösterilir', () => {
+    const sourcePeriod: BordroDonemi = { ...period, id: '2026-05' };
+    const paymentPeriod: BordroDonemi = { ...period, id: '2026-06' };
+    const batchId = 'batch-retro-2';
+
+    const batch: RetroAdjustmentBatch = {
+      id: batchId,
+      revisionId: 'rev-2',
+      personnelId: person1.id,
+      paymentDate: '2026-06-15',
+      totalGrossDelta: 11000,
+      payableSettlementAmount: 11000,
+      offsetSettlementAmount: 0,
+      recoveredAmount: 0,
+      recoverableAmount: 0,
+      outstandingReceivable: 0,
+      status: 'FINALIZED',
+      createdAt: '2026-06-15',
+    };
+
+    const allocation: RetroAllocation = {
+      id: 'alloc-2',
+      batchId,
+      personnelId: person1.id,
+      sourcePeriodId: sourcePeriod.id,
+      earningCode: 'BASE_WAGE',
+      originalRecognizedAmount: 30000,
+      previousAuthoritativeRetroAmount: 0,
+      targetAmount: 40000,
+      deltaAmount: 10000,
+      sgkTreatment: 'WAGE_SOURCE_MONTH',
+      incomeTaxTreatment: 'TAXABLE',
+      stampTaxTreatment: 'TAXABLE',
+      originalPek: 30000,
+      retroPekDelta: 10000,
+      adjustedPek: 40000,
+      workerSgkDelta: 1400,
+      workerUnemploymentDelta: 100,
+      employerSgkDelta: 2175,
+      employerUnemploymentDelta: 200,
+      originalEmployerLowerBound: 0,
+      targetEmployerLowerBound: 0,
+      employerLowerBoundDelta: 0,
+      employerLowerBoundPremiumDelta: 0,
+      payableSettlementAmount: 10000,
+      offsetSettlementAmount: 0,
+      recoverableAmount: 0,
+    };
+
+    // Ödeme ayında hem kaynak farkı (1400) hem de ödeme ayı PEK primi (140) var: toplam 1540 TL
+    const retroPayrollWithPaymentPek: BordroKaydi = {
+      ...payroll(person1.id, 'retro-payment-2', 'FINALIZED', {
+        isverenSgkPrimi: 217.5,
+        isverenIssizlikPrimi: 20,
+        isciSgkPrimi: 1540, // 1400 source + 140 payment month
+        isciIssizlikPrimi: 110, // 100 source + 10 payment month
+        pekAltSinirTamamlamaIsverenPrimi: 0,
+      }),
+      donemId: paymentPeriod.id,
+      accrualId: batchId,
+      accrualType: 'RETRO_ADJUSTMENT',
+      pekDetay: {
+        hesaplananPek: 1000,
+        hamPek: 1000,
+        devredenPekKullanilan: 0,
+        primMatrahi: 1000, // Ödeme ayında 1000 TL PEK oluştu
+        finalPek: 1000,
+        devredenPekAşanTutar: 0,
+        pekAltSinir: 20000,
+        pekUstSinir: 150000,
+        altSinirTamamlamaFarki: 0,
+        fiiliYemekGunu: 0,
+        yemekIstisnasiTutar: 0,
+        isverenSgkPrimi: 217.5,
+        isverenIssizlikPrimi: 20,
+        pekAltSinirTamamlamaIsverenPrimi: 0,
+        isverenPrimToplami: 237.5,
+        sgkIsverenOraniYuzde: 21.75,
+        isverenIssizlikOraniYuzde: 2,
+      },
+    };
+
+    // Ödeme ayı satırında 1540 - 1400 = 140 TL (yalnız cari ödeme ayı kısmı) görünmeli!
+    const paymentRows = getSgkPrimKontroluRows(
+      paymentPeriod,
+      [person1],
+      [retroPayrollWithPaymentPek],
+      [batch],
+      [allocation]
+    );
+    expect(paymentRows[0].isciSgkPrimi).toBe(140);
+    expect(paymentRows[0].isciIssizlikPrimi).toBe(10);
+    expect(paymentRows[0].isverenSgkPrimi).toBe(217.5);
+  });
 });

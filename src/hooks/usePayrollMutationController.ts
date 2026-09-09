@@ -42,6 +42,11 @@ import {
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
+import {
+  isValidIsoDate,
+  validatePuantaj,
+  validateSickLeaveRecord,
+} from '../services/storage/payrollPayloadSchema';
 
 export interface PayrollMutationControllerOptions {
   isNative: boolean;
@@ -439,6 +444,30 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
+    validatePuantaj(updatedPuantaj);
+    const period = donemler.find((p) => p.id === updatedPuantaj.donemId);
+    if (period) {
+      if (isValidIsoDate(period.baslangicTarihi) && isValidIsoDate(period.bitisTarihi)) {
+        const [sy, sm, sd] = period.baslangicTarihi.split('-').map(Number);
+        const [ey, em, ed] = period.bitisTarihi.split('-').map(Number);
+        const startMs = Date.UTC(sy, sm - 1, sd);
+        const endMs = Date.UTC(ey, em - 1, ed);
+        const calendarDayCount = Math.round((endMs - startMs) / 86400000) + 1;
+        const keys = Object.keys(updatedPuantaj.gunler);
+        if (keys.length > calendarDayCount) {
+          throw new Error(
+            `${period.id} dönemi ${calendarDayCount} takvim günü içeriyor ancak puantajda ${keys.length} kayıt var.`
+          );
+        }
+      }
+      for (const dateText of Object.keys(updatedPuantaj.gunler)) {
+        if (dateText < period.baslangicTarihi || dateText > period.bitisTarihi) {
+          throw new Error(
+            `${dateText} puantaj tarihi ${period.id} döneminin ${period.baslangicTarihi}–${period.bitisTarihi} aralığı dışında.`
+          );
+        }
+      }
+    }
     const impact = await evaluateBrowserMutations({
       kind: 'PERSON_PERIOD',
       personnelId: updatedPuantaj.personelId,
@@ -488,6 +517,16 @@ export function usePayrollMutationController({
       await tauriBridge.saveSickLeaveRecord(record);
       await loadData();
       return;
+    }
+    validateSickLeaveRecord(record);
+    for (const other of sickLeaveRecords) {
+      if (other.id !== record.id && other.personnelId === record.personnelId) {
+        if (record.startDate <= other.endDate && record.endDate >= other.startDate) {
+          throw new Error(
+            `Rapor tarihleri çakışıyor: ${record.startDate}–${record.endDate} aralığı, ${other.id} kaydındaki ${other.startDate}–${other.endDate} aralığıyla örtüşüyor. Örtüşen raporlar ayrı episode olarak kaydedilemez.`
+          );
+        }
+      }
     }
     const existing = sickLeaveRecords.find((item) => item.id === record.id);
     const mutations: PayrollMutation[] = [
