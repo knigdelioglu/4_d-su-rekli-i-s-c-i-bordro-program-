@@ -1260,7 +1260,24 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
     let isci_sgk_primi = round_sgk_amount(worker_pek_matrah * sgk_rate);
     let isci_issizlik_primi = round_sgk_amount(worker_pek_matrah * issizlik_rate);
 
-    let gelir_vergisi_matrah = calculate_gv_matrah(brut_gelir, isci_sgk_primi, isci_issizlik_primi);
+    let p_kesintiler = personel.and_then(|p| p.kesintiler.as_ref());
+
+    let is_sendika = p_kesintiler.and_then(|pk| pk.sendikaUyesi).unwrap_or(false);
+    let sendika_aidati = if is_sendika {
+        p_kesintiler
+            .and_then(|pk| pk.sabitSendikaAidati)
+            .filter(|&sabit| sabit > dec!(0))
+            .or_else(|| k.sabitSendikaAidati.filter(|&sabit| sabit > dec!(0)))
+            .unwrap_or_else(|| {
+                let sendika_orani = k.sendikaAidatiYuzde.unwrap_or(dec!(65)) / dec!(100);
+                round2(k.gunlukTabanUcret * sendika_orani)
+            })
+    } else {
+        dec!(0)
+    };
+
+    let gelir_vergisi_matrah =
+        calculate_gv_matrah(brut_gelir - sendika_aidati, isci_sgk_primi, isci_issizlik_primi);
 
     let gunluk_asgari = k.gunlukAsgariUcret.unwrap_or(dec!(1101.00));
     let aylik_brut_asgari = round2(gunluk_asgari * dec!(30));
@@ -1279,22 +1296,6 @@ pub(crate) fn calculate_statutory_deductions_with_month_to_date_and_devreden_sta
     let asgari_ucret_dv_istisnasi = round2(aylik_brut_asgari * dv_rate);
     let ham_damga_vergisi = round2(brut_gelir * dv_rate);
     let damga_vergisi = (round2(ham_damga_vergisi - asgari_ucret_dv_istisnasi)).max(dec!(0));
-
-    let p_kesintiler = personel.and_then(|p| p.kesintiler.as_ref());
-
-    let is_sendika = p_kesintiler.and_then(|pk| pk.sendikaUyesi).unwrap_or(false);
-    let sendika_aidati = if is_sendika {
-        p_kesintiler
-            .and_then(|pk| pk.sabitSendikaAidati)
-            .filter(|&sabit| sabit > dec!(0))
-            .or_else(|| k.sabitSendikaAidati.filter(|&sabit| sabit > dec!(0)))
-            .unwrap_or_else(|| {
-                let sendika_orani = k.sendikaAidatiYuzde.unwrap_or(dec!(65)) / dec!(100);
-                round2(k.gunlukTabanUcret * sendika_orani)
-            })
-    } else {
-        dec!(0)
-    };
 
     let bes = calculate_oks_deduction(oks_pek_matrah, k, personel, true).unwrap_or_default();
 
