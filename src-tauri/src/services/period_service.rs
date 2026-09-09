@@ -1,5 +1,6 @@
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::settings_repo::SettingsRepository;
@@ -64,6 +65,17 @@ impl PeriodService {
 
         PeriodRepository::save_in_transaction(&tx, period)?;
         SettingsRepository::save_institution_settings_in_transaction(&tx, settings)?;
+        // The Rust core owns the supported legal package. Bootstrap it when a
+        // new period is created, but never reinterpret an unsupported year as
+        // 2026.
+        if period.taxYear == 2026
+            && AnnualPayrollParametersRepository::get_by_year(&tx, period.taxYear)?.is_none()
+        {
+            AnnualPayrollParametersRepository::save_in_transaction(
+                &tx,
+                &AnnualPayrollParameters::default_for_2026(),
+            )?;
+        }
         tx.commit()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))
     }

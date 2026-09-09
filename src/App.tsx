@@ -444,11 +444,11 @@ export default function App() {
   const {
     evaluateBrowserMutations,
     handleSavePersonel,
+    handleSavePersonelAndTaxOpening,
     handleDeletePersonel,
     handleCreateDonem,
     handleSaveKurumDegerleri,
     handleSavePuantaj,
-    handleSaveTaxOpening,
     handleSaveSickLeaveRecord,
     handleSaveAnnualPayrollParameters,
     handleSaveZamAylari,
@@ -712,8 +712,7 @@ export default function App() {
                     authoritativeDataset={payrollDataset}
                     onSaveBordro={handleSaveBordro}
                     onDeleteBordro={handleDeleteBordro}
-                    onSavePersonel={handleSavePersonel}
-                    onSaveTaxOpening={handleSaveTaxOpening}
+                    onSavePersonelAndTaxOpening={handleSavePersonelAndTaxOpening}
                     initialPersonelId={targetPersonelIdForBordro}
                     onGoToPuantaj={(personelId) => {
                       if (personelId) setTargetPersonelIdForBordro(personelId);

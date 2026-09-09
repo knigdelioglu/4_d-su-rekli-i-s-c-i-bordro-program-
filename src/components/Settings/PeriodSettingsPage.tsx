@@ -12,11 +12,12 @@ import type { ParametreSection } from '../../types/navigation';
 import {
   AY_ISIMLERI,
   createBordroDonemi,
-  DEFAULT_IS_PRIMI_GRUPLARI,
-  DEFAULT_KURUM_DEGERLERI,
-  DEFAULT_TEDIYE_LISTESI,
-  DEFAULT_TIS_IKRAMIYE_LISTESI,
+  DEFAULT_PRODUCTION_KURUM_DEGERLERI,
 } from '../../utils/payrollPresentation';
+import {
+  DEFAULT_STATUTORY_PERIOD_PARAMETERS,
+  getDefaultAnnualPayrollParameters,
+} from '../../services/storage/payrollDefaults';
 import { AnnualTaxSection } from './AnnualTaxSection';
 import { DeductionLegalRatesSection } from './DeductionLegalRatesSection';
 import { IncomeParametersSection } from './IncomeParametersSection';
@@ -49,7 +50,7 @@ export interface PeriodSettingsPageProps {
 }
 
 const sanitizeTediyeList = (list?: TediyeKalemi[]) =>
-  (list || DEFAULT_TEDIYE_LISTESI).map((item) => ({
+  (list ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeListesi).map((item) => ({
     ...item,
     ad: item.ad.replace(/\s*\(\d+\s*gün\)/i, ''),
   }));
@@ -134,24 +135,30 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   const activeKurumDegerleri =
     kurumDegerleriMap[aktifDonemId] || {
       donemId: aktifDonemId,
-      ...DEFAULT_KURUM_DEGERLERI,
+      ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
     };
   const [paramsForm, setParamsForm] = useState<DönemselKurumDegerleri>({
     ...activeKurumDegerleri,
-    isPrimiGruplari: activeKurumDegerleri.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI,
+    isPrimiGruplari:
+      activeKurumDegerleri.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
     tediyeListesi: sanitizeTediyeList(activeKurumDegerleri.tediyeListesi),
     tisIkramiyeListesi:
-      activeKurumDegerleri.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI,
+      activeKurumDegerleri.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
     gunlukYemekIstisnasiGV:
       activeKurumDegerleri.gunlukYemekIstisnasiGV ??
       activeKurumDegerleri.gunlukYemekIstisnasiSGK ??
-      DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
+      DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
     statutoryParameterSegments: activeKurumDegerleri.statutoryParameterSegments || [],
   });
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [annualTaxYear, setAnnualTaxYear] = useState<number>(currentYear);
-  const [annualTaxBrackets, setAnnualTaxBrackets] = useState<TaxBracket[]>([]);
-  const [annualInsuranceGvCap, setAnnualInsuranceGvCap] = useState<number>(396360);
+  const initialAnnualDefaults = getDefaultAnnualPayrollParameters(currentYear);
+  const [annualTaxBrackets, setAnnualTaxBrackets] = useState<TaxBracket[]>(
+    initialAnnualDefaults?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) || []
+  );
+  const [annualInsuranceGvCap, setAnnualInsuranceGvCap] = useState<number>(
+    initialAnnualDefaults?.sigortaGvYillikBrutAsgariUcretTavani ?? 0
+  );
   const [annualTaxSuccess, setAnnualTaxSuccess] = useState(false);
   const [zamAylariForm, setZamAylariForm] = useState<number[]>(
     [...zamAylari].sort((a, b) => a - b)
@@ -172,17 +179,17 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   useEffect(() => {
     const active = kurumDegerleriMap[aktifDonemId] || {
       donemId: aktifDonemId,
-      ...DEFAULT_KURUM_DEGERLERI,
+      ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
     };
     setParamsForm({
       ...active,
-      isPrimiGruplari: active.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI,
+      isPrimiGruplari: active.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
       tediyeListesi: sanitizeTediyeList(active.tediyeListesi),
-      tisIkramiyeListesi: active.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI,
+      tisIkramiyeListesi: active.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
       gunlukYemekIstisnasiGV:
         active.gunlukYemekIstisnasiGV ??
         active.gunlukYemekIstisnasiSGK ??
-        DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
+        DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
       statutoryParameterSegments: active.statutoryParameterSegments || [],
     });
   }, [aktifDonemId, kurumDegerleriMap]);
@@ -195,10 +202,14 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     );
     setAnnualTaxYear(year);
     setAnnualTaxBrackets(
-      savedParameters?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) || []
+      savedParameters?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) ||
+        getDefaultAnnualPayrollParameters(year)?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) ||
+        []
     );
     setAnnualInsuranceGvCap(
-      savedParameters?.sigortaGvYillikBrutAsgariUcretTavani ?? (year === 2026 ? 396360 : 0)
+      savedParameters?.sigortaGvYillikBrutAsgariUcretTavani ??
+        getDefaultAnnualPayrollParameters(year)?.sigortaGvYillikBrutAsgariUcretTavani ??
+        0
     );
   }, [aktifDonemId, annualPayrollParameters, donemler, newTaxYear]);
 
@@ -249,46 +260,64 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   const handleCreateNewPeriod = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const newDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
+    const statutoryDefaults = getDefaultAnnualPayrollParameters(newDonem.taxYear)
+      ? DEFAULT_STATUTORY_PERIOD_PARAMETERS
+      : undefined;
     const initialKurum: DönemselKurumDegerleri = {
-      ...DEFAULT_KURUM_DEGERLERI,
+      ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
       ...paramsForm,
       donemId: newDonem.id,
       gunlukTabanUcret:
-        paramsForm.gunlukTabanUcret ?? DEFAULT_KURUM_DEGERLERI.gunlukTabanUcret,
-      gunlukYemek: paramsForm.gunlukYemek ?? DEFAULT_KURUM_DEGERLERI.gunlukYemek,
+        paramsForm.gunlukTabanUcret ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukTabanUcret,
+      gunlukYemek: paramsForm.gunlukYemek ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemek,
       birlestirilmisSosyalYardim:
         paramsForm.birlestirilmisSosyalYardim ??
-        DEFAULT_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
+        DEFAULT_PRODUCTION_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
       gunlukVasitaYol:
-        paramsForm.gunlukVasitaYol ?? DEFAULT_KURUM_DEGERLERI.gunlukVasitaYol,
-      giyimYardimi: paramsForm.giyimYardimi ?? DEFAULT_KURUM_DEGERLERI.giyimYardimi,
+        paramsForm.gunlukVasitaYol ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukVasitaYol,
+      giyimYardimi: paramsForm.giyimYardimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.giyimYardimi,
       hizmetZammiBirimi:
-        paramsForm.hizmetZammiBirimi ?? DEFAULT_KURUM_DEGERLERI.hizmetZammiBirimi,
+        paramsForm.hizmetZammiBirimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.hizmetZammiBirimi,
       isPrimiYuzde: paramsForm.isPrimiYuzde || 0,
-      isPrimiGruplari: paramsForm.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI,
+      isPrimiGruplari:
+        paramsForm.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
       ekOdeme: paramsForm.ekOdeme || 0,
-      tediyeListesi: paramsForm.tediyeListesi || DEFAULT_TEDIYE_LISTESI,
-      tisIkramiyeListesi: paramsForm.tisIkramiyeListesi || DEFAULT_TIS_IKRAMIYE_LISTESI,
-      tediyeTisNotu: paramsForm.tediyeTisNotu || DEFAULT_KURUM_DEGERLERI.tediyeTisNotu,
+      tediyeListesi: paramsForm.tediyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeListesi,
+      tisIkramiyeListesi:
+        paramsForm.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
+      tediyeTisNotu: paramsForm.tediyeTisNotu || DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeTisNotu,
       sgkIsciOraniYuzde:
-        paramsForm.sgkIsciOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.sgkIsciOraniYuzde,
+        statutoryDefaults ? paramsForm.sgkIsciOraniYuzde ?? statutoryDefaults.sgkIsciOraniYuzde : undefined,
       issizlikIsciOraniYuzde:
-        paramsForm.issizlikIsciOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.issizlikIsciOraniYuzde,
+        statutoryDefaults ? paramsForm.issizlikIsciOraniYuzde ?? statutoryDefaults.issizlikIsciOraniYuzde : undefined,
+      gelirVergisiOraniYuzde: statutoryDefaults
+        ? paramsForm.gelirVergisiOraniYuzde ?? statutoryDefaults.gelirVergisiOraniYuzde
+        : undefined,
+      damgaVergisiOraniBinde: statutoryDefaults
+        ? paramsForm.damgaVergisiOraniBinde ?? statutoryDefaults.damgaVergisiOraniBinde
+        : undefined,
       sgkIsverenOraniYuzde:
-        paramsForm.sgkIsverenOraniYuzde ?? DEFAULT_KURUM_DEGERLERI.sgkIsverenOraniYuzde,
+        statutoryDefaults ? paramsForm.sgkIsverenOraniYuzde ?? statutoryDefaults.sgkIsverenOraniYuzde : undefined,
       issizlikIsverenOraniYuzde:
-        paramsForm.issizlikIsverenOraniYuzde ??
-        DEFAULT_KURUM_DEGERLERI.issizlikIsverenOraniYuzde,
+        statutoryDefaults
+          ? paramsForm.issizlikIsverenOraniYuzde ?? statutoryDefaults.issizlikIsverenOraniYuzde
+          : undefined,
       gunlukYemekIstisnasiSGK:
-        paramsForm.gunlukYemekIstisnasiSGK ??
-        DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiSGK,
+        statutoryDefaults
+          ? paramsForm.gunlukYemekIstisnasiSGK ?? statutoryDefaults.gunlukYemekIstisnasiSGK
+          : undefined,
       gunlukYemekIstisnasiGV:
-        paramsForm.gunlukYemekIstisnasiGV ?? DEFAULT_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
-      statutoryParameterSegments: paramsForm.statutoryParameterSegments || [],
+        statutoryDefaults
+          ? paramsForm.gunlukYemekIstisnasiGV ?? statutoryDefaults.gunlukYemekIstisnasiGV
+          : undefined,
+      statutoryParameterSegments: statutoryDefaults
+        ? paramsForm.statutoryParameterSegments ?? []
+        : [],
       pekTavanKatsayisi:
-        paramsForm.pekTavanKatsayisi ?? DEFAULT_KURUM_DEGERLERI.pekTavanKatsayisi,
+        statutoryDefaults ? paramsForm.pekTavanKatsayisi ?? statutoryDefaults.pekTavanKatsayisi : undefined,
       gunlukAsgariUcret:
-        paramsForm.gunlukAsgariUcret ?? DEFAULT_KURUM_DEGERLERI.gunlukAsgariUcret,
+        statutoryDefaults ? paramsForm.gunlukAsgariUcret ?? statutoryDefaults.gunlukAsgariUcret : undefined,
+      statutoryParameterSnapshot: undefined,
     };
 
     try {

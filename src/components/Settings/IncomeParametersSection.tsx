@@ -3,7 +3,6 @@ import { Check, Info, Layers, Percent, Plus, Save, Settings2, Trash2, X } from '
 import type { DönemselKurumDegerleri, IsPrimiGrupItem } from '../../types/payroll';
 import {
   AY_ISIMLERI,
-  DEFAULT_IS_PRIMI_GRUPLARI,
   DEFAULT_KURUM_DEGERLERI,
   formatTL,
 } from '../../utils/payrollPresentation';
@@ -28,7 +27,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
   onSubmit,
 }) => {
   const [isGrupModalOpen, setIsGrupModalOpen] = React.useState(false);
-  const groups = paramsForm.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI;
+  const groups = paramsForm.isPrimiGruplari ?? [];
 
   return (
     <section data-testid="period-settings-gelir" className="space-y-5">
@@ -402,7 +401,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                     setParamsForm((current) => ({
                       ...current,
                       isPrimiGruplari: [
-                        ...(current.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI),
+                        ...(current.isPrimiGruplari ?? []),
                         newGroup,
                       ],
                     }));
@@ -430,7 +429,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                         onChange={(e) =>
                           setParamsForm((current) => {
                             const next = [
-                              ...(current.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI),
+                              ...(current.isPrimiGruplari ?? []),
                             ];
                             next[index] = { ...next[index], ad: e.target.value };
                             return { ...current, isPrimiGruplari: next };
@@ -455,7 +454,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                           onChange={(e) =>
                             setParamsForm((current) => {
                               const next = [
-                                ...(current.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI),
+                                ...(current.isPrimiGruplari ?? []),
                               ];
                               next[index] = {
                                 ...next[index],
@@ -476,7 +475,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                           setParamsForm((current) => ({
                             ...current,
                             isPrimiGruplari: (
-                              current.isPrimiGruplari || DEFAULT_IS_PRIMI_GRUPLARI
+                              current.isPrimiGruplari ?? []
                             ).filter((_, itemIndex) => itemIndex !== index),
                           }))
                         }

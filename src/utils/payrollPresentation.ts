@@ -16,10 +16,20 @@ import type {
   PuantajOzeti,
   StatutoryParameterSegment,
   TaxBracket,
-  TediyeKalemi,
-  TisIkramiyeKalemi,
 } from '../types/payroll';
 import { OPEN_ENDED_TAX_BRACKET_LIMIT } from '../services/storage/annualPayrollParametersValidation';
+import {
+  DEFAULT_IS_PRIMI_GRUPLARI,
+  DEFAULT_STATUTORY_PERIOD_PARAMETERS,
+  DEFAULT_TEDIYE_LISTESI,
+  DEFAULT_TIS_IKRAMIYE_LISTESI,
+} from '../services/storage/payrollDefaults';
+export {
+  DEFAULT_IS_PRIMI_GRUPLARI,
+  DEFAULT_TEDIYE_LISTESI,
+  DEFAULT_TIS_IKRAMIYE_LISTESI,
+  DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+} from '../services/storage/payrollDefaults';
 export { OPEN_ENDED_TAX_BRACKET_LIMIT } from '../services/storage/annualPayrollParametersValidation';
 
 export const AY_ISIMLERI = [
@@ -48,24 +58,6 @@ export const GUN_ISIMLERI_UZUN = [
   'Cumartesi',
 ];
 
-export const DEFAULT_TEDIYE_LISTESI: TediyeKalemi[] = [
-  { id: 1, ad: '1. Tediye', odemeAyi: 'Ocak', gunSayisi: 13, aktifDonemdeOdensin: false },
-  { id: 2, ad: '2. Tediye', odemeAyi: 'Nisan', gunSayisi: 13, aktifDonemdeOdensin: false },
-  { id: 3, ad: '3. Tediye', odemeAyi: 'Temmuz', gunSayisi: 13, aktifDonemdeOdensin: false },
-  { id: 4, ad: '4. Tediye', odemeAyi: 'Aralık', gunSayisi: 13, aktifDonemdeOdensin: false },
-];
-
-export const DEFAULT_TIS_IKRAMIYE_LISTESI: TisIkramiyeKalemi[] = [
-  { id: 1, ad: '1. TİS İkramiyesi', odemeAyi: '', gunSayisi: 0, aktifDonemdeOdensin: false },
-  { id: 2, ad: '2. TİS İkramiyesi', odemeAyi: '', gunSayisi: 0, aktifDonemdeOdensin: false },
-];
-
-export const DEFAULT_IS_PRIMI_GRUPLARI: IsPrimiGrupItem[] = [
-  { id: '1. Grup', ad: '1. Grup', oran: 9, aktif: true },
-  { id: '2. Grup', ad: '2. Grup', oran: 8, aktif: true },
-  { id: '3. Grup', ad: '3. Grup', oran: 7, aktif: true },
-];
-
 export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> = {
   gunlukTabanUcret: 2443.28,
   gunlukYemek: 300.75,
@@ -83,21 +75,11 @@ export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> =
   tisIkramiyeListesi: DEFAULT_TIS_IKRAMIYE_LISTESI,
   tediyeTisNotu:
     'Tediye ve TİS listeleri yalnız referans takvimidir. Ödeme ayı ve gün sayısı burada not edilebilir; bordroya aktarılacak gerçek brüt Tediye/TİS tutarı Bordro Hesaplama ekranında personel ve dönem bazında manuel girilir.',
-  sgkIsciOraniYuzde: 14,
-  issizlikIsciOraniYuzde: 1,
-  gelirVergisiOraniYuzde: 15,
-  damgaVergisiOraniBinde: 7.59,
   sendikaAidatiYuzde: 65,
   sabitSendikaAidati: 0,
   besOraniYuzde: 3,
   sabitBesTutar: 0,
-  gunlukYemekIstisnasiSGK: 300.00,
-  gunlukYemekIstisnasiGV: 300.00,
-  statutoryParameterSegments: [],
-  pekTavanKatsayisi: 9,
-  gunlukAsgariUcret: 1101.00,
-  sgkIsverenOraniYuzde: 21.75,
-  issizlikIsverenOraniYuzde: 2.00,
+  ...DEFAULT_STATUTORY_PERIOD_PARAMETERS,
 };
 
 const REQUIRED_PERIOD_INCOME_FIELDS = [

@@ -41,6 +41,7 @@ import {
 } from '../services/payrollEngine/decimalBoundary';
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
+import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 
 export interface PayrollMutationControllerOptions {
   isNative: boolean;
@@ -103,6 +104,70 @@ type BoundaryInstitutionSettings = PayrollStorageDto['kurumDegerleriMap'][string
 type BoundaryStatutoryParameterSnapshot = NonNullable<
   BoundaryInstitutionSettings['statutoryParameterSnapshot']
 >;
+
+function ensureBoundaryAnnualPayrollParameters(
+  parameters: PayrollStorageDto['annualPayrollParameters'],
+  year: number
+): PayrollStorageDto['annualPayrollParameters'] {
+  if (parameters.some((parameter) => parameter.year === year)) return parameters;
+  const defaults = getDefaultAnnualPayrollParameters(year);
+  if (!defaults) return parameters;
+  return [...parameters, toPayrollBoundaryDto(defaults)].sort(
+    (left, right) => left.year - right.year
+  );
+}
+
+export function mergeBrowserTaxOpening(
+  openings: PayrollStorageDto['taxOpenings'],
+  opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
+): PayrollStorageDto['taxOpenings'] {
+  const index = openings.findIndex(
+    (item) =>
+      item.id === opening.id ||
+      (item.personnelId === opening.personnelId && item.year === opening.year)
+  );
+  const nextOpenings = [...openings];
+  const previousOpening = index < 0 ? undefined : openings[index];
+  const clearNormalOpening =
+    opening.gvCumulativeOpening === null || opening.effectiveFromPeriodId === null;
+  const clearAsgariOpening =
+    opening.asgariGvCumulativeOpening === null || opening.asgariGvEffectiveFromPeriodId === null;
+  const mergedOpening = { ...opening } as PayrollBoundaryTaxOpening;
+
+  if (clearNormalOpening) {
+    mergedOpening.gvCumulativeOpening = null;
+    mergedOpening.effectiveFromPeriodId = null;
+  } else if (
+    opening.gvCumulativeOpening === undefined &&
+    previousOpening?.gvCumulativeOpening !== undefined
+  ) {
+    mergedOpening.gvCumulativeOpening = previousOpening.gvCumulativeOpening;
+    mergedOpening.effectiveFromPeriodId = previousOpening.effectiveFromPeriodId;
+  }
+  if (clearAsgariOpening) {
+    mergedOpening.asgariGvCumulativeOpening = null;
+    mergedOpening.asgariGvEffectiveFromPeriodId = null;
+  } else if (
+    opening.asgariGvCumulativeOpening === undefined &&
+    previousOpening?.asgariGvCumulativeOpening !== undefined
+  ) {
+    mergedOpening.asgariGvCumulativeOpening = previousOpening.asgariGvCumulativeOpening;
+    mergedOpening.asgariGvEffectiveFromPeriodId = previousOpening.asgariGvEffectiveFromPeriodId;
+  }
+
+  const hasNormalValue = mergedOpening.gvCumulativeOpening != null;
+  const hasNormalPeriod = mergedOpening.effectiveFromPeriodId != null;
+  const hasAsgariValue = mergedOpening.asgariGvCumulativeOpening != null;
+  const hasAsgariPeriod = mergedOpening.asgariGvEffectiveFromPeriodId != null;
+  if (hasNormalValue !== hasNormalPeriod || hasAsgariValue !== hasAsgariPeriod) {
+    throw new Error('Vergi opening bileşenleri değer ve effective dönem çiftleri olarak birlikte tanımlanmalıdır.');
+  }
+
+  const exactOpening = mergePayrollUiIntoBoundary(previousOpening, mergedOpening);
+  if (index < 0) nextOpenings.push(exactOpening);
+  else nextOpenings[index] = exactOpening;
+  return nextOpenings;
+}
 
 function captureStatutoryParameterSnapshot(
   settings: BoundaryInstitutionSettings | undefined
@@ -210,6 +275,52 @@ export function usePayrollMutationController({
     });
   };
 
+  const handleSavePersonelAndTaxOpening = async (
+    newPersonel: Personel | PayrollBoundaryPersonel,
+    opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
+  ) => {
+    if (newPersonel.id !== opening.personnelId) {
+      throw new Error('Personel ile vergi opening aynı personel kimliğini taşımalıdır.');
+    }
+    // Validate the complete pair before evaluating or scheduling the single
+    // authoritative snapshot update. This keeps a malformed composite input
+    // from reaching either persistence adapter.
+    mergeBrowserTaxOpening(authoritativePayload.taxOpenings, opening);
+    if (isNative) {
+      await tauriBridge.savePersonnelAndTaxOpening(
+        toPayrollBoundaryDto(newPersonel) as unknown as Personel,
+        toPayrollBoundaryDto(opening) as unknown as PersonelTaxOpening
+      );
+      await loadData();
+      return;
+    }
+
+    const impact = await evaluateBrowserMutations([
+      { kind: 'PERSON', personnelId: newPersonel.id },
+      {
+        kind: 'PERSON_TAX_YEAR',
+        personnelId: opening.personnelId,
+        taxYear: opening.year,
+      },
+    ]);
+    updateAuthoritativePayload((current) => {
+      const existingPersonel = current.personeller.find((person) => person.id === newPersonel.id);
+      const exactPersonel = mergePayrollUiIntoBoundary(existingPersonel, newPersonel);
+      const personeller = existingPersonel
+        ? current.personeller.map((person) =>
+            person.id === newPersonel.id ? exactPersonel : person
+          )
+        : [...current.personeller, exactPersonel];
+      return {
+        ...current,
+        personeller,
+        taxOpenings: mergeBrowserTaxOpening(current.taxOpenings, opening),
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
+      };
+    });
+  };
+
   const handleDeletePersonel = async (personelId: string) => {
     if (isNative) {
       await tauriBridge.deletePersonnel(personelId);
@@ -290,6 +401,10 @@ export function usePayrollMutationController({
         ...current,
         donemler,
         kurumDegerleriMap: { ...current.kurumDegerleriMap, [newDonem.id]: preservedSettings },
+        annualPayrollParameters: ensureBoundaryAnnualPayrollParameters(
+          current.annualPayrollParameters,
+          newDonem.taxYear
+        ),
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
         retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
@@ -360,54 +475,12 @@ export function usePayrollMutationController({
       personnelId: opening.personnelId,
       taxYear: opening.year,
     });
-    updateAuthoritativePayload((current) => {
-      const index = current.taxOpenings.findIndex((item) => item.id === opening.id);
-      const taxOpenings = [...current.taxOpenings];
-      const previousOpening = index < 0 ? undefined : current.taxOpenings[index];
-      const clearNormalOpening =
-        opening.gvCumulativeOpening === null || opening.effectiveFromPeriodId === null;
-      const clearAsgariOpening =
-        opening.asgariGvCumulativeOpening === null || opening.asgariGvEffectiveFromPeriodId === null;
-      const mergedOpening = { ...opening } as PayrollBoundaryTaxOpening;
-      if (clearNormalOpening) {
-        mergedOpening.gvCumulativeOpening = null;
-        mergedOpening.effectiveFromPeriodId = null;
-      } else if (
-        opening.gvCumulativeOpening === undefined &&
-        previousOpening?.gvCumulativeOpening !== undefined
-      ) {
-        mergedOpening.gvCumulativeOpening = previousOpening.gvCumulativeOpening;
-        mergedOpening.effectiveFromPeriodId = previousOpening.effectiveFromPeriodId;
-      }
-      if (clearAsgariOpening) {
-        mergedOpening.asgariGvCumulativeOpening = null;
-        mergedOpening.asgariGvEffectiveFromPeriodId = null;
-      } else if (
-        opening.asgariGvCumulativeOpening === undefined &&
-        previousOpening?.asgariGvCumulativeOpening !== undefined
-      ) {
-        mergedOpening.asgariGvCumulativeOpening = previousOpening.asgariGvCumulativeOpening;
-        mergedOpening.asgariGvEffectiveFromPeriodId = previousOpening.asgariGvEffectiveFromPeriodId;
-      }
-      const hasNormalValue = mergedOpening.gvCumulativeOpening != null;
-      const hasNormalPeriod = mergedOpening.effectiveFromPeriodId != null;
-      const hasAsgariValue = mergedOpening.asgariGvCumulativeOpening != null;
-      const hasAsgariPeriod = mergedOpening.asgariGvEffectiveFromPeriodId != null;
-      if (hasNormalValue !== hasNormalPeriod || hasAsgariValue !== hasAsgariPeriod) {
-        throw new Error('Vergi opening bileşenleri değer ve effective dönem çiftleri olarak birlikte tanımlanmalıdır.');
-      }
-      const exactOpening = mergePayrollUiIntoBoundary(
-        previousOpening,
-        mergedOpening
-      );
-      if (index < 0) taxOpenings.push(exactOpening);
-      else taxOpenings[index] = exactOpening;
-      return {
-        ...current,
-        taxOpenings,
-        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
-      };
-    });
+    updateAuthoritativePayload((current) => ({
+      ...current,
+      taxOpenings: mergeBrowserTaxOpening(current.taxOpenings, opening),
+      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+      retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
+    }));
   };
 
   const handleSaveSickLeaveRecord = async (record: SickLeaveRecord) => {
@@ -955,6 +1028,7 @@ export function usePayrollMutationController({
   return {
     evaluateBrowserMutations,
     handleSavePersonel,
+    handleSavePersonelAndTaxOpening,
     handleDeletePersonel,
     handleCreateDonem,
     handleSaveKurumDegerleri,

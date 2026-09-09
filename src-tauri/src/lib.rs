@@ -16,6 +16,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_personnel_list,
             commands::save_personnel,
+            commands::save_personnel_and_tax_opening,
             commands::delete_personnel,
             commands::get_tax_openings,
             commands::save_tax_opening,

@@ -5,7 +5,6 @@
 import {
   BordroDonemi,
   DönemselKurumDegerleri,
-  AnnualPayrollParameters,
   Personel,
   PersonelPuantaj,
 } from '../types/payroll';
@@ -14,6 +13,7 @@ import {
   DEFAULT_KURUM_DEGERLERI,
   generateDefaultPuantajGunler,
 } from './payrollPresentation';
+import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 
 export const INITIAL_PERSONELLER: Personel[] = [
   {
@@ -104,6 +104,7 @@ export const INITIAL_PERSONELLER: Personel[] = [
 
 export function getInitialDataset() {
   const currentYear = new Date().getFullYear();
+  const annualDefaults = getDefaultAnnualPayrollParameters(currentYear);
   
   // Create periods from January (1) to August (8) for the current year
   const donemler: BordroDonemi[] = [];
@@ -168,18 +169,7 @@ export function getInitialDataset() {
     bordrolar: [],
     taxOpenings: [],
     sickLeaveRecords: [],
-    annualPayrollParameters: [
-      {
-        year: currentYear,
-        gelirVergisiDilimleri: [
-          { limit: 190000, oran: 0.15 },
-          { limit: 400000, oran: 0.2 },
-          { limit: 1500000, oran: 0.27 },
-          { limit: 5300000, oran: 0.35 },
-          { limit: 1_000_000_000_000_000, oran: 0.4 },
-        ],
-      } satisfies AnnualPayrollParameters,
-    ],
+    annualPayrollParameters: annualDefaults ? [annualDefaults] : [],
     zamAylari: [],
   };
 }

@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type MouseEvent } from 'react';
+import { useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
 import { comparePaymentEvents, nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import {
   AccrualType,
@@ -20,6 +20,27 @@ import {
   toPayrollUiModel,
 } from '../services/payrollEngine/decimalBoundary';
 
+function formatActionableParameterError(message: string): string {
+  const annualYear = message.match(/\b(20\d{2})\b/)?.[1];
+  if (
+    annualYear &&
+    /(yıllık bordro parametreleri|sigorta gv yıllık)/i.test(message) &&
+    /(eksik|bulunamadı|yok)/i.test(message)
+  ) {
+    return `${annualYear} yılı gelir vergisi tarifesi henüz tanımlı değil. Yıllık Parametreler bölümünü tamamlayın.`;
+  }
+  if (
+    /(zorunlu yasal parametre|yasal parametresi|kurum ayarları|yasal parametre baseline)/i.test(message) &&
+    /(eksik|yok|bulunamadı)/i.test(message)
+  ) {
+    return 'Dönem yasal parametreleri henüz tamamlanmamış. Dönem Parametreleri bölümünü tamamlayın.';
+  }
+  if (/(günlük taban ücret|iş primi grupları)/i.test(message) && /(eksik|geçerli)/i.test(message)) {
+    return 'Dönem kurum ücretleri henüz tamamlanmamış. Ücretler bölümünde kurum değerlerini tamamlayın.';
+  }
+  return message;
+}
+
 export function formatPayrollError(err: unknown): string {
   if (err && typeof err === 'object') {
     const tagged = err as { type?: string; message?: unknown };
@@ -27,14 +48,14 @@ export function formatPayrollError(err: unknown): string {
       const details = tagged.message as { gelir?: number; kesinti?: number; fark?: number };
       return `Kesintiler geliri aşıyor. Gelir: ${formatTL(details.gelir ?? 0)}, kesinti: ${formatTL(details.kesinti ?? 0)}, açık: ${formatTL(details.fark ?? 0)}.`;
     }
-    if (typeof tagged.message === 'string') return tagged.message;
+    if (typeof tagged.message === 'string') return formatActionableParameterError(tagged.message);
     try {
       return JSON.stringify(err);
     } catch {
       return String(err);
     }
   }
-  return String(err);
+  return formatActionableParameterError(String(err));
 }
 
 export const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
@@ -86,6 +107,10 @@ export function useBordroCalculationController({
   onSaveBordro,
 }: UseBordroCalculationControllerOptions) {
   const payrollEngine = getPayrollEngine();
+  const authoritativeDatasetRef = useRef(authoritativeDataset);
+  useLayoutEffect(() => {
+    authoritativeDatasetRef.current = authoritativeDataset;
+  }, [authoritativeDataset]);
   const [searchTerm, setSearchTerm] = useState('');
   const [rowFilter, setRowFilter] = useState<PayrollRowFilter>('all');
   const [activePaySlip, setActivePaySlip] = useState<{
@@ -181,7 +206,7 @@ export function useBordroCalculationController({
     return opening > 0 && (!openingYear || openingYear === activeTaxYear) ? opening : 0;
   };
 
-  const buildDataset = (): PayrollDatasetSnapshot => authoritativeDataset;
+  const buildDataset = (): PayrollDatasetSnapshot => authoritativeDatasetRef.current;
 
   const calculateAndSaveForPerson = async (person: Personel): Promise<BordroKaydi | null> => {
     const pPuantaj = puantajlar.find(

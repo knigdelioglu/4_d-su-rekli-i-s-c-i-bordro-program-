@@ -81,6 +81,9 @@ type StoredPayroll = {
   gelirToplam: string;
   kesintiToplam: string;
   netOdeme: string;
+  gvDetay?: {
+    oncekiKumulatifGvMatrahi?: string;
+  };
 };
 
 type StoredPeriod = {
@@ -108,6 +111,15 @@ type StoredSnapshot = {
   }>;
   donemler?: StoredPeriod[];
   annualPayrollParameters?: StoredAnnualPayrollParameters[];
+  kurumDegerleriMap?: Record<string, {
+    gunlukAsgariUcret?: string;
+    sgkIsciOraniYuzde?: string;
+    issizlikIsciOraniYuzde?: string;
+    pekTavanKatsayisi?: string;
+    gunlukYemekIstisnasiSGK?: string;
+    gunlukYemekIstisnasiGV?: string;
+    damgaVergisiOraniBinde?: string;
+  }>;
 };
 
 const databaseName = '4d-bordro-programi';
@@ -566,7 +578,22 @@ test('period settings expose new period creation without an active period', asyn
 
   await page.getByTestId('period-settings-yeni-donem').getByRole('button', { name: 'Dönemi Oluştur ve Geç' }).click();
   await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
-  await expect(page.getByTestId('active-period-selector')).not.toHaveValue('');
+  const periodId = await page.getByTestId('active-period-selector').inputValue();
+  expect(periodId).not.toBe('');
+  const snapshot = await readStoredSnapshot(page);
+  expect(snapshot?.annualPayrollParameters?.find((item) => item.year === 2026)).toMatchObject({
+    year: 2026,
+    sigortaGvYillikBrutAsgariUcretTavani: '396360',
+  });
+  expect(snapshot?.kurumDegerleriMap?.[periodId]).toMatchObject({
+    gunlukAsgariUcret: '1101',
+    sgkIsciOraniYuzde: '14',
+    issizlikIsciOraniYuzde: '1',
+    pekTavanKatsayisi: '9',
+    gunlukYemekIstisnasiSGK: '300',
+    gunlukYemekIstisnasiGV: '300',
+    damgaVergisiOraniBinde: '7.59',
+  });
 });
 
 test('mobile navigation opens as a drawer without reducing the content area', async ({ page }) => {
@@ -665,6 +692,38 @@ test('browser WASM calculation persists in IndexedDB and survives reload', async
   await expect(page.getByTestId('payroll-screen')).toBeVisible();
   const reloaded = await waitForPayrollStatus(page, periodId, 'CALCULATED');
   expect(reloaded).toEqual(payroll);
+});
+
+test('browser tax opening save persists the active period as an explicit canonical pair', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('period-summary')).toBeVisible();
+  await loadSampleDataset(page);
+
+  const periodId = await openPayrollScreen(page);
+  await page.getByTitle('Sisteme ilk defa girildiğinde veya yıl ortasında önceki kümülatif vergi matrahlarını elle girmek için tıklayın').click();
+  const ahmetRow = page.getByRole('row').filter({ hasText: 'Ahmet Yılmaz' });
+  await ahmetRow.locator('input[inputmode="decimal"]').nth(0).fill('185000');
+  await page.getByRole('button', { name: 'Kaydet ve Bordroları Yeniden Hesapla' }).click();
+
+  await expect.poll(async () => (await readStoredSnapshot(page))?.taxOpenings?.find(
+    (opening) => opening.personnelId === 'p-1'
+  )).toMatchObject({
+    year: 2026,
+    gvCumulativeOpening: '185000',
+    effectiveFromPeriodId: periodId,
+  });
+  await expect.poll(async () => {
+    const snapshot = await readStoredSnapshot(page);
+    return snapshot?.bordrolar.find(
+      (payroll) => payroll.personelId === 'p-1' && payroll.donemId === periodId
+    )?.gvDetay?.oncekiKumulatifGvMatrahi;
+  }).toBe('185000');
+  await page.reload();
+  const reloaded = await readStoredSnapshot(page);
+  expect(reloaded?.taxOpenings?.find((opening) => opening.personnelId === 'p-1')).toMatchObject({
+    gvCumulativeOpening: '185000',
+    effectiveFromPeriodId: periodId,
+  });
 });
 
 test('browser rejects a corrupt authoritative IndexedDB snapshot without autosaving over it', async ({ page }) => {

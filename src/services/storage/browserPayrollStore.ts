@@ -252,10 +252,32 @@ export class BrowserPayrollStore {
     const database = await openDatabase();
     try {
       const stored = await readSnapshotFromDatabase(database);
-      // A present but malformed/empty snapshot is still authoritative. Let
-      // App's version/shape validation surface it instead of silently
-      // replacing it with a legacy localStorage copy.
+      // A present but malformed/empty snapshot is still authoritative. The
+      // current parser validates it and throws instead of silently replacing
+      // it with a legacy localStorage copy.
       if (stored !== null) {
+        // Current V5 snapshots may still contain person-level legacy opening
+        // fields from before taxOpenings became authoritative. The parser
+        // repairs only an exact, unambiguous period match; persist that repair
+        // under the same CAS revision before exposing the snapshot to App.
+        const repairedPayload = serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload));
+        if (repairedPayload !== stored.payload) {
+          try {
+            const revision = await writeAndVerify(
+              database,
+              repairedPayload,
+              stored.revision
+            );
+            this.knownRevision = revision;
+            return { payload: repairedPayload, revision };
+          } catch (error) {
+            if (!(error instanceof BrowserSnapshotConflictError)) throw error;
+            const concurrent = await readSnapshotFromDatabase(database);
+            if (!concurrent) throw error;
+            this.knownRevision = concurrent.revision;
+            return concurrent;
+          }
+        }
         this.knownRevision = stored.revision;
         return stored;
       }

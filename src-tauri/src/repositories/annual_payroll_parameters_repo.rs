@@ -4,7 +4,6 @@ use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepositor
 use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
-use rust_decimal::Decimal;
 
 pub struct AnnualPayrollParametersRepository;
 
@@ -30,7 +29,8 @@ impl AnnualPayrollParametersRepository {
         // Geçmiş mevzuat arşivi oluşturmadan yalnız mevcut 2026 sözleşmesini
         // geriye uyumlu biçimde tamamlarız; gelecek yıllar açıkça girilmelidir.
         if parameters.sigortaGvYillikBrutAsgariUcretTavani.is_none() && year == 2026 {
-            parameters.sigortaGvYillikBrutAsgariUcretTavani = Some(Decimal::from(396360));
+            parameters.sigortaGvYillikBrutAsgariUcretTavani =
+                AnnualPayrollParameters::default_for_2026().sigortaGvYillikBrutAsgariUcretTavani;
         }
 
         if parameters.year != year {

@@ -7,6 +7,7 @@ import {
   assertRecord,
   parseAndValidatePayrollPayload,
 } from './payrollPayloadSchema';
+import { getDefaultAnnualPayrollParameters } from './payrollDefaults';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -60,18 +61,6 @@ const LEGACY_GV_DEFAULT_DECIMAL_KEYS = [
   'sigortaGvYillikKalanLimiti',
   'uygulanabilirSigortaGvIndirimi',
 ] as const;
-
-// MigrationService::import_payload uses AnnualPayrollParameters::default_for_2026
-// for tax years that are absent from a legacy backup. Keep these as exact
-// strings because this is persistence canonicalization, not calculation code.
-const LEGACY_DEFAULT_ANNUAL_TAX_BRACKETS = [
-  { limit: '190000', oran: '0.15' },
-  { limit: '400000', oran: '0.20' },
-  { limit: '1500000', oran: '0.27' },
-  { limit: '5300000', oran: '0.35' },
-  { limit: '1000000000000000', oran: '0.40' },
-] as const;
-const LEGACY_DEFAULT_ANNUAL_INSURANCE_CAP = '396360';
 
 function hasOwn(record: UnknownRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -279,23 +268,35 @@ function canonicalizeLegacyInstitutionSettings(value: unknown): unknown {
 function canonicalizeLegacyAnnualParameter(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const parameters = { ...value };
-  // AnnualPayrollParametersRepository fills the 2026 cap when a legacy
-  // Option<Decimal> is missing/None and the row is read back.
+  const defaults = typeof parameters.year === 'number'
+    ? getDefaultAnnualPayrollParameters(parameters.year)
+    : undefined;
+  // AnnualPayrollParametersRepository fills the supported year's cap when a
+  // legacy Option<Decimal> is missing/None and the row is read back.
   if (
-    parameters.year === 2026 &&
+    defaults &&
     (!hasOwn(parameters, 'sigortaGvYillikBrutAsgariUcretTavani') ||
       parameters.sigortaGvYillikBrutAsgariUcretTavani === null)
   ) {
-    parameters.sigortaGvYillikBrutAsgariUcretTavani = LEGACY_DEFAULT_ANNUAL_INSURANCE_CAP;
+    parameters.sigortaGvYillikBrutAsgariUcretTavani = String(
+      defaults.sigortaGvYillikBrutAsgariUcretTavani
+    );
   }
   return parameters;
 }
 
-function defaultLegacyAnnualParameter(year: number): UnknownRecord {
+function defaultLegacyAnnualParameter(year: number): UnknownRecord | undefined {
+  const defaults = getDefaultAnnualPayrollParameters(year);
+  if (!defaults) return undefined;
   return {
     year,
-    gelirVergisiDilimleri: LEGACY_DEFAULT_ANNUAL_TAX_BRACKETS.map((bracket) => ({ ...bracket })),
-    sigortaGvYillikBrutAsgariUcretTavani: LEGACY_DEFAULT_ANNUAL_INSURANCE_CAP,
+    gelirVergisiDilimleri: defaults.gelirVergisiDilimleri.map((bracket) => ({
+      limit: String(bracket.limit),
+      oran: bracket.oran.toFixed(2),
+    })),
+    sigortaGvYillikBrutAsgariUcretTavani: String(
+      defaults.sigortaGvYillikBrutAsgariUcretTavani
+    ),
   };
 }
 
@@ -320,7 +321,10 @@ function canonicalizeLegacyAnnualParameters(value: unknown, periods: unknown): u
   });
 
   importedTaxYears.forEach((year) => {
-    if (!parameterYears.has(year)) parameters.push(defaultLegacyAnnualParameter(year));
+    if (!parameterYears.has(year)) {
+      const defaults = defaultLegacyAnnualParameter(year);
+      if (defaults) parameters.push(defaults);
+    }
   });
   return parameters;
 }
@@ -689,13 +693,20 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   if (!isRecord(encodedLegacy)) {
     throw new Error('Legacy yedek canonical nesne içermiyor.');
   }
-  return parseAndValidatePayrollPayload(
+  const validated = parseAndValidatePayrollPayload(
     toCanonicalLegacyPayload(encodedLegacy, false),
     {
       allowLegacySparsePayrollFinancials: true,
       allowLegacyTaxOpeningYearMismatch: true,
     }
   );
+  const repaired = repairLegacyPersonTaxOpenings(validated);
+  return repaired === validated
+    ? validated
+    : parseAndValidatePayrollPayload(repaired, {
+        allowLegacySparsePayrollFinancials: true,
+        allowLegacyTaxOpeningYearMismatch: true,
+      });
 }
 
 /**
@@ -707,9 +718,15 @@ export function repairAndCanonicalizeBackup(raw: UnknownRecord): PayrollStorageD
   if (!isRecord(converted)) {
     throw new Error('Kurtarılacak veri geçerli bir nesne değil.');
   }
-  return parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted, true), {
+  const validated = parseAndValidatePayrollPayload(toCanonicalLegacyPayload(converted, true), {
     allowLegacyTaxOpeningYearMismatch: true,
   });
+  const repaired = repairLegacyPersonTaxOpenings(validated);
+  return repaired === validated
+    ? validated
+    : parseAndValidatePayrollPayload(repaired, {
+        allowLegacyTaxOpeningYearMismatch: true,
+      });
 }
 
 /** Explicit structural/version predicate for legacy localStorage or imports. */
@@ -725,13 +742,114 @@ export function isSupportedLegacyBackupPayload(payload: string): boolean {
 /** Compatibility alias retained for the browser migration owner. */
 export const isMigratableBackupPayload = isSupportedLegacyBackupPayload;
 
+function uniqueLegacyOpeningPeriodId(
+  payload: PayrollStorageDto,
+  year: number,
+  month: number
+): string | undefined {
+  const matchingIds = new Set(
+    payload.donemler
+      .filter(
+        (period) =>
+          period.taxYear === year &&
+          (period.ay === month || period.taxMonth === month)
+      )
+      .map((period) => period.id)
+  );
+  return matchingIds.size === 1 ? [...matchingIds][0] : undefined;
+}
+
+/**
+ * Repairs only the safe subset of old person-level openings. A legacy row is
+ * promoted when its year/month resolves to exactly one loaded period. No
+ * active-period or first-period fallback is allowed here; unresolved rows
+ * remain legacy so payroll-core can fail closed with its actionable error.
+ */
+export function repairLegacyPersonTaxOpenings(
+  payload: PayrollStorageDto
+): PayrollStorageDto {
+  const taxOpenings = [...payload.taxOpenings];
+  const repairComponent = (
+    person: PayrollStorageDto['personeller'][number],
+    value: string | null | undefined,
+    year: number | null | undefined,
+    field: 'gvCumulativeOpening' | 'asgariGvCumulativeOpening',
+    periodField: 'effectiveFromPeriodId' | 'asgariGvEffectiveFromPeriodId'
+  ) => {
+    if (
+      value === undefined ||
+      value === null ||
+      !/[1-9]/.test(value) ||
+      !Number.isInteger(year) ||
+      year <= 0 ||
+      !Number.isInteger(person.devirKumulatifGvMatrahiBaslangicAyi) ||
+      person.devirKumulatifGvMatrahiBaslangicAyi < 1 ||
+      person.devirKumulatifGvMatrahiBaslangicAyi > 12
+    ) {
+      return;
+    }
+    const periodId = uniqueLegacyOpeningPeriodId(
+      payload,
+      year,
+      person.devirKumulatifGvMatrahiBaslangicAyi
+    );
+    if (!periodId) return;
+
+    const index = taxOpenings.findIndex(
+      (opening) => opening.personnelId === person.id && opening.year === year
+    );
+    if (index < 0) {
+      taxOpenings.push({
+        id: `${person.id}_${year}`,
+        personnelId: person.id,
+        year,
+        [field]: value,
+        [periodField]: periodId,
+      } as PayrollStorageDto['taxOpenings'][number]);
+      return;
+    }
+
+    const existing = taxOpenings[index];
+    // An explicit canonical component always wins over a legacy compatibility
+    // field. Only fill a completely absent pair.
+    if (existing[field] !== undefined || existing[periodField] !== undefined) return;
+    taxOpenings[index] = { ...existing, [field]: value, [periodField]: periodId };
+  };
+
+  payload.personeller.forEach((person) => {
+    repairComponent(
+      person,
+      person.devirKumulatifGvMatrahi,
+      person.devirKumulatifGvMatrahiYili,
+      'gvCumulativeOpening',
+      'effectiveFromPeriodId'
+    );
+    repairComponent(
+      person,
+      person.devirKumulatifAsgariGvMatrahi,
+      person.devirKumulatifAsgariGvMatrahiYili,
+      'asgariGvCumulativeOpening',
+      'asgariGvEffectiveFromPeriodId'
+    );
+  });
+
+  return taxOpenings.length === payload.taxOpenings.length &&
+    taxOpenings.every((opening, index) => opening === payload.taxOpenings[index])
+    ? payload
+    : { ...payload, taxOpenings };
+}
+
 /**
  * Parses the authoritative IndexedDB snapshot. This path never calls the
- * legacy numeric compatibility adapter and never canonicalizes current data.
+ * legacy numeric compatibility adapter. It performs only the narrow,
+ * period-ID-safe repair for old person-level tax openings.
  */
 export function parseCurrentBrowserSnapshot(json: string): PayrollStorageDto {
   const parsed: unknown = JSON.parse(json);
-  return parseAndValidatePayrollPayload(parsed);
+  const validated = parseAndValidatePayrollPayload(parsed);
+  const repaired = repairLegacyPersonTaxOpenings(validated);
+  if (repaired === validated) return validated;
+  return parseAndValidatePayrollPayload(repaired);
 }
 
 /** Parses and canonicalizes a structurally supported legacy backup. */

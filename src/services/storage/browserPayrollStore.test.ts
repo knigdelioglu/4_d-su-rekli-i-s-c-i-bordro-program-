@@ -13,6 +13,7 @@ import {
   parseImportedBackup,
   parseLegacyBackup,
   repairAndCanonicalizeBackup,
+  repairLegacyPersonTaxOpenings,
 } from './payrollPayload';
 import { serializePayrollStorage, type PayrollStorageDto } from '../payrollEngine/decimalBoundary';
 
@@ -1204,6 +1205,83 @@ describe('BrowserPayrollStore', () => {
 describe('SQLite persistence invariant parity', () => {
   test('accepts the unique realistic snapshot', () => {
     expect(() => parseCurrentBrowserSnapshot(makeV2Snapshot())).not.toThrow();
+  });
+
+  test('repairs an unambiguous legacy person opening into the canonical pair', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    payload.taxOpenings = [];
+    const person = firstRecord(payload, 'personeller');
+    person.devirKumulatifGvMatrahi = '185000';
+    person.devirKumulatifGvMatrahiYili = 2026;
+    person.devirKumulatifGvMatrahiBaslangicAyi = 1;
+
+    const repaired = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(repaired.taxOpenings.length).toBe(1);
+    expect(repaired.taxOpenings[0].personnelId).toBe('person-1');
+    expect(repaired.taxOpenings[0].year).toBe(2026);
+    expect(repaired.taxOpenings[0].gvCumulativeOpening).toBe('185000');
+    expect(repaired.taxOpenings[0].effectiveFromPeriodId).toBe('2026-01');
+  });
+
+  test('repairs an unambiguous legacy asgari opening without inventing a normal pair', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    payload.taxOpenings = [];
+    const person = firstRecord(payload, 'personeller');
+    person.devirKumulatifAsgariGvMatrahi = '90000';
+    person.devirKumulatifAsgariGvMatrahiYili = 2026;
+    person.devirKumulatifGvMatrahi = '0.00';
+    person.devirKumulatifGvMatrahiYili = 2026;
+    person.devirKumulatifGvMatrahiBaslangicAyi = 1;
+
+    const repaired = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(repaired.taxOpenings.length).toBe(1);
+    expect(repaired.taxOpenings[0].asgariGvCumulativeOpening).toBe('90000');
+    expect(repaired.taxOpenings[0].asgariGvEffectiveFromPeriodId).toBe('2026-01');
+    expect(repaired.taxOpenings[0].gvCumulativeOpening).toBe(undefined);
+    expect(repaired.taxOpenings[0].effectiveFromPeriodId).toBe(undefined);
+  });
+
+  test('does not overwrite an explicit canonical opening with legacy person fields', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const person = firstRecord(payload, 'personeller');
+    person.devirKumulatifGvMatrahi = '185000';
+    person.devirKumulatifGvMatrahiYili = 2026;
+    person.devirKumulatifGvMatrahiBaslangicAyi = 1;
+
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(parsed.taxOpenings[0].gvCumulativeOpening).toBe('0.00');
+    expect(parsed.taxOpenings[0].effectiveFromPeriodId).toBe('2026-01');
+  });
+
+  test('does not guess an ambiguous legacy opening period', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    payload.taxOpenings = [];
+    (payload.donemler as TestRecord[]).push({
+      ...firstRecord(payload, 'donemler'),
+      id: '2026-01-ambiguous',
+      taxMonth: 3,
+    });
+    const person = firstRecord(payload, 'personeller');
+    person.devirKumulatifGvMatrahi = '185000';
+    person.devirKumulatifGvMatrahiYili = 2026;
+    person.devirKumulatifGvMatrahiBaslangicAyi = 1;
+
+    const repaired = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(repaired.taxOpenings).toEqual([]);
+    expect(repaired.personeller[0].devirKumulatifGvMatrahi).toBe('185000');
+  });
+
+  test('keeps an explicit zero canonical opening and its period', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const opening = firstRecord(payload, 'taxOpenings');
+    opening.gvCumulativeOpening = '0';
+    opening.effectiveFromPeriodId = '2026-01';
+
+    const repaired = repairLegacyPersonTaxOpenings(
+      parseCurrentBrowserSnapshot(JSON.stringify(payload))
+    );
+    expect(repaired.taxOpenings[0].gvCumulativeOpening).toBe('0');
+    expect(repaired.taxOpenings[0].effectiveFromPeriodId).toBe('2026-01');
   });
 
   test('rejects duplicate personel.tcNo, including duplicate empty values', () => {

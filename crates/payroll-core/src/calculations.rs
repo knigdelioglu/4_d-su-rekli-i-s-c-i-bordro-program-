@@ -178,28 +178,7 @@ fn floor_dec(val: Decimal) -> Decimal {
 /// Test/geriye dönük fixture için 2026 tarifesi. Üretim hesaplaması bu değeri
 /// doğrudan kullanmaz; `annual_payroll_parameters` tablosundaki tarife kullanılır.
 pub fn default_gelir_vergisi_dilimleri_2026() -> Vec<TaxBracket> {
-    vec![
-        TaxBracket {
-            limit: dec!(190000),
-            oran: dec!(0.15),
-        },
-        TaxBracket {
-            limit: dec!(400000),
-            oran: dec!(0.20),
-        },
-        TaxBracket {
-            limit: dec!(1500000),
-            oran: dec!(0.27),
-        },
-        TaxBracket {
-            limit: dec!(5300000),
-            oran: dec!(0.35),
-        },
-        TaxBracket {
-            limit: Decimal::from(OPEN_ENDED_TAX_BRACKET_LIMIT),
-            oran: dec!(0.40),
-        },
-    ]
+    AnnualPayrollParameters::default_for_2026().gelirVergisiDilimleri
 }
 
 pub fn calculate_total_tax_for_cumulative_matrah_with_brackets(

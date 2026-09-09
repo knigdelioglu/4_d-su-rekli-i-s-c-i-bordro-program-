@@ -120,7 +120,7 @@ fn devir_migration_with_existing_columns_is_idempotent() -> Result<()> {
 }
 
 #[test]
-fn v1_import_fills_missing_annual_parameters_per_tax_year() -> Result<()> {
+fn v1_import_leaves_unsupported_annual_parameters_unconfigured() -> Result<()> {
     let mut conn =
         create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
     let payload = r#"{
@@ -133,12 +133,37 @@ fn v1_import_fills_missing_annual_parameters_per_tax_year() -> Result<()> {
     }"#;
     MigrationService::migrate_legacy_data(&mut conn, payload)?;
 
-    let imported = AnnualPayrollParametersRepository::get_by_year(&conn, 2027)?
-        .expect("V1 import must create a tariff for every imported tax year");
-    assert_eq!(
-        imported.gelirVergisiDilimleri.last().unwrap().limit,
-        Decimal::from(OPEN_ENDED_TAX_BRACKET_LIMIT)
-    );
+    assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2027)?.is_none());
+    Ok(())
+}
+
+#[test]
+fn period_creation_bootstraps_only_supported_annual_parameters() -> Result<()> {
+    let mut conn =
+        create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+    PeriodService::save_period_with_settings(
+        &mut conn,
+        &period("supported-period", 2026),
+        &settings("supported-period"),
+    )?;
+    assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2026)?.is_some());
+
+    let unsupported_period = BordroDonemi {
+        yil: 2027,
+        ay: 6,
+        baslangicTarihi: "2027-06-15".into(),
+        bitisTarihi: "2027-07-14".into(),
+        donemAdi: "Haziran 2027".into(),
+        taxMonth: 7,
+        ..period("unsupported-period", 2027)
+    };
+    PeriodService::save_period_with_settings(
+        &mut conn,
+        &unsupported_period,
+        &settings("unsupported-period"),
+    )?;
+    assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2027)?.is_none());
     Ok(())
 }
 

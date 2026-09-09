@@ -614,8 +614,9 @@ impl MigrationService {
             )?;
         }
 
-        // Fill missing yearly parameters before importing the retro graph. The
-        // normal parameter repository correctly blocks a tax-year mutation
+        // Fill missing supported-year parameters before importing the retro
+        // graph. Unsupported years remain explicitly unconfigured. The normal
+        // parameter repository correctly blocks a tax-year mutation
         // when a FINALIZED retro batch already exists; during restore that
         // batch is part of this same transaction, so ordering the compatibility
         // default after it would make a clean V3/V4 restore fail against its own
@@ -625,10 +626,12 @@ impl MigrationService {
             .map(|period| period.taxYear)
             .collect();
         for year in imported_tax_years {
-            if AnnualPayrollParametersRepository::get_by_year(conn, year)?.is_none() {
-                let mut defaults = AnnualPayrollParameters::default_for_2026();
-                defaults.year = year;
-                AnnualPayrollParametersRepository::save_in_transaction(conn, &defaults)?;
+            if year == 2026 && AnnualPayrollParametersRepository::get_by_year(conn, year)?.is_none()
+            {
+                AnnualPayrollParametersRepository::save_in_transaction(
+                    conn,
+                    &AnnualPayrollParameters::default_for_2026(),
+                )?;
             }
         }
 

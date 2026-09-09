@@ -21,9 +21,14 @@ import {
   Personel,
   PuantajKodu,
   PuantajOzeti,
-  TediyeKalemi,
-  TisIkramiyeKalemi,
 } from '../types/payroll';
+import {
+  DEFAULT_IS_PRIMI_GRUPLARI as PRESENTATION_DEFAULT_IS_PRIMI_GRUPLARI,
+  DEFAULT_KURUM_DEGERLERI as PRESENTATION_DEFAULT_KURUM_DEGERLERI,
+  DEFAULT_TEDIYE_LISTESI as PRESENTATION_DEFAULT_TEDIYE_LISTESI,
+  DEFAULT_TIS_IKRAMIYE_LISTESI as PRESENTATION_DEFAULT_TIS_IKRAMIYE_LISTESI,
+} from './payrollPresentation';
+import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 
 export const AY_ISIMLERI = [
   'Ocak',
@@ -51,71 +56,10 @@ export const GUN_ISIMLERI_UZUN = [
   'Cumartesi',
 ];
 
-/**
- * Standard 4 Tediye per year for 4/D Public Workers (6772 sayılı Kanun)
- */
-export const DEFAULT_TEDIYE_LISTESI: TediyeKalemi[] = [
-  { id: 1, ad: '1. Tediye', odemeAyi: 'Ocak', gunSayisi: 13, aktifDonemdeOdensin: false },
-  { id: 2, ad: '2. Tediye', odemeAyi: 'Nisan', gunSayisi: 13, aktifDonemdeOdensin: false },
-  { id: 3, ad: '3. Tediye', odemeAyi: 'Temmuz', gunSayisi: 13, aktifDonemdeOdensin: false },
-  { id: 4, ad: '4. Tediye', odemeAyi: 'Aralık', gunSayisi: 13, aktifDonemdeOdensin: false },
-];
-
-/**
- * Standard 2 TİS İkramiyesi per year for 4/D Public Workers (Toplu İş Sözleşmesi)
- */
-export const DEFAULT_TIS_IKRAMIYE_LISTESI: TisIkramiyeKalemi[] = [
-  { id: 1, ad: '1. TİS İkramiyesi', odemeAyi: '', gunSayisi: 0, aktifDonemdeOdensin: false },
-  { id: 2, ad: '2. TİS İkramiyesi', odemeAyi: '', gunSayisi: 0, aktifDonemdeOdensin: false },
-];
-
-export const DEFAULT_IS_PRIMI_GRUPLARI: IsPrimiGrupItem[] = [
-  { id: '1. Grup', ad: '1. Grup', oran: 9, aktif: true },
-  { id: '2. Grup', ad: '2. Grup', oran: 8, aktif: true },
-  { id: '3. Grup', ad: '3. Grup', oran: 7, aktif: true },
-];
-
-/**
- * Default institution values according to 4/D specifications
- */
-export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> = {
-  gunlukTabanUcret: 2443.28,
-  gunlukYemek: 300.75,
-  birlestirilmisSosyalYardim: 5089.70,
-  gunlukVasitaYol: 128.93,
-  giyimYardimi: 269.70,
-  hizmetZammiBirimi: 24.67,
-  isPrimiYuzde: 0,
-  isPrimiGruplari: DEFAULT_IS_PRIMI_GRUPLARI,
-  geceCalismaPrimiYuzde: 0,
-  geceCalismaTatiliPrimiYuzde: 0,
-  ekOdeme: 0,
-  digerGelirVarsayilan: 0,
-  tediyeListesi: DEFAULT_TEDIYE_LISTESI,
-  tisIkramiyeListesi: DEFAULT_TIS_IKRAMIYE_LISTESI,
-  tediyeTisNotu: "Tediye ve TİS listeleri yalnız referans takvimidir. Ödeme ayı ve gün sayısı burada not edilebilir; bordroya aktarılacak gerçek brüt Tediye/TİS tutarı Bordro Hesaplama ekranında personel ve dönem bazında manuel girilir.",
-
-  // Default Kesinti Kalemleri & Yasal Oranlar
-  sgkIsciOraniYuzde: 14,
-  issizlikIsciOraniYuzde: 1,
-  gelirVergisiOraniYuzde: 15,
-  damgaVergisiOraniBinde: 7.59,
-  sendikaAidatiYuzde: 65, // Günlük Çıplak Ücretin %65'i
-  sabitSendikaAidati: 0,
-  besOraniYuzde: 3,
-  sabitBesTutar: 0,
-
-  // 2026 SGK PEK (Prime Esas Kazanç) Varsayılan Parametreleri
-  gunlukYemekIstisnasiSGK: 300.00, // Dönem baseline değeri; mevzuat değişimi segment ile girilebilir.
-  gunlukYemekIstisnasiGV: 300.00, // SGK'dan bağımsız GV yemek istisnası baseline değeri.
-  statutoryParameterSegments: [],
-  pekTavanKatsayisi: 9, // 2026 PEK Tavan Katsayısı = 9
-  gunlukAsgariUcret: 1101.00, // 2026 Günlük Brüt Asgari Ücret (TL) - PEK Alt Sınır Birimi
-
-  // İşveren Prim Oranları
-  sgkIsverenOraniYuzde: 21.75, // SGK İşveren Prim Oranı = %21,75
-  issizlikIsverenOraniYuzde: 2.00, // İşveren İşsizlik Sigortası Prim Oranı = %2,00
-};
+export const DEFAULT_TEDIYE_LISTESI = PRESENTATION_DEFAULT_TEDIYE_LISTESI;
+export const DEFAULT_TIS_IKRAMIYE_LISTESI = PRESENTATION_DEFAULT_TIS_IKRAMIYE_LISTESI;
+export const DEFAULT_IS_PRIMI_GRUPLARI = PRESENTATION_DEFAULT_IS_PRIMI_GRUPLARI;
+export const DEFAULT_KURUM_DEGERLERI = PRESENTATION_DEFAULT_KURUM_DEGERLERI;
 
 /**
  * Generates 15th to 14th payroll period
@@ -563,13 +507,12 @@ export function autoFillGelirlerFromPuantaj(
  * 4. Dilim: 1.500.000 - 5.300.000 TL arası %35
  * 5. Dilim: 5.300.000 TL üzeri %40
  */
-export const GELIR_VERGISI_DILIMLERI_2026 = [
-  { limit: 190000, oran: 0.15 },
-  { limit: 400000, oran: 0.20 },
-  { limit: 1500000, oran: 0.27 },
-  { limit: 5300000, oran: 0.35 },
-  { limit: Infinity, oran: 0.40 },
-];
+const DEFAULT_2026_ANNUAL_PARAMETERS = getDefaultAnnualPayrollParameters(2026);
+export const GELIR_VERGISI_DILIMLERI_2026 =
+  DEFAULT_2026_ANNUAL_PARAMETERS?.gelirVergisiDilimleri.map((bracket, index, brackets) => ({
+    limit: index === brackets.length - 1 ? Infinity : bracket.limit,
+    oran: bracket.oran,
+  })) ?? [];
 
 export function calculateTotalTaxForCumulativeMatrah(kumulatif: number): number {
   if (kumulatif <= 0) return 0;

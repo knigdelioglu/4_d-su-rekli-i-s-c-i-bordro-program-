@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Save, X, CreditCard, Shield, Briefcase, Calendar, Layers } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
-import { DEFAULT_IS_PRIMI_GRUPLARI, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
+import { getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 
 interface PersonelFormModalProps {
   isOpen: boolean;
@@ -24,14 +24,16 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   onSave,
   isPrimiGruplari,
 }) => {
-  const groups = isPrimiGruplari && isPrimiGruplari.length > 0 ? isPrimiGruplari : DEFAULT_IS_PRIMI_GRUPLARI;
+  // An explicit empty period group list is a real configuration state. Do not
+  // replace it with demo groups; the institution must define its own groups.
+  const groups = isPrimiGruplari ?? [];
 
   const [formData, setFormData] = useState<Partial<Personel>>({
     tcNo: '',
     ad: '',
     soyad: '',
-    grup: groups[0]?.ad || '1. Grup',
-    unvan: `${groups[0]?.ad || '1. Grup'} (%${groups[0]?.oran || 9} İş Primi)`,
+    grup: groups[0]?.ad || '',
+    unvan: `${groups[0]?.ad || 'İş primi grubu seçilmedi'} (%${groups[0]?.oran ?? 0} İş Primi)`,
     sgkSicilNo: '',
     iban: 'TR',
     hizmetYili: 1,
@@ -50,14 +52,14 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
     if (personelToEdit) {
       setFormData(personelToEdit);
     } else {
-      const defaultGrup = groups[0]?.ad || '1. Grup';
-      const defaultRate = groups[0]?.oran || 9;
+      const defaultGrup = groups[0]?.ad || '';
+      const defaultRate = groups[0]?.oran ?? 0;
       setFormData({
         tcNo: '',
         ad: '',
         soyad: '',
         grup: defaultGrup,
-        unvan: `${defaultGrup} (%${defaultRate} İş Primi)`,
+        unvan: `${defaultGrup || 'İş primi grubu seçilmedi'} (%${defaultRate} İş Primi)`,
         sgkSicilNo: '',
         iban: 'TR',
         hizmetYili: 1,
@@ -97,6 +99,10 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       errs.hizmetYili = 'Hizmet yılı negatif olamaz.';
     }
 
+    if (groups.length === 0 || !formData.grup) {
+      errs.grup = 'Önce Dönem Parametreleri > Ücretler bölümünde iş primi grubu tanımlayın.';
+    }
+
     const oksRate = formData.kesintiler?.oksOraniYuzde;
     if (formData.kesintiler?.besUyesi === true && oksRate != null && (oksRate < 3 || oksRate > 100)) {
       errs.oksOraniYuzde = 'OKS özel oranı %3-%100 arasında olmalıdır.';
@@ -110,8 +116,8 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
     e.preventDefault();
     if (!validate()) return;
 
-    const selGrup = formData.grup || groups[0]?.ad || '1. Grup';
-    const rate = getGrupIsPrimiOraniDisplay(selGrup, groups) ?? groups[0]?.oran ?? 9;
+    const selGrup = formData.grup || groups[0]?.ad || '';
+    const rate = getGrupIsPrimiOraniDisplay(selGrup, groups) ?? groups[0]?.oran ?? 0;
 
     const newPersonel: Personel = {
       id: formData.id || `p-${Date.now()}`,
@@ -300,7 +306,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                 <span>İş Primi Grubu *</span>
               </label>
               <select
-                value={formData.grup || groups[0]?.ad || '1. Grup'}
+                value={formData.grup || groups[0]?.ad || ''}
                 onChange={(e) =>
                   setFormData({
                     ...formData,
@@ -309,12 +315,17 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                 }
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-semibold focus:bg-white focus:ring-2 focus:ring-indigo-500 cursor-pointer"
               >
-                {groups.map((g) => (
-                  <option key={g.id || g.ad} value={g.ad}>
-                    {g.ad} (%{g.oran} İş Primi)
-                  </option>
-                ))}
+                {groups.length === 0 ? (
+                  <option value="">Önce dönem iş primi gruplarını tanımlayın</option>
+                ) : (
+                  groups.map((g) => (
+                    <option key={g.id || g.ad} value={g.ad}>
+                      {g.ad} (%{g.oran} İş Primi)
+                    </option>
+                  ))
+                )}
               </select>
+              {errors.grup && <p className="text-[11px] text-rose-600 mt-0.5 font-medium">{errors.grup}</p>}
               <span className="text-[11px] text-slate-500 mt-1 block">
                 Seçilen grubun iş primi oranı taban brüt aylığa uygulanır.
               </span>

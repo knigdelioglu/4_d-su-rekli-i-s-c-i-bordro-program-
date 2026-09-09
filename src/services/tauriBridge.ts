@@ -71,6 +71,16 @@ export const tauriBridge = {
     return mutateTauri<void>('save_personnel', { personel: encodeDecimalValues(personel) });
   },
 
+  async savePersonnelAndTaxOpening(
+    personel: Personel,
+    taxOpening: PersonelTaxOpening
+  ): Promise<void> {
+    return mutateTauri<void>('save_personnel_and_tax_opening', {
+      personel: encodeDecimalValues(personel),
+      taxOpening: encodeDecimalValues(taxOpening),
+    });
+  },
+
   async deletePersonnel(id: string): Promise<void> {
     return mutateTauri<void>('delete_personnel', { id });
   },

@@ -79,8 +79,8 @@ interface BordroHesaplamaProps {
   authoritativeDataset: PayrollDatasetSnapshot;
   onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
   onSaveBordro: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
-  onSavePersonel?: (personel: Personel | PayrollBoundaryPersonel) => Promise<void> | void;
-  onSaveTaxOpening?: (
+  onSavePersonelAndTaxOpening: (
+    personel: Personel | PayrollBoundaryPersonel,
     opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
   ) => Promise<void> | void;
   initialPersonelId?: string;
@@ -102,8 +102,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   authoritativeDataset,
   onSaveBordro,
   onDeleteBordro,
-  onSavePersonel,
-  onSaveTaxOpening,
+  onSavePersonelAndTaxOpening,
   onGoToPuantaj,
 }) => {
   const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
@@ -1178,10 +1177,11 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           exactPerson.devirKumulatifAsgariGvMatrahiYili === aktifDonem.taxYear)
                           ? exactPerson.devirKumulatifAsgariGvMatrahi
                           : undefined;
-                      const autoGv =
+                      const autoGv = Number(
                         explicitOpening?.gvCumulativeOpening ??
                         exactBordro?.oncekiKumulatifGvMatrahi ??
-                        getDevirGvMatrahiForActiveYear(person);
+                        getDevirGvMatrahiForActiveYear(person)
+                      ) || 0;
                       const autoAsgariGv = Number(
                         explicitOpening?.asgariGvCumulativeOpening ??
                           exactBordro?.oncekiKumulatifAsgariGvMatrahi ??
@@ -1277,7 +1277,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                         ]);
                         for (const pId of editedPersonIds) {
                           const person = personeller.find((p) => p.id === pId);
-                          if (person && onSavePersonel) {
+                          if (person) {
                             const exactPersonSource = authoritativeDataset.personnel.find(
                               (item) => item.id === person.id
                             );
@@ -1348,7 +1348,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                   : { devirKumulatifAsgariGvMatrahi: exactPersonSource?.devirKumulatifAsgariGvMatrahi }),
                               }
                             ) as PayrollBoundaryPersonel;
-                            await onSavePersonel({
+                            const personelUpdate = {
                               ...exactPerson,
                               ...(normalOpeningWasEdited
                                 ? {
@@ -1359,42 +1359,42 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               ...(asgariOpeningWasEdited
                                 ? { devirKumulatifAsgariGvMatrahiYili: aktifDonem.taxYear }
                                 : {}),
-                            } as PayrollBoundaryPersonel);
-                            // The App owns persistence in both native and browser
-                            // modes. Do not swallow an opening-table write failure.
-                            if (onSaveTaxOpening) {
-                              const openingUpdate: PayrollBoundaryTaxOpening = {
-                                id: `${person.id}_${aktifDonem.taxYear}`,
-                                personnelId: person.id,
-                                year: aktifDonem.taxYear,
-                                ...(normalOpeningWasEdited
+                            } as PayrollBoundaryPersonel;
+                            const openingUpdate: PayrollBoundaryTaxOpening = {
+                              id: `${person.id}_${aktifDonem.taxYear}`,
+                              personnelId: person.id,
+                              year: aktifDonem.taxYear,
+                              ...(normalOpeningWasEdited
+                                ? {
+                                    gvCumulativeOpening: val,
+                                    effectiveFromPeriodId: aktifDonem.id,
+                                  }
+                                : hasExistingNormalOpening
                                   ? {
-                                      gvCumulativeOpening: val,
-                                      effectiveFromPeriodId: aktifDonem.id,
+                                      gvCumulativeOpening: existingOpening!.gvCumulativeOpening,
+                                      effectiveFromPeriodId: existingOpening!.effectiveFromPeriodId,
                                     }
-                                  : hasExistingNormalOpening
-                                    ? {
-                                        gvCumulativeOpening: existingOpening!.gvCumulativeOpening,
-                                        effectiveFromPeriodId: existingOpening!.effectiveFromPeriodId,
-                                      }
-                                    : {}),
-                                ...(asgariOpeningWasEdited
+                                  : {}),
+                              ...(asgariOpeningWasEdited
+                                ? {
+                                    asgariGvCumulativeOpening: asgariVal,
+                                    asgariGvEffectiveFromPeriodId: aktifDonem.id,
+                                  }
+                                : hasExistingAsgariOpening
                                   ? {
-                                      asgariGvCumulativeOpening: asgariVal,
-                                      asgariGvEffectiveFromPeriodId: aktifDonem.id,
+                                      asgariGvCumulativeOpening: existingOpening!.asgariGvCumulativeOpening,
+                                      asgariGvEffectiveFromPeriodId: existingOpening!.asgariGvEffectiveFromPeriodId,
                                     }
-                                  : hasExistingAsgariOpening
-                                    ? {
-                                        asgariGvCumulativeOpening: existingOpening!.asgariGvCumulativeOpening,
-                                        asgariGvEffectiveFromPeriodId: existingOpening!.asgariGvEffectiveFromPeriodId,
-                                      }
-                                    : {}),
-                              };
-                              await onSaveTaxOpening(openingUpdate);
-                            }
+                                  : {}),
+                            };
+                            await onSavePersonelAndTaxOpening(personelUpdate, openingUpdate);
                             updatedAny = true;
                           }
                         }
+                        // Browser state is committed by the parent after the
+                        // atomic save. Let that render update the calculation
+                        // controller's dataset ref before the immediate recalc.
+                        await new Promise<void>((resolve) => setTimeout(resolve, 0));
                         await handleCalculateAll();
                         setIsKumulatifModalOpen(false);
                         if (updatedAny) {
