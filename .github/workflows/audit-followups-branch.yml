@@ -55,7 +55,6 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
           from textwrap import dedent
-
           workflow = Path('.github/workflows/one-time-payroll-hardening-v2.yml').read_text()
           start_marker = "          python3 <<'PY'\n"
           start = workflow.find(start_marker)
@@ -65,41 +64,23 @@ jobs:
           end = workflow.find("\n          PY\n", start)
           if end < 0:
               raise SystemExit('embedded hardening script end not found')
-          script = dedent(workflow[start:end])
-          Path('/tmp/apply_hardening.py').write_text(script)
+          Path('/tmp/apply_hardening.py').write_text(dedent(workflow[start:end]))
           PY
           python3 /tmp/apply_hardening.py
           python3 <<'PY'
           from pathlib import Path
           path = Path('crates/payroll-core/tests/retro_tax_oks_followup_20260909.rs')
           text = path.read_text()
-
           support_needle = '#[path = "support/independent_audit.rs"]\nmod support;'
           support_replacement = '#[allow(dead_code)]\n#[path = "support/independent_audit.rs"]\nmod support;'
           if support_needle not in text:
               raise SystemExit('retro follow-up support module anchor not found')
           text = text.replace(support_needle, support_replacement, 1)
-
-          chronology_needle = '''    let mut payment = support::dated_request(2026, 2);
-    let payment_normal = calculate_payroll_checked(&payment).unwrap();
-    payment.dataset.payrolls.push(payment_normal);
-    payment.dataset.periods.extend(source.dataset.periods.clone());
-    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());
-    payment.dataset.attendances.extend(source.dataset.attendances.clone());
-    payment.dataset.payrolls.push(original);
-'''
-          chronology_replacement = '''    let mut payment = support::dated_request(2026, 2);
-    payment.dataset.periods.extend(source.dataset.periods.clone());
-    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());
-    payment.dataset.attendances.extend(source.dataset.attendances.clone());
-    payment.dataset.payrolls.push(original);
-    let payment_normal = calculate_payroll_checked(&payment).unwrap();
-    payment.dataset.payrolls.push(payment_normal);
-'''
+          chronology_needle = '    let mut payment = support::dated_request(2026, 2);\n    let payment_normal = calculate_payroll_checked(&payment).unwrap();\n    payment.dataset.payrolls.push(payment_normal);\n    payment.dataset.periods.extend(source.dataset.periods.clone());\n    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());\n    payment.dataset.attendances.extend(source.dataset.attendances.clone());\n    payment.dataset.payrolls.push(original);\n'
+          chronology_replacement = '    let mut payment = support::dated_request(2026, 2);\n    payment.dataset.periods.extend(source.dataset.periods.clone());\n    payment.dataset.institutionSettings.extend(source.dataset.institutionSettings.clone());\n    payment.dataset.attendances.extend(source.dataset.attendances.clone());\n    payment.dataset.payrolls.push(original);\n    let payment_normal = calculate_payroll_checked(&payment).unwrap();\n    payment.dataset.payrolls.push(payment_normal);\n'
           if chronology_needle not in text:
               raise SystemExit('retro meal chronology anchor not found')
-          text = text.replace(chronology_needle, chronology_replacement, 1)
-          path.write_text(text)
+          path.write_text(text.replace(chronology_needle, chronology_replacement, 1))
           PY
 
       - name: Format Rust changes
