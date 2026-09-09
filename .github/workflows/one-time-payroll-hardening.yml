@@ -1,0 +1,721 @@
+name: One-time payroll hardening
+
+on:
+  push:
+    paths:
+      - '.github/workflows/one-time-payroll-hardening.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+          cache: false
+
+      - name: Install WASM toolchain
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
+
+      - name: Install JavaScript dependencies
+        run: |
+          bun install --frozen-lockfile || {
+            bun pm cache rm
+            bun install --frozen-lockfile
+          }
+
+      - name: Apply targeted hardening patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one patch anchor, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          # 1) Browser storage semantic validation parity with payroll-core.
+          schema = 'src/services/storage/payrollPayloadSchema.ts'
+          old = '''export function validateAnnualPayrollParameters(
+            value: unknown,
+            path = '$'
+          ): asserts value is PayrollStorageDto['annualPayrollParameters'][number] {
+            assertRecord(value, path);
+            requiredInteger(value, 'year', path);
+            const bracketsPath = fieldPath(path, 'gelirVergisiDilimleri');
+            const brackets = required(value, 'gelirVergisiDilimleri', path);
+            assertArray(brackets, bracketsPath);
+            brackets.forEach((item, index) => validateTaxBracket(item, `${bracketsPath}[${index}]`));
+            optionalDecimal(value, 'sigortaGvYillikBrutAsgariUcretTavani', path);
+            optionalNullableString(value, 'updatedAt', path);
+          }
+          '''
+          new = '''const MAX_PERSISTED_TAX_BRACKET_LIMIT = '1000000000000000';
+
+          function compareExactDecimalStrings(left: string, right: string): number {
+            const parse = (value: string) => {
+              const negative = value.startsWith('-');
+              const unsigned = negative ? value.slice(1) : value;
+              const [whole = '0', fraction = ''] = unsigned.split('.');
+              const digits = BigInt(`${whole || '0'}${fraction}` || '0');
+              return { value: negative ? -digits : digits, scale: fraction.length };
+            };
+            const lhs = parse(left);
+            const rhs = parse(right);
+            const scale = Math.max(lhs.scale, rhs.scale);
+            const leftScaled = lhs.value * 10n ** BigInt(scale - lhs.scale);
+            const rightScaled = rhs.value * 10n ** BigInt(scale - rhs.scale);
+            return leftScaled < rightScaled ? -1 : leftScaled > rightScaled ? 1 : 0;
+          }
+
+          export function validateAnnualPayrollParameters(
+            value: unknown,
+            path = '$'
+          ): asserts value is PayrollStorageDto['annualPayrollParameters'][number] {
+            assertRecord(value, path);
+            requiredInteger(value, 'year', path);
+            if ((value.year as number) <= 0) fail(fieldPath(path, 'year'), 'sıfırdan büyük olmalıdır.');
+
+            const bracketsPath = fieldPath(path, 'gelirVergisiDilimleri');
+            const brackets = required(value, 'gelirVergisiDilimleri', path);
+            assertArray(brackets, bracketsPath);
+            if (brackets.length === 0) fail(bracketsPath, 'en az bir gelir vergisi dilimi içermelidir.');
+
+            let previousLimit = '0';
+            brackets.forEach((item, index) => {
+              const bracketPath = `${bracketsPath}[${index}]`;
+              validateTaxBracket(item, bracketPath);
+              assertRecord(item, bracketPath);
+              const limit = item.limit;
+              const rate = item.oran;
+              if (!isExactDecimalString(limit)) fail(`${bracketPath}.limit`, 'exact Decimal string olmalıdır.');
+              if (!isExactDecimalString(rate)) fail(`${bracketPath}.oran`, 'exact Decimal string olmalıdır.');
+              if (
+                compareExactDecimalStrings(limit, previousLimit) <= 0 ||
+                compareExactDecimalStrings(limit, MAX_PERSISTED_TAX_BRACKET_LIMIT) > 0
+              ) {
+                fail(`${bracketPath}.limit`, 'artan ve SQLite-safe üst sınır içinde olmalıdır.');
+              }
+              if (
+                compareExactDecimalStrings(rate, '0') < 0 ||
+                compareExactDecimalStrings(rate, '1') > 0
+              ) {
+                fail(`${bracketPath}.oran`, '0-1 arasında olmalıdır.');
+              }
+              previousLimit = limit;
+            });
+
+            optionalDecimal(value, 'sigortaGvYillikBrutAsgariUcretTavani', path);
+            const insuranceCap = optional(value, 'sigortaGvYillikBrutAsgariUcretTavani', path);
+            if (insuranceCap !== undefined && insuranceCap !== null) {
+              if (!isExactDecimalString(insuranceCap)) {
+                fail(fieldPath(path, 'sigortaGvYillikBrutAsgariUcretTavani'), 'exact Decimal string olmalıdır.');
+              }
+              if (compareExactDecimalStrings(insuranceCap, '0') <= 0) {
+                fail(fieldPath(path, 'sigortaGvYillikBrutAsgariUcretTavani'), 'sıfırdan büyük olmalıdır.');
+              }
+            }
+            optionalNullableString(value, 'updatedAt', path);
+          }
+          '''
+          replace_once(schema, old, new)
+
+          # 2) Native persistence snapshot reconciliation.
+          repo = 'src-tauri/src/repositories/payroll_repo.rs'
+          old = '''        if calculated_gross != bordro.gelirToplam
+              || calculated_deductions != bordro.kesintiToplam
+              || calculated_net != bordro.netOdeme
+          {
+              return Err(DomainError::InvalidData(format!(
+                  "Bordro snapshot finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor (hesap gelir {}, kesinti {}, net {}; snapshot gelir {}, kesinti {}, net {}).",
+                  calculated_gross,
+                  calculated_deductions,
+                  calculated_net,
+                  bordro.gelirToplam,
+                  bordro.kesintiToplam,
+                  bordro.netOdeme,
+              )));
+          }
+          Ok(())
+          '''
+          new = '''        if calculated_gross != bordro.gelirToplam
+              || calculated_deductions != bordro.kesintiToplam
+              || calculated_net != bordro.netOdeme
+          {
+              return Err(DomainError::InvalidData(format!(
+                  "Bordro snapshot finansal toplamları gelir/kesinti kalemleriyle eşleşmiyor (hesap gelir {}, kesinti {}, net {}; snapshot gelir {}, kesinti {}, net {}).",
+                  calculated_gross,
+                  calculated_deductions,
+                  calculated_net,
+                  bordro.gelirToplam,
+                  bordro.kesintiToplam,
+                  bordro.netOdeme,
+              )));
+          }
+
+          if let Some(gv) = bordro.gvDetay.as_ref() {
+              let line_item = bordro.kesintiler.gelirVergisi.unwrap_or_default();
+              if gv.kesilenGelirVergisi != line_item {
+                  return Err(DomainError::InvalidData(format!(
+                      "GV snapshot kesilen vergi {} ile kesinti kalemi {} eşleşmiyor.",
+                      gv.kesilenGelirVergisi, line_item
+                  )));
+              }
+              if gv.yeniKumulatifGvMatrahi
+                  != (gv.oncekiKumulatifGvMatrahi + gv.cariGvMatrahi).round_dp(2)
+              {
+                  return Err(DomainError::InvalidData(
+                      "GV snapshot kümülatif matrah zinciri kendi içinde tutarsız.".into(),
+                  ));
+              }
+          }
+
+          if let Some(stamp) = bordro.damgaDetay.as_ref() {
+              let line_item = bordro.kesintiler.damgaVergisi.unwrap_or_default();
+              if stamp.kesilenDamgaVergisi != line_item {
+                  return Err(DomainError::InvalidData(format!(
+                      "Damga snapshot kesilen vergi {} ile kesinti kalemi {} eşleşmiyor.",
+                      stamp.kesilenDamgaVergisi, line_item
+                  )));
+              }
+          }
+
+          // RETRO_ADJUSTMENT combines source-month SGK deltas with payment-month
+          // PEK, so direct PEK*rate reconciliation is not valid for that event.
+          // All ordinary NORMAL/TEDIYE/TIS/SUPPLEMENTAL records must reconcile.
+          if bordro.accrualType != AccrualType::RETRO_ADJUSTMENT {
+              if let (Some(pek), Some(snapshot)) =
+                  (bordro.pekDetay.as_ref(), bordro.statutorySnapshot.as_ref())
+              {
+                  if let Some(rate) = snapshot.sgkIsciOraniYuzde {
+                      let expected = payroll_core::round_sgk_amount(
+                          pek.primMatrahi * rate / Decimal::from(100),
+                      );
+                      let actual = bordro.kesintiler.isciSgkPrimi.unwrap_or_default();
+                      if expected != actual {
+                          return Err(DomainError::InvalidData(format!(
+                              "PEK snapshot SGK işçi primi {} üretirken kesinti kalemi {} içeriyor.",
+                              expected, actual
+                          )));
+                      }
+                  }
+                  if let Some(rate) = snapshot.issizlikIsciOraniYuzde {
+                      let expected = payroll_core::round_sgk_amount(
+                          pek.primMatrahi * rate / Decimal::from(100),
+                      );
+                      let actual = bordro.kesintiler.isciIssizlikPrimi.unwrap_or_default();
+                      if expected != actual {
+                          return Err(DomainError::InvalidData(format!(
+                              "PEK snapshot işçi işsizlik primi {} üretirken kesinti kalemi {} içeriyor.",
+                              expected, actual
+                          )));
+                      }
+                  }
+              }
+          }
+          Ok(())
+          '''
+          replace_once(repo, old, new)
+
+          # 3) Source-period meal GV/DV exemption for retro payments.
+          retro = 'crates/payroll-core/src/retro.rs'
+          anchor = '''fn source_period_events(
+              index: &PayrollDatasetIndex,
+          '''
+          helper = '''/// Amount of a payable retro MEAL difference that still belongs to the
+          /// source work-period GVK 23/8 exemption. The exemption is tied to worked
+          /// days in the source period; prior recognized meal entitlement consumes the
+          /// source-period cap first. The same amount is exempt from stamp tax under
+          /// Income Tax Communiqué No. 322 article 4(6).
+          pub(crate) fn retro_meal_gv_dv_exempt_delta(
+              index: &PayrollDatasetIndex,
+              dataset: &PayrollDatasetSnapshot,
+              personnel_id: &str,
+              allocation: &RetroAllocation,
+          ) -> Result<Decimal> {
+              if allocation.earningCode != RetroEarningCode::MEAL {
+                  return Ok(Decimal::ZERO);
+              }
+              let period = index
+                  .period(dataset, &allocation.sourcePeriodId)
+                  .ok_or_else(|| {
+                      DomainError::InvalidData(format!(
+                          "{} retro yemek allocation source period'i bulunamadı.",
+                          allocation.id
+                      ))
+                  })?;
+              let cap = source_statutory_snapshot(index, dataset, personnel_id, period)?
+                  .gvYemekIstisnasiToplam
+                  .max(Decimal::ZERO);
+              let recognized_before = (allocation.originalRecognizedAmount
+                  + allocation.previousAuthoritativeRetroAmount)
+                  .max(Decimal::ZERO);
+              let target = allocation.targetAmount.max(Decimal::ZERO);
+              Ok(round2(
+                  (target.min(cap) - recognized_before.min(cap)).max(Decimal::ZERO),
+              ))
+          }
+
+          fn source_period_events(
+              index: &PayrollDatasetIndex,
+          '''
+          replace_once(retro, anchor, helper)
+
+          engine = 'crates/payroll-core/src/payroll_engine.rs'
+          old = '''use crate::retro::{
+              retro_payable_allocation_amount, retro_payable_settlement_amount,
+              retro_payment_income_with_index,
+          };
+          '''
+          new = '''use crate::retro::{
+              retro_meal_gv_dv_exempt_delta, retro_payable_allocation_amount,
+              retro_payable_settlement_amount, retro_payment_income_with_index,
+          };
+          '''
+          replace_once(engine, old, new)
+
+          old = '''    let (retro_income_tax_exempt, retro_stamp_tax_exempt) = retro_payment
+              .as_ref()
+              .map(|(batch, allocations, _, _)| {
+                  allocations.iter().fold(
+                      (Decimal::ZERO, Decimal::ZERO),
+                      |(income_tax_exempt, stamp_tax_exempt), allocation| {
+                          (
+                              income_tax_exempt
+                                  + if allocation.incomeTaxTreatment == RetroTaxTreatment::EXEMPT {
+                                      retro_payable_allocation_amount(batch, allocation)
+                                  } else {
+                                      Decimal::ZERO
+                                  },
+                              stamp_tax_exempt
+                                  + if allocation.stampTaxTreatment == RetroTaxTreatment::EXEMPT {
+                                      retro_payable_allocation_amount(batch, allocation)
+                                  } else {
+                                      Decimal::ZERO
+                                  },
+                          )
+                      },
+                  )
+              })
+              .unwrap_or((Decimal::ZERO, Decimal::ZERO));
+          '''
+          new = '''    let (retro_income_tax_exempt, retro_stamp_tax_exempt) =
+              if let Some((batch, allocations, _, _)) = retro_payment.as_ref() {
+                  let mut income_tax_exempt = Decimal::ZERO;
+                  let mut stamp_tax_exempt = Decimal::ZERO;
+                  for allocation in allocations {
+                      let payable =
+                          retro_payable_allocation_amount(batch, allocation).max(Decimal::ZERO);
+                      let source_meal_exempt = retro_meal_gv_dv_exempt_delta(
+                          index,
+                          dataset,
+                          &person.id,
+                          allocation,
+                      )?
+                      .min(payable);
+                      income_tax_exempt +=
+                          if allocation.incomeTaxTreatment == RetroTaxTreatment::EXEMPT {
+                              payable
+                          } else {
+                              source_meal_exempt
+                          };
+                      stamp_tax_exempt +=
+                          if allocation.stampTaxTreatment == RetroTaxTreatment::EXEMPT {
+                              payable
+                          } else {
+                              source_meal_exempt
+                          };
+                  }
+                  (round2(income_tax_exempt), round2(stamp_tax_exempt))
+              } else {
+                  (Decimal::ZERO, Decimal::ZERO)
+              };
+          '''
+          replace_once(engine, old, new)
+
+          old = '''        - income.yemek.unwrap_or_default().min(statutory_snapshot.gvYemekIstisnasiToplam)
+          '''
+          new = '''        - normal_meal_tax_exemption
+          '''
+          replace_once(engine, old, new)
+
+          # Browser semantic regression tests.
+          Path('src/services/storage/payrollPayloadSchema.semantic.test.ts').write_text(r'''import { describe, expect, test } from 'bun:test';
+          import { validateAnnualPayrollParameters } from './payrollPayloadSchema';
+
+          const valid = () => ({
+            year: 2026,
+            gelirVergisiDilimleri: [
+              { limit: '190000', oran: '0.15' },
+              { limit: '400000', oran: '0.20' },
+              { limit: '1500000', oran: '0.27' },
+              { limit: '5300000', oran: '0.35' },
+              { limit: '1000000000000000', oran: '0.40' },
+            ],
+            sigortaGvYillikBrutAsgariUcretTavani: '396360',
+            updatedAt: null,
+          });
+
+          describe('annual payroll semantic validation parity', () => {
+            test('rejects an empty tariff at the browser persistence boundary', () => {
+              const value = valid();
+              value.gelirVergisiDilimleri = [];
+              expect(() => validateAnnualPayrollParameters(value)).toThrow();
+            });
+
+            test('rejects non-ascending limits and rates outside 0..1', () => {
+              const descending = valid();
+              descending.gelirVergisiDilimleri[1] = { limit: '100000', oran: '0.20' };
+              expect(() => validateAnnualPayrollParameters(descending)).toThrow();
+
+              const badRate = valid();
+              badRate.gelirVergisiDilimleri[0] = { limit: '190000', oran: '1.01' };
+              expect(() => validateAnnualPayrollParameters(badRate)).toThrow();
+            });
+
+            test('rejects invalid year, unsafe limit and non-positive insurance cap', () => {
+              const badYear = valid();
+              badYear.year = 0;
+              expect(() => validateAnnualPayrollParameters(badYear)).toThrow();
+
+              const unsafeLimit = valid();
+              unsafeLimit.gelirVergisiDilimleri[4] = {
+                limit: '1000000000000000.01',
+                oran: '0.40',
+              };
+              expect(() => validateAnnualPayrollParameters(unsafeLimit)).toThrow();
+
+              const badCap = valid();
+              badCap.sigortaGvYillikBrutAsgariUcretTavani = '0';
+              expect(() => validateAnnualPayrollParameters(badCap)).toThrow();
+            });
+
+            test('accepts the canonical 2026 parameters', () => {
+              expect(() => validateAnnualPayrollParameters(valid())).not.toThrow();
+            });
+          });
+          ''')
+
+          # Core retro meal + mixed/negative OKS regressions.
+          Path('crates/payroll-core/tests/retro_tax_oks_followup_20260909.rs').write_text(r'''#[path = "support/independent_audit.rs"]
+          mod support;
+          use payroll_core::*;
+          use rust_decimal::Decimal;
+          use rust_decimal_macros::dec;
+
+          fn revision(id: &str) -> CompensationRevision {
+              serde_json::from_value(serde_json::json!({
+                  "id": id,
+                  "reason": "COLLECTIVE_AGREEMENT",
+                  "title": "Follow-up audit",
+                  "effectiveFrom": "2026-01-15",
+                  "effectiveTo": "2026-02-14",
+                  "status": "DRAFT",
+                  "scope": "SELECTED_PERSONNEL",
+                  "personnelIds": ["audit"]
+              }))
+              .unwrap()
+          }
+
+          fn add_payment_month_normal(req: &mut PayrollCalculationRequest) {
+              let normal = calculate_payroll_checked(req).unwrap();
+              req.dataset.payrolls.push(normal);
+          }
+
+          #[test]
+          fn retro_meal_uses_remaining_source_period_gv_and_dv_exemption() {
+              let mut source = support::request();
+              let settings = source
+                  .dataset
+                  .institutionSettings
+                  .get_mut(&source.periodId)
+                  .unwrap();
+              settings.gunlukYemek = dec!(100);
+              settings.gunlukYemekIstisnasiGV = Some(dec!(200));
+              settings.gunlukYemekIstisnasiSGK = Some(dec!(200));
+              let original = calculate_payroll_checked(&source).unwrap();
+              assert_eq!(original.gelirler.yemek, Some(dec!(3100)));
+              assert_eq!(
+                  original.statutorySnapshot.as_ref().unwrap().gvYemekIstisnasiToplam,
+                  dec!(6200)
+              );
+
+              let mut payment = support::dated_request(2026, 2);
+              add_payment_month_normal(&mut payment);
+              payment.dataset.periods.extend(source.dataset.periods.clone());
+              payment
+                  .dataset
+                  .institutionSettings
+                  .extend(source.dataset.institutionSettings.clone());
+              payment.dataset.attendances.extend(source.dataset.attendances.clone());
+              payment.dataset.payrolls.push(original);
+
+              let result = RetroEntitlementEngine::calculate(&RetroCalculationRequest {
+                  batchId: "retro-meal".into(),
+                  revision: revision("retro-meal-revision"),
+                  overrides: vec![CompensationRevisionOverride {
+                      id: "retro-meal-override".into(),
+                      revisionId: "retro-meal-revision".into(),
+                      parameter: RetroParameterKey::GUNLUK_YEMEK,
+                      value: dec!(250),
+                      personnelId: None,
+                  }],
+                  personnelId: "audit".into(),
+                  paymentDate: "2026-02-28".into(),
+                  calculatedAt: payment.calculatedAt.clone(),
+                  description: None,
+                  dataset: payment.dataset.clone(),
+              })
+              .unwrap();
+              let meal = result
+                  .allocations
+                  .iter()
+                  .find(|allocation| allocation.earningCode == RetroEarningCode::MEAL)
+                  .unwrap();
+              assert_eq!(meal.deltaAmount, dec!(4650));
+              assert_eq!(meal.retroPekDelta, dec!(1550));
+
+              payment.dataset.retroBatches.push(result.batch);
+              payment.dataset.retroAllocations.extend(result.allocations);
+              payment.accrual = Some(PayrollAccrualInput {
+                  accrualId: "retro-meal".into(),
+                  accrualType: AccrualType::RETRO_ADJUSTMENT,
+                  paymentDate: "2026-02-28".into(),
+                  sequence: 1,
+                  grossAmount: None,
+                  description: None,
+              });
+              let payroll = calculate_payroll_checked(&payment).unwrap();
+              assert_eq!(payroll.gelirToplam, dec!(4650));
+              assert_eq!(payroll.kesintiler.isciSgkPrimi, Some(dec!(217)));
+              assert_eq!(payroll.kesintiler.isciIssizlikPrimi, Some(dec!(15.50)));
+              assert_eq!(payroll.gvDetay.as_ref().unwrap().cariGvMatrahi, dec!(1317.50));
+              assert_eq!(payroll.kesintiler.gelirVergisi, Some(dec!(197.63)));
+              assert_eq!(payroll.kesintiler.damgaVergisi, Some(dec!(11.76)));
+          }
+
+          #[test]
+          fn mixed_positive_and_negative_retro_wage_deltas_use_signed_net_pek_for_oks() {
+              let mut source = support::request();
+              let settings = source
+                  .dataset
+                  .institutionSettings
+                  .get_mut(&source.periodId)
+                  .unwrap();
+              settings.gunlukYemek = Decimal::ZERO;
+              settings.digerGelirVarsayilan = Some(dec!(2000));
+              let original = calculate_payroll_checked(&source).unwrap();
+
+              let mut payment = support::dated_request(2026, 2);
+              payment.dataset.periods.extend(source.dataset.periods.clone());
+              payment
+                  .dataset
+                  .institutionSettings
+                  .extend(source.dataset.institutionSettings.clone());
+              payment.dataset.attendances.extend(source.dataset.attendances.clone());
+              payment.dataset.payrolls.push(original);
+
+              let result = RetroEntitlementEngine::calculate(&RetroCalculationRequest {
+                  batchId: "retro-mixed".into(),
+                  revision: revision("retro-mixed-revision"),
+                  overrides: vec![
+                      CompensationRevisionOverride {
+                          id: "retro-mixed-wage".into(),
+                          revisionId: "retro-mixed-revision".into(),
+                          parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                          value: dec!(2200),
+                          personnelId: None,
+                      },
+                      CompensationRevisionOverride {
+                          id: "retro-mixed-other".into(),
+                          revisionId: "retro-mixed-revision".into(),
+                          parameter: RetroParameterKey::DIGER_GELIR,
+                          value: dec!(1000),
+                          personnelId: None,
+                      },
+                  ],
+                  personnelId: "audit".into(),
+                  paymentDate: "2026-02-28".into(),
+                  calculatedAt: payment.calculatedAt.clone(),
+                  description: None,
+                  dataset: payment.dataset.clone(),
+              })
+              .unwrap();
+              assert_eq!(result.batch.totalGrossDelta, dec!(5200));
+              assert_eq!(
+                  result
+                      .allocations
+                      .iter()
+                      .map(|allocation| allocation.retroPekDelta)
+                      .sum::<Decimal>(),
+                  dec!(5200)
+              );
+
+              payment.dataset.retroBatches.push(result.batch);
+              payment.dataset.retroAllocations.extend(result.allocations);
+              payment.accrual = Some(PayrollAccrualInput {
+                  accrualId: "retro-mixed".into(),
+                  accrualType: AccrualType::RETRO_ADJUSTMENT,
+                  paymentDate: "2026-02-28".into(),
+                  sequence: 0,
+                  grossAmount: None,
+                  description: None,
+              });
+              let payroll = calculate_payroll_checked(&payment).unwrap();
+              assert_eq!(payroll.gelirToplam, dec!(5200));
+              assert_eq!(payroll.kesintiler.bes, Some(dec!(156)));
+          }
+
+          #[test]
+          fn negative_retro_wage_delta_is_receivable_and_never_a_payment_oks_base() {
+              let mut source = support::request();
+              source
+                  .dataset
+                  .institutionSettings
+                  .get_mut(&source.periodId)
+                  .unwrap()
+                  .gunlukYemek = Decimal::ZERO;
+              let original = calculate_payroll_checked(&source).unwrap();
+              source.dataset.payrolls.push(original);
+
+              let result = RetroEntitlementEngine::calculate(&RetroCalculationRequest {
+                  batchId: "retro-negative".into(),
+                  revision: revision("retro-negative-revision"),
+                  overrides: vec![CompensationRevisionOverride {
+                      id: "retro-negative-wage".into(),
+                      revisionId: "retro-negative-revision".into(),
+                      parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                      value: dec!(1800),
+                      personnelId: None,
+                  }],
+                  personnelId: "audit".into(),
+                  paymentDate: "2026-02-28".into(),
+                  calculatedAt: source.calculatedAt.clone(),
+                  description: None,
+                  dataset: source.dataset,
+              })
+              .unwrap();
+              assert_eq!(result.batch.totalGrossDelta, dec!(-6200));
+              assert_eq!(retro_payable_settlement_amount(&result.batch), Decimal::ZERO);
+              assert_eq!(result.batch.recoverableAmount, dec!(6200));
+              assert_eq!(result.batch.settlementStatus, RetroSettlementStatus::OVERPAYMENT);
+              assert_eq!(
+                  result
+                      .allocations
+                      .iter()
+                      .map(|allocation| allocation.retroPekDelta)
+                      .sum::<Decimal>(),
+                  dec!(-6200)
+              );
+          }
+          ''')
+
+          # Native snapshot reconciliation regressions.
+          Path('src-tauri/tests/snapshot_reconciliation_20260909.rs').write_text(r'''#[allow(dead_code)]
+          #[path = "../../crates/payroll-core/tests/support/independent_audit.rs"]
+          mod support;
+          use bordro_programi_lib::{
+              db::connection::create_in_memory_connection,
+              repositories::{
+                  attendance_repo::AttendanceRepository, payroll_repo::PayrollRepository,
+                  period_repo::PeriodRepository, personnel_repo::PersonnelRepository,
+                  settings_repo::SettingsRepository,
+              },
+              services::payroll_service::PayrollService,
+          };
+          use rust_decimal_macros::dec;
+
+          fn setup() -> rusqlite::Connection {
+              let conn = create_in_memory_connection().unwrap();
+              let req = support::request();
+              PersonnelRepository::save(&conn, &req.dataset.personnel[0]).unwrap();
+              PeriodRepository::save(&conn, &req.dataset.periods[0]).unwrap();
+              SettingsRepository::save_institution_settings(
+                  &conn,
+                  &req.dataset.institutionSettings[&req.periodId],
+              )
+              .unwrap();
+              AttendanceRepository::save(&conn, &req.dataset.attendances[0]).unwrap();
+              conn
+          }
+
+          fn calculated(conn: &rusqlite::Connection) -> payroll_core::BordroKaydi {
+              PayrollService::calculate_payroll_for_accrual_checked(
+                  conn,
+                  "audit",
+                  "audit-jan",
+                  None,
+                  None,
+              )
+              .unwrap()
+          }
+
+          #[test]
+          fn rejects_gv_snapshot_that_disagrees_with_deduction_line() {
+              let conn = setup();
+              let mut payroll = calculated(&conn);
+              payroll.gvDetay.as_mut().unwrap().kesilenGelirVergisi += dec!(0.01);
+              assert!(PayrollRepository::save(&conn, &payroll).is_err());
+          }
+
+          #[test]
+          fn rejects_stamp_snapshot_that_disagrees_with_deduction_line() {
+              let conn = setup();
+              let mut payroll = calculated(&conn);
+              payroll.damgaDetay.as_mut().unwrap().kesilenDamgaVergisi += dec!(0.01);
+              assert!(PayrollRepository::save(&conn, &payroll).is_err());
+          }
+
+          #[test]
+          fn rejects_pek_snapshot_that_disagrees_with_worker_premium_lines() {
+              let conn = setup();
+              let mut payroll = calculated(&conn);
+              payroll.pekDetay.as_mut().unwrap().primMatrahi += dec!(1);
+              assert!(PayrollRepository::save(&conn, &payroll).is_err());
+          }
+          ''')
+          PY
+
+      - name: Format Rust changes
+        run: cargo fmt --all
+
+      - name: Run targeted core regressions
+        run: |
+          cargo test -p payroll-core --test independent_audit_20260908
+          cargo test -p payroll-core --test retro_tax_oks_followup_20260909
+
+      - name: Run browser semantic regression
+        run: bun test src/services/storage/payrollPayloadSchema.semantic.test.ts
+
+      - name: Rebuild committed browser WASM
+        run: bun run wasm:build
+
+      - name: Commit hardening changes
+        run: |
+          rm .github/workflows/one-time-payroll-hardening.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Harden payroll validation and retro tax policy'
+          git push origin HEAD:main
