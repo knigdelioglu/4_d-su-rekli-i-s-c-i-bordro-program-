@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { join, relative, resolve, sep } from 'node:path';
 
-const root = process.cwd();
+const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const manifestPath = resolve(root, 'src/wasm/pkg/source-hash.txt');
 const packageManifestPath = resolve(root, 'src/wasm/pkg/package.json');
 const sourceDirectories = [
@@ -34,9 +35,9 @@ const files = [
 
 const hash = createHash('sha256');
 for (const path of files) {
-  hash.update(relative(root, path));
+  hash.update(relative(root, path).split(sep).join('/'));
   hash.update('\0');
-  hash.update(readFileSync(path));
+  hash.update(readFileSync(path, 'utf8').replace(/\r\n?/g, '\n'));
   hash.update('\0');
 }
 const currentHash = hash.digest('hex');
