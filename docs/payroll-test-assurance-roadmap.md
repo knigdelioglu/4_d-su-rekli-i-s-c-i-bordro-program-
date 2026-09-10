@@ -1,8 +1,9 @@
 # Bordro Test Güvence Yol Haritası
 
-**Durum:** Planlandı  
-**Hedef dal:** `main`  
-**Kapsam:** `payroll-core`, native Tauri/SQLite akışı, WASM/browser parity ve CI test güvence katmanları  
+**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, mutation full-run periyodik/manual akışta — 2026-09-10
+
+**Hedef dal:** `main`
+**Kapsam:** `payroll-core`, native Tauri/SQLite akışı, WASM/browser parity ve CI test güvence katmanları
 **İlişkili plan:** `docs/payroll-engine-hardening-plan.md`
 
 ---
@@ -49,9 +50,36 @@ Depoda zaten korunacak güçlü katmanlar vardır:
 
 Dolayısıyla bu yol haritası mevcut regresyon testlerini topluca yeniden yazmayacaktır. Yeni katmanlar mevcut test takımının üzerine eklenecektir.
 
+## Uygulama durumu
+
+Üç büyük uygulama fazı yaklaşımında Faz 1 ve Faz 2 tamamlandı. Test güvence
+matrisi, 2026 yılı için 33 bağımsız golden fixture, fixture şeması, exact
+`calculate_payroll_checked()` replay testi ve `legalYear`/parametre sürümü
+fail-closed kontrollerine ek olarak property-based testler ve test-only bağımsız
+mali oracle eklendi. Ayrıntılı kapsam
+`docs/payroll-test-coverage-matrix.md`, fixture sözleşmesi
+`crates/payroll-core/tests/golden/README.md` ve Faz 2 test topolojisi
+`crates/payroll-core/tests/property_tests.rs` altında görülebilir.
+
+Bu teslimat, aşağıdaki özgün başlıkları birlikte karşılar:
+
+- Faz 1 — Test envanteri ve güvence matrisi
+- Faz 1 — Golden Payroll Corpus
+- Faz 1 — Golden/mevzuat sürüm disiplini
+- Faz 2 — Property-based testing
+- Faz 2 — Independent Reference Oracle
+
+Uygulama sırası üç büyük faz olarak izlenir:
+
+1. **Faz 1 — Referans temeli:** güvence matrisi, golden corpus ve yasal yıl/sürüm disiplini. **Tamamlandı.**
+2. **Faz 2 — Bağımsız doğruluk:** property-based testler ve production'dan bağımsız mali oracle. **Tamamlandı.**
+3. **Faz 3 — Sürekli güvence:** mutation, coverage/CI quality gate ve release evidence.
+   **Altyapı tamamlandı; tam mutation skoru periyodik/manual shard koşusundan sonra
+   baseline'a işlenecektir.**
+
 ---
 
-# 3. Faz 0 — Test envanteri ve güvence matrisi
+# 3. Faz 1 — Test envanteri ve güvence matrisi
 
 ## Amaç
 
@@ -113,20 +141,43 @@ Production motorundan bağımsız olarak doğrulanmış bordroları kalıcı ref
 ## Dizin yapısı
 
 ```text
-tests/golden/
+crates/payroll-core/tests/golden/
   README.md
   schema.json
   2026/
     G001-normal-full-month.json
-    G002-tax-bracket-boundary.json
-    G003-paid-sick-leave.json
-    G004-tediye-before-normal.json
-    G005-normal-before-tis.json
-    G006-multi-event-month.json
-    G007-pek-carry.json
-    G008-meal-exemption.json
-    G009-retro-tis.json
-    G010-year-boundary.json
+    G002-minimum-wage-boundary.json
+    G003-pek-floor-completion.json
+    G004-mid-range-normal.json
+    G005-tax-first-bracket-upper.json
+    G006-tax-boundary-below-190000.json
+    G007-tax-boundary-above-190000.json
+    G008-tax-second-bracket.json
+    G009-tax-boundary-below-400000.json
+    G010-tax-boundary-above-400000.json
+    G011-tax-third-bracket.json
+    G012-tax-boundary-above-1500000.json
+    G013-pek-ceiling.json
+    G014-paid-sick-leave.json
+    G015-unpaid-absence.json
+    G016-meal-under-exemption.json
+    G017-meal-over-exemption.json
+    G018-mixed-attendance.json
+    G019-work-premium.json
+    G020-social-aid.json
+    G021-road-and-clothing.json
+    G022-service-year-increment.json
+    G023-standalone-tediye.json
+    G024-standalone-tis.json
+    G025-standalone-supplemental.json
+    G026-oks-percentage.json
+    G027-oks-fixed-and-deductions.json
+    G028-union-fixed.json
+    G029-tax-opening.json
+    G030-tediye-before-normal.json
+    G031-normal-before-tis.json
+    G032-decimal-boundary.json
+    G033-gv-deductions.json
 ```
 
 İlk hedef **en az 30 golden vaka**, olgun hedef **50+ vaka**dır.
@@ -137,18 +188,22 @@ Her fixture şu bölümleri taşımalıdır:
 
 ```json
 {
+  "schemaVersion": 1,
   "id": "G001",
   "description": "...",
   "legalYear": 2026,
+  "parametersVersion": "2026-repository-parameters-v1",
   "source": {
-    "type": "independent_manual_or_external_reference",
+    "type": "independent_manual_calculation",
     "verifiedBy": "...",
     "verifiedAt": "YYYY-MM-DD",
     "notes": "..."
   },
   "request": {},
-  "expected": {},
-  "assertionProfile": "FULL_FINANCIAL"
+  "expected": {
+    "assertionProfile": "FULL_FINANCIAL",
+    "result": {}
+  }
 }
 ```
 
@@ -201,9 +256,9 @@ Test tüm fixture'ları yükler, `calculate_payroll_checked()` çalıştırır v
 
 ## Kabul kriteri
 
-- En az 30 bağımsız doğrulanmış fixture.
+- En az 30 bağımsız doğrulanmış fixture. **Tamamlandı: 33 fixture.**
 - Production kodundan otomatik expected üretimi yok.
-- Tüm golden fixture'lar CI'da çalışıyor.
+- Tüm golden fixture'lar CI'da çalışıyor. **Tamamlandı: ayrı blocking CI adımı eklendi.**
 - Fixture değişikliği kod değişikliğinden ayrı ve incelemeye açık diff üretir.
 
 ---
@@ -238,6 +293,14 @@ crates/payroll-core/tests/property/
   payment_event_properties.rs
   retro_properties.rs
   validation_properties.rs
+crates/payroll-core/tests/reference/
+  mod.rs
+  tax_oracle.rs
+  pek_oracle.rs
+  exemptions_oracle.rs
+  deductions_oracle.rs
+  normal_payroll_oracle.rs
+crates/payroll-core/tests/property_tests.rs
 ```
 
 Cargo integration-test yapısına göre gerekirse tek üst seviye `property_tests.rs` modülü altında organize edilebilir.
@@ -295,17 +358,27 @@ Ayrıca ayrı invalid strategy'ler validation fail-closed davranışını test e
 
 ## Reproducibility
 
-CI failure çıktısında `proptest` minimal failing case ve seed/case bilgisi korunmalıdır. Bulunan her production bug fixinden sonra küçültülmüş örnek ayrıca normal regresyon testine dönüştürülmelidir.
+CI failure çıktısında `proptest` minimal failing case ve seed/case bilgisi korunmalıdır. Bu
+suite `failure_persistence = None` ile koşuyu kaynak ağacına yerel regresyon dosyası
+yazmadan ve sabit case bütçeleriyle yürütür; başarısızlık çıktısındaki küçültülmüş vaka
+CI log'unda görünür. Aynı girdiyi yeniden çalıştırmak için proptest'in raporladığı
+seed/case bilgisi kullanılabilir. Bulunan her production bug fixinden sonra
+küçültülmüş örnek ayrıca normal regresyon testine dönüştürülmelidir.
 
 ## Kabul kriteri
 
-- Kritik alanların tamamında property testleri.
-- Her CI koşusunda deterministik/replay edilebilir failure bilgisi.
-- Property testinin bulduğu her gerçek hata için kalıcı regression testi.
+- Kritik alanların tamamında property testleri. **Tamamlandı: vergi, PEK/carry,
+  normal finansal korunum, payment-event, retro ve validation/Decimal setleri.**
+- Her CI koşusunda replay edilebilir failure bilgisi. **Tamamlandı:
+  `property_tests` blocking test adımı, persistence kapalı sabit case bütçeleri ve
+  shrink çıktısı.**
+- Property testinin bulduğu her gerçek hata için kalıcı regression testi. **Faz 2
+  koşusunda üretim hatası bulunmadı; yakalanan kapasite/uygulanan istisna ayrımı
+  oracle modeline kalıcı test beklentisi olarak işlendi.**
 
 ---
 
-# 6. Faz 3 — Independent Reference Oracle
+# 6. Faz 2 — Independent Reference Oracle
 
 ## Amaç
 
@@ -377,14 +450,19 @@ Native ↔ core veya WASM ↔ core karşılaştırması tek başına bağımsız
 
 ## Kabul kriteri
 
-- GV, PEK, DV ve temel normal bordro için bağımsız oracle.
-- Oracle production helper import etmez.
-- Property-generated girdiler üzerinde differential test çalışır.
+- GV, PEK, DV ve temel normal bordro için bağımsız oracle. **Tamamlandı.**
+- Oracle production helper import etmez. **Tamamlandı: reference modülleri
+  yalnız test binary'si altında derlenir ve production hesap helper'larını
+  çağırmaz.**
+- Property-generated girdiler üzerinde differential test çalışır. **Tamamlandı:
+  normal bordro ile GV/PEK formülleri property suite içinde karşılaştırılır.**
 - Bir production bug'ı oracle'daki aynı kod kopyası nedeniyle gizlenmemelidir.
+  **Tamamlandı: oracle daha basit parça/dilim hesapları ve ayrı test-only
+  yuvarlama fonksiyonları kullanır.**
 
 ---
 
-# 7. Faz 4 — Mutation Testing
+# 7. Faz 3 — Mutation Testing
 
 ## Amaç
 
@@ -404,6 +482,15 @@ crates/payroll-core/src/policies.rs
 crates/payroll-core/src/retro.rs
 crates/payroll-core/src/validation.rs
 ```
+
+### Uygulama durumu
+
+`.cargo/mutants.toml` bu altı dosyayı ve yalnız `payroll-core` test paketini
+ölçecek şekilde sabitler. Lokal aday listesi **2.147 mutant** üretmiştir;
+`gv_exemption.rs` smoke koşusunda 7 mutantın 6'sı caught, 1'i unviable ve
+0'ı missed olmuştur. Tam kapsam, her haftalık/manual çalışmada 8 shard halinde
+`target/cargo-mutants/**/outcomes.json` artifact'ı olarak saklanır. Unviable
+sonuçlar sessiz exclusion değildir; sonuç sınıflandırmasında ayrı tutulur.
 
 ## Uygulama sırası
 
@@ -438,11 +525,19 @@ akışlarından biri kullanılabilir.
 
 ---
 
-# 8. Faz 5 — Coverage ve CI quality gates
+# 8. Faz 3 — Coverage ve CI quality gates
 
 ## Amaç
 
 Test kapsamının görünür olması ve fark edilmeden gerilememesi.
+
+### Uygulama durumu
+
+`docs/payroll-coverage-baseline.json` altı kritik modül için lines/functions/
+regions baseline'ını taşır. `scripts/check-rust-coverage.mjs` her metriği dosya
+bazında karşılaştırır ve düşüşte fail olur. Bu kontrol haftalık/manual CI
+çalışmasında blocking'dir; ilk baseline'da toplam repository için keyfi bir
+minimum yüzde yoktur.
 
 ## Rust coverage
 
@@ -507,7 +602,7 @@ CI yalnız "derleniyor ve testler geçiyor" kapısı değil, bordro doğruluk g�
 
 ---
 
-# 9. Faz 6 — Golden/mevzuat sürüm disiplini
+# 9. Faz 1 — Golden/mevzuat sürüm disiplini
 
 ## Amaç
 
@@ -531,7 +626,7 @@ Bu, uygulamanın kapanmış bordroları yeniden hesaplayan genel tarihsel mevzua
 
 ---
 
-# 10. Faz 7 — Release Evidence / test manifesti
+# 10. Faz 3 — Release Evidence / test manifesti
 
 ## Amaç
 
@@ -540,6 +635,10 @@ Bir release'in hangi finansal güvence setinden geçtiğini tek yerden görebilm
 ## Eklenecek belge
 
 `docs/payroll-assurance-status.md`
+
+Belge eklendi. Güncel manifest golden/property/oracle sayısını, coverage
+baseline'ını, mutation kapsamını, doğrulama SHA'sını ve bilinen boşlukları
+taşır; tam mutation skoru CI artifact'ı oluşmadan uydurulmaz.
 
 İçeriği:
 
@@ -570,22 +669,23 @@ Ayrı bir "kim, hangi alanı, ne zaman değiştirdi" append-only kullanıcı iş
 
 ## P0 — En yüksek değer
 
-1. Faz 0 — Test güvence matrisi
+1. Faz 1 — Test güvence matrisi
 2. Faz 1 — Golden Payroll Corpus
-3. Faz 2 — Property-based testing
+3. Faz 1 — Mevzuat/golden sürüm disiplini
 
-Bu üç faz tamamlanmadan yeni yüzlerce klasik regression testi yazmak öncelik değildir.
+Bu temel güvence katmanları tamamlanmadan yeni yüzlerce klasik regression testi
+yazmak öncelik değildir.
 
 ## P1 — Bağımsız doğruluk
 
-4. Faz 3 — Independent Reference Oracle
-5. Faz 4 — Mutation Testing
+4. Faz 2 — Property-based testing
+5. Faz 2 — Independent Reference Oracle
 
 ## P2 — Sürekli kalite kapısı
 
-6. Faz 5 — Coverage/CI ratchet
-7. Faz 6 — Mevzuat/golden sürüm disiplini
-8. Faz 7 — Release evidence
+6. Faz 3 — Mutation Testing
+7. Faz 3 — Coverage/CI ratchet
+8. Faz 3 — Release evidence
 
 ---
 
@@ -593,21 +693,21 @@ Bu üç faz tamamlanmadan yeni yüzlerce klasik regression testi yazmak öncelik
 
 Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul edilir:
 
-- [ ] Kritik bordro kuralları için test güvence matrisi mevcut.
-- [ ] En az 30 bağımsız doğrulanmış golden bordro mevcut.
-- [ ] Golden expected değerleri production motorundan otomatik üretilmiyor.
-- [ ] GV, PEK, payment-event, puantaj/rapor ve Decimal için property testleri mevcut.
-- [ ] Property failure'ları replay/shrink edilebilir.
-- [ ] GV, PEK, DV ve temel normal bordro için production'dan bağımsız oracle mevcut.
-- [ ] Oracle ile production motoru generated input'larda differential test ediliyor.
+- [x] Kritik bordro kuralları için test güvence matrisi mevcut.
+- [x] En az 30 bağımsız doğrulanmış golden bordro mevcut.
+- [x] Golden expected değerleri production motorundan otomatik üretilmiyor.
+- [x] GV, PEK, payment-event, puantaj/rapor ve Decimal için property testleri mevcut.
+- [x] Property failure'ları replay/shrink edilebilir.
+- [x] GV, PEK, DV ve temel normal bordro için production'dan bağımsız oracle mevcut.
+- [x] Oracle ile production motoru generated input'larda differential test ediliyor.
 - [ ] Native ve WASM/browser adapter parity testleri korunuyor.
-- [ ] Kritik Rust mali modülleri cargo-mutants ile ölçülüyor.
+- [x] Kritik Rust mali modülleri cargo-mutants ile ölçülüyor.
 - [ ] Mutation score baseline kaydedilmiş ve gerileme politikası uygulanıyor.
-- [ ] Rust coverage baseline ölçülmüş ve ratchet policy uygulanıyor.
-- [ ] Golden + property testleri normal PR CI akışında blocking.
-- [ ] Ağır mutation/coverage/differential suite release veya periyodik gate olarak çalışıyor.
+- [x] Rust coverage baseline ölçülmüş ve ratchet policy uygulanıyor.
+- [x] Golden + property testleri normal PR CI akışında blocking.
+- [x] Ağır mutation/coverage/differential suite release veya periyodik gate olarak çalışıyor.
 - [ ] Her yeni gerçek hesap hatası kalıcı regresyon vakasına dönüştürülüyor.
-- [ ] `docs/payroll-assurance-status.md` güncel güvence durumunu gösteriyor.
+- [x] `docs/payroll-assurance-status.md` güncel güvence durumunu gösteriyor.
 
 ---
 

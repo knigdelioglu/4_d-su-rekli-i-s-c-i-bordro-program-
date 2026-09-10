@@ -1,0 +1,17 @@
+# Phase 3 mutation scope: only the payroll-core modules that own statutory
+# calculations, policy decisions, replay, and fail-closed validation.
+examine_globs = [
+  "crates/payroll-core/src/calculations.rs",
+  "crates/payroll-core/src/gv_exemption.rs",
+  "crates/payroll-core/src/payroll_engine.rs",
+  "crates/payroll-core/src/policies.rs",
+  "crates/payroll-core/src/retro.rs",
+  "crates/payroll-core/src/validation.rs",
+]
+
+test_package = ["payroll-core"]
+test_tool = "cargo"
+output = "target/cargo-mutants"
+timeout_multiplier = 2.0
+build_timeout_multiplier = 2.0
+minimum_test_timeout = 30.0

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "tool": "cargo-llvm-cov",
+  "toolVersion": "0.9.1",
+  "measuredAt": "2026-09-10",
+  "command": "cargo llvm-cov --package payroll-core --all-features --json --summary-only",
+  "scope": "payroll-core package tests; critical source files are ratcheted independently",
+  "files": {
+    "crates/payroll-core/src/calculations.rs": {
+      "lines": { "count": 1179, "covered": 1000, "percent": 84.81764206955047 },
+      "functions": { "count": 67, "covered": 55, "percent": 82.08955223880598 },
+      "regions": { "count": 1295, "covered": 1180, "percent": 91.1196911196911 }
+    },
+    "crates/payroll-core/src/gv_exemption.rs": {
+      "lines": { "count": 31, "covered": 31, "percent": 100 },
+      "functions": { "count": 2, "covered": 2, "percent": 100 },
+      "regions": { "count": 64, "covered": 64, "percent": 100 }
+    },
+    "crates/payroll-core/src/payroll_engine.rs": {
+      "lines": { "count": 3951, "covered": 3104, "percent": 78.56238926853962 },
+      "functions": { "count": 304, "covered": 199, "percent": 65.46052631578947 },
+      "regions": { "count": 5342, "covered": 4495, "percent": 84.14451516286036 }
+    },
+    "crates/payroll-core/src/policies.rs": {
+      "lines": { "count": 997, "covered": 814, "percent": 81.64493480441323 },
+      "functions": { "count": 73, "covered": 58, "percent": 79.45205479452055 },
+      "regions": { "count": 1359, "covered": 1144, "percent": 84.1795437821928 }
+    },
+    "crates/payroll-core/src/retro.rs": {
+      "lines": { "count": 2237, "covered": 1794, "percent": 80.19669199821189 },
+      "functions": { "count": 170, "covered": 123, "percent": 72.35294117647058 },
+      "regions": { "count": 2736, "covered": 2330, "percent": 85.1608187134503 }
+    },
+    "crates/payroll-core/src/validation.rs": {
+      "lines": { "count": 415, "covered": 298, "percent": 71.80722891566265 },
+      "functions": { "count": 26, "covered": 15, "percent": 57.692307692307686 },
+      "regions": { "count": 418, "covered": 334, "percent": 79.90430622009569 }
+    }
+  }
+}

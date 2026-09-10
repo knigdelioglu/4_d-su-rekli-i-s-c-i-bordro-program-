@@ -18,6 +18,8 @@
     "test": "bun test",
     "test:rust": "if command -v cargo-nextest >/dev/null 2>&1; then cargo nextest run --manifest-path src-tauri/Cargo.toml; else cargo test --manifest-path src-tauri/Cargo.toml; fi",
     "test:rust:nextest": "cargo nextest run --manifest-path src-tauri/Cargo.toml",
+    "test:rust:coverage": "cargo llvm-cov --package payroll-core --all-features --json --summary-only --output-path target/payroll-core-coverage.json && node scripts/check-rust-coverage.mjs target/payroll-core-coverage.json docs/payroll-coverage-baseline.json",
+    "test:rust:mutation": "cargo mutants --manifest-path crates/payroll-core/Cargo.toml --package payroll-core --no-shuffle",
     "check:rust": "cargo check --manifest-path src-tauri/Cargo.toml",
     "lint": "tsc --noEmit && bun run verify:production-graph",
     "verify:production-graph": "bun scripts/verify-production-graph.mjs",

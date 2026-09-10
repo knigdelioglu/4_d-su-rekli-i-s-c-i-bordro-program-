@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "tool": "cargo-mutants",
+  "toolVersion": "27.1.0",
+  "measuredAt": "2026-09-10",
+  "scope": [
+    "crates/payroll-core/src/calculations.rs",
+    "crates/payroll-core/src/gv_exemption.rs",
+    "crates/payroll-core/src/payroll_engine.rs",
+    "crates/payroll-core/src/policies.rs",
+    "crates/payroll-core/src/retro.rs",
+    "crates/payroll-core/src/validation.rs"
+  ],
+  "candidateMutants": {
+    "total": 2147,
+    "byFile": {
+      "crates/payroll-core/src/calculations.rs": 472,
+      "crates/payroll-core/src/gv_exemption.rs": 7,
+      "crates/payroll-core/src/payroll_engine.rs": 781,
+      "crates/payroll-core/src/policies.rs": 125,
+      "crates/payroll-core/src/retro.rs": 654,
+      "crates/payroll-core/src/validation.rs": 108
+    }
+  },
+  "fullRun": {
+    "status": "scheduled_or_manual_sharded_run",
+    "shards": 8,
+    "sourceOfTruth": "payroll-core-mutation-summary artifact aggregated from cargo-mutants outcomes.json"
+  },
+  "localSmokeRun": {
+    "scope": "crates/payroll-core/src/gv_exemption.rs",
+    "total": 7,
+    "caught": 6,
+    "missed": 0,
+    "timeout": 0,
+    "unviable": 1,
+    "meaningfulScorePercent": 100,
+    "command": "cargo mutants --no-config --manifest-path crates/payroll-core/Cargo.toml --package payroll-core --file crates/payroll-core/src/gv_exemption.rs --no-shuffle --minimum-test-timeout 5"
+  },
+  "policy": {
+    "meaningfulScore": "caught / (total - unviable)",
+    "unviableHandling": "cargo-mutants sonucu olarak raporlanır; config içinde sessizce bastırılmaz",
+    "initialCiMode": "non-blocking; weekly schedule veya workflow_dispatch",
+    "futureGate": "baseline'a göre mutation score düşüşü ve yeni gerekçesiz surviving mutant blocking olur"
+  }
+}

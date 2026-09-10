@@ -1,0 +1,280 @@
+{
+  "description": "Normal bordrodan bağımsız ek ödeme payment-event.",
+  "expected": {
+    "assertionProfile": "FULL_FINANCIAL",
+    "result": {
+      "accrualDescription": "Normal bordrodan bağımsız ek ödeme payment-event.",
+      "accrualId": "G025-accrual",
+      "accrualType": "SUPPLEMENTAL",
+      "damgaDetay": {
+        "aylikDamgaIstisnaHakki": "250.70",
+        "ayniAyOncekiKullanilanDamgaIstisnasi": "0",
+        "brutDamgaVergisi": "75.90",
+        "kalanDamgaIstisnasi": "174.80",
+        "kesilenDamgaVergisi": "0.00",
+        "uygulananDamgaIstisnasi": "75.90"
+      },
+      "devredenPekGelen": [],
+      "donemId": "G025-period",
+      "gelirToplam": "10000",
+      "gelirler": {
+        "birlestirilmisSosyalYardim": null,
+        "digerGelir": null,
+        "ekOdeme": "10000",
+        "geceCalismasiTatiliUcreti": null,
+        "geceCalismasiUcreti": null,
+        "giyimYardimi": null,
+        "hizmetZammi": null,
+        "isPrimi": null,
+        "tabanBrutAylik": null,
+        "tediye": null,
+        "tisIkramiyesi": null,
+        "vasitaYol": null,
+        "yemek": null
+      },
+      "gvDetay": {
+        "asgariUcretGvIstisnasi": "4211.33",
+        "asgariUcretGvMatrahi": "28075.50",
+        "asgariUcretReferansKumulatifMatrahi": "28075.50",
+        "ayniAyOncekiKullanilanGvIstisnasi": "0",
+        "brutGelirVergisi": "1275.00",
+        "cariGvMatrahi": "8500.00",
+        "dogumAskerlikGvIndirimi": "0",
+        "kesilenGelirVergisi": "0.00",
+        "oncekiKumulatifGvMatrahi": "0",
+        "sigortaGvAylikLimiti": "1500.00",
+        "sigortaGvIndirimAdayi": "0",
+        "sigortaGvYillikKalanLimiti": "396360",
+        "tahakkukOncesiKalanGvIstisnasi": "4211.33",
+        "tahakkukSonrasiKalanGvIstisnasi": "2936.33",
+        "uygulanabilirSigortaGvIndirimi": "0",
+        "uygulananGvIstisnasi": "1275.00",
+        "yeniKumulatifGvMatrahi": "8500.00"
+      },
+      "id": "G025-accrual",
+      "isPrimiDetay": null,
+      "kesintiToplam": "1500.00",
+      "kesintiler": {
+        "bes": null,
+        "damgaVergisi": "0.00",
+        "digerKesinti": null,
+        "dogumAskerlikBorclanmasi": null,
+        "gelirVergisi": "0.00",
+        "hayatSaglikSigortasi": null,
+        "icra": null,
+        "isciIssizlikPrimi": "100.00",
+        "isciSgkPrimi": "1400.00",
+        "kisiBorcu": null,
+        "sendikaAidati": null
+      },
+      "manuelKumulatifGvMatrahi": null,
+      "netOdeme": "8500.00",
+      "notlar": "Normal bordrodan bağımsız ek ödeme payment-event.",
+      "odenenRaporluGun": 0,
+      "olusturulmaTarihi": "2026-09-10T00:00:00Z",
+      "oncekiKumulatifAsgariGvMatrahi": "0",
+      "oncekiKumulatifGvMatrahi": "0",
+      "paymentDate": "2026-01-31",
+      "pekDetay": {
+        "altSinirTamamlamaFarki": "0",
+        "aylikOncekiPekTuketimi": "0",
+        "aylikSonrasiPekTuketimi": "10000",
+        "devredenPekAşanTutar": "0",
+        "devredenPekKullanilan": "0",
+        "fiiliYemekGunu": 0,
+        "finalPek": "10000",
+        "hamPek": "10000",
+        "hesaplananPek": "10000",
+        "isverenIssizlikOraniYuzde": "2",
+        "isverenIssizlikPrimi": "200.00",
+        "isverenPrimToplami": "2375.00",
+        "isverenSgkPrimi": "2175.00",
+        "pekAltSinir": "33030",
+        "pekAltSinirTamamlamaIsverenPrimi": "0",
+        "pekUstSinir": "297270",
+        "primMatrahi": "10000",
+        "sgkIsverenOraniYuzde": "21.75",
+        "yemekIstisnasiTutar": "0"
+      },
+      "persistedGvBase": "8500.00",
+      "personelId": "G025-person",
+      "puantajOzeti": {
+        "G": 0,
+        "GÇ": 0,
+        "GÇT": 0,
+        "R": 0,
+        "T": 0,
+        "Ç": 0,
+        "İ": 0
+      },
+      "raporluGun": 0,
+      "sequence": 0,
+      "sonGuncellemeTarihi": "2026-09-10T00:00:00Z",
+      "sonrakiDevredenPek": [],
+      "status": "CALCULATED",
+      "statutorySnapshot": {
+        "gvReferansGunlukAsgariUcret": "1101",
+        "gvYemekIstisnasiToplam": "0",
+        "issizlikIsciOraniYuzde": "1",
+        "pekAltSinir": "33030",
+        "pekUstSinir": "297270",
+        "segments": [
+          {
+            "effectiveFrom": "2026-01-15",
+            "effectiveTo": "2026-02-14",
+            "fiiliYemekGunu": 0,
+            "gunlukAsgariUcret": "1101",
+            "gunlukYemekIstisnasiGV": "0",
+            "gunlukYemekIstisnasiSGK": "0",
+            "pekTavanKatsayisi": "9",
+            "sgkPrimGunSayisi": 30
+          }
+        ],
+        "sgkIsciOraniYuzde": "14",
+        "sgkPrimGunSayisi": 30,
+        "sgkYemekIstisnasiToplam": "0",
+        "source": "PROVISIONAL_PAYMENT_MONTH"
+      }
+    }
+  },
+  "id": "G025",
+  "legalYear": 2026,
+  "parametersVersion": "2026-repository-parameters-v1",
+  "request": {
+    "accrual": {
+      "accrualId": "G025-accrual",
+      "accrualType": "SUPPLEMENTAL",
+      "description": "Normal bordrodan bağımsız ek ödeme payment-event.",
+      "grossAmount": "10000",
+      "paymentDate": "2026-01-31",
+      "sequence": 0
+    },
+    "calculatedAt": "2026-09-10T00:00:00Z",
+    "dataset": {
+      "annualPayrollParameters": [
+        {
+          "gelirVergisiDilimleri": [
+            {
+              "limit": "190000",
+              "oran": "0.15"
+            },
+            {
+              "limit": "400000",
+              "oran": "0.20"
+            },
+            {
+              "limit": "1500000",
+              "oran": "0.27"
+            },
+            {
+              "limit": "5300000",
+              "oran": "0.35"
+            },
+            {
+              "limit": "1000000000000000",
+              "oran": "0.40"
+            }
+          ],
+          "sigortaGvYillikBrutAsgariUcretTavani": "396360",
+          "updatedAt": null,
+          "year": 2026
+        }
+      ],
+      "attendances": [],
+      "compensationRevisionOverrides": [],
+      "compensationRevisions": [],
+      "institutionSettings": {
+        "G025-period": {
+          "besOraniYuzde": "3",
+          "birlestirilmisSosyalYardim": "0",
+          "damgaVergisiOraniBinde": "7.59",
+          "digerGelirVarsayilan": "0",
+          "donemId": "G025-period",
+          "ekOdeme": "0",
+          "geceCalismaPrimiYuzde": "0",
+          "geceCalismaTatiliPrimiYuzde": "0",
+          "gelirVergisiOraniYuzde": "15",
+          "giyimYardimi": "0",
+          "gunlukAsgariUcret": "1101",
+          "gunlukTabanUcret": "2000",
+          "gunlukVasitaYol": "0",
+          "gunlukYemek": "0",
+          "gunlukYemekIstisnasiGV": "0",
+          "gunlukYemekIstisnasiSGK": "0",
+          "hizmetZammiBirimi": "0",
+          "isPrimiGruplari": [
+            {
+              "ad": "1. Grup",
+              "aktif": true,
+              "id": "1. Grup",
+              "oran": "0"
+            }
+          ],
+          "isPrimiYuzde": "0",
+          "issizlikIsciOraniYuzde": "1",
+          "issizlikIsverenOraniYuzde": "2",
+          "pekTavanKatsayisi": "9",
+          "sabitBesTutar": "0",
+          "sabitSendikaAidati": "0",
+          "sendikaAidatiYuzde": "65",
+          "sgkIsciOraniYuzde": "14",
+          "sgkIsverenOraniYuzde": "21.75",
+          "statutoryParameterSegments": null,
+          "statutoryParameterSnapshot": null,
+          "tediyeListesi": null,
+          "tediyeTisNotu": null,
+          "tisIkramiyeListesi": null
+        }
+      },
+      "payrolls": [],
+      "periods": [
+        {
+          "ay": 1,
+          "baslangicTarihi": "2026-01-15",
+          "bitisTarihi": "2026-02-14",
+          "donemAdi": "G025 2026",
+          "id": "G025-period",
+          "taxMonth": 1,
+          "taxYear": 2026,
+          "yil": 2026
+        }
+      ],
+      "personnel": [
+        {
+          "aciklama": null,
+          "ad": "Golden",
+          "devirKumulatifAsgariGvMatrahi": null,
+          "devirKumulatifAsgariGvMatrahiYili": null,
+          "devirKumulatifGvMatrahi": null,
+          "devirKumulatifGvMatrahiBaslangicAyi": null,
+          "devirKumulatifGvMatrahiYili": null,
+          "grup": "1. Grup",
+          "hizmetYili": 0,
+          "iban": "TR000000000000000000000000",
+          "id": "G025-person",
+          "kesintiler": null,
+          "sgkSicilNo": "SGK-G025",
+          "soyad": "G025",
+          "tcNo": "10000000000",
+          "unvan": "İşçi"
+        }
+      ],
+      "retroAllocations": [],
+      "retroBatches": [],
+      "sickLeaveRecords": [],
+      "taxOpenings": [],
+      "zamAylari": []
+    },
+    "manualIncome": null,
+    "periodId": "G025-period",
+    "personnelId": "G025-person"
+  },
+  "schemaVersion": 1,
+  "source": {
+    "notes": "Beklenen mali alanlar request içindeki explicit girdiler üzerinden production hesaplayıcıdan bağımsız kuruş aritmetiğiyle yeniden kontrol edilmiştir. Bu kayıt dış kurum mevzuat onayı değil, corpus kaynak incelemesidir.",
+    "referenceId": "2026-payroll-assurance-manual-v1",
+    "type": "independent_manual_calculation",
+    "verifiedAt": "2026-09-10",
+    "verifiedBy": "Codex fixture author - independent arithmetic worksheet"
+  }
+}

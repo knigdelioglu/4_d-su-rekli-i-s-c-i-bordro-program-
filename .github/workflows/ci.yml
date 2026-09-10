@@ -3,6 +3,9 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * 1'
 
 jobs:
   verify:
@@ -79,6 +82,12 @@ jobs:
       - name: Shared core tests
         run: cargo test -p payroll-core
 
+      - name: Golden payroll corpus
+        run: cargo test -p payroll-core --test golden_payroll_corpus
+
+      - name: Property and oracle differential tests
+        run: cargo test -p payroll-core --test property_tests
+
       - name: Build browser WASM package
         run: bun run wasm:build
 
@@ -151,3 +160,124 @@ jobs:
 
       - name: Rust workspace tests
         run: cargo test --workspace
+
+  rust-coverage:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          components: llvm-tools-preview
+          cache: false
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+
+      - name: Measure payroll-core coverage
+        run: |
+          mkdir -p artifacts
+          cargo llvm-cov \
+            --package payroll-core \
+            --all-features \
+            --json \
+            --summary-only \
+            --output-path artifacts/payroll-core-coverage.json
+
+      - name: Enforce critical module coverage ratchet
+        run: node scripts/check-rust-coverage.mjs artifacts/payroll-core-coverage.json docs/payroll-coverage-baseline.json
+
+      - name: Upload payroll coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payroll-core-coverage
+          path: artifacts/payroll-core-coverage.json
+          if-no-files-found: warn
+
+  rust-mutation:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # cargo-mutants uses zero-based shard indices (0/8 through 7/8).
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          cache: false
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --version 27.1.0 --locked
+
+      - name: Run payroll-core mutation shard
+        run: cargo mutants --manifest-path crates/payroll-core/Cargo.toml --package payroll-core --shard "${{ matrix.shard }}/8" --jobs 2 --no-shuffle
+
+      - name: Summarize mutation shard
+        if: always()
+        run: |
+          outcomes="target/cargo-mutants/mutants.out/outcomes.json"
+          if [ -f "$outcomes" ]; then
+            node scripts/summarize-cargo-mutants.mjs "$outcomes"
+          else
+            echo "Mutation outcomes bulunamadı; shard başarısız veya tamamlanmadı."
+          fi
+
+      - name: Upload mutation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payroll-core-mutants-shard-${{ matrix.shard }}
+          path: target/cargo-mutants
+          if-no-files-found: warn
+
+  rust-mutation-summary:
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    needs: rust-mutation
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.2
+
+      - name: Download mutation shard evidence
+        uses: actions/download-artifact@v4
+        with:
+          pattern: payroll-core-mutants-shard-*
+          path: artifacts/mutation
+          merge-multiple: false
+
+      - name: Aggregate mutation evidence
+        run: |
+          mkdir -p artifacts
+          mapfile -t outcomes < <(find artifacts/mutation -type f -name outcomes.json -print)
+          if [ "${#outcomes[@]}" -eq 0 ]; then
+            echo "Mutation shard outcomes bulunamadı."
+            exit 0
+          fi
+          node scripts/summarize-cargo-mutants.mjs "${outcomes[@]}" > artifacts/payroll-core-mutation-summary.json
+          cat artifacts/payroll-core-mutation-summary.json
+
+      - name: Upload aggregate mutation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: payroll-core-mutation-summary
+          path: artifacts/payroll-core-mutation-summary.json
+          if-no-files-found: warn

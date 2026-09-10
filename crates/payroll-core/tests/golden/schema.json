@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bordro-programi.local/schemas/payroll-golden-fixture-v1.json",
+  "title": "Payroll golden fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "description",
+    "legalYear",
+    "parametersVersion",
+    "source",
+    "request",
+    "expected"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^G[0-9]{3}$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "legalYear": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "parametersVersion": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-.+"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "referenceId", "verifiedBy", "verifiedAt", "notes"],
+      "properties": {
+        "type": {
+          "const": "independent_manual_calculation"
+        },
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verifiedBy": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verifiedAt": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["personnelId", "periodId", "calculatedAt", "dataset"],
+      "properties": {
+        "personnelId": { "type": "string", "minLength": 1 },
+        "periodId": { "type": "string", "minLength": 1 },
+        "calculatedAt": { "type": "string", "minLength": 1 },
+        "dataset": {
+          "type": "object",
+          "required": [
+            "personnel",
+            "periods",
+            "institutionSettings",
+            "attendances",
+            "payrolls",
+            "taxOpenings",
+            "sickLeaveRecords",
+            "annualPayrollParameters"
+          ]
+        }
+      }
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assertionProfile", "result"],
+      "properties": {
+        "assertionProfile": {
+          "const": "FULL_FINANCIAL"
+        },
+        "result": {
+          "type": "object",
+          "required": [
+            "id",
+            "personelId",
+            "donemId",
+            "accrualId",
+            "accrualType",
+            "paymentDate",
+            "sequence",
+            "puantajOzeti",
+            "gelirler",
+            "gelirToplam",
+            "kesintiler",
+            "kesintiToplam",
+            "netOdeme",
+            "status",
+            "pekDetay",
+            "gvDetay",
+            "damgaDetay",
+            "devredenPekGelen",
+            "sonrakiDevredenPek",
+            "statutorySnapshot"
+          ]
+        }
+      }
+    }
+  }
+}
