@@ -321,6 +321,7 @@
     "referenceId": "2026-payroll-assurance-manual-v1",
     "type": "independent_manual_calculation",
     "verifiedAt": "2026-09-10",
-    "verifiedBy": "Codex fixture author - independent arithmetic worksheet"
+    "verifiedBy": "Codex fixture author - independent arithmetic worksheet",
+    "evidence": "evidence/G006.md"
   }
 }

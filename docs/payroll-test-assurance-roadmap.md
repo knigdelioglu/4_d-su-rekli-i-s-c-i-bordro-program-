@@ -1,6 +1,6 @@
 # Bordro Test Güvence Yol Haritası
 
-**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, mutation full-run periyodik/manual akışta — 2026-09-10
+**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, mutation full-run periyodik/manual akışta ve henüz pending — 2026-09-10
 
 **Hedef dal:** `main`
 **Kapsam:** `payroll-core`, native Tauri/SQLite akışı, WASM/browser parity ve CI test güvence katmanları
@@ -53,7 +53,8 @@ Dolayısıyla bu yol haritası mevcut regresyon testlerini topluca yeniden yazma
 ## Uygulama durumu
 
 Üç büyük uygulama fazı yaklaşımında Faz 1 ve Faz 2 tamamlandı. Test güvence
-matrisi, 2026 yılı için 33 bağımsız golden fixture, fixture şeması, exact
+matrisi, 2026 yılı için 33 exact golden fixture (15'i bağımsız evidence çalışma
+kâğıdına bağlı), fixture şeması, exact
 `calculate_payroll_checked()` replay testi ve `legalYear`/parametre sürümü
 fail-closed kontrollerine ek olarak property-based testler ve test-only bağımsız
 mali oracle eklendi. Ayrıntılı kapsam
@@ -74,8 +75,9 @@ Uygulama sırası üç büyük faz olarak izlenir:
 1. **Faz 1 — Referans temeli:** güvence matrisi, golden corpus ve yasal yıl/sürüm disiplini. **Tamamlandı.**
 2. **Faz 2 — Bağımsız doğruluk:** property-based testler ve production'dan bağımsız mali oracle. **Tamamlandı.**
 3. **Faz 3 — Sürekli güvence:** mutation, coverage/CI quality gate ve release evidence.
-   **Altyapı tamamlandı; tam mutation skoru periyodik/manual shard koşusundan sonra
-   baseline'a işlenecektir.**
+   **Altyapı tamamlandı; mutation infrastructure blocking, quality findings
+   advisory ve tam skor periyodik/manual shard koşusundan sonra baseline'a
+   işlenecektir.**
 
 ---
 
@@ -256,7 +258,8 @@ Test tüm fixture'ları yükler, `calculate_payroll_checked()` çalıştırır v
 
 ## Kabul kriteri
 
-- En az 30 bağımsız doğrulanmış fixture. **Tamamlandı: 33 fixture.**
+- En az 30 exact golden fixture. **Tamamlandı: 33 fixture; 15 kritik fixture
+  repo içi bağımsız evidence çalışma kâğıdına bağlı, 18 fixture pendingEvidence.**
 - Production kodundan otomatik expected üretimi yok.
 - Tüm golden fixture'lar CI'da çalışıyor. **Tamamlandı: ayrı blocking CI adımı eklendi.**
 - Fixture değişikliği kod değişikliğinden ayrı ve incelemeye açık diff üretir.
@@ -489,16 +492,20 @@ crates/payroll-core/src/validation.rs
 ölçecek şekilde sabitler. Lokal aday listesi **2.147 mutant** üretmiştir;
 `gv_exemption.rs` smoke koşusunda 7 mutantın 6'sı caught, 1'i unviable ve
 0'ı missed olmuştur. Tam kapsam, her haftalık/manual çalışmada 8 shard halinde
-`target/cargo-mutants/**/outcomes.json` artifact'ı olarak saklanır. Unviable
-sonuçlar sessiz exclusion değildir; sonuç sınıflandırmasında ayrı tutulur.
+`target/cargo-mutants/outcomes.json` artifact'ı olarak saklanır. cargo-mutants
+27.1.0'un tool-native `target/mutants.out` çıktısı CI'da tek seferde canonical
+dizine taşınır; collector nested/fallback path aramaz. Unviable sonuçlar
+sessiz exclusion değildir; sonuç sınıflandırmasında ayrı tutulur.
 
 ## Uygulama sırası
 
 1. Lokal mutation baseline çıkar.
 2. Surviving mutant'lar sınıflandırılır.
 3. Gerçek test açığı olan her mutant için test eklenir.
-4. Equivalent/unreachable mutant'lar gerekçeli exclusion ile belgelenir.
-5. CI'ya önce raporlayan non-blocking job olarak girer.
+4. Equivalent/unreachable mutant'lar ancak ayrı kanıt ve inceleme ile
+   belgelenir; blanket survivor exclusion kullanılmaz.
+5. CI'ya infrastructure failure'ı blocking, missed/timeout kalite sonucunu
+   advisory olarak raporlayan job olarak girer.
 6. Baseline oturduktan sonra mutation score gerilemesi blocking hale gelir.
 
 ## Hedef
@@ -537,7 +544,8 @@ Test kapsamının görünür olması ve fark edilmeden gerilememesi.
 regions baseline'ını taşır. `scripts/check-rust-coverage.mjs` her metriği dosya
 bazında karşılaştırır ve düşüşte fail olur. Bu kontrol haftalık/manual CI
 çalışmasında blocking'dir; ilk baseline'da toplam repository için keyfi bir
-minimum yüzde yoktur.
+minimum yüzde yoktur. Coverage job ölçümünde sabit `PROPTEST_RNG_SEED=2026091001`
+kullanır; normal PR property suite keşif için seed'siz kalır.
 
 ## Rust coverage
 
@@ -694,7 +702,9 @@ yazmak öncelik değildir.
 Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul edilir:
 
 - [x] Kritik bordro kuralları için test güvence matrisi mevcut.
-- [x] En az 30 bağımsız doğrulanmış golden bordro mevcut.
+- [x] En az 30 exact golden bordro mevcut; 33 fixture korunuyor.
+- [x] En az 10–15 kritik golden fixture bağımsız repo içi evidence'a bağlı; mevcut kapsam 15/15.
+- [ ] Kalan 18 golden fixture bağımsız evidence çalışma kâğıtlarına bağlandı.
 - [x] Golden expected değerleri production motorundan otomatik üretilmiyor.
 - [x] GV, PEK, payment-event, puantaj/rapor ve Decimal için property testleri mevcut.
 - [x] Property failure'ları replay/shrink edilebilir.
@@ -705,13 +715,19 @@ Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul ed
 - [ ] Mutation score baseline kaydedilmiş ve gerileme politikası uygulanıyor.
 - [x] Rust coverage baseline ölçülmüş ve ratchet policy uygulanıyor.
 - [x] Golden + property testleri normal PR CI akışında blocking.
-- [x] Ağır mutation/coverage/differential suite release veya periyodik gate olarak çalışıyor.
+- [x] Mutation/coverage suite için release veya periyodik/manual workflow yapılandırıldı; mutation full 2.147 sonucu pending.
+- [x] Production 2026 statutory parameter değerleri bağımsız reference fixture ile karşılaştırılıyor.
 - [ ] Her yeni gerçek hesap hatası kalıcı regresyon vakasına dönüştürülüyor.
 - [x] `docs/payroll-assurance-status.md` güncel güvence durumunu gösteriyor.
 
 ---
 
 # 14. Uygulama prensipleri
+
+## GitHub branch protection
+
+Repository içinden GitHub branch protection/ruleset değiştirilemez; bu ayar
+manuel yapılmalıdır. Required check önerisi: `CI / verify`.
 
 1. **Tek production motoru korunur.** Test için ikinci production engine yaratılmaz.
 2. **Oracle bağımsızdır ama test-only'dir.** Production akışına çağrılmaz.

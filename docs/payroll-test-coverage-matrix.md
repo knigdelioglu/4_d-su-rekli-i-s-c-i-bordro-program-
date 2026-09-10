@@ -2,7 +2,8 @@
 
 Bu matris, kritik bordro kurallarını gerçek test/fixture kimlikleriyle
 eşleştirir. `Golden` sütunundaki kimlikler
-`crates/payroll-core/tests/golden/2026/` altındaki bağımsız fixture'ları,
+`crates/payroll-core/tests/golden/2026/` altındaki exact golden fixture'ları
+(bunların 15'i bağımsız `evidence/Gxxx.md` çalışma kâğıdına bağlıdır),
 `Property`/`Oracle` sütunları Faz 2'nin generated differential testlerini,
 diğer sütunlar mevcut regression/parity testlerini gösterir. Faz 3 mutation
 kapsamı ve coverage ratchet'ı tablonun altındaki kalite kanıtı bölümünde
@@ -48,6 +49,18 @@ Durumlar:
 - Fixture sözleşmesi: `crates/payroll-core/tests/golden/schema.json`
 - Fixture kullanım ve ekleme kuralları: `crates/payroll-core/tests/golden/README.md`
 - Minimum corpus kapısı: 30 fixture; mevcut sayı: 33.
+- Evidence durumu: 15 `verified`, 18 `pendingEvidence`; kritik loader bağlantı
+  ve çalışma kâğıdı bölümlerini kontrol eder.
+
+## 2026 statutory parameter kanıtı
+
+- Bağımsız snapshot: `crates/payroll-core/tests/statutory/2026.json`.
+- Karşılaştırma testi: `annual_parameters_regression::production_2026_parameters_match_independent_statutory_reference`.
+- Yıllık GV dilimleri ve yıllık sigorta GV tavanı production default'tan
+  generate edilmez; JSON içindeki bağımsız sabitlerle exact karşılaştırılır.
+- SGK yemek istisnası alanı mevcut 4/D uygulama değeri ile resmi 4/a değeri
+  arasındaki kapsam farkı nedeniyle `needs_authoritative_verification` durumunu
+  açıkça taşır.
 
 ## Faz 2 kanıtı
 
@@ -69,9 +82,15 @@ Durumlar:
   `docs/payroll-mutation-baseline.json` içindedir.
 - Yerel smoke: `gv_exemption.rs` için 6/6 anlamlı mutant caught, 1 unviable,
   0 missed. Tam skor haftalık/manual 8 shard CI artifact'larından alınır.
+- Canonical shard evidence yolu `target/cargo-mutants/outcomes.json`'dır.
+  Eksik baseline/outcomes/shard veya parse edilemeyen JSON infrastructure
+  failure'dır; missed/timeout sonucu full baseline oluşana kadar advisory'dir.
+- Aggregate collector tam 8 shard bekler, duplicate mutant ve denominator/file
+  scope uyuşmazlığında fail olur ve tek machine-readable summary üretir.
 - Coverage baseline: `docs/payroll-coverage-baseline.json`.
 - Ratchet uygulayıcısı: `scripts/check-rust-coverage.mjs`; kritik dosyaların
-  lines/functions/regions metrikleri baseline'ın altına inemez.
+  lines/functions/regions metrikleri baseline'ın altına inemez. Weekly/manual
+  ölçüm `PROPTEST_RNG_SEED=2026091001` ile çalışır; PR property keşfi sabitlenmez.
 
 Golden sütunundaki
 `—` işareti mevcut regression kapsamının zayıf olduğu anlamına gelmez; yalnızca

@@ -11,7 +11,10 @@ examine_globs = [
 
 test_package = ["payroll-core"]
 test_tool = "cargo"
-output = "target/cargo-mutants"
+# cargo-mutants 27.1.0 creates `mutants.out` below this parent directory.
+# CI moves that single completed run directory to the repository's canonical
+# artifact directory: target/cargo-mutants/.
+output = "target"
 timeout_multiplier = 2.0
 build_timeout_multiplier = 2.0
 minimum_test_timeout = 30.0

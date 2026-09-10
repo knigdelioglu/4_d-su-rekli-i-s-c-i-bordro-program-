@@ -1,8 +1,18 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "status": "pending",
   "tool": "cargo-mutants",
   "toolVersion": "27.1.0",
   "measuredAt": "2026-09-10",
+  "commit": "77ff5237b28a88bc8d868b7edb14aa26e009628c",
+  "commitRole": "candidate discovery / last verified repository baseline commit; full mutation run is not represented",
+  "total": 0,
+  "caught": 0,
+  "missed": 0,
+  "timeout": 0,
+  "unviable": 0,
+  "meaningful": 0,
+  "scorePercent": 0,
   "scope": [
     "crates/payroll-core/src/calculations.rs",
     "crates/payroll-core/src/gv_exemption.rs",
@@ -23,9 +33,15 @@
     }
   },
   "fullRun": {
-    "status": "scheduled_or_manual_sharded_run",
+    "status": "pending",
     "shards": 8,
-    "sourceOfTruth": "payroll-core-mutation-summary artifact aggregated from cargo-mutants outcomes.json"
+    "expectedShards": 8,
+    "outputPath": "target/cargo-mutants/outcomes.json",
+    "sourceOfTruth": "payroll-core-mutation-summary artifact aggregated from the eight canonical cargo-mutants outcomes.json files",
+    "qualityMode": "advisory",
+    "infrastructureFailure": "blocking",
+    "comparisonScript": "scripts/check-cargo-mutants-baseline.mjs",
+    "pendingValuesAreSentinels": true
   },
   "localSmokeRun": {
     "scope": "crates/payroll-core/src/gv_exemption.rs",
@@ -40,7 +56,9 @@
   "policy": {
     "meaningfulScore": "caught / (total - unviable)",
     "unviableHandling": "cargo-mutants sonucu olarak raporlanır; config içinde sessizce bastırılmaz",
-    "initialCiMode": "non-blocking; weekly schedule veya workflow_dispatch",
-    "futureGate": "baseline'a göre mutation score düşüşü ve yeni gerekçesiz surviving mutant blocking olur"
+    "initialCiMode": "weekly schedule veya workflow_dispatch; infrastructure blocking, missed/timeout quality findings advisory",
+    "baselineLifecycle": "Bu dosya full run tamamlanana kadar pending kalır. Gerçek artifact'tan gelen aggregate summary inceleme sonrası root total/caught/missed/timeout/unviable/meaningful/scorePercent alanlarını doldurur; sentinel değerler önceden skor sayılmaz.",
+    "futureGate": "scripts/check-cargo-mutants-baseline.mjs score düşüşünü, yeni missed mutant'ı ve timeout artışını advisory kalite regression olarak raporlar; baseline politikası onaylandıktan sonra blocking yapılabilir.",
+    "survivorPolicy": "Survivor'lar blanket exclusion listesine alınmaz; her equivalent/unreachable kararı ayrı kanıt ve inceleme gerektirir."
   }
 }

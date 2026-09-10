@@ -164,6 +164,10 @@ jobs:
   rust-coverage:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
+    env:
+      # Measurement runs must be reproducible; the normal PR property suite
+      # intentionally does not inherit this seed.
+      PROPTEST_RNG_SEED: "2026091001"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -201,8 +205,11 @@ jobs:
 
   rust-mutation:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    continue-on-error: true
     runs-on: ubuntu-latest
+    env:
+      # Keep mutation quality measurements stable without restricting normal
+      # PR property-test exploration.
+      PROPTEST_RNG_SEED: "2026091001"
     strategy:
       fail-fast: false
       matrix:
@@ -222,17 +229,51 @@ jobs:
         run: cargo install cargo-mutants --version 27.1.0 --locked
 
       - name: Run payroll-core mutation shard
-        run: cargo mutants --manifest-path crates/payroll-core/Cargo.toml --package payroll-core --shard "${{ matrix.shard }}/8" --jobs 2 --no-shuffle
+        run: |
+          set -euo pipefail
+          set +e
+          cargo mutants \
+            --manifest-path crates/payroll-core/Cargo.toml \
+            --package payroll-core \
+            --shard "${{ matrix.shard }}/8" \
+            --jobs 2 \
+            --no-shuffle
+          mutation_status=$?
+          set -e
+
+          # cargo-mutants uses these exit codes for completed quality findings.
+          # All other codes represent an infrastructure or baseline failure.
+          case "$mutation_status" in
+            0|2|3)
+              ;;
+            *)
+              echo "::error::cargo-mutants infrastructure failure (exit $mutation_status)."
+              exit "$mutation_status"
+              ;;
+          esac
+
+          tool_output="target/mutants.out"
+          canonical_output="target/cargo-mutants"
+          if [ ! -f "$tool_output/outcomes.json" ]; then
+            echo "::error::cargo-mutants completed without $tool_output/outcomes.json."
+            exit 1
+          fi
+          if [ -e "$canonical_output" ]; then
+            echo "::error::Canonical mutation output already exists: $canonical_output"
+            exit 1
+          fi
+          mkdir -p "$(dirname "$canonical_output")"
+          mv "$tool_output" "$canonical_output"
+          test -f "$canonical_output/outcomes.json"
 
       - name: Summarize mutation shard
         if: always()
         run: |
-          outcomes="target/cargo-mutants/mutants.out/outcomes.json"
-          if [ -f "$outcomes" ]; then
-            node scripts/summarize-cargo-mutants.mjs "$outcomes"
-          else
-            echo "Mutation outcomes bulunamadı; shard başarısız veya tamamlanmadı."
-          fi
+          set -euo pipefail
+          outcomes="target/cargo-mutants/outcomes.json"
+          test -f "$outcomes"
+          node scripts/summarize-cargo-mutants.mjs "$outcomes" > target/cargo-mutants/shard-summary.json
+          cat target/cargo-mutants/shard-summary.json
 
       - name: Upload mutation evidence
         if: always()
@@ -240,12 +281,11 @@ jobs:
         with:
           name: payroll-core-mutants-shard-${{ matrix.shard }}
           path: target/cargo-mutants
-          if-no-files-found: warn
+          if-no-files-found: error
 
   rust-mutation-summary:
     if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
     needs: rust-mutation
-    continue-on-error: true
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -264,15 +304,34 @@ jobs:
           merge-multiple: false
 
       - name: Aggregate mutation evidence
+        if: always()
         run: |
-          mkdir -p artifacts
-          mapfile -t outcomes < <(find artifacts/mutation -type f -name outcomes.json -print)
-          if [ "${#outcomes[@]}" -eq 0 ]; then
-            echo "Mutation shard outcomes bulunamadı."
-            exit 0
+          set -euo pipefail
+          shard_job_result="${{ needs.rust-mutation.result }}"
+          if [ "$shard_job_result" != "success" ]; then
+            echo "::warning::Mutation shard job sonucu $shard_job_result; exact artifact doğrulaması yine çalıştırılıyor."
           fi
-          node scripts/summarize-cargo-mutants.mjs "${outcomes[@]}" > artifacts/payroll-core-mutation-summary.json
+          mkdir -p artifacts
+          outcomes=()
+          for shard in 0 1 2 3 4 5 6 7; do
+            path="artifacts/mutation/payroll-core-mutants-shard-${shard}/target/cargo-mutants/outcomes.json"
+            if [ ! -f "$path" ]; then
+              echo "::error::Expected mutation shard artifact is missing: $path"
+              exit 1
+            fi
+            outcomes+=("$path")
+          done
+          summary_tmp="artifacts/payroll-core-mutation-summary.json.tmp"
+          node scripts/summarize-cargo-mutants.mjs \
+            --expected-shards 8 \
+            --baseline docs/payroll-mutation-baseline.json \
+            "${outcomes[@]}" > "$summary_tmp"
+          mv "$summary_tmp" artifacts/payroll-core-mutation-summary.json
           cat artifacts/payroll-core-mutation-summary.json
+          if [ "$shard_job_result" != "success" ]; then
+            echo "::error::At least one mutation shard failed infrastructure validation."
+            exit 1
+          fi
 
       - name: Upload aggregate mutation evidence
         if: always()
@@ -280,4 +339,4 @@ jobs:
         with:
           name: payroll-core-mutation-summary
           path: artifacts/payroll-core-mutation-summary.json
-          if-no-files-found: warn
+          if-no-files-found: error

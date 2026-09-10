@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "year": 2026,
+  "verificationStatus": "partial",
+  "generatedFromProduction": false,
+  "source": {
+    "type": "independent_statutory_reference",
+    "verifiedAt": "2026-09-10",
+    "notes": "Annual and period values are manually transcribed from the cited official 2026 sources. The repository's SGK meal value is retained as the current 4/D application snapshot until the scope of the official 4/a value is authoritatively resolved; this fixture does not authorize a production change."
+  },
+  "annualPayrollParameters": {
+    "year": {
+      "value": 2026,
+      "source": "GİB 2026 Gelir Vergisi Tarifesi",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "2026 tax year."
+    },
+    "incomeTaxBrackets": {
+      "value": [
+        { "limit": "190000", "rate": "0.15" },
+        { "limit": "400000", "rate": "0.20" },
+        { "limit": "1500000", "rate": "0.27" },
+        { "limit": "5300000", "rate": "0.35" },
+        { "limit": "1000000000000000", "rate": "0.40" }
+      ],
+      "source": "GİB 2026 Gelir Vergisi Tarifesi",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "The final finite limit is the repository persistence sentinel for an open-ended 40% bracket."
+    },
+    "annualGrossMinimumWage": {
+      "value": "396360.00",
+      "source": "ÇSGB 2026 Asgari Ücret; SGK 2026 Prime Esas Kazanç Miktarları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Monthly gross minimum wage 33,030.00 × 12."
+    },
+    "annualInsuranceGrossMinimumWageCap": {
+      "value": "396360.00",
+      "source": "SGK 2026 Prime Esas Kazanç Miktarları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Annual GVK 63/3 insurance deduction reference ceiling used by the annual parameter contract."
+    }
+  },
+  "periodParameters": {
+    "dailyMinimumWage": {
+      "value": "1101.00",
+      "source": "SGK 2026 Prime Esas Kazanç Miktarları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Daily gross minimum wage."
+    },
+    "monthlyMinimumWage": {
+      "value": "33030.00",
+      "source": "ÇSGB 2026 Asgari Ücret; SGK 2026 Prime Esas Kazanç Miktarları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Daily minimum wage 1,101.00 × 30."
+    },
+    "monthlyMinimumWageGvBase": {
+      "value": "28075.50",
+      "source": "Independent exact derivation from 2026 gross minimum wage and employee statutory rates",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "33,030.00 − (33,030.00 × 0.14) − (33,030.00 × 0.01)."
+    },
+    "workerSgkRatePercent": {
+      "value": "14.00",
+      "source": "SGK 2026 İşveren Prim Oranları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Employee long-term insurance 9% + general health insurance 5%."
+    },
+    "workerUnemploymentRatePercent": {
+      "value": "1.00",
+      "source": "SGK 2026 İşveren Prim Oranları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Employee unemployment insurance contribution."
+    },
+    "employerSgkRatePercent": {
+      "value": "21.75",
+      "source": "SGK 2026 İşveren Prim Oranları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Employer components total 12% + 7.5% + 2.25%."
+    },
+    "employerUnemploymentRatePercent": {
+      "value": "2.00",
+      "source": "SGK 2026 İşveren Prim Oranları; ÇSGB 2026 Asgari Ücret",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Employer unemployment insurance contribution."
+    },
+    "pekCeilingMultiplier": {
+      "value": "9.00",
+      "source": "SGK 2026 Prime Esas Kazanç Miktarları",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "4/a daily PEK upper limit is 9 times the daily lower limit."
+    },
+    "stampTaxRatePerMille": {
+      "value": "7.59",
+      "source": "GİB 488 Sayılı Damga Vergisi Kanunu Genel Tebliği Seri No: 71",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Payroll wage and salary rate, per mille."
+    },
+    "gvMealExemptionDaily": {
+      "value": "300.00",
+      "source": "GİB 2026 yemek bedeli istisnası duyurusu",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Daily income-tax meal exemption."
+    },
+    "sgkMealExemptionDaily": {
+      "value": "300.00",
+      "source": "Repository 4/D application snapshot; official 4/a comparison recorded below",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "needs_authoritative_verification",
+      "authoritativeComparison": {
+        "value": "158.00",
+        "source": "SGK 2026 Prime Esas Kazanç Miktarları page (4/a scope)",
+        "effectiveFrom": "2026-01-01",
+        "verificationStatus": "needs_authoritative_verification",
+        "notes": "The official page states 158.00 TL for 4/a. The application and golden fixtures currently use 300.00 TL for the 4/D workflow; the legal scope must be confirmed before changing either production or evidence."
+      },
+      "notes": "Do not treat the current application snapshot as a confirmed universal statutory value."
+    },
+    "annualMinimumWageGvExemptionReference": {
+      "value": "28075.50",
+      "source": "Independent exact derivation from cited 2026 minimum wage and contribution rates",
+      "effectiveFrom": "2026-01-01",
+      "verificationStatus": "verified",
+      "notes": "Monthly reference GV base used to derive the monthly minimum-wage GV and stamp exemptions."
+    }
+  },
+  "references": [
+    {
+      "name": "GİB 2026 Gelir Vergisi Tarifesi",
+      "url": "https://cdn.gib.gov.tr/api/gibportal-file/file/getFileResources?objectKey=arsiv/yardim-kaynaklar/yararli-bilgiler/gelir-vergisi-tarifeleri/gelir-vergisi-tarifesi-2026.pdf"
+    },
+    {
+      "name": "GİB yemek bedeli istisnası",
+      "url": "https://usak.gib.gov.tr/vergi-konulari/1_bireysel/11_ucret_geliri/11"
+    },
+    {
+      "name": "SGK 2026 Prime Esas Kazanç Miktarları",
+      "url": "https://www.sgk.gov.tr/Content/Post/2e0c9e1a-2cfe-4456-af10-49d3de0c58ba/Prime-Esas-Kazanc-Miktarlari-2026-01-14-10-35-39"
+    },
+    {
+      "name": "SGK 2026 İşveren Prim Oranları",
+      "url": "https://www.sgk.gov.tr/Content/Post/c7812ea8-5087-413f-aeb5-d3c1d153e11a/Isveren-Prim-Oranlari-2026-01-13-04-52-38"
+    },
+    {
+      "name": "ÇSGB 2026 Asgari Ücret",
+      "url": "https://csgb.gov.tr/poco-pages/asgari-ucret/"
+    },
+    {
+      "name": "GİB Damga Vergisi Tebliğ 71",
+      "url": "https://cdn.gib.gov.tr/api/gibportal-file/file/getFile?objectKey=MEVZUAT_TEBLIGLER/UNIVERSAL/2025/488_Teblig71.pdf"
+    }
+  ]
+}

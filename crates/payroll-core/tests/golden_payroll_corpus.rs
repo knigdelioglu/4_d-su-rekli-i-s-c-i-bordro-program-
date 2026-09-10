@@ -10,6 +10,10 @@ const GOLDEN_SCHEMA_VERSION: u32 = 1;
 const MINIMUM_GOLDEN_CASES: usize = 30;
 const EXPECTED_ASSERTION_PROFILE: &str = "FULL_FINANCIAL";
 const EXPECTED_SOURCE_TYPE: &str = "independent_manual_calculation";
+const VERIFIED_EVIDENCE_IDS: &[&str] = &[
+    "G001", "G003", "G006", "G007", "G009", "G010", "G011", "G013", "G014", "G016", "G017", "G029",
+    "G030", "G031", "G032",
+];
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,6 +37,7 @@ struct GoldenSource {
     verified_by: String,
     verified_at: String,
     notes: String,
+    evidence: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -119,6 +124,76 @@ fn period_for_request(request: &PayrollCalculationRequest) -> &BordroDonemi {
         .unwrap_or_else(|| panic!("{} request'i aktif period içermiyor", request.periodId))
 }
 
+fn assert_evidence(path: &Path, fixture: &GoldenFixture) {
+    let Some(evidence) = fixture.source.evidence.as_deref() else {
+        assert!(
+            !VERIFIED_EVIDENCE_IDS.contains(&fixture.id.as_str()),
+            "{} kritik fixture için evidence yolu eksik",
+            path.display()
+        );
+        return;
+    };
+
+    assert!(
+        VERIFIED_EVIDENCE_IDS.contains(&fixture.id.as_str()),
+        "{} kritik liste dışında evidence işaretliyor",
+        path.display()
+    );
+    let evidence_path = Path::new(evidence);
+    assert!(
+        !evidence_path.is_absolute()
+            && !evidence_path
+                .components()
+                .any(|component| component == std::path::Component::ParentDir),
+        "{} evidence yolu repo-relative ve parent traversal içermemeli",
+        path.display()
+    );
+    assert!(
+        evidence.starts_with("evidence/"),
+        "{} evidence yolu evidence/ altında olmalı",
+        path.display()
+    );
+
+    let golden_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden");
+    let evidence_path = golden_root.join(evidence_path);
+    let content = fs::read_to_string(&evidence_path).unwrap_or_else(|error| {
+        panic!(
+            "{} ({}) bağımsız evidence okunamadı: {error}",
+            path.display(),
+            fixture.id
+        )
+    });
+    assert!(
+        content.contains(&format!("# {}", fixture.id)),
+        "{} evidence fixture id'sini açıkça taşımalı",
+        evidence_path.display()
+    );
+    for marker in [
+        "## Sabit girdiler",
+        "## Gelir hesabı",
+        "## PEK hesabı",
+        "## İşçi primleri",
+        "## GV hesabı",
+        "## DV hesabı",
+        "## Kesinti toplamı ve net ödeme",
+        "## Kaynak / referans notu",
+        "## Doğrulama tarihi",
+    ] {
+        assert!(
+            content.contains(marker),
+            "{} evidence bölümü eksik: {marker}",
+            evidence_path.display()
+        );
+    }
+    for forbidden in ["calculate_payroll_checked(", "calculate_payroll("] {
+        assert!(
+            !content.contains(forbidden),
+            "{} production hesap çağrısı evidence içine yazılamaz: {forbidden}",
+            evidence_path.display()
+        );
+    }
+}
+
 fn assert_fixture_metadata(path: &Path, fixture: &GoldenFixture) {
     assert_eq!(
         fixture.schema_version,
@@ -171,6 +246,7 @@ fn assert_fixture_metadata(path: &Path, fixture: &GoldenFixture) {
             path.display()
         )
     });
+    assert_evidence(path, fixture);
 
     assert_eq!(
         fixture.expected.assertion_profile,
@@ -282,6 +358,7 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
     );
 
     let mut ids = HashSet::new();
+    let mut evidence_count = 0;
     for path in paths {
         let payload = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("{} okunamadı: {error}", path.display()));
@@ -295,6 +372,9 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
             path.display(),
             fixture.id
         );
+        if fixture.source.evidence.is_some() {
+            evidence_count += 1;
+        }
 
         let actual = calculate_payroll_checked(&fixture.request).unwrap_or_else(|error| {
             panic!(
@@ -317,4 +397,10 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
             fixture.id
         );
     }
+
+    assert_eq!(
+        evidence_count,
+        VERIFIED_EVIDENCE_IDS.len(),
+        "kritik golden evidence kapsamı beklenen 15 fixture ile eşleşmeli"
+    );
 }
