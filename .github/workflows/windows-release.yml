@@ -112,6 +112,19 @@ jobs:
 
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
+            # GitHub identifies an asset by both its stored filename and its
+            # display label. Remove an older asset with either value before
+            # replacing it so rerunning this test release stays idempotent.
+            $release = gh release view $tag --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+            $existingAssets = @($release.assets | Where-Object {
+              $_.name -eq (Split-Path -Leaf $env:INSTALLER_PATH) -or
+              $_.label -eq $env:RELEASE_ASSET_NAME
+            })
+            foreach ($existingAsset in $existingAssets) {
+              Write-Host "Removing existing release asset $($existingAsset.name)..."
+              gh release delete-asset $tag $existingAsset.name --repo $env:GITHUB_REPOSITORY --yes
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            }
             gh release upload $tag $asset --clobber --repo $env:GITHUB_REPOSITORY
           } else {
             gh release create $tag $asset `
