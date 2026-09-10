@@ -136,3 +136,9 @@ Bunlar bordro business rule'ları değil, bozuk snapshot'ın authoritative state
 girmesini önleyen storage kontrolleridir.
 
 Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. Aynı kayıt içindeki normal GV ve asgari GV opening tutarları bağımsızdır; her biri kendi `effectiveFromPeriodId` değeri üzerinden ilgili dönemin `taxYear`/`taxMonth` alanına çözülür. Personel formundaki devir alanları yalnızca bu tabloda aynı vergi yılı için ayrı açılış bulunmadığında geriye dönük uyumluluk fallback'idir; iki kaynak çakışırsa tablo kaydı önceliklidir.
+
+## Test güvence yol haritası
+
+Mevcut regresyon ve invariant testlerini daha yüksek doğruluk güvencesine taşımak için Golden Payroll Corpus, property-based testing, bağımsız reference oracle, mutation testing ve coverage/CI quality gate aşamaları planlanmıştır.
+
+Ayrıntılı plan: [`docs/payroll-test-assurance-roadmap.md`](docs/payroll-test-assurance-roadmap.md)
