@@ -9,6 +9,7 @@
     "build": "bun run verify:wasm-freshness && vite build",
     "web:verify": "bun scripts/verify-web-build.mjs",
     "verify:wasm-package": "bun scripts/verify-wasm-package.mjs",
+    "verify:wasm-binary": "node scripts/verify-wasm-binary.mjs",
     "verify:wasm-freshness": "bun scripts/verify-wasm-freshness.mjs",
     "wasm:build": "node scripts/build-wasm.mjs",
     "wasm:test": "wasm-pack test --node crates/payroll-wasm",

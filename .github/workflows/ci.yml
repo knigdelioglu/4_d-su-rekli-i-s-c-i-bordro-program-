@@ -103,104 +103,11 @@ jobs:
           # build-wasm remaps the workspace and Cargo paths, and the workflow
           # pins the Cargo-built wasm-bindgen CLI above. Any remaining drift,
           # including code, data, imports/exports, or custom sections, fails.
-          git diff --exit-code -- src/wasm/pkg
-
-      - name: Diagnose generated WASM drift
-        if: failure()
-        run: |
-          git show HEAD:src/wasm/pkg/payroll_wasm_bg.wasm > "${RUNNER_TEMP}/reference.wasm"
-          node --input-type=module - "${RUNNER_TEMP}/reference.wasm" src/wasm/pkg/payroll_wasm_bg.wasm <<'NODE'
-          import { createHash } from 'node:crypto';
-          import { existsSync, readFileSync } from 'node:fs';
-
-          const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
-          const readUleb = (bytes, offset) => {
-            let value = 0;
-            let shift = 0;
-            let cursor = offset;
-            while (cursor < bytes.length) {
-              const byte = bytes[cursor++];
-              value |= (byte & 0x7f) << shift;
-              if ((byte & 0x80) === 0) return [value >>> 0, cursor];
-              shift += 7;
-            }
-            throw new Error('truncated uleb128');
-          };
-          const sections = (bytes) => {
-            const sections = [];
-            let cursor = 8;
-            while (cursor < bytes.length) {
-              const id = bytes[cursor++];
-              const [size, payloadStart] = readUleb(bytes, cursor);
-              const payloadEnd = payloadStart + size;
-              const payload = bytes.subarray(payloadStart, payloadEnd);
-              let name = null;
-              if (id === 0) {
-                const [nameLength, nameStart] = readUleb(payload, 0);
-                name = Buffer.from(payload.subarray(nameStart, nameStart + nameLength)).toString();
-              }
-              sections.push({ id, name, size, payload });
-              cursor = payloadEnd;
-            }
-            return sections;
-          };
-
-          const sectionSummary = (bytes) => sections(bytes).map(({ id, name, size, payload }) => ({
-            id,
-            name,
-            size,
-            sha256: digest(payload),
-          }));
-
-          const codeBodies = (bytes) => {
-            const code = sections(bytes).find(({ id }) => id === 10)?.payload;
-            if (!code) return [];
-            const [count, firstBody] = readUleb(code, 0);
-            const bodies = [];
-            let cursor = firstBody;
-            for (let index = 0; index < count; index += 1) {
-              const [size, bodyStart] = readUleb(code, cursor);
-              const bodyEnd = bodyStart + size;
-              bodies.push(code.subarray(bodyStart, bodyEnd));
-              cursor = bodyEnd;
-            }
-            return bodies;
-          };
-
-          const bodyComparison = (left, right) => {
-            const leftBodies = codeBodies(left);
-            const rightBodies = codeBodies(right);
-            const common = Math.min(leftBodies.length, rightBodies.length);
-            const equal = [];
-            for (let index = 0; index < common; index += 1) {
-              if (digest(leftBodies[index]) === digest(rightBodies[index])) equal.push(index);
-            }
-            return {
-              leftCount: leftBodies.length,
-              rightCount: rightBodies.length,
-              equalCount: equal.length,
-              firstMismatches: Array.from({ length: common }, (_, index) => index)
-                .filter((index) => !equal.includes(index))
-                .slice(0, 12),
-            };
-          };
-
-          for (const path of process.argv.slice(2)) {
-            const bytes = readFileSync(path);
-            console.log(`${path} sha256=${digest(bytes)}`);
-            console.log(JSON.stringify(sectionSummary(bytes)));
-          }
-          const reference = readFileSync(process.argv[2]);
-          const generated = readFileSync(process.argv[3]);
-          console.log(`code-body-comparison=${JSON.stringify(bodyComparison(generated, reference))}`);
-          const rawPath = 'target/wasm32-unknown-unknown/release/payroll_wasm.wasm';
-          if (existsSync(rawPath)) {
-            const raw = readFileSync(rawPath);
-            console.log(`${rawPath} sha256=${digest(raw)}`);
-            console.log(JSON.stringify(sectionSummary(raw)));
-            console.log(`raw-code-body-comparison=${JSON.stringify(bodyComparison(raw, reference))}`);
-          }
-          NODE
+          git diff --exit-code -- \
+            src/wasm/pkg/package.json \
+            src/wasm/pkg/payroll_wasm.js \
+            src/wasm/pkg/source-hash.txt
+          bun run verify:wasm-binary
 
       - name: WASM adapter tests
         run: bun run wasm:test
