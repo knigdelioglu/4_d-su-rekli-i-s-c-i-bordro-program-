@@ -207,6 +207,44 @@ function dataFingerprintSummary(fingerprint) {
   }));
 }
 
+function maskedDataBytes(segment) {
+  const masked = Buffer.from(segment.bytes);
+  for (const span of findPathSpans(segment.bytes)) masked.fill(0, span.start, span.end);
+  return masked;
+}
+
+function dataDiffSummary(referenceSegments, generatedSegments) {
+  const summary = [];
+  const count = Math.min(referenceSegments.length, generatedSegments.length);
+  for (let index = 0; index < count; index += 1) {
+    const referenceBytes = maskedDataBytes(referenceSegments[index]);
+    const generatedBytes = maskedDataBytes(generatedSegments[index]);
+    const firstDifferences = [];
+    let differenceCount = 0;
+    const common = Math.min(referenceBytes.length, generatedBytes.length);
+    for (let byteIndex = 0; byteIndex < common; byteIndex += 1) {
+      if (referenceBytes[byteIndex] !== generatedBytes[byteIndex]) {
+        differenceCount += 1;
+        if (firstDifferences.length < 24) {
+          firstDifferences.push({
+            offset: byteIndex,
+            reference: referenceBytes[byteIndex],
+            generated: generatedBytes[byteIndex],
+          });
+        }
+      }
+    }
+    summary.push({
+      segment: index,
+      referenceLength: referenceBytes.length,
+      generatedLength: generatedBytes.length,
+      differenceCount,
+      firstDifferences,
+    });
+  }
+  return summary;
+}
+
 class PathAddressMap {
   constructor(segments) {
     this.entries = segments.flatMap((segment) => {
@@ -449,7 +487,7 @@ function compareSections(reference, generated) {
   const generatedDataFingerprint = JSON.stringify(dataFingerprint(generatedData));
   if (referenceDataFingerprint !== generatedDataFingerprint) {
     fail(
-      `WASM data section metadata-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))}`,
+      `WASM data section metadata-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))} diff=${JSON.stringify(dataDiffSummary(referenceData, generatedData))}`,
     );
   }
 
