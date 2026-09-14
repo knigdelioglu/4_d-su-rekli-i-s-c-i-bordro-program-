@@ -37,7 +37,7 @@
     "source": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "referenceId", "verifiedBy", "verifiedAt", "notes"],
+      "required": ["type", "referenceId", "verifiedBy", "verifiedAt", "verificationStatus", "notes"],
       "properties": {
         "type": {
           "const": "independent_manual_calculation"
@@ -53,6 +53,9 @@
         "verifiedAt": {
           "type": "string",
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "verificationStatus": {
+          "enum": ["verified", "pendingEvidence"]
         },
         "notes": {
           "type": "string",

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 const USAGE =
-  'Kullanım: node scripts/summarize-cargo-mutants.mjs [--expected-shards N] [--baseline path] <outcomes.json> [<outcomes.json> ...]';
+  'Kullanım: node scripts/summarize-cargo-mutants.mjs [--expected-shards N] [--baseline path] [--shard ID=outcomes.json ...]';
 
 function fail(message) {
   console.error(`cargo-mutants evidence: ${message}`);
@@ -9,13 +9,27 @@ function fail(message) {
 }
 
 function parseInteger(value, name) {
-  if (!/^\d+$/.test(value)) fail(`${name} pozitif bir tam sayı olmalı: ${value}`);
-  return Number(value);
+  if (!/^\d+$/.test(value)) fail(`${name} sıfır veya pozitif bir tam sayı olmalı: ${value}`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) fail(`${name} güvenli bir tam sayı olmalı: ${value}`);
+  return parsed;
+}
+
+function parseShard(value) {
+  const separator = value.indexOf('=');
+  if (separator <= 0 || separator === value.length - 1) {
+    fail(`--shard ID=outcomes.json biçiminde olmalı: ${value}`);
+  }
+  return {
+    id: parseInteger(value.slice(0, separator), '--shard id'),
+    path: value.slice(separator + 1),
+  };
 }
 
 function parseArguments() {
   const args = process.argv.slice(2);
   const outcomesPaths = [];
+  const shardInputs = [];
   let expectedShards = null;
   let baselinePath = null;
 
@@ -27,6 +41,12 @@ function parseArguments() {
       expectedShards = parseInteger(value, '--expected-shards');
     } else if (arg.startsWith('--expected-shards=')) {
       expectedShards = parseInteger(arg.slice('--expected-shards='.length), '--expected-shards');
+    } else if (arg === '--shard') {
+      const value = args[++index];
+      if (value === undefined) fail(USAGE);
+      shardInputs.push(parseShard(value));
+    } else if (arg.startsWith('--shard=')) {
+      shardInputs.push(parseShard(arg.slice('--shard='.length)));
     } else if (arg === '--baseline') {
       baselinePath = args[++index];
       if (baselinePath === undefined) fail(USAGE);
@@ -37,15 +57,41 @@ function parseArguments() {
     }
   }
 
-  if (outcomesPaths.length === 0) fail(USAGE);
-  if (expectedShards !== null && outcomesPaths.length !== expectedShards) {
-    fail(`beklenen shard sayısı ${expectedShards}, bulunan outcomes sayısı ${outcomesPaths.length}`);
+  if (outcomesPaths.length > 0 && shardInputs.length > 0) {
+    fail('outcomes yolları ile --shard girdileri birlikte kullanılamaz');
   }
-  if (new Set(outcomesPaths).size !== outcomesPaths.length) {
+  if (outcomesPaths.length === 0 && shardInputs.length === 0) fail(USAGE);
+
+  const inputs =
+    shardInputs.length > 0
+      ? shardInputs
+      : outcomesPaths.map((path, index) => ({ id: index, path }));
+
+  if (expectedShards !== null && inputs.length !== expectedShards) {
+    fail(`beklenen shard sayısı ${expectedShards}, bulunan outcomes sayısı ${inputs.length}`);
+  }
+  if (expectedShards !== null && expectedShards > 1 && shardInputs.length === 0) {
+    fail('çoklu shard aggregate için her giriş --shard ID=outcomes.json ile verilmelidir');
+  }
+
+  const shardIds = inputs.map(({ id }) => id);
+  if (new Set(shardIds).size !== shardIds.length) {
+    fail('aynı shard ID birden fazla kez verildi');
+  }
+  if (expectedShards !== null) {
+    const expectedIds = Array.from({ length: expectedShards }, (_, index) => index);
+    const actualIds = [...shardIds].sort((left, right) => left - right);
+    if (JSON.stringify(actualIds) !== JSON.stringify(expectedIds)) {
+      fail(`shard ID kümesi 0..${expectedShards - 1} olmalı; bulunan ${actualIds.join(', ')}`);
+    }
+  }
+
+  const inputPaths = inputs.map(({ path }) => path);
+  if (new Set(inputPaths).size !== inputPaths.length) {
     fail('aynı outcomes.json yolu birden fazla kez verildi');
   }
 
-  return { outcomesPaths, expectedShards, baselinePath };
+  return { inputs, expectedShards, baselinePath };
 }
 
 function readJson(path, label) {
@@ -75,7 +121,7 @@ function isMutantScenario(scenario) {
   );
 }
 
-function validateReport(report, path) {
+function validateReport(report, path, shardId) {
   if (!report || typeof report !== 'object' || Array.isArray(report)) {
     fail(`${path}: outcomes kökü object olmalı`);
   }
@@ -104,6 +150,15 @@ function validateReport(report, path) {
   }
   if (baseline.phase_results.some((phase) => phase?.process_status !== 'Success')) {
     fail(`${path}: baseline Build/Test fazlarından biri başarılı değil`);
+  }
+
+  for (const field of ['shard', 'shard_id', 'shardId']) {
+    if (report[field] !== undefined) {
+      const reportedShard = Number(report[field]);
+      if (!Number.isSafeInteger(reportedShard) || reportedShard !== shardId) {
+        fail(`${path}: report shard ID ${shardId} ile uyuşmuyor`);
+      }
+    }
   }
 
   const counts = {
@@ -197,8 +252,11 @@ function validateBaseline(baselinePath, mutants, total, version) {
   }
 }
 
-const { outcomesPaths, expectedShards, baselinePath } = parseArguments();
-const reports = outcomesPaths.map((path) => validateReport(readJson(path, 'cargo-mutants outcomes'), path));
+const { inputs, expectedShards, baselinePath } = parseArguments();
+const reports = inputs.map(({ id, path }) => ({
+  shardId: id,
+  ...validateReport(readJson(path, 'cargo-mutants outcomes'), path, id),
+}));
 const versions = new Set(reports.map((report) => report.version));
 if (versions.size !== 1) fail('shard outcomes cargo-mutants sürümü aynı değil');
 
@@ -230,6 +288,7 @@ const summary = {
   toolVersion: reports[0].version,
   reports: reports.length,
   shards: expectedShards ?? reports.length,
+  shardIds: reports.map((report) => report.shardId).sort((left, right) => left - right),
   total,
   caught,
   missed,

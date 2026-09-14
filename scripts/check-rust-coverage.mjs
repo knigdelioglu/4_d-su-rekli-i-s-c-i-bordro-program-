@@ -50,6 +50,30 @@ const failures = [];
 const checked = [];
 const metrics = ['lines', 'functions', 'regions'];
 
+function readMetric(metricValue, label) {
+  if (!metricValue || typeof metricValue !== 'object' || Array.isArray(metricValue)) {
+    failures.push(`${label}: metric object eksik`);
+    return null;
+  }
+
+  const { count, covered, percent } = metricValue;
+  if (
+    !Number.isSafeInteger(count) ||
+    count <= 0 ||
+    !Number.isSafeInteger(covered) ||
+    covered < 0 ||
+    covered > count
+  ) {
+    failures.push(`${label}: count/covered geçersiz`);
+    return null;
+  }
+  if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0 || percent > 100) {
+    failures.push(`${label}: percent geçersiz`);
+    return null;
+  }
+  return { count, covered, percent };
+}
+
 for (const [relativePath, baselineFile] of Object.entries(baseline.files ?? {})) {
   const matches = findReportFiles(relativePath);
 
@@ -67,22 +91,24 @@ for (const [relativePath, baselineFile] of Object.entries(baseline.files ?? {}))
     const expected = baselineFile[metric];
     const actual = currentFile.summary?.[metric];
 
-    if (
-      !expected ||
-      !actual ||
-      typeof expected.percent !== 'number' ||
-      !Number.isFinite(expected.percent) ||
-      typeof actual.percent !== 'number' ||
-      !Number.isFinite(actual.percent)
-    ) {
-      failures.push(`${relativePath} ${metric}: metric eksik`);
+    const expectedMetric = readMetric(expected, `${relativePath} ${metric} baseline`);
+    const actualMetric = readMetric(actual, `${relativePath} ${metric} current`);
+    if (!expectedMetric || !actualMetric) {
       continue;
     }
 
-    checked.push({ relativePath, metric, percent: actual.percent });
-    if (actual.percent + Number.EPSILON < expected.percent) {
+    checked.push({
+      relativePath,
+      metric,
+      percent: (actualMetric.covered / actualMetric.count) * 100,
+    });
+    // Compare the exact integer ratios instead of rounded/floating percentages.
+    if (
+      BigInt(actualMetric.covered) * BigInt(expectedMetric.count) <
+      BigInt(expectedMetric.covered) * BigInt(actualMetric.count)
+    ) {
       failures.push(
-        `${relativePath} ${metric}: ${actual.percent.toFixed(2)}% < baseline ${expected.percent.toFixed(2)}%`
+        `${relativePath} ${metric}: ${(actualMetric.covered / actualMetric.count * 100).toFixed(2)}% < baseline ${(expectedMetric.covered / expectedMetric.count * 100).toFixed(2)}%`
       );
     }
   }

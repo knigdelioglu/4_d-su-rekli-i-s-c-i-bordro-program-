@@ -36,6 +36,7 @@ struct GoldenSource {
     reference_id: String,
     verified_by: String,
     verified_at: String,
+    verification_status: String,
     notes: String,
     evidence: Option<String>,
 }
@@ -194,6 +195,151 @@ fn assert_evidence(path: &Path, fixture: &GoldenFixture) {
     }
 }
 
+fn schema_pattern_matches(pattern: &str, value: &str) -> bool {
+    match pattern {
+        "^G[0-9]{3}$" => {
+            let bytes = value.as_bytes();
+            bytes.len() == 4 && bytes[0] == b'G' && bytes[1..].iter().all(u8::is_ascii_digit)
+        }
+        "^[0-9]{4}-.+" => {
+            let bytes = value.as_bytes();
+            bytes.len() > 5 && bytes[..4].iter().all(u8::is_ascii_digit) && bytes[4] == b'-'
+        }
+        "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" => {
+            let bytes = value.as_bytes();
+            bytes.len() == 10
+                && bytes[4] == b'-'
+                && bytes[7] == b'-'
+                && bytes[..4].iter().all(u8::is_ascii_digit)
+                && bytes[5..7].iter().all(u8::is_ascii_digit)
+                && bytes[8..].iter().all(u8::is_ascii_digit)
+        }
+        "^evidence/[^/].+" => value
+            .strip_prefix("evidence/")
+            .is_some_and(|rest| !rest.starts_with('/') && rest.chars().count() >= 2),
+        _ => panic!("Golden schema validator pattern desteği olmayan ifade içeriyor: {pattern}"),
+    }
+}
+
+fn schema_type_matches(expected: &str, value: &Value) -> bool {
+    match expected {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => panic!("Golden schema validator type desteği olmayan ifade içeriyor: {expected}"),
+    }
+}
+
+fn validate_schema_instance(schema: &Value, value: &Value, path: &str) -> Result<(), String> {
+    let schema_object = schema
+        .as_object()
+        .ok_or_else(|| format!("{path}: schema düğümü object olmalı"))?;
+
+    if let Some(expected_type) = schema_object.get("type").and_then(Value::as_str) {
+        if !schema_type_matches(expected_type, value) {
+            return Err(format!("{path}: type={expected_type} bekleniyordu"));
+        }
+    }
+
+    if let Some(expected) = schema_object.get("const") {
+        if value != expected {
+            return Err(format!("{path}: const değeri eşleşmiyor"));
+        }
+    }
+
+    if let Some(options) = schema_object.get("enum").and_then(Value::as_array) {
+        if !options.iter().any(|option| option == value) {
+            return Err(format!("{path}: enum değeri geçersiz"));
+        }
+    }
+
+    if let Some(minimum) = schema_object.get("minimum").and_then(Value::as_f64) {
+        let actual = value
+            .as_f64()
+            .ok_or_else(|| format!("{path}: minimum için numeric değer gerekli"))?;
+        if actual < minimum {
+            return Err(format!("{path}: minimum={minimum} altında"));
+        }
+    }
+
+    if let Some(min_length) = schema_object.get("minLength").and_then(Value::as_u64) {
+        let actual = value
+            .as_str()
+            .ok_or_else(|| format!("{path}: minLength için string değer gerekli"))?;
+        if actual.chars().count() < min_length as usize {
+            return Err(format!("{path}: minLength={min_length} altında"));
+        }
+    }
+
+    if let Some(pattern) = schema_object.get("pattern").and_then(Value::as_str) {
+        let actual = value
+            .as_str()
+            .ok_or_else(|| format!("{path}: pattern için string değer gerekli"))?;
+        if !schema_pattern_matches(pattern, actual) {
+            return Err(format!("{path}: pattern eşleşmiyor: {pattern}"));
+        }
+    }
+
+    if let Some(required) = schema_object.get("required").and_then(Value::as_array) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: required için object değer gerekli"))?;
+        for field in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(field) {
+                return Err(format!("{path}: required alan eksik: {field}"));
+            }
+        }
+    }
+
+    if schema_object.get("additionalProperties") == Some(&Value::Bool(false)) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: additionalProperties için object değer gerekli"))?;
+        let properties = schema_object
+            .get("properties")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("{path}: additionalProperties=false için properties gerekli"))?;
+        if let Some(unknown) = object.keys().find(|key| !properties.contains_key(*key)) {
+            return Err(format!("{path}: bilinmeyen alan: {unknown}"));
+        }
+    }
+
+    if let Some(properties) = schema_object.get("properties").and_then(Value::as_object) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("{path}: properties için object değer gerekli"))?;
+        for (field, child_schema) in properties {
+            if let Some(child_value) = object.get(field) {
+                validate_schema_instance(child_schema, child_value, &format!("{path}.{field}"))?;
+            }
+        }
+    }
+
+    if let Some(item_schema) = schema_object.get("items") {
+        let array = value
+            .as_array()
+            .ok_or_else(|| format!("{path}: items için array değer gerekli"))?;
+        for (index, item) in array.iter().enumerate() {
+            validate_schema_instance(item_schema, item, &format!("{path}[{index}]"))?;
+        }
+    }
+
+    Ok(())
+}
+
+fn assert_schema_instance(path: &Path, schema: &Value, fixture: &Value) {
+    if let Err(error) = validate_schema_instance(schema, fixture, "$fixture") {
+        panic!(
+            "{} JSON Schema doğrulaması başarısız: {error}",
+            path.display()
+        );
+    }
+}
+
 fn assert_fixture_metadata(path: &Path, fixture: &GoldenFixture) {
     assert_eq!(
         fixture.schema_version,
@@ -246,6 +392,22 @@ fn assert_fixture_metadata(path: &Path, fixture: &GoldenFixture) {
             path.display()
         )
     });
+    match source.verification_status.as_str() {
+        "verified" => assert!(
+            VERIFIED_EVIDENCE_IDS.contains(&fixture.id.as_str()) && source.evidence.is_some(),
+            "{} verified işaretli fixture evidence listesinde ve evidence yolunda olmalı",
+            path.display()
+        ),
+        "pendingEvidence" => assert!(
+            !VERIFIED_EVIDENCE_IDS.contains(&fixture.id.as_str()) && source.evidence.is_none(),
+            "{} pendingEvidence fixture evidence listesinde veya evidence yolunda olamaz",
+            path.display()
+        ),
+        other => panic!(
+            "{} source.verificationStatus tanımsız: {other}",
+            path.display()
+        ),
+    }
     assert_evidence(path, fixture);
 
     assert_eq!(
@@ -348,6 +510,38 @@ fn golden_schema_is_present_and_versioned() {
 }
 
 #[test]
+fn golden_schema_rejects_constraint_violations() {
+    let schema_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/schema.json");
+    let schema: Value = serde_json::from_str(
+        &fs::read_to_string(&schema_path)
+            .unwrap_or_else(|error| panic!("{} okunamadı: {error}", schema_path.display())),
+    )
+    .expect("golden schema parse edilmeli");
+    let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden/2026/G001-normal-full-month.json");
+    let fixture: Value = serde_json::from_str(
+        &fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|error| panic!("{} okunamadı: {error}", fixture_path.display())),
+    )
+    .expect("golden fixture parse edilmeli");
+
+    let mut invalid_enum = fixture.clone();
+    invalid_enum["source"]["verificationStatus"] = Value::String("unverified".into());
+    assert!(validate_schema_instance(&schema, &invalid_enum, "$fixture").is_err());
+
+    let mut unknown_property = fixture.clone();
+    unknown_property["unexpected"] = Value::Bool(true);
+    assert!(validate_schema_instance(&schema, &unknown_property, "$fixture").is_err());
+
+    let mut missing_required = fixture;
+    missing_required
+        .as_object_mut()
+        .expect("fixture object")
+        .remove("expected");
+    assert!(validate_schema_instance(&schema, &missing_required, "$fixture").is_err());
+}
+
+#[test]
 fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
     let paths = golden_fixture_paths();
     assert!(
@@ -359,11 +553,23 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
 
     let mut ids = HashSet::new();
     let mut evidence_count = 0;
+    let schema_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/schema.json");
+    let schema_payload = fs::read_to_string(&schema_path)
+        .unwrap_or_else(|error| panic!("{} okunamadı: {error}", schema_path.display()));
+    let schema: Value = serde_json::from_str(&schema_payload).unwrap_or_else(|error| {
+        panic!(
+            "{} JSON schema parse edilemedi: {error}",
+            schema_path.display()
+        )
+    });
     for path in paths {
         let payload = fs::read_to_string(&path)
             .unwrap_or_else(|error| panic!("{} okunamadı: {error}", path.display()));
-        let fixture: GoldenFixture = serde_json::from_str(&payload).unwrap_or_else(|error| {
-            panic!("{} schema/model parse edilemedi: {error}", path.display())
+        let raw_fixture: Value = serde_json::from_str(&payload)
+            .unwrap_or_else(|error| panic!("{} JSON parse edilemedi: {error}", path.display()));
+        assert_schema_instance(&path, &schema, &raw_fixture);
+        let fixture: GoldenFixture = serde_json::from_value(raw_fixture).unwrap_or_else(|error| {
+            panic!("{} typed model parse edilemedi: {error}", path.display())
         });
         assert_fixture_metadata(&path, &fixture);
         assert!(

@@ -53,6 +53,14 @@ for (const field of integerFields) {
   if (!Number.isInteger(summary[field]) || summary[field] < 0) fail(`summary.${field} geçersiz`);
   if (!Number.isInteger(baselineRun[field]) || baselineRun[field] < 0) fail(`baseline.${field} geçersiz`);
 }
+for (const [label, value] of [['summary', summary], ['baseline', baselineRun]]) {
+  if (value.caught + value.missed + value.timeout + value.unviable !== value.total) {
+    fail(`${label} outcome counters total ile uyuşmuyor`);
+  }
+  if (value.meaningful !== value.total - value.unviable) {
+    fail(`${label}.meaningful total-unviable ile uyuşmuyor`);
+  }
+}
 if (!Number.isFinite(summary.scorePercent) || !Number.isFinite(baselineRun.scorePercent)) {
   fail('complete baseline/summary scorePercent finite olmalı');
 }

@@ -323,6 +323,7 @@
     "notes": "Beklenen mali alanlar request içindeki explicit girdiler üzerinden production hesaplayıcıdan bağımsız kuruş aritmetiğiyle yeniden kontrol edilmiştir. Bu kayıt dış kurum mevzuat onayı değil, corpus kaynak incelemesidir.",
     "referenceId": "2026-payroll-assurance-manual-v1",
     "type": "independent_manual_calculation",
+    "verificationStatus": "verified",
     "verifiedAt": "2026-09-10",
     "verifiedBy": "Codex fixture author - independent arithmetic worksheet",
     "evidence": "evidence/G032.md"

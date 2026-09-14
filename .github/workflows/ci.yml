@@ -272,7 +272,9 @@ jobs:
           set -euo pipefail
           outcomes="target/cargo-mutants/outcomes.json"
           test -f "$outcomes"
-          node scripts/summarize-cargo-mutants.mjs "$outcomes" > target/cargo-mutants/shard-summary.json
+          node scripts/summarize-cargo-mutants.mjs \
+            --shard "${{ matrix.shard }}=${outcomes}" \
+            > target/cargo-mutants/shard-summary.json
           cat target/cargo-mutants/shard-summary.json
 
       - name: Upload mutation evidence
@@ -312,20 +314,20 @@ jobs:
             echo "::warning::Mutation shard job sonucu $shard_job_result; exact artifact doğrulaması yine çalıştırılıyor."
           fi
           mkdir -p artifacts
-          outcomes=()
+          shard_args=()
           for shard in 0 1 2 3 4 5 6 7; do
             path="artifacts/mutation/payroll-core-mutants-shard-${shard}/target/cargo-mutants/outcomes.json"
             if [ ! -f "$path" ]; then
               echo "::error::Expected mutation shard artifact is missing: $path"
               exit 1
             fi
-            outcomes+=("$path")
+            shard_args+=(--shard "${shard}=${path}")
           done
           summary_tmp="artifacts/payroll-core-mutation-summary.json.tmp"
           node scripts/summarize-cargo-mutants.mjs \
             --expected-shards 8 \
             --baseline docs/payroll-mutation-baseline.json \
-            "${outcomes[@]}" > "$summary_tmp"
+            "${shard_args[@]}" > "$summary_tmp"
           mv "$summary_tmp" artifacts/payroll-core-mutation-summary.json
           cat artifacts/payroll-core-mutation-summary.json
           if [ "$shard_job_result" != "success" ]; then

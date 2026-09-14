@@ -3,9 +3,9 @@
   "status": "pending",
   "tool": "cargo-mutants",
   "toolVersion": "27.1.0",
-  "measuredAt": "2026-09-10",
-  "commit": "77ff5237b28a88bc8d868b7edb14aa26e009628c",
-  "commitRole": "candidate discovery / last verified repository baseline commit; full mutation run is not represented",
+  "measuredAt": "2026-09-11",
+  "commit": "working tree verification",
+  "commitRole": "candidate discovery / current working-tree verification; full mutation run is not represented",
   "total": 0,
   "caught": 0,
   "missed": 0,
@@ -51,7 +51,7 @@
     "timeout": 0,
     "unviable": 1,
     "meaningfulScorePercent": 100,
-    "command": "cargo mutants --no-config --manifest-path crates/payroll-core/Cargo.toml --package payroll-core --file crates/payroll-core/src/gv_exemption.rs --no-shuffle --minimum-test-timeout 5"
+    "command": "PROPTEST_RNG_SEED=2026091001 cargo mutants --no-config --output target --manifest-path crates/payroll-core/Cargo.toml --package payroll-core --file crates/payroll-core/src/gv_exemption.rs --no-shuffle --minimum-test-timeout 5"
   },
   "policy": {
     "meaningfulScore": "caught / (total - unviable)",

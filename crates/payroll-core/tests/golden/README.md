@@ -21,6 +21,8 @@ sonucu taşır. Bağımsızlık iddiasının denetlenebilir kanıtı kritik fixt
 - `source.evidence` verilmişse `tests/golden/evidence/` altında repo-relative bir
   Markdown çalışma kâğıdına işaret eder. Loader bu dosyanın varlığını, fixture
   id'sini ve zorunlu hesap bölümlerini kontrol eder.
+- `source.verificationStatus` yalnızca `verified` veya `pendingEvidence` olabilir;
+  evidence olmayan fixture `verified` olarak işaretlenemez.
 
 ## Bağımsızlık kuralı
 
@@ -34,17 +36,19 @@ parametrelerin doğruluğu ayrıca yetkili bordro/mevzuat incelemesi gerektirir.
 Fixture eklerken:
 
 1. Yeni dosyayı doğru `legalYear` dizinine ekleyin.
-2. `source.referenceId`, `source.verifiedBy`, `source.verifiedAt` ve
-   `source.notes` alanlarını doldurun.
+2. `source.referenceId`, `source.verifiedBy`, `source.verifiedAt`,
+   `source.verificationStatus` ve `source.notes` alanlarını doldurun.
 3. Kritik bir vaka ise `source.evidence` ile insan tarafından okunabilir
    çalışma kâğıdını bağlayın.
 4. Beklenen değerleri production çıktısını kopyalayarak değil, request'ten
    bağımsız aritmetik/kurum bordrosu/reference çalışma kâğıdıyla doğrulayın.
 5. `cargo test -p payroll-core --test golden_payroll_corpus` komutunu çalıştırın.
 
-Test loader'ı dosyaları alfabetik sırada toplar, duplicate fixture id'lerini,
-mevzuat yılı/sürüm ayrışmasını ve zorunlu mali snapshot alanlarını fail-closed
-olarak kontrol eder. Corpus sayısı 30'un altına düşerse test başarısız olur.
+Test loader'ı gerçek `schema.json` kısıtlarını (required, enum, pattern,
+additionalProperties ve minLength dahil) uygular; ayrıca dosyaları alfabetik
+sırada toplar, duplicate fixture id'lerini, mevzuat yılı/sürüm ayrışmasını ve
+zorunlu mali snapshot alanlarını fail-closed olarak kontrol eder. Corpus sayısı
+30'un altına düşerse test başarısız olur.
 
 ## Mevcut corpus kapsamı
 

@@ -6,11 +6,10 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
 
 ## Son doğrulama kimliği
 
-- Tarih: `2026-09-10`
-- Last verified baseline commit: `77ff5237b28a88bc8d868b7edb14aa26e009628c`
-- Not: Bu SHA, doğrulamanın dayandığı son commit'tir. Aşağıdaki güvence
-  değişiklikleri çalışma ağacında ve henüz commit edilmemiştir; bu belge
-  çalışma ağacını commit edilmiş release kanıtı olarak göstermemelidir.
+- Tarih: `2026-09-11`
+- Verification identity: `working tree verification`
+- Not: Bu rapor mevcut çalışma ağacındaki doğrulamayı temsil eder; commit SHA'sı
+  veya release kanıtı değildir.
 
 ## Golden corpus
 
@@ -21,7 +20,9 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
   G010, G011, G013, G014, G016, G017, G029, G030, G031, G032`;
   kalan **18** fixture `pendingEvidence` durumundadır.
 - Evidence formatı: `crates/payroll-core/tests/golden/evidence/Gxxx.md`;
-  loader kritik bağlantının varlığını ve zorunlu hesap bölümlerini kontrol eder.
+  loader JSON Schema'yı, kritik bağlantının varlığını ve zorunlu hesap
+  bölümlerini kontrol eder. Her fixture ayrıca `source.verificationStatus` ile
+  `verified` veya `pendingEvidence` olarak açıkça işaretlenir.
 
 ## 2026 statutory parameter reference
 
@@ -82,9 +83,9 @@ node scripts/check-rust-coverage.mjs <coverage.json> docs/payroll-coverage-basel
 | `retro.rs` | 80.20% | 72.35% | 85.16% |
 | `validation.rs` | 71.81% | 57.69% | 79.90% |
 
-Ratchet dosya bazında lines/functions/regions metriklerinin baseline'ın altına
-inmesine izin vermez; dosya/metric eksikliği, duplicate path ve NaN/undefined
-değerler fail'dir. Coverage job yalnız weekly/manual çalışır ve ölçüm sırasında
+Ratchet dosya bazında lines/functions/regions metriklerinin exact
+`covered/count` oranını baseline'ın altına indirmeye izin vermez; dosya/metric
+eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Coverage job yalnız weekly/manual çalışır ve ölçüm sırasında
 `PROPTEST_RNG_SEED=2026091001` kullanır; normal PR property job'ı sabitlenmez.
 
 ## Korunan kritik invariant'lar

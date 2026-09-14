@@ -13,7 +13,12 @@ mod validation_properties;
 
 pub(crate) fn proptest_config(cases: u32) -> ProptestConfig {
     let mut config = ProptestConfig::with_cases(cases);
-    config.failure_persistence = None;
+    // Keep normal local/PR runs backed by proptest's default regression-file
+    // persistence. Measurement jobs set PROPTEST_RNG_SEED and must use only
+    // the versioned seed/case budget, not a mutable local regression corpus.
+    if std::env::var_os("PROPTEST_RNG_SEED").is_some() {
+        config.failure_persistence = None;
+    }
     config
 }
 

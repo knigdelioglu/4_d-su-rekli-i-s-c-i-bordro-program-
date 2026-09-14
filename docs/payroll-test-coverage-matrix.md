@@ -85,8 +85,9 @@ Durumlar:
 - Canonical shard evidence yolu `target/cargo-mutants/outcomes.json`'dır.
   Eksik baseline/outcomes/shard veya parse edilemeyen JSON infrastructure
   failure'dır; missed/timeout sonucu full baseline oluşana kadar advisory'dir.
-- Aggregate collector tam 8 shard bekler, duplicate mutant ve denominator/file
-  scope uyuşmazlığında fail olur ve tek machine-readable summary üretir.
+- Aggregate collector tam 8 shard ID'si (`0..7`) bekler; duplicate/missing shard,
+  duplicate mutant ve denominator/file scope uyuşmazlığında fail olur ve tek
+  machine-readable summary üretir.
 - Coverage baseline: `docs/payroll-coverage-baseline.json`.
 - Ratchet uygulayıcısı: `scripts/check-rust-coverage.mjs`; kritik dosyaların
   lines/functions/regions metrikleri baseline'ın altına inemez. Weekly/manual

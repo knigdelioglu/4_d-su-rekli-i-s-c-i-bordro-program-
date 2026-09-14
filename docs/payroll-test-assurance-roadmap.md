@@ -1,6 +1,6 @@
 # Bordro Test Güvence Yol Haritası
 
-**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, mutation full-run periyodik/manual akışta ve henüz pending — 2026-09-10
+**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, mutation full-run periyodik/manual akışta ve henüz pending — 2026-09-11
 
 **Hedef dal:** `main`
 **Kapsam:** `payroll-core`, native Tauri/SQLite akışı, WASM/browser parity ve CI test güvence katmanları
@@ -54,7 +54,7 @@ Dolayısıyla bu yol haritası mevcut regresyon testlerini topluca yeniden yazma
 
 Üç büyük uygulama fazı yaklaşımında Faz 1 ve Faz 2 tamamlandı. Test güvence
 matrisi, 2026 yılı için 33 exact golden fixture (15'i bağımsız evidence çalışma
-kâğıdına bağlı), fixture şeması, exact
+kâğıdına bağlı, kalan 18'i `pendingEvidence`), fixture JSON Schema doğrulaması, exact
 `calculate_payroll_checked()` replay testi ve `legalYear`/parametre sürümü
 fail-closed kontrollerine ek olarak property-based testler ve test-only bağımsız
 mali oracle eklendi. Ayrıntılı kapsam
@@ -199,6 +199,7 @@ Her fixture şu bölümleri taşımalıdır:
     "type": "independent_manual_calculation",
     "verifiedBy": "...",
     "verifiedAt": "YYYY-MM-DD",
+    "verificationStatus": "pendingEvidence",
     "notes": "..."
   },
   "request": {},
@@ -361,11 +362,12 @@ Ayrıca ayrı invalid strategy'ler validation fail-closed davranışını test e
 
 ## Reproducibility
 
-CI failure çıktısında `proptest` minimal failing case ve seed/case bilgisi korunmalıdır. Bu
-suite `failure_persistence = None` ile koşuyu kaynak ağacına yerel regresyon dosyası
-yazmadan ve sabit case bütçeleriyle yürütür; başarısızlık çıktısındaki küçültülmüş vaka
-CI log'unda görünür. Aynı girdiyi yeniden çalıştırmak için proptest'in raporladığı
-seed/case bilgisi kullanılabilir. Bulunan her production bug fixinden sonra
+CI failure çıktısında `proptest` minimal failing case ve seed/case bilgisi korunmalıdır.
+Normal local/PR suite proptest'in varsayılan regression persistence davranışını korur;
+yalnız coverage/mutation gibi ölçüm işleri `PROPTEST_RNG_SEED=2026091001` ile
+koşarken persistence'ı kapatıp versioned seed/case bütçesine dayanır. Başarısızlık
+çıktısındaki küçültülmüş vaka CI log'unda görünür. Aynı girdiyi yeniden çalıştırmak
+için proptest'in raporladığı seed/case bilgisi kullanılabilir. Bulunan her production bug fixinden sonra
 küçültülmüş örnek ayrıca normal regresyon testine dönüştürülmelidir.
 
 ## Kabul kriteri
@@ -373,8 +375,8 @@ küçültülmüş örnek ayrıca normal regresyon testine dönüştürülmelidir
 - Kritik alanların tamamında property testleri. **Tamamlandı: vergi, PEK/carry,
   normal finansal korunum, payment-event, retro ve validation/Decimal setleri.**
 - Her CI koşusunda replay edilebilir failure bilgisi. **Tamamlandı:
-  `property_tests` blocking test adımı, persistence kapalı sabit case bütçeleri ve
-  shrink çıktısı.**
+  `property_tests` blocking test adımı, measurement seed'i ve shrink çıktısı;
+  normal geliştirmede persistence korunuyor.**
 - Property testinin bulduğu her gerçek hata için kalıcı regression testi. **Faz 2
   koşusunda üretim hatası bulunmadı; yakalanan kapasite/uygulanan istisna ayrımı
   oracle modeline kalıcı test beklentisi olarak işlendi.**
@@ -645,7 +647,8 @@ Bir release'in hangi finansal güvence setinden geçtiğini tek yerden görebilm
 `docs/payroll-assurance-status.md`
 
 Belge eklendi. Güncel manifest golden/property/oracle sayısını, coverage
-baseline'ını, mutation kapsamını, doğrulama SHA'sını ve bilinen boşlukları
+baseline'ını, mutation kapsamını, doğrulama kimliğini (commit SHA veya çalışma ağacı
+doğrulaması) ve bilinen boşlukları
 taşır; tam mutation skoru CI artifact'ı oluşmadan uydurulmaz.
 
 İçeriği:
@@ -656,7 +659,7 @@ taşır; tam mutation skoru CI artifact'ı oluşmadan uydurulmaz.
 - mutation baseline / son skor
 - coverage baseline / son durum
 - kritik invariant listesi
-- son tam doğrulama commit SHA'sı
+- son doğrulama kimliği (commit SHA veya `working tree verification`)
 - bilinen test boşlukları
 
 Bu belge otomatik veya yarı otomatik güncellenebilir; ancak sayılar CI çıktısından gelmelidir, elle uydurulmamalıdır.
