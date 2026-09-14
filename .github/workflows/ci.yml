@@ -106,6 +106,57 @@ jobs:
           # including code, data, imports/exports, or custom sections, fails.
           git diff --exit-code -- src/wasm/pkg
 
+      - name: Diagnose generated WASM drift
+        if: failure()
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { execFileSync } from 'node:child_process';
+          import { existsSync, readFileSync } from 'node:fs';
+
+          const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+          const readUleb = (bytes, offset) => {
+            let value = 0;
+            let shift = 0;
+            let cursor = offset;
+            while (cursor < bytes.length) {
+              const byte = bytes[cursor++];
+              value |= (byte & 0x7f) << shift;
+              if ((byte & 0x80) === 0) return [value >>> 0, cursor];
+              shift += 7;
+            }
+            throw new Error('truncated uleb128');
+          };
+          const sectionSummary = (bytes) => {
+            const sections = [];
+            let cursor = 8;
+            while (cursor < bytes.length) {
+              const id = bytes[cursor++];
+              const [size, payloadStart] = readUleb(bytes, cursor);
+              const payloadEnd = payloadStart + size;
+              const payload = bytes.subarray(payloadStart, payloadEnd);
+              let name = null;
+              if (id === 0) {
+                const [nameLength, nameStart] = readUleb(payload, 0);
+                name = Buffer.from(payload.subarray(nameStart, nameStart + nameLength)).toString();
+              }
+              sections.push({ id, name, size, sha256: digest(payload) });
+              cursor = payloadEnd;
+            }
+            return sections;
+          };
+
+          const generatedPath = 'src/wasm/pkg/payroll_wasm_bg.wasm';
+          const generated = readFileSync(generatedPath);
+          const reference = execFileSync('git', ['show', `HEAD:${generatedPath}`]);
+          console.log(`generated sha256=${digest(generated)}`);
+          console.log(`reference sha256=${digest(reference)}`);
+          console.log(`generated sections=${JSON.stringify(sectionSummary(generated))}`);
+          console.log(`reference sections=${JSON.stringify(sectionSummary(reference))}`);
+          const rawPath = 'target/wasm32-unknown-unknown/release/payroll_wasm.wasm';
+          if (existsSync(rawPath)) console.log(`raw sha256=${digest(readFileSync(rawPath))}`);
+          NODE
+
       - name: WASM adapter tests
         run: bun run wasm:test
 
