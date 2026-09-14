@@ -92,10 +92,10 @@ Durumlar:
 - Ratchet uygulayıcısı: `scripts/check-rust-coverage.mjs`; kritik dosyaların
   lines/functions/regions metrikleri baseline'ın altına inemez. Weekly/manual
   ölçüm `PROPTEST_RNG_SEED=2026091001` ile çalışır; PR property keşfi sabitlenmez.
-- Generated WASM doğrulaması exact package diff'i tercih eder; yalnız bilinen
-  compiler/source path metadata'sı için `scripts/verify-wasm-binary.mjs`
-  sınırlı normalization yapar. Code/data/import/export/custom-section drift'i
-  normalized hash ve byte-exact section karşılaştırmasıyla yakalanır.
+- Generated WASM doğrulaması Cargo-built `wasm-bindgen-cli 0.2.127` ile
+  runner'lar arasında deterministic hale getirilir ve exact package diff'i
+  kullanır. Code/data/import/export/custom-section drift'i gizlenmeden
+  yakalanır.
 
 Golden sütunundaki
 `—` işareti mevcut regression kapsamının zayıf olduğu anlamına gelmez; yalnızca

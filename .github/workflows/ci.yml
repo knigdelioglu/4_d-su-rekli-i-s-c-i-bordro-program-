@@ -58,6 +58,10 @@ jobs:
         run: |
           rustup target add wasm32-unknown-unknown
           cargo install wasm-pack --version 0.15.0 --locked
+          # wasm-pack otherwise selects a runner-specific prebuilt CLI on
+          # Linux, while local macOS builds fall back to Cargo. Pin the same
+          # Cargo-built wasm-bindgen CLI on every runner for exact output.
+          cargo install wasm-bindgen-cli --version 0.2.127 --locked
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -96,21 +100,10 @@ jobs:
 
       - name: Verify generated WASM package
         run: |
-          set -euo pipefail
-          # Prefer exact verification. If a runner changes only compiler/source
-          # path metadata in the WASM data section, the verifier compares every
-          # other section byte-for-byte and hashes the normalized artifact.
-          if git diff --exit-code -- src/wasm/pkg; then
-            echo "Generated WASM package is byte-identical."
-            exit 0
-          fi
-          changed_files="$(git diff --name-only -- src/wasm/pkg)"
-          if [ "$changed_files" != "src/wasm/pkg/payroll_wasm_bg.wasm" ]; then
-            echo "::error::Unexpected generated WASM package drift outside the binary."
-            git diff -- src/wasm/pkg
-            exit 1
-          fi
-          node scripts/verify-wasm-binary.mjs
+          # build-wasm remaps the workspace and Cargo paths, and the workflow
+          # pins the Cargo-built wasm-bindgen CLI above. Any remaining drift,
+          # including code, data, imports/exports, or custom sections, fails.
+          git diff --exit-code -- src/wasm/pkg
 
       - name: WASM adapter tests
         run: bun run wasm:test

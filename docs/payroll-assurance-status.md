@@ -41,13 +41,14 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
 - `scripts/build-wasm.mjs`, workspace ve Cargo registry yollarını
   `CARGO_ENCODED_RUSTFLAGS` ile canonical metadata yollarına remap eder;
   boşluk içeren runner/workspace yolları tek flag olarak korunur.
-- CI önce `src/wasm/pkg` için exact `git diff --exit-code` kontrolü yapar.
-  Linux/macOS runner farkı yalnız data section içindeki bilinen compiler/source
-  path metadata'sında kalırsa `scripts/verify-wasm-binary.mjs` bu sınırlı
-  metadata'yı canonicalize eder ve `Type`, `Code`, `Data`'nın geri kalanı ile
-  import/export ve tüm custom section'ları byte-exact karşılaştırıp normalized
-  hash üretir. Semantic drift veya beklenmeyen generated dosya değişikliği
-  blocking failure'dır.
+- CI, `Cargo.lock` içindeki `wasm-bindgen` sürümüyle eşleşen Cargo-built
+  `wasm-bindgen-cli 0.2.127` kurar. Böylece `wasm-pack`'in Linux'ta prebuilt
+  CLI, macOS'ta Cargo-built CLI seçmesinden kaynaklanan code-section drift'i
+  ortadan kaldırılır.
+- CI `src/wasm/pkg` için exact `git diff --exit-code` kontrolü yapar. Type,
+  code, data, import/export ve tüm custom section değişiklikleri ile beklenmeyen
+  generated dosya değişiklikleri blocking failure'dır; binary drift
+  normalizasyonla gizlenmez.
 
 ## Property ve oracle
 
