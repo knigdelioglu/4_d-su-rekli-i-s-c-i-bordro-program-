@@ -48,6 +48,8 @@ function splitRustFlags(value) {
 }
 
 const encodedSeparator = '\x1f';
+// Cargo's encoded form keeps each remap flag intact even when the workspace
+// path contains spaces (as it does on the local development volume).
 const inheritedRustFlags = process.env.CARGO_ENCODED_RUSTFLAGS
   ? process.env.CARGO_ENCODED_RUSTFLAGS.split(encodedSeparator).filter(Boolean)
   : splitRustFlags(process.env.RUSTFLAGS ?? '');

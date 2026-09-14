@@ -36,6 +36,19 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
   değerini `verified` olarak taşır. Tarihsel veya uygulama kapsamı dışındaki
   değerler bu sözleşmenin parçası değildir.
 
+## Generated WASM kanıtı
+
+- `scripts/build-wasm.mjs`, workspace ve Cargo registry yollarını
+  `CARGO_ENCODED_RUSTFLAGS` ile canonical metadata yollarına remap eder;
+  boşluk içeren runner/workspace yolları tek flag olarak korunur.
+- CI önce `src/wasm/pkg` için exact `git diff --exit-code` kontrolü yapar.
+  Linux/macOS runner farkı yalnız data section içindeki bilinen compiler/source
+  path metadata'sında kalırsa `scripts/verify-wasm-binary.mjs` bu sınırlı
+  metadata'yı canonicalize eder ve `Type`, `Code`, `Data`'nın geri kalanı ile
+  import/export ve tüm custom section'ları byte-exact karşılaştırıp normalized
+  hash üretir. Semantic drift veya beklenmeyen generated dosya değişikliği
+  blocking failure'dır.
+
 ## Property ve oracle
 
 - Property integration testleri: **19** (`crates/payroll-core/tests/property_tests.rs`)

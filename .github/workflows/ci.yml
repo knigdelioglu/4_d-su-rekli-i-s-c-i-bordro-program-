@@ -96,10 +96,21 @@ jobs:
 
       - name: Verify generated WASM package
         run: |
-          # build-wasm remaps the workspace and Cargo paths, so the checked-in
-          # package is an exact reproducible artifact. Any drift, including
-          # code, data, imports/exports, or custom sections, must fail here.
-          git diff --exit-code -- src/wasm/pkg
+          set -euo pipefail
+          # Prefer exact verification. If a runner changes only compiler/source
+          # path metadata in the WASM data section, the verifier compares every
+          # other section byte-for-byte and hashes the normalized artifact.
+          if git diff --exit-code -- src/wasm/pkg; then
+            echo "Generated WASM package is byte-identical."
+            exit 0
+          fi
+          changed_files="$(git diff --name-only -- src/wasm/pkg)"
+          if [ "$changed_files" != "src/wasm/pkg/payroll_wasm_bg.wasm" ]; then
+            echo "::error::Unexpected generated WASM package drift outside the binary."
+            git diff -- src/wasm/pkg
+            exit 1
+          fi
+          node scripts/verify-wasm-binary.mjs
 
       - name: WASM adapter tests
         run: bun run wasm:test
