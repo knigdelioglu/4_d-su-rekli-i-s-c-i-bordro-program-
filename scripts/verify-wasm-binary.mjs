@@ -3,6 +3,10 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
 const IGNORED_CUSTOM_SECTIONS = new Set(['name', 'producers']);
+const STRING_FRAGMENT_PUNCTUATION = new Set(
+  [...`!"#$%&'()*+,-./:;<=>?@[\\]^_\`{|}~`].map((character) => character.charCodeAt(0)),
+);
+const STRING_FRAGMENT_RADIUS = 64;
 const PATH_MARKERS = [
   '/rustc/',
   '/cargo-home/',
@@ -174,34 +178,115 @@ function findPathSpans(bytes) {
   return [...spans.values()].sort((left, right) => left.start - right.start);
 }
 
-function dataFingerprint(segments) {
-  return segments
-    .map((segment) => {
-      const spans = findPathSpans(segment.bytes);
-      const nonPathParts = [];
-      let cursor = 0;
-      for (const span of spans) {
-        nonPathParts.push(segment.bytes.subarray(cursor, span.start));
-        cursor = span.end;
+function printableRuns(bytes) {
+  const runs = [];
+  let cursor = 0;
+  while (cursor < bytes.length) {
+    while (cursor < bytes.length && (bytes[cursor] < 0x20 || bytes[cursor] > 0x7e)) {
+      cursor += 1;
+    }
+    const start = cursor;
+    while (cursor < bytes.length && bytes[cursor] >= 0x20 && bytes[cursor] <= 0x7e) {
+      cursor += 1;
+    }
+    if (cursor - start >= 2) runs.push({ start, end: cursor });
+  }
+  return runs;
+}
+
+function dataTextMask(bytes, counterpartBytes) {
+  const mask = new Uint8Array(bytes.length);
+  const runs = printableRuns(bytes);
+  const counterpartRuns = printableRuns(counterpartBytes);
+  const punctuation = new Set();
+  for (const [source, sourceRuns] of [
+    [bytes, runs],
+    [counterpartBytes, counterpartRuns],
+  ]) {
+    for (const run of sourceRuns) {
+      for (let index = run.start; index < run.end; index += 1) {
+        if (STRING_FRAGMENT_PUNCTUATION.has(source[index])) punctuation.add(source[index]);
       }
-      nonPathParts.push(segment.bytes.subarray(cursor));
+    }
+  }
+
+  for (const run of runs) mask.fill(1, run.start, run.end);
+  for (const run of runs) {
+    const start = Math.max(0, run.start - STRING_FRAGMENT_RADIUS);
+    const end = Math.min(bytes.length, run.end + STRING_FRAGMENT_RADIUS);
+    for (let index = start; index < end; index += 1) {
+      if (punctuation.has(bytes[index]) && STRING_FRAGMENT_PUNCTUATION.has(bytes[index])) {
+        mask[index] = 1;
+      }
+    }
+  }
+  return mask;
+}
+
+function canonicalDataLayout(segment, counterpartSegment) {
+  const bytes = segment.bytes;
+  const mask = dataTextMask(bytes, counterpartSegment?.bytes ?? Buffer.alloc(0));
+  const paths = findPathSpans(bytes);
+  const pathAt = new Map(paths.map((path) => [path.start, path]));
+  const textParts = [];
+  const binaryParts = [];
+  const addresses = new Array(bytes.length);
+  let textIndex = 0;
+  let binaryIndex = 0;
+  let cursor = 0;
+  while (cursor < bytes.length) {
+    const path = pathAt.get(cursor);
+    if (path) {
+      for (let index = path.start; index < path.end; index += 1) {
+        addresses[index] = { kind: 'path', key: path.key, offset: index - path.start };
+      }
+      cursor = path.end;
+      continue;
+    }
+    if (mask[cursor]) {
+      addresses[cursor] = { kind: 'text', index: textIndex };
+      textParts.push(bytes.subarray(cursor, cursor + 1));
+      textIndex += 1;
+    } else {
+      addresses[cursor] = { kind: 'binary', index: binaryIndex };
+      binaryParts.push(bytes.subarray(cursor, cursor + 1));
+      binaryIndex += 1;
+    }
+    cursor += 1;
+  }
+  return {
+    addresses,
+    binary: Buffer.concat(binaryParts),
+    paths: paths.map(({ key }) => key).sort(),
+    text: Buffer.concat(textParts),
+  };
+}
+
+function dataFingerprint(segments, counterpartSegments) {
+  return segments
+    .map((segment, index) => {
+      const layout = canonicalDataLayout(segment, counterpartSegments[index]);
       return {
         flags: segment.flags,
         memoryIndex: segment.memoryIndex,
-        nonPathLength: nonPathParts.reduce((total, part) => total + part.length, 0),
-        nonPathSha256: digest(Buffer.concat(nonPathParts)),
-        paths: spans.map(({ key }) => key).sort(),
+        binaryLength: layout.binary.length,
+        binarySha256: digest(layout.binary),
+        textLength: layout.text.length,
+        textSha256: digest(layout.text),
+        paths: layout.paths,
       };
     })
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 }
 
 function dataFingerprintSummary(fingerprint) {
-  return fingerprint.map(({ flags, memoryIndex, nonPathLength, nonPathSha256, paths }) => ({
+  return fingerprint.map(({ flags, memoryIndex, binaryLength, binarySha256, textLength, textSha256, paths }) => ({
     flags,
     memoryIndex,
-    nonPathLength,
-    nonPathSha256,
+    binaryLength,
+    binarySha256,
+    textLength,
+    textSha256,
     pathCount: paths.length,
     pathsSha256: digest(Buffer.from(paths.join('\0'))),
   }));
@@ -263,15 +348,15 @@ function dataDiffSummary(referenceSegments, generatedSegments) {
   return summary;
 }
 
-class PathAddressMap {
-  constructor(segments) {
-    this.entries = segments.flatMap((segment) => {
+class DataAddressMap {
+  constructor(segments, layouts) {
+    this.entries = segments.flatMap((segment, index) => {
       if (segment.offset === null) return [];
-      return findPathSpans(segment.bytes).map((span) => ({
-        start: segment.offset + span.start,
-        end: segment.offset + span.end,
-        key: span.key,
-      }));
+      return [{
+        start: segment.offset,
+        end: segment.offset + segment.bytes.length,
+        layout: layouts[index],
+      }];
     });
   }
 
@@ -279,7 +364,10 @@ class PathAddressMap {
     const unsigned = value >>> 0;
     const entry = this.entries.find(({ start, end }) => unsigned >= start && unsigned < end);
     if (!entry) return null;
-    return `${entry.key}+${unsigned - entry.start}`;
+    const address = entry.layout.addresses[unsigned - entry.start];
+    if (!address) return null;
+    if (address.kind === 'path') return `data-path:${address.key}+${address.offset}`;
+    return `data-${address.kind}:${address.index}`;
   }
 }
 
@@ -329,7 +417,7 @@ function skipBulkMemoryInstruction(bytes, offset, subopcode) {
   }
 }
 
-function readInstruction(body, offset, pathAddresses) {
+function readInstruction(body, offset, dataAddresses) {
   const start = offset;
   const opcode = body[offset++];
   if (opcode === undefined) fail('Instruction body sınırı aşıldı.');
@@ -410,8 +498,8 @@ function readInstruction(body, offset, pathAddresses) {
     case 0x41: {
       const [value, afterValue] = readSleb(body, offset, 32);
       offset = afterValue;
-      const path = pathAddresses.lookup(value);
-      if (path) return { next: offset, token: `i32.const:data-path:${path}` };
+      const dataAddress = dataAddresses.lookup(value);
+      if (dataAddress) return { next: offset, token: `i32.const:${dataAddress}` };
       break;
     }
     case 0x42:
@@ -440,7 +528,7 @@ function readInstruction(body, offset, pathAddresses) {
   return { next: offset, token: body.subarray(start, offset).toString('hex') };
 }
 
-function canonicalBody(body, pathAddresses) {
+function canonicalBody(body, dataAddresses) {
   let cursor = 0;
   const [localCount, afterLocalCount] = readUleb(body, cursor);
   cursor = afterLocalCount;
@@ -451,7 +539,7 @@ function canonicalBody(body, pathAddresses) {
   }
   const tokens = [body.subarray(0, cursor).toString('hex')];
   while (cursor < body.length) {
-    const instruction = readInstruction(body, cursor, pathAddresses);
+    const instruction = readInstruction(body, cursor, dataAddresses);
     tokens.push(instruction.token);
     cursor = instruction.next;
   }
@@ -475,10 +563,10 @@ function parseCodeBodies(bytes) {
   return bodies;
 }
 
-function canonicalCode(bytes, pathAddresses) {
+function canonicalCode(bytes, dataAddresses) {
   return parseCodeBodies(bytes).map((body) => {
     try {
-      return canonicalBody(body, pathAddresses);
+      return canonicalBody(body, dataAddresses);
     } catch {
       // Unsupported instructions are fail-closed: only an exact body match can pass.
       return `raw:${digest(body)}`;
@@ -501,18 +589,29 @@ function compareSections(reference, generated) {
 
   const referenceData = parseDataSegments(reference);
   const generatedData = parseDataSegments(generated);
-  const referenceDataFingerprint = JSON.stringify(dataFingerprint(referenceData));
-  const generatedDataFingerprint = JSON.stringify(dataFingerprint(generatedData));
+  if (referenceData.length !== generatedData.length) {
+    fail(
+      `WASM data segment sayısı değişti: reference=${referenceData.length}, generated=${generatedData.length}.`,
+    );
+  }
+  const referenceLayouts = referenceData.map((segment, index) =>
+    canonicalDataLayout(segment, generatedData[index]),
+  );
+  const generatedLayouts = generatedData.map((segment, index) =>
+    canonicalDataLayout(segment, referenceData[index]),
+  );
+  const referenceDataFingerprint = JSON.stringify(dataFingerprint(referenceData, generatedData));
+  const generatedDataFingerprint = JSON.stringify(dataFingerprint(generatedData, referenceData));
   if (referenceDataFingerprint !== generatedDataFingerprint) {
     fail(
-      `WASM data section metadata-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))} diff=${JSON.stringify(dataDiffSummary(referenceData, generatedData))}`,
+      `WASM data section layout-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))} diff=${JSON.stringify(dataDiffSummary(referenceData, generatedData))}`,
     );
   }
 
-  const referencePaths = new PathAddressMap(referenceData);
-  const generatedPaths = new PathAddressMap(generatedData);
-  const referenceCode = canonicalCode(reference, referencePaths);
-  const generatedCode = canonicalCode(generated, generatedPaths);
+  const referenceAddresses = new DataAddressMap(referenceData, referenceLayouts);
+  const generatedAddresses = new DataAddressMap(generatedData, generatedLayouts);
+  const referenceCode = canonicalCode(reference, referenceAddresses);
+  const generatedCode = canonicalCode(generated, generatedAddresses);
   if (referenceCode.length !== generatedCode.length) {
     fail(`WASM function body sayısı değişti: reference=${referenceCode.length}, generated=${generatedCode.length}.`);
   }
