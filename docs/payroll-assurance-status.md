@@ -40,7 +40,8 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
 
 - `scripts/build-wasm.mjs`, workspace ve Cargo registry yollarını
   `CARGO_ENCODED_RUSTFLAGS` ile canonical metadata yollarına remap eder;
-  boşluk içeren runner/workspace yolları tek flag olarak korunur.
+  boşluk içeren runner/workspace yolları tek flag olarak korunur ve Cargo
+  `--locked`, non-incremental build kullanır.
 - CI, `Cargo.lock` içindeki `wasm-bindgen` sürümüyle eşleşen Cargo-built
   `wasm-bindgen-cli 0.2.127` kurar. Böylece `wasm-pack`'in Linux'ta prebuilt
   CLI, macOS'ta Cargo-built CLI seçmesinden kaynaklanan code-section drift'i

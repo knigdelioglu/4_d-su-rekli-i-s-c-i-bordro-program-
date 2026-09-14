@@ -62,6 +62,7 @@ jobs:
           # Linux, while local macOS builds fall back to Cargo. Pin the same
           # Cargo-built wasm-bindgen CLI on every runner for exact output.
           cargo install wasm-bindgen-cli --version 0.2.127 --locked
+          wasm-bindgen --version
 
       - name: Install Tauri Linux dependencies
         run: |

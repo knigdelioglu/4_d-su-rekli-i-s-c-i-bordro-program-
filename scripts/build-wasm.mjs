@@ -62,6 +62,7 @@ const rustFlags = [
 
 const environment = {
   ...process.env,
+  CARGO_INCREMENTAL: '0',
   CARGO_ENCODED_RUSTFLAGS: rustFlags.join(encodedSeparator),
 };
 delete environment.RUSTFLAGS;
@@ -78,6 +79,7 @@ const build = spawnSync(
     '--release',
     '--no-opt',
     '--no-typescript',
+    '--locked',
   ],
   { cwd: root, env: environment, stdio: 'inherit' },
 );
