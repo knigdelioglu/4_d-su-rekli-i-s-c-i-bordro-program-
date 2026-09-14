@@ -196,6 +196,17 @@ function dataFingerprint(segments) {
     .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 }
 
+function dataFingerprintSummary(fingerprint) {
+  return fingerprint.map(({ flags, memoryIndex, nonPathLength, nonPathSha256, paths }) => ({
+    flags,
+    memoryIndex,
+    nonPathLength,
+    nonPathSha256,
+    pathCount: paths.length,
+    pathsSha256: digest(Buffer.from(paths.join('\0'))),
+  }));
+}
+
 class PathAddressMap {
   constructor(segments) {
     this.entries = segments.flatMap((segment) => {
@@ -437,7 +448,9 @@ function compareSections(reference, generated) {
   const referenceDataFingerprint = JSON.stringify(dataFingerprint(referenceData));
   const generatedDataFingerprint = JSON.stringify(dataFingerprint(generatedData));
   if (referenceDataFingerprint !== generatedDataFingerprint) {
-    fail('WASM data section metadata-normalized karşılaştırmada değişti.');
+    fail(
+      `WASM data section metadata-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))}`,
+    );
   }
 
   const referencePaths = new PathAddressMap(referenceData);
