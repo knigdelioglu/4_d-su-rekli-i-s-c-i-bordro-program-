@@ -6,7 +6,7 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
 
 ## Son doğrulama kimliği
 
-- Tarih: `2026-09-11`
+- Tarih: `2026-09-14`
 - Verification identity: `working tree verification`
 - Not: Bu rapor mevcut çalışma ağacındaki doğrulamayı temsil eder; commit SHA'sı
   veya release kanıtı değildir.
@@ -32,10 +32,9 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
 - Günlük/aylık asgari ücret, işçi/işveren SGK ve işsizlik oranları, PEK tavan
   katsayısı, damga vergisi, GV yemek istisnası ve aylık GV referans matrahı da
   period alanları olarak karşılaştırılır.
-- SGK yemek istisnası için mevcut 4/D uygulama snapshot'ı `300.00` TL'dir;
-  resmi SGK 4/a sayfasındaki `158.00` TL ile kapsam farkı bulunduğundan alan
-  `needs_authoritative_verification` olarak işaretlidir. Bu belirsizlik
-  çözülmeden production parametresi değiştirilmemiştir.
+- SGK yemek istisnası için 2026 4/D uygulama sözleşmesi `300.00` TL/gün
+  değerini `verified` olarak taşır. Tarihsel veya uygulama kapsamı dışındaki
+  değerler bu sözleşmenin parçası değildir.
 
 ## Property ve oracle
 

@@ -5,19 +5,64 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const cargoHome = resolve(process.env.CARGO_HOME || resolve(homedir(), '.cargo'));
+const remappedRoot = root.split(sep).join('/');
 const rustCargoHome = cargoHome.split(sep).join('/');
-const existingRustFlags = process.env.RUSTFLAGS?.trim();
+
+function splitRustFlags(value) {
+  const flags = [];
+  let current = '';
+  let quote = null;
+  let escaped = false;
+
+  for (const character of value) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+      continue;
+    }
+    if (character === '\\' && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = null;
+      else current += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+    } else if (/\s/.test(character)) {
+      if (current) {
+        flags.push(current);
+        current = '';
+      }
+    } else {
+      current += character;
+    }
+  }
+
+  if (escaped) current += '\\';
+  if (quote) throw new Error('RUSTFLAGS içinde kapanmamış quote var.');
+  if (current) flags.push(current);
+  return flags;
+}
+
+const encodedSeparator = '\x1f';
+const inheritedRustFlags = process.env.CARGO_ENCODED_RUSTFLAGS
+  ? process.env.CARGO_ENCODED_RUSTFLAGS.split(encodedSeparator).filter(Boolean)
+  : splitRustFlags(process.env.RUSTFLAGS ?? '');
+const remapPath = (from, to) => `--remap-path-prefix=${from}=${to}`;
 const rustFlags = [
-  existingRustFlags,
-  `--remap-path-prefix=${rustCargoHome}=/cargo-home`,
-]
-  .filter(Boolean)
-  .join(' ');
+  ...inheritedRustFlags,
+  remapPath(remappedRoot, '/workspace'),
+  remapPath(rustCargoHome, '/cargo-home'),
+];
 
 const environment = {
   ...process.env,
-  RUSTFLAGS: rustFlags,
+  CARGO_ENCODED_RUSTFLAGS: rustFlags.join(encodedSeparator),
 };
+delete environment.RUSTFLAGS;
 
 const build = spawnSync(
   'wasm-pack',

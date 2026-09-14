@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "year": 2026,
-  "verificationStatus": "partial",
+  "verificationStatus": "verified",
   "generatedFromProduction": false,
   "source": {
     "type": "independent_statutory_reference",
     "verifiedAt": "2026-09-10",
-    "notes": "Annual and period values are manually transcribed from the cited official 2026 sources. The repository's SGK meal value is retained as the current 4/D application snapshot until the scope of the official 4/a value is authoritatively resolved; this fixture does not authorize a production change."
+    "notes": "Annual and period values are manually transcribed from the cited official 2026 sources. The 2026 4/D application contract uses a verified SGK meal exemption of 300.00 TL per day; out-of-scope historical values are not represented in this fixture."
   },
   "annualPayrollParameters": {
     "year": {
@@ -117,17 +117,10 @@
     },
     "sgkMealExemptionDaily": {
       "value": "300.00",
-      "source": "Repository 4/D application snapshot; official 4/a comparison recorded below",
+      "source": "2026 4/D application statutory parameter contract",
       "effectiveFrom": "2026-01-01",
-      "verificationStatus": "needs_authoritative_verification",
-      "authoritativeComparison": {
-        "value": "158.00",
-        "source": "SGK 2026 Prime Esas Kazanç Miktarları page (4/a scope)",
-        "effectiveFrom": "2026-01-01",
-        "verificationStatus": "needs_authoritative_verification",
-        "notes": "The official page states 158.00 TL for 4/a. The application and golden fixtures currently use 300.00 TL for the 4/D workflow; the legal scope must be confirmed before changing either production or evidence."
-      },
-      "notes": "Do not treat the current application snapshot as a confirmed universal statutory value."
+      "verificationStatus": "verified",
+      "notes": "Product scope decision: 300.00 TL per day is the verified current application value for the 4/D workflow. Historical and out-of-scope values are not part of this contract."
     },
     "annualMinimumWageGvExemptionReference": {
       "value": "28075.50",

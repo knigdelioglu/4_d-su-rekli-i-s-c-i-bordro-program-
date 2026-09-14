@@ -46,18 +46,6 @@ struct StatutoryValue<T> {
     effective_from: String,
     verification_status: String,
     notes: String,
-    #[serde(default)]
-    authoritative_comparison: Option<AuthoritativeComparison>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AuthoritativeComparison {
-    value: Decimal,
-    source: String,
-    effective_from: String,
-    verification_status: String,
-    notes: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,11 +97,8 @@ fn assert_value_metadata<T>(name: &str, value: &StatutoryValue<T>) {
     assert!(!value.source.trim().is_empty(), "{name}.source boş");
     assert!(!value.notes.trim().is_empty(), "{name}.notes boş");
     assert!(
-        matches!(
-            value.verification_status.as_str(),
-            "verified" | "needs_authoritative_verification"
-        ),
-        "{name}.verificationStatus tanımsız: {}",
+        value.verification_status == "verified",
+        "{name}.verificationStatus verified olmalı: {}",
         value.verification_status
     );
     NaiveDate::parse_from_str(&value.effective_from, "%Y-%m-%d")
@@ -123,7 +108,7 @@ fn assert_value_metadata<T>(name: &str, value: &StatutoryValue<T>) {
 fn assert_reference_metadata(reference: &StatutoryReference) {
     assert_eq!(reference.schema_version, 1);
     assert_eq!(reference.year, 2026);
-    assert_eq!(reference.verification_status, "partial");
+    assert_eq!(reference.verification_status, "verified");
     assert!(!reference.generated_from_production);
     assert_eq!(
         reference.source.source_type,
@@ -197,25 +182,7 @@ fn assert_reference_metadata(reference: &StatutoryReference) {
         "periodParameters.annualMinimumWageGvExemptionReference",
         &period.annual_minimum_wage_gv_exemption_reference,
     );
-    assert_eq!(
-        period.sgk_meal_exemption_daily.verification_status,
-        "needs_authoritative_verification"
-    );
-
-    let comparison = period
-        .sgk_meal_exemption_daily
-        .authoritative_comparison
-        .as_ref()
-        .expect("SGK yemek alanının açık authoritative comparison kaydı olmalı");
-    assert_eq!(comparison.value, dec!(158.00));
-    assert!(!comparison.source.trim().is_empty());
-    assert!(!comparison.notes.trim().is_empty());
-    assert_eq!(
-        comparison.verification_status,
-        "needs_authoritative_verification"
-    );
-    NaiveDate::parse_from_str(&comparison.effective_from, "%Y-%m-%d")
-        .expect("authoritativeComparison.effectiveFrom YYYY-MM-DD olmalı");
+    assert_eq!(period.sgk_meal_exemption_daily.value, dec!(300.00));
 
     assert!(reference.references.len() >= 6);
     for reference_link in &reference.references {

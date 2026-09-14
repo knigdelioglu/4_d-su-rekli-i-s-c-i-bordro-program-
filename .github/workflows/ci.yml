@@ -96,25 +96,10 @@ jobs:
 
       - name: Verify generated WASM package
         run: |
-          # The release WASM contains panic-location metadata with absolute
-          # toolchain source paths, so its bytes can legitimately vary by
-          # runner. Source freshness, the package allowlist, adapter tests,
-          # browser tests, and the production build verify the artifact.
-          wasm_status="$(git status --porcelain --untracked-files=all -- src/wasm/pkg)"
-          unexpected_status="$(printf '%s\n' "$wasm_status" | awk '
-            $1 == "M" && $2 == "src/wasm/pkg/payroll_wasm_bg.wasm" { next }
-            NF { print }
-          ')"
-          if [ -n "$unexpected_status" ]; then
-            echo "::error::Unexpected generated WASM package drift detected in src/wasm/pkg."
-            echo "$unexpected_status"
-            exit 1
-          fi
-          if [ -n "$wasm_status" ]; then
-            echo "Generated WASM binary differs only in runner-specific path metadata; all synchronized package checks passed."
-          else
-            echo "Generated WASM package is unchanged."
-          fi
+          # build-wasm remaps the workspace and Cargo paths, so the checked-in
+          # package is an exact reproducible artifact. Any drift, including
+          # code, data, imports/exports, or custom sections, must fail here.
+          git diff --exit-code -- src/wasm/pkg
 
       - name: WASM adapter tests
         run: bun run wasm:test
@@ -233,8 +218,16 @@ jobs:
           set -euo pipefail
           set +e
           cargo mutants \
+            --no-config \
+            --output target \
             --manifest-path crates/payroll-core/Cargo.toml \
             --package payroll-core \
+            --file crates/payroll-core/src/calculations.rs \
+            --file crates/payroll-core/src/gv_exemption.rs \
+            --file crates/payroll-core/src/payroll_engine.rs \
+            --file crates/payroll-core/src/policies.rs \
+            --file crates/payroll-core/src/retro.rs \
+            --file crates/payroll-core/src/validation.rs \
             --shard "${{ matrix.shard }}/8" \
             --jobs 2 \
             --no-shuffle

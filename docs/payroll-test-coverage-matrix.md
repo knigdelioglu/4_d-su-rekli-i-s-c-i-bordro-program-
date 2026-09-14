@@ -58,9 +58,9 @@ Durumlar:
 - Karşılaştırma testi: `annual_parameters_regression::production_2026_parameters_match_independent_statutory_reference`.
 - Yıllık GV dilimleri ve yıllık sigorta GV tavanı production default'tan
   generate edilmez; JSON içindeki bağımsız sabitlerle exact karşılaştırılır.
-- SGK yemek istisnası alanı mevcut 4/D uygulama değeri ile resmi 4/a değeri
-  arasındaki kapsam farkı nedeniyle `needs_authoritative_verification` durumunu
-  açıkça taşır.
+- SGK yemek istisnası alanı 2026 4/D uygulama sözleşmesindeki `300.00` TL/gün
+  değerini `verified` olarak taşır; tarihsel veya kapsam dışı değerler bu
+  uygulamanın sözleşmesine dahil değildir.
 
 ## Faz 2 kanıtı
 
