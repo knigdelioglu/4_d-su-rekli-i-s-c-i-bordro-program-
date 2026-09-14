@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, resolve, sep } from 'node:path';
+import { delimiter, dirname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -67,11 +68,41 @@ const environment = {
 };
 delete environment.RUSTFLAGS;
 
+const wasmBindgenVersion = '0.2.127';
+const wasmPackCache = resolve(
+  homedir(),
+  process.platform === 'darwin' ? 'Library/Caches/.wasm-pack' : '.cache/.wasm-pack',
+);
+const wasmBindgenBinDirs = [
+  resolve(cargoHome, 'bin'),
+  resolve(wasmPackCache, `wasm-bindgen-cargo-install-${wasmBindgenVersion}`),
+].filter((directory) => existsSync(resolve(directory, 'wasm-bindgen')));
+environment.PATH = [...wasmBindgenBinDirs, process.env.PATH ?? '']
+  .filter(Boolean)
+  .join(delimiter);
+
+const wasmBindgen = spawnSync('wasm-bindgen', ['--version'], {
+  cwd: root,
+  env: environment,
+  encoding: 'utf8',
+});
+if (
+  wasmBindgen.error ||
+  wasmBindgen.status !== 0 ||
+  !wasmBindgen.stdout.trim().startsWith(`wasm-bindgen ${wasmBindgenVersion}`)
+) {
+  const detail = wasmBindgen.error?.message ?? wasmBindgen.stderr?.trim() ?? 'sürüm doğrulanamadı';
+  console.error(`WASM build requires wasm-bindgen ${wasmBindgenVersion} on PATH: ${detail}`);
+  process.exit(1);
+}
+
 const build = spawnSync(
   'wasm-pack',
   [
     'build',
     'crates/payroll-wasm',
+    '--mode',
+    'no-install',
     '--target',
     'web',
     '--out-dir',
