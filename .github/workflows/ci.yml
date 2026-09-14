@@ -105,6 +105,53 @@ jobs:
           # including code, data, imports/exports, or custom sections, fails.
           git diff --exit-code -- src/wasm/pkg
 
+      - name: Diagnose generated WASM drift
+        if: failure()
+        run: |
+          git show HEAD:src/wasm/pkg/payroll_wasm_bg.wasm > "${RUNNER_TEMP}/reference.wasm"
+          node --input-type=module - "${RUNNER_TEMP}/reference.wasm" src/wasm/pkg/payroll_wasm_bg.wasm <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync } from 'node:fs';
+
+          const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
+          const readUleb = (bytes, offset) => {
+            let value = 0;
+            let shift = 0;
+            let cursor = offset;
+            while (cursor < bytes.length) {
+              const byte = bytes[cursor++];
+              value |= (byte & 0x7f) << shift;
+              if ((byte & 0x80) === 0) return [value >>> 0, cursor];
+              shift += 7;
+            }
+            throw new Error('truncated uleb128');
+          };
+          const sectionSummary = (bytes) => {
+            const sections = [];
+            let cursor = 8;
+            while (cursor < bytes.length) {
+              const id = bytes[cursor++];
+              const [size, payloadStart] = readUleb(bytes, cursor);
+              const payloadEnd = payloadStart + size;
+              const payload = bytes.subarray(payloadStart, payloadEnd);
+              let name = null;
+              if (id === 0) {
+                const [nameLength, nameStart] = readUleb(payload, 0);
+                name = Buffer.from(payload.subarray(nameStart, nameStart + nameLength)).toString();
+              }
+              sections.push({ id, name, size, sha256: digest(payload) });
+              cursor = payloadEnd;
+            }
+            return sections;
+          };
+
+          for (const path of process.argv.slice(2)) {
+            const bytes = readFileSync(path);
+            console.log(`${path} sha256=${digest(bytes)}`);
+            console.log(JSON.stringify(sectionSummary(bytes)));
+          }
+          NODE
+
       - name: WASM adapter tests
         run: bun run wasm:test
 
