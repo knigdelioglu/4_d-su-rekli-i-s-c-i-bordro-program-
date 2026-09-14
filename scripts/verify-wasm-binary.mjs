@@ -221,10 +221,12 @@ function dataDiffSummary(referenceSegments, generatedSegments) {
     const generatedBytes = maskedDataBytes(generatedSegments[index]);
     const firstDifferences = [];
     let differenceCount = 0;
+    let firstDifferenceOffset = null;
     const common = Math.min(referenceBytes.length, generatedBytes.length);
     for (let byteIndex = 0; byteIndex < common; byteIndex += 1) {
       if (referenceBytes[byteIndex] !== generatedBytes[byteIndex]) {
         differenceCount += 1;
+        firstDifferenceOffset ??= byteIndex;
         if (firstDifferences.length < 24) {
           firstDifferences.push({
             offset: byteIndex,
@@ -240,6 +242,22 @@ function dataDiffSummary(referenceSegments, generatedSegments) {
       generatedLength: generatedBytes.length,
       differenceCount,
       firstDifferences,
+      ...(firstDifferenceOffset === null
+        ? {}
+        : {
+            firstDifferenceContext: (() => {
+              const start = Math.max(0, firstDifferenceOffset - 16);
+              const end = Math.min(
+                Math.max(referenceSegments[index].bytes.length, generatedSegments[index].bytes.length),
+                firstDifferenceOffset + 48,
+              );
+              return {
+                start,
+                referenceHex: referenceSegments[index].bytes.subarray(start, end).toString('hex'),
+                generatedHex: generatedSegments[index].bytes.subarray(start, end).toString('hex'),
+              };
+            })(),
+          }),
     });
   }
   return summary;
