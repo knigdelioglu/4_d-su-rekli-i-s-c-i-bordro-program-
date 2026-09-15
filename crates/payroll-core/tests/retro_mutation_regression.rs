@@ -249,7 +249,7 @@ fn legacy_mixed_sign_batch_is_materialized_as_one_net_cash_flow() {
     assert_eq!(allocations.iter().map(|a| a.payableSettlementAmount).sum::<Decimal>(), dec!(70));
     assert_eq!(allocations.iter().map(|a| a.recoverableAmount).sum::<Decimal>(), Decimal::ZERO);
     assert_eq!(income.tabanBrutAylik, Some(dec!(70)));
-    assert_eq!(income.isPrimi, None);
+    assert_eq!(income.isPrimi, Some(Decimal::ZERO));
 }
 
 #[test]
