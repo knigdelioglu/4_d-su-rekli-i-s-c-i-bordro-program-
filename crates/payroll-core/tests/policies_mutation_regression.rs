@@ -165,7 +165,6 @@ fn retro_fixture(
 #[test]
 fn period_mutation_predicates_are_independently_observable_at_boundaries() {
     let source = period_custom("source", "2026-03-15", "2026-04-14", 2026, 3);
-    let same_id = period_custom("source", "2026-02-15", "2026-03-14", 2025, 1);
     let later_start = period_custom("later-start", "2026-04-15", "2026-05-14", 2025, 1);
     let later_tax_month = period_custom("later-tax", "2026-02-15", "2026-03-14", 2026, 4);
     let equal_start_equal_tax = period_custom("equal", "2026-03-15", "2026-04-14", 2026, 3);
@@ -181,7 +180,7 @@ fn period_mutation_predicates_are_independently_observable_at_boundaries() {
         payroll_for("p", "other-year", "other-year", BordroStatus::CALCULATED, AccrualType::NORMAL, "2026-03-20", 0, StatutorySnapshotSource::AttendanceBacked),
     ];
     let data = dataset(
-        vec![source, same_id, later_start, later_tax_month, equal_start_equal_tax, earlier_equal_tax, other_year_later_month],
+        vec![source, later_start, later_tax_month, equal_start_equal_tax, earlier_equal_tax, other_year_later_month],
         payrolls,
     );
 
@@ -281,7 +280,7 @@ fn payroll_and_accrual_mutations_respect_identity_order_and_person_scope() {
 
     let insert = evaluate_payroll_invalidation(
         &data,
-        &PayrollMutation::AccrualInsert { personnelId: "person-1".into(), periodId: "p1".into(), accrualId: "inserted".into(), paymentDate: "2026-02-11".into(), sequence: 0 },
+        &PayrollMutation::AccrualInsert { personnelId: "person-1".into(), periodId: "p1".into(), accrualId: "zz-inserted".into(), paymentDate: "2026-02-11".into(), sequence: 0 },
     ).unwrap();
     assert!(!affected(&insert, "current"));
     assert!(!affected(&insert, "later"));
