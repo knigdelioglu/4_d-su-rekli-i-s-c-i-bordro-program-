@@ -64,6 +64,10 @@ const rustFlags = [
 const environment = {
   ...process.env,
   CARGO_INCREMENTAL: '0',
+  // A single release codegen unit and one Cargo worker keep wasm-ld's object
+  // input order stable across host runners.
+  CARGO_BUILD_JOBS: '1',
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '1',
   CARGO_ENCODED_RUSTFLAGS: rustFlags.join(encodedSeparator),
 };
 delete environment.RUSTFLAGS;
