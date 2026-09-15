@@ -49,6 +49,8 @@ fn batch(
     }
 }
 
+// Each ledger field is an independent mutation boundary in these fixtures.
+#[allow(clippy::too_many_arguments)]
 fn allocation(
     id: &str,
     batch_id: &str,
@@ -95,7 +97,10 @@ fn allocation(
     }
 }
 
-fn dataset(batch: RetroAdjustmentBatch, allocations: Vec<RetroAllocation>) -> PayrollDatasetSnapshot {
+fn dataset(
+    batch: RetroAdjustmentBatch,
+    allocations: Vec<RetroAllocation>,
+) -> PayrollDatasetSnapshot {
     PayrollDatasetSnapshot {
         periods: vec![period("p1")],
         retroBatches: vec![batch],
@@ -241,7 +246,10 @@ fn legacy_mixed_sign_batch_is_materialized_as_one_net_cash_flow() {
     );
 
     assert_eq!(retro_payable_settlement_amount(&legacy), dec!(70));
-    assert_eq!(retro_payable_allocation_amount(&legacy, &positive), Decimal::ZERO);
+    assert_eq!(
+        retro_payable_allocation_amount(&legacy, &positive),
+        Decimal::ZERO
+    );
 
     let (_, allocations, income, _) =
         retro_payment_income(&dataset(legacy, vec![positive, negative]), "legacy")
@@ -290,9 +298,7 @@ fn payment_ledger_rejects_broken_identity_policy_and_equation_invariants() {
 
     let mut wrong_person = valid.clone();
     wrong_person.personnelId = "other".into();
-    assert!(
-        retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_person]), "b1").is_err()
-    );
+    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_person]), "b1").is_err());
 
     let mut unknown_period = valid.clone();
     unknown_period.sourcePeriodId = "missing".into();
@@ -302,9 +308,7 @@ fn payment_ledger_rejects_broken_identity_policy_and_equation_invariants() {
 
     let mut wrong_policy = valid.clone();
     wrong_policy.sgkTreatment = retro_earning_policy(RetroEarningCode::WORK_PREMIUM).sgkTreatment;
-    assert!(
-        retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_policy]), "b1").is_err()
-    );
+    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_policy]), "b1").is_err());
 
     let mut wrong_delta = valid.clone();
     wrong_delta.targetAmount = dec!(101);
@@ -338,11 +342,9 @@ fn payment_ledger_rejects_negative_authoritative_fields_and_invalid_carry() {
     let mut negative_original = valid.clone();
     negative_original.originalRecognizedAmount = dec!(-1);
     negative_original.targetAmount = dec!(99);
-    assert!(retro_payment_income(
-        &dataset(valid_batch.clone(), vec![negative_original]),
-        "b1"
-    )
-    .is_err());
+    assert!(
+        retro_payment_income(&dataset(valid_batch.clone(), vec![negative_original]), "b1").is_err()
+    );
 
     let mut negative_carry_amount = valid.clone();
     negative_carry_amount.originalSourceCarry = Some(vec![DevredenPekKaydi {
@@ -417,7 +419,5 @@ fn payment_ledger_rejects_settlement_flows_that_exceed_signed_entitlement() {
         retro_payable_settlement_amount(&offset_only_batch),
         Decimal::ZERO
     );
-    assert!(
-        retro_payment_income(&dataset(offset_only_batch, vec![offset]), "b2").is_err()
-    );
+    assert!(retro_payment_income(&dataset(offset_only_batch, vec![offset]), "b2").is_err());
 }

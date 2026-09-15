@@ -91,7 +91,10 @@ fn make_allocation(
     }
 }
 
-fn dataset(batch: RetroAdjustmentBatch, allocations: Vec<RetroAllocation>) -> PayrollDatasetSnapshot {
+fn dataset(
+    batch: RetroAdjustmentBatch,
+    allocations: Vec<RetroAllocation>,
+) -> PayrollDatasetSnapshot {
     PayrollDatasetSnapshot {
         periods: vec![period()],
         retroBatches: vec![batch],
@@ -150,7 +153,10 @@ fn legacy_payable_fallback_requires_every_explicit_flow_to_be_zero() {
 
     let mut negative_total = legacy;
     negative_total.totalGrossDelta = dec!(-1);
-    assert_eq!(retro_payable_settlement_amount(&negative_total), Decimal::ZERO);
+    assert_eq!(
+        retro_payable_settlement_amount(&negative_total),
+        Decimal::ZERO
+    );
 }
 
 #[test]
@@ -300,10 +306,7 @@ fn explicit_settlement_totals_must_match_allocations_and_entitlement() {
         Decimal::ZERO,
     );
     assert!(retro_payment_income(
-        &dataset(
-            entitlement_mismatch,
-            vec![entitlement_mismatch_allocation]
-        ),
+        &dataset(entitlement_mismatch, vec![entitlement_mismatch_allocation]),
         "entitlement-mismatch"
     )
     .is_err());

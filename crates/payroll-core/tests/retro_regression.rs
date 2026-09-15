@@ -450,6 +450,129 @@ fn same_revision_second_correction_is_delta_only() {
 }
 
 #[test]
+fn chained_authoritative_retro_uses_only_incremental_source_delta_and_sgk() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let source_settings = source
+        .institutionSettings
+        .get_mut("2026-02")
+        .expect("source settings");
+    source_settings.sgkIsciOraniYuzde = Some(dec!(10));
+    source_settings.issizlikIsciOraniYuzde = Some(dec!(2));
+    source_settings.sgkIsverenOraniYuzde = Some(dec!(20));
+    source_settings.issizlikIsverenOraniYuzde = Some(dec!(1));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let first = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "retro-chain-1",
+        revision("rev-chain-1", "2026-02-15"),
+        vec![wage_override("ov-chain-1", "rev-chain-1", dec!(130))],
+        "2026-06-20",
+    ))
+    .expect("first authoritative retro should calculate");
+
+    assert_eq!(first.periods[0].sourcePeriodId, "2026-02");
+    assert_eq!(first.periods[0].originalRecognizedAmount, dec!(2800));
+    assert_eq!(
+        first.periods[0].previousAuthoritativeRetroAmount,
+        Decimal::ZERO
+    );
+    assert_eq!(first.periods[0].targetAmount, dec!(3640));
+    assert_eq!(first.periods[0].deltaAmount, dec!(840));
+    assert_eq!(first.batch.totalGrossDelta, dec!(840));
+    assert_eq!(first.allocations.len(), 1);
+    let first_allocation = first.allocations[0].clone();
+    assert_eq!(first_allocation.sourcePeriodId, "2026-02");
+    assert_eq!(first_allocation.earningCode, RetroEarningCode::BASE_WAGE);
+    assert_eq!(first_allocation.retroPekDelta, dec!(840));
+    assert_eq!(first_allocation.adjustedPek, dec!(3640));
+    assert_eq!(first_allocation.workerSgkDelta, dec!(84));
+    assert_eq!(first_allocation.workerUnemploymentDelta, dec!(16.8));
+    assert_eq!(first_allocation.employerSgkDelta, dec!(128));
+    assert_eq!(first_allocation.employerUnemploymentDelta, dec!(6.4));
+    assert_eq!(first_allocation.originalEmployerLowerBound, dec!(200));
+    assert_eq!(first_allocation.targetEmployerLowerBound, Decimal::ZERO);
+    assert_eq!(first_allocation.employerLowerBoundDelta, dec!(-200));
+    assert_eq!(first_allocation.employerLowerBoundPremiumDelta, dec!(-24));
+
+    source.retroBatches.push(first.batch);
+    source.retroAllocations.extend(first.allocations);
+
+    let second = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "retro-chain-2",
+        revision("rev-chain-2", "2026-02-15"),
+        vec![wage_override("ov-chain-2", "rev-chain-2", dec!(140))],
+        "2026-06-20",
+    ))
+    .expect("second authoritative retro should calculate");
+
+    assert_eq!(second.periods[0].sourcePeriodId, "2026-02");
+    assert_eq!(second.periods[0].originalRecognizedAmount, dec!(2800));
+    assert_eq!(
+        second.periods[0].previousAuthoritativeRetroAmount,
+        dec!(840)
+    );
+    assert_eq!(second.periods[0].targetAmount, dec!(3920));
+    assert_eq!(second.periods[0].deltaAmount, dec!(280));
+    assert_eq!(second.batch.totalGrossDelta, dec!(280));
+    assert_eq!(second.allocations.len(), 1);
+    let second_allocation = second.allocations[0].clone();
+    assert_eq!(second_allocation.sourcePeriodId, "2026-02");
+    assert_eq!(second_allocation.earningCode, RetroEarningCode::BASE_WAGE);
+    assert_eq!(second_allocation.originalRecognizedAmount, dec!(2800));
+    assert_eq!(
+        second_allocation.previousAuthoritativeRetroAmount,
+        dec!(840)
+    );
+    assert_eq!(second_allocation.targetAmount, dec!(3920));
+    assert_eq!(second_allocation.deltaAmount, dec!(280));
+    assert_eq!(second_allocation.retroPekDelta, dec!(280));
+    assert_eq!(second_allocation.adjustedPek, dec!(3920));
+    assert_eq!(second_allocation.workerSgkDelta, dec!(28));
+    assert_eq!(second_allocation.workerUnemploymentDelta, dec!(5.6));
+    assert_eq!(second_allocation.employerSgkDelta, dec!(56));
+    assert_eq!(second_allocation.employerUnemploymentDelta, dec!(2.8));
+
+    assert_eq!(
+        first_allocation.retroPekDelta + second_allocation.retroPekDelta,
+        dec!(1120)
+    );
+    assert_eq!(
+        first_allocation.workerSgkDelta + second_allocation.workerSgkDelta,
+        dec!(112)
+    );
+    assert_eq!(
+        first_allocation.workerUnemploymentDelta + second_allocation.workerUnemploymentDelta,
+        dec!(22.4)
+    );
+    assert_eq!(
+        first_allocation.employerSgkDelta + second_allocation.employerSgkDelta,
+        dec!(184)
+    );
+    assert_eq!(
+        first_allocation.employerUnemploymentDelta + second_allocation.employerUnemploymentDelta,
+        dec!(9.2)
+    );
+
+    source.retroBatches.push(second.batch.clone());
+    source.retroAllocations.extend(second.allocations.clone());
+    let (_, payment_allocations, payment_income, payment_month_pek_income) =
+        retro_payment_income(&source, "retro-chain-2").expect("retro payment view");
+    assert_eq!(payment_allocations.len(), 1);
+    assert_eq!(payment_allocations[0].sourcePeriodId, "2026-02");
+    assert_eq!(
+        payment_allocations[0].earningCode,
+        RetroEarningCode::BASE_WAGE
+    );
+    assert_eq!(payment_income.tabanBrutAylik, Some(dec!(280)));
+    assert_eq!(payment_month_pek_income.tabanBrutAylik, None);
+}
+
+#[test]
 fn later_authoritative_retro_on_same_source_period_blocks_earlier_payment() {
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
