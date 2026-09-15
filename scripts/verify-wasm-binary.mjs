@@ -348,6 +348,34 @@ function dataDiffSummary(referenceSegments, generatedSegments) {
   return summary;
 }
 
+function canonicalByteDiff(left, right) {
+  const common = Math.min(left.length, right.length);
+  let firstDifference = -1;
+  for (let index = 0; index < common; index += 1) {
+    if (left[index] !== right[index]) {
+      firstDifference = index;
+      break;
+    }
+  }
+  if (firstDifference < 0 && left.length === right.length) return null;
+  const start = Math.max(0, (firstDifference < 0 ? common : firstDifference) - 16);
+  const end = Math.min(Math.max(left.length, right.length), start + 64);
+  return {
+    start,
+    referenceHex: left.subarray(start, end).toString('hex'),
+    generatedHex: right.subarray(start, end).toString('hex'),
+  };
+}
+
+function canonicalDataDiffSummary(referenceLayouts, generatedLayouts) {
+  return referenceLayouts.flatMap((reference, index) => {
+    const generated = generatedLayouts[index];
+    const text = canonicalByteDiff(reference.text, generated.text);
+    const binary = canonicalByteDiff(reference.binary, generated.binary);
+    return text || binary ? [{ segment: index, text, binary }] : [];
+  });
+}
+
 class DataAddressMap {
   constructor(segments, layouts) {
     this.entries = segments.flatMap((segment, index) => {
@@ -604,7 +632,7 @@ function compareSections(reference, generated) {
   const generatedDataFingerprint = JSON.stringify(dataFingerprint(generatedData, referenceData));
   if (referenceDataFingerprint !== generatedDataFingerprint) {
     fail(
-      `WASM data section layout-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))} diff=${JSON.stringify(dataDiffSummary(referenceData, generatedData))}`,
+      `WASM data section layout-normalized karşılaştırmada değişti: reference=${JSON.stringify(dataFingerprintSummary(JSON.parse(referenceDataFingerprint)))} generated=${JSON.stringify(dataFingerprintSummary(JSON.parse(generatedDataFingerprint)))} layoutDiff=${JSON.stringify(canonicalDataDiffSummary(referenceLayouts, generatedLayouts))} diff=${JSON.stringify(dataDiffSummary(referenceData, generatedData))}`,
     );
   }
 
