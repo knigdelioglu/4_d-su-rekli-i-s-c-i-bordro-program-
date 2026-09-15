@@ -324,7 +324,7 @@ jobs:
           mkdir -p artifacts
           shard_args=()
           for shard in 0 1 2 3 4 5 6 7; do
-            path="artifacts/mutation/payroll-core-mutants-shard-${shard}/target/cargo-mutants/outcomes.json"
+            path="artifacts/mutation/payroll-core-mutants-shard-${shard}/outcomes.json"
             if [ ! -f "$path" ]; then
               echo "::error::Expected mutation shard artifact is missing: $path"
               exit 1
