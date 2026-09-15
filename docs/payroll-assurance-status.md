@@ -1,15 +1,17 @@
 # Bordro Test Güvence Durumu
 
 Bu belge release kanıtının kısa manifestidir. Coverage ve mutation sayıları
-komut çıktısından/CI artifact'larından alınır; mutation full-run sonucu oluşana
-kadar `pending` alanları bilinçli olarak skor uydurmaz.
+komut çıktısından/CI artifact'larından alınır. Mutation baseline artık gerçek
+8-shard CI artifact'ına dayanır; `pendingEvidence` yalnız bağımsız golden kanıtı
+henüz tamamlanmamış fixture'ları belirtir.
 
 ## Son doğrulama kimliği
 
-- Tarih: `2026-09-14`
-- Verification identity: `working tree verification`
-- Not: Bu rapor mevcut çalışma ağacındaki doğrulamayı temsil eder; commit SHA'sı
-  veya release kanıtı değildir.
+- Tarih: `2026-09-15`
+- Verification identity: ölçülen kod commit'i
+  `34198be740843e8ae22ae459e1a4263e7618cf82`
+- Normal CI / verify: `35012763160` — PASS
+- Full mutation workflow: `35013775841` — PASS
 
 ## Golden corpus
 
@@ -46,10 +48,14 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
   `wasm-bindgen-cli 0.2.127` kurar. Böylece `wasm-pack`'in Linux'ta prebuilt
   CLI, macOS'ta Cargo-built CLI seçmesinden kaynaklanan code-section drift'i
   ortadan kaldırılır.
-- CI `src/wasm/pkg` için exact `git diff --exit-code` kontrolü yapar. Type,
-  code, data, import/export ve tüm custom section değişiklikleri ile beklenmeyen
-  generated dosya değişiklikleri blocking failure'dır; binary drift
-  normalizasyonla gizlenmez.
+- CI canonical runner'da `src/wasm/pkg` için exact `git diff --exit-code`
+  freshness kontrolü yapar. Type, code, data, import/export ve tüm custom
+  section değişiklikleri ile beklenmeyen generated dosya değişiklikleri
+  blocking failure'dır; binary drift normalizasyonla gizlenmez.
+- Bu canonical freshness kontrolü Linux/macOS arasında generated `.wasm`
+  byte-equality release şartı değildir. Bilinen code/data layout farkı bu turda
+  P2 risk olarak korunur. Package allowlist, source freshness, WASM adapter ve
+  browser E2E kontrolleri PASS durumundadır.
 
 ## Property ve oracle
 
@@ -67,14 +73,32 @@ kadar `pending` alanları bilinçli olarak skor uydurmaz.
 - Kritik kapsam: `calculations.rs`, `gv_exemption.rs`, `payroll_engine.rs`,
   `policies.rs`, `retro.rs`, `validation.rs`.
 - Aday mutant sayısı: **2.147** (liste baseline'ı).
-- Full run: **pending**; haftalık/manual workflow, 8 shard ve aggregate artifact
-  `payroll-core-mutation-summary` olarak tanımlı. Her shard'ın canonical yolu
-  `target/cargo-mutants/outcomes.json`'dır; cargo-mutants 27.1.0'un tool-native
-  `target/mutants.out` klasörü CI'da tek seferde bu dizine taşınır.
+- Full run: `35013775841` — PASS; ölçülen commit
+  `34198be740843e8ae22ae459e1a4263e7618cf82`. Sekiz shard'ın tamamı
+  (`0..7`) ve summary job `104540908933` PASS'tır. Aggregate artifact
+  `payroll-core-mutation-summary` içindeki gerçek sonuç:
+
+  | Sayaç | Değer |
+  |---|---:|
+  | Total | 2.147 |
+  | Caught | 1.349 |
+  | Missed | 494 |
+  | Timeout | 0 |
+  | Unviable | 304 |
+  | Meaningful | 1.843 |
+  | Score | %73,20 |
+
+- Score exact olarak `caught / (total - unviable)` formülüyle hesaplanır:
+  `1.349 / 1.843`. Summary, duplicate/missing shard, invalid JSON veya
+  denominator uyuşmazlığında fail-closed davranır.
 - Altyapı hataları (baseline, shard, JSON veya eksik artifact) blocking'dir;
-  `missed`/`timeout` quality findings full baseline oluşana kadar advisory'dir.
-- Mutation summary tek makine-okunur JSON artifact üretir; full 2.147-mutant
-  sonucu henüz mevcut değildir.
+  `missed`/`timeout` quality findings advisory'dir.
+- Her shard'ın canonical yolu `target/cargo-mutants/outcomes.json`'dır;
+  cargo-mutants 27.1.0'un tool-native `target/mutants.out` klasörü CI'da tek
+  seferde bu dizine taşınır. Survivor triage kaydı
+  `docs/payroll-mutation-survivor-review.md` içindedir.
+- İlk yeni koşuya göre 31 missed mutant caught olmuştur; policies.rs
+  missed 16'dan 5'e, retro.rs missed 161'den 141'e inmiştir.
 - Yerel smoke kanıtı (`gv_exemption.rs`): 7 toplam, 6 caught, 0 missed,
   0 timeout, 1 unviable; anlamlı skor **%100**.
 - Unviable mutant'lar sessizce exclude edilmez; araç çıktısında ayrı raporlanır.
@@ -117,19 +141,27 @@ eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Coverage job yal
 
 ## Bilinen boşluklar
 
-- 2.147 adayın tam mutation skoru periyodik/manual shard job tamamlandığında
-  artifact'lardan birleştirilecektir; yalnız quality sonucu advisory olan
-  geçiş adımıdır. Infrastructure başarısızlığı blocking'dir.
-- Full mutation baseline gerçek 8-shard artifact'ı olmadan doldurulmamıştır;
-  `docs/payroll-mutation-baseline.json` pending sentinel değerleri taşır.
+- 2.147 adayın gerçek 8-shard aggregate sonucu baseline'a kaydedilmiştir:
+  `docs/payroll-mutation-baseline.json`. Quality findings advisory, infrastructure
+  failure blocking olmaya devam eder.
+- 494 anlamlı missed mutant için conservative triage:
+  `REAL_TEST_GAP` 0, `EQUIVALENT` 2, `UNREACHABLE` 0,
+  `NEEDS_REVIEW` 492. Ayrıntı ve kapsam sınırı
+  `docs/payroll-mutation-survivor-review.md` içindedir; blanket exclusion yoktur.
+- Golden corpus'un 33 fixture'ından yalnız 15'i bağımsız evidence ile verified;
+  kalan 18'i `pendingEvidence` durumundadır. Bu durum 33/33 bağımsız doğrulama
+  iddiası olarak sunulmaz.
+- Linux/macOS generated WASM code/data layout farkı P2 riskidir; package
+  allowlist, freshness, adapter ve browser E2E kontrolleri korunmuştur.
 - Frontend için bu fazda yeni toplam coverage yüzdesi kapısı eklenmedi; mevcut
   WASM/browser adapter ve E2E testleri korunmaktadır.
-- Mutation baseline'da surviving mutant bulunursa her vaka için eşdeğerlik/
-  ulaşılamazlık gerekçesi veya kalıcı regression testi ayrıca yazılmalıdır.
+- Mutation baseline'da kalan survivor'lar için gerekçe veya kalıcı regression
+  testi ayrıca yazılmalıdır; bu turda kesinleştirilemeyen vakalar NEEDS_REVIEW
+  olarak bırakılmıştır.
 - Yeni gerçek production hesap hatalarının kalıcı regression fixture'ına
   dönüştürülmesi hâlâ inceleme/bug-fix akışının sorumluluğundadır.
 
 ## Branch protection
 
-MAIN BRANCH PROTECTION: manual GitHub configuration required
+MAIN BRANCH PROTECTION: false; manual GitHub configuration required
 Required check önerisi: `CI / verify`

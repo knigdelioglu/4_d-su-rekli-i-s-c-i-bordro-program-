@@ -1,18 +1,21 @@
 {
   "schemaVersion": 2,
-  "status": "pending",
+  "status": "complete",
   "tool": "cargo-mutants",
   "toolVersion": "27.1.0",
-  "measuredAt": "2026-09-11",
-  "commit": "working tree verification",
-  "commitRole": "candidate discovery / current working-tree verification; full mutation run is not represented",
-  "total": 0,
-  "caught": 0,
-  "missed": 0,
+  "cargoMutantsVersion": "27.1.0",
+  "measuredAt": "2026-09-15T19:53:31.591349432Z",
+  "commit": "34198be740843e8ae22ae459e1a4263e7618cf82",
+  "commitSha": "34198be740843e8ae22ae459e1a4263e7618cf82",
+  "runId": 35013775841,
+  "commitRole": "measured full 8-shard mutation run; baseline metadata is committed after the measured code commit",
+  "total": 2147,
+  "caught": 1349,
+  "missed": 494,
   "timeout": 0,
-  "unviable": 0,
-  "meaningful": 0,
-  "scorePercent": 0,
+  "unviable": 304,
+  "meaningful": 1843,
+  "scorePercent": 73.2,
   "scope": [
     "crates/payroll-core/src/calculations.rs",
     "crates/payroll-core/src/gv_exemption.rs",
@@ -33,7 +36,7 @@
     }
   },
   "fullRun": {
-    "status": "pending",
+    "status": "complete",
     "shards": 8,
     "expectedShards": 8,
     "outputPath": "target/cargo-mutants/outcomes.json",
@@ -41,7 +44,12 @@
     "qualityMode": "advisory",
     "infrastructureFailure": "blocking",
     "comparisonScript": "scripts/check-cargo-mutants-baseline.mjs",
-    "pendingValuesAreSentinels": true
+    "pendingValuesAreSentinels": false,
+    "runId": 35013775841,
+    "summaryJobId": 104540908933,
+    "summaryArtifact": "payroll-core-mutation-summary",
+    "shardIds": [0, 1, 2, 3, 4, 5, 6, 7],
+    "survivorReview": "docs/payroll-mutation-survivor-review.md"
   },
   "localSmokeRun": {
     "scope": "crates/payroll-core/src/gv_exemption.rs",
@@ -57,8 +65,8 @@
     "meaningfulScore": "caught / (total - unviable)",
     "unviableHandling": "cargo-mutants sonucu olarak raporlanır; config içinde sessizce bastırılmaz",
     "initialCiMode": "weekly schedule veya workflow_dispatch; infrastructure blocking, missed/timeout quality findings advisory",
-    "baselineLifecycle": "Bu dosya full run tamamlanana kadar pending kalır. Gerçek artifact'tan gelen aggregate summary inceleme sonrası root total/caught/missed/timeout/unviable/meaningful/scorePercent alanlarını doldurur; sentinel değerler önceden skor sayılmaz.",
+    "baselineLifecycle": "Bu dosya, 2026-09-15 tarihli gerçek 8-shard aggregate artifact ile complete durumundadır. Root total/caught/missed/timeout/unviable/meaningful/scorePercent alanları summary ile exact eşleşir; sentinel değer kullanılmaz.",
     "futureGate": "scripts/check-cargo-mutants-baseline.mjs score düşüşünü, yeni missed mutant'ı ve timeout artışını advisory kalite regression olarak raporlar; baseline politikası onaylandıktan sonra blocking yapılabilir.",
-    "survivorPolicy": "Survivor'lar blanket exclusion listesine alınmaz; her equivalent/unreachable kararı ayrı kanıt ve inceleme gerektirir."
+    "survivorPolicy": "494 meaningful missed mutant için conservative triage docs/payroll-mutation-survivor-review.md içindedir. Survivor'lar blanket exclusion listesine alınmaz; equivalent/unreachable kararı ayrı kanıt ve inceleme gerektirir."
   }
 }
