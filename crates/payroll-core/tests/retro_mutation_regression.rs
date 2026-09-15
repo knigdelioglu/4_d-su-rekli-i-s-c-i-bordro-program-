@@ -246,8 +246,20 @@ fn legacy_mixed_sign_batch_is_materialized_as_one_net_cash_flow() {
     let (_, allocations, income, _) =
         retro_payment_income(&dataset(legacy, vec![positive, negative]), "legacy")
             .expect("legacy mixed-sign batch should normalize locally");
-    assert_eq!(allocations.iter().map(|a| a.payableSettlementAmount).sum::<Decimal>(), dec!(70));
-    assert_eq!(allocations.iter().map(|a| a.recoverableAmount).sum::<Decimal>(), Decimal::ZERO);
+    assert_eq!(
+        allocations
+            .iter()
+            .map(|a| a.payableSettlementAmount)
+            .sum::<Decimal>(),
+        dec!(70)
+    );
+    assert_eq!(
+        allocations
+            .iter()
+            .map(|a| a.recoverableAmount)
+            .sum::<Decimal>(),
+        Decimal::ZERO
+    );
     assert_eq!(income.tabanBrutAylik, Some(dec!(70)));
     assert_eq!(income.isPrimi, Some(Decimal::ZERO));
 }
@@ -278,15 +290,21 @@ fn payment_ledger_rejects_broken_identity_policy_and_equation_invariants() {
 
     let mut wrong_person = valid.clone();
     wrong_person.personnelId = "other".into();
-    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_person]), "b1").is_err());
+    assert!(
+        retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_person]), "b1").is_err()
+    );
 
     let mut unknown_period = valid.clone();
     unknown_period.sourcePeriodId = "missing".into();
-    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![unknown_period]), "b1").is_err());
+    assert!(
+        retro_payment_income(&dataset(valid_batch.clone(), vec![unknown_period]), "b1").is_err()
+    );
 
     let mut wrong_policy = valid.clone();
     wrong_policy.sgkTreatment = retro_earning_policy(RetroEarningCode::WORK_PREMIUM).sgkTreatment;
-    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_policy]), "b1").is_err());
+    assert!(
+        retro_payment_income(&dataset(valid_batch.clone(), vec![wrong_policy]), "b1").is_err()
+    );
 
     let mut wrong_delta = valid.clone();
     wrong_delta.targetAmount = dec!(101);
@@ -320,7 +338,11 @@ fn payment_ledger_rejects_negative_authoritative_fields_and_invalid_carry() {
     let mut negative_original = valid.clone();
     negative_original.originalRecognizedAmount = dec!(-1);
     negative_original.targetAmount = dec!(99);
-    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![negative_original]), "b1").is_err());
+    assert!(retro_payment_income(
+        &dataset(valid_batch.clone(), vec![negative_original]),
+        "b1"
+    )
+    .is_err());
 
     let mut negative_carry_amount = valid.clone();
     negative_carry_amount.originalSourceCarry = Some(vec![DevredenPekKaydi {
@@ -328,7 +350,11 @@ fn payment_ledger_rejects_negative_authoritative_fields_and_invalid_carry() {
         kalanAySayisi: 1,
         kaynakDonemId: Some("p1".into()),
     }]);
-    assert!(retro_payment_income(&dataset(valid_batch.clone(), vec![negative_carry_amount]), "b1").is_err());
+    assert!(retro_payment_income(
+        &dataset(valid_batch.clone(), vec![negative_carry_amount]),
+        "b1"
+    )
+    .is_err());
 
     let mut negative_carry_months = valid;
     negative_carry_months.targetSourceCarry = Some(vec![DevredenPekKaydi {
@@ -336,12 +362,14 @@ fn payment_ledger_rejects_negative_authoritative_fields_and_invalid_carry() {
         kalanAySayisi: -1,
         kaynakDonemId: Some("p1".into()),
     }]);
-    assert!(retro_payment_income(&dataset(valid_batch, vec![negative_carry_months]), "b1").is_err());
+    assert!(
+        retro_payment_income(&dataset(valid_batch, vec![negative_carry_months]), "b1").is_err()
+    );
 }
 
 #[test]
 fn payment_ledger_rejects_settlement_flows_that_exceed_signed_entitlement() {
-    let batch = batch(
+    let cash_flow_batch = batch(
         "b1",
         dec!(100),
         dec!(100),
@@ -362,7 +390,7 @@ fn payment_ledger_rejects_settlement_flows_that_exceed_signed_entitlement() {
         Decimal::ZERO,
         Decimal::ZERO,
     );
-    assert!(retro_payment_income(&dataset(batch, vec![overpaid]), "b1").is_err());
+    assert!(retro_payment_income(&dataset(cash_flow_batch, vec![overpaid]), "b1").is_err());
 
     let offset_only_batch = batch(
         "b2",
@@ -385,6 +413,11 @@ fn payment_ledger_rejects_settlement_flows_that_exceed_signed_entitlement() {
         dec!(100),
         Decimal::ZERO,
     );
-    assert_eq!(retro_payable_settlement_amount(&offset_only_batch), Decimal::ZERO);
-    assert!(retro_payment_income(&dataset(offset_only_batch, vec![offset]), "b2").is_err());
+    assert_eq!(
+        retro_payable_settlement_amount(&offset_only_batch),
+        Decimal::ZERO
+    );
+    assert!(
+        retro_payment_income(&dataset(offset_only_batch, vec![offset]), "b2").is_err()
+    );
 }
