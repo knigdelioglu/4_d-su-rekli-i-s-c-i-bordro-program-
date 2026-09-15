@@ -109,6 +109,8 @@ fn dataset(
     }
 }
 
+type NegativeAllocationSnapshotMutation = (&'static str, fn(&mut RetroAllocation));
+
 #[test]
 fn sgk_ledger_totals_sum_deltas_but_take_maximum_authoritative_snapshots() {
     let mut first = allocation(
@@ -367,6 +369,105 @@ fn payment_ledger_rejects_negative_authoritative_fields_and_invalid_carry() {
     assert!(
         retro_payment_income(&dataset(valid_batch, vec![negative_carry_months]), "b1").is_err()
     );
+}
+
+#[test]
+fn payment_ledger_rejects_each_negative_authoritative_allocation_snapshot() {
+    let cases: [NegativeAllocationSnapshotMutation; 8] = [
+        ("original PEK", |allocation| {
+            allocation.originalPek = dec!(-1)
+        }),
+        ("adjusted PEK", |allocation| {
+            allocation.adjustedPek = dec!(-1)
+        }),
+        ("original lower bound", |allocation| {
+            allocation.originalEmployerLowerBound = dec!(-1)
+        }),
+        ("target lower bound", |allocation| {
+            allocation.targetEmployerLowerBound = dec!(-1)
+        }),
+        ("payable", |allocation| {
+            allocation.payableSettlementAmount = dec!(-1)
+        }),
+        ("offset", |allocation| {
+            allocation.offsetSettlementAmount = dec!(-1)
+        }),
+        ("recoverable", |allocation| {
+            allocation.recoverableAmount = dec!(-1)
+        }),
+        ("original recognized", |allocation| {
+            allocation.originalRecognizedAmount = dec!(-1);
+            allocation.targetAmount = dec!(99);
+        }),
+    ];
+
+    for (label, mutate) in cases {
+        let batch = batch(
+            "negative-snapshot",
+            dec!(100),
+            dec!(100),
+            Decimal::ZERO,
+            Decimal::ZERO,
+            CompensationRevisionStatus::CALCULATED,
+            RetroSettlementStatus::UNSETTLED,
+        );
+        let mut allocation = allocation(
+            "negative-snapshot-allocation",
+            "negative-snapshot",
+            RetroEarningCode::BASE_WAGE,
+            Decimal::ZERO,
+            Decimal::ZERO,
+            dec!(100),
+            dec!(100),
+            dec!(100),
+            Decimal::ZERO,
+            Decimal::ZERO,
+        );
+        mutate(&mut allocation);
+        assert!(
+            retro_payment_income(&dataset(batch, vec![allocation]), "negative-snapshot").is_err(),
+            "negative {label} must be rejected"
+        );
+    }
+
+    let batch = batch(
+        "negative-target",
+        dec!(100),
+        dec!(100),
+        Decimal::ZERO,
+        Decimal::ZERO,
+        CompensationRevisionStatus::CALCULATED,
+        RetroSettlementStatus::UNSETTLED,
+    );
+    let negative_target = allocation(
+        "negative-target-allocation",
+        "negative-target",
+        RetroEarningCode::BASE_WAGE,
+        Decimal::ZERO,
+        Decimal::ZERO,
+        dec!(-1),
+        dec!(-1),
+        Decimal::ZERO,
+        Decimal::ZERO,
+        Decimal::ZERO,
+    );
+    let positive_companion = allocation(
+        "positive-target-allocation",
+        "negative-target",
+        RetroEarningCode::WORK_PREMIUM,
+        Decimal::ZERO,
+        Decimal::ZERO,
+        dec!(101),
+        dec!(101),
+        dec!(100),
+        Decimal::ZERO,
+        Decimal::ZERO,
+    );
+    assert!(retro_payment_income(
+        &dataset(batch, vec![negative_target, positive_companion]),
+        "negative-target"
+    )
+    .is_err());
 }
 
 #[test]

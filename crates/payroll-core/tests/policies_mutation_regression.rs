@@ -258,6 +258,76 @@ fn period_mutation_predicates_are_independently_observable_at_boundaries() {
 }
 
 #[test]
+fn person_and_tax_year_mutations_are_scoped_to_their_requested_dimension() {
+    let current_year = period_custom("current-year", "2026-01-15", "2026-02-14", 2026, 1);
+    let previous_year = period_custom("previous-year", "2025-01-15", "2025-02-14", 2025, 1);
+    let data = dataset(
+        vec![current_year, previous_year],
+        vec![
+            payroll_for(
+                "person-1",
+                "current-year",
+                "person-1-current",
+                BordroStatus::CALCULATED,
+                AccrualType::NORMAL,
+                "2026-02-10",
+                0,
+                StatutorySnapshotSource::AttendanceBacked,
+            ),
+            payroll_for(
+                "person-1",
+                "previous-year",
+                "person-1-previous",
+                BordroStatus::CALCULATED,
+                AccrualType::NORMAL,
+                "2025-02-10",
+                0,
+                StatutorySnapshotSource::AttendanceBacked,
+            ),
+            payroll_for(
+                "person-2",
+                "current-year",
+                "person-2-current",
+                BordroStatus::CALCULATED,
+                AccrualType::NORMAL,
+                "2026-02-10",
+                0,
+                StatutorySnapshotSource::AttendanceBacked,
+            ),
+        ],
+    );
+
+    let person = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::Person {
+            personnelId: "person-1".into(),
+        },
+    )
+    .unwrap();
+    assert!(affected(&person, "person-1-current"));
+    assert!(affected(&person, "person-1-previous"));
+    assert!(!affected(&person, "person-2-current"));
+
+    let person_year = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::PersonTaxYear {
+            personnelId: "person-1".into(),
+            taxYear: 2026,
+        },
+    )
+    .unwrap();
+    assert!(affected(&person_year, "person-1-current"));
+    assert!(!affected(&person_year, "person-1-previous"));
+    assert!(!affected(&person_year, "person-2-current"));
+
+    let year =
+        evaluate_payroll_invalidation(&data, &PayrollMutation::TaxYear { taxYear: 2025 }).unwrap();
+    assert!(!affected(&year, "person-1-current"));
+    assert!(affected(&year, "person-1-previous"));
+    assert!(!affected(&year, "person-2-current"));
+}
+
+#[test]
 fn position_mutation_keeps_date_and_tax_position_predicates_independent() {
     let equal_date_other_year = period_custom("equal-date", "2026-03-15", "2026-04-14", 2025, 1);
     let earlier_same_tax_position =
@@ -487,6 +557,82 @@ fn retro_batch_mutations_enforce_person_source_and_settlement_identity() {
     data.retroBatches.push(batch);
     data.retroAllocations.push(allocation);
 
+    let person = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::Person {
+            personnelId: "person-1".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(person.affectedRetroBatches, vec!["retro-batch"]);
+
+    let wrong_person = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::Person {
+            personnelId: "other".into(),
+        },
+    )
+    .unwrap();
+    assert!(wrong_person.affectedRetroBatches.is_empty());
+
+    let person_tax_year = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::PersonTaxYear {
+            personnelId: "person-1".into(),
+            taxYear: 2026,
+        },
+    )
+    .unwrap();
+    assert_eq!(person_tax_year.affectedRetroBatches, vec!["retro-batch"]);
+
+    let wrong_tax_year =
+        evaluate_payroll_invalidation(&data, &PayrollMutation::TaxYear { taxYear: 2025 }).unwrap();
+    assert!(wrong_tax_year.affectedRetroBatches.is_empty());
+
+    let payroll_calculation = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::PayrollCalculation {
+            personnelId: "person-1".into(),
+            periodId: "p1".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        payroll_calculation.affectedRetroBatches,
+        vec!["retro-batch"]
+    );
+
+    let wrong_payroll_calculation = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::PayrollCalculation {
+            personnelId: "person-1".into(),
+            periodId: "p2".into(),
+        },
+    )
+    .unwrap();
+    assert!(wrong_payroll_calculation.affectedRetroBatches.is_empty());
+
+    let person_from_date = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::PersonFromDate {
+            personnelId: "person-1".into(),
+            effectiveFrom: "2026-01-01".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(person_from_date.affectedRetroBatches, vec!["retro-batch"]);
+
+    let source_delete = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::AccrualDelete {
+            personnelId: "person-1".into(),
+            periodId: "p1".into(),
+            accrualId: "source-payroll".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(source_delete.affectedRetroBatches, vec!["retro-batch"]);
+
     let person_period = evaluate_payroll_invalidation(
         &data,
         &PayrollMutation::PersonPeriod {
@@ -641,4 +787,52 @@ fn retro_source_carry_save_obeys_replay_and_payment_date_boundaries() {
         data.retroAllocations[0].targetSourceCarry.clone();
     let no_replay = evaluate_payroll_invalidation(&data, &mutation).unwrap();
     assert!(no_replay.affectedPayrolls.is_empty());
+}
+
+#[test]
+fn retro_source_carry_replay_ignores_non_wage_carry_changes() {
+    let p1 = period_custom("p1", "2026-01-15", "2026-02-14", 2026, 1);
+    let p2 = period_custom("p2", "2026-02-15", "2026-03-14", 2026, 2);
+    let at_boundary = payroll_for(
+        "person-1",
+        "p2",
+        "at-boundary",
+        BordroStatus::CALCULATED,
+        AccrualType::SUPPLEMENTAL,
+        "2026-06-20",
+        0,
+        StatutorySnapshotSource::ProvisionalPaymentMonth,
+    );
+    let (batch, mut wage) = retro_fixture(
+        "person-1",
+        "p1",
+        "retro-batch",
+        CompensationRevisionStatus::CALCULATED,
+    );
+    wage.originalSourceCarry = wage.targetSourceCarry.clone();
+    let mut non_wage = wage.clone();
+    non_wage.id = "non-wage-carry-change".into();
+    non_wage.earningCode = RetroEarningCode::WORK_PREMIUM;
+    non_wage.sgkTreatment = RetroSgkTreatment::NON_WAGE_PAYMENT_MONTH;
+    non_wage.originalSourceCarry = None;
+    non_wage.targetSourceCarry = Some(vec![DevredenPekKaydi {
+        tutar: 10.into(),
+        kalanAySayisi: 1,
+        kaynakDonemId: Some("p1".into()),
+    }]);
+
+    let mut data = dataset(vec![p1, p2], vec![at_boundary]);
+    data.retroBatches.push(batch);
+    data.retroAllocations.extend([wage, non_wage]);
+    let impact = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::RetroBatchSave {
+            personnelId: "person-1".into(),
+            batchId: "retro-batch".into(),
+            paymentDate: "2026-06-20".into(),
+        },
+    )
+    .unwrap();
+
+    assert!(impact.affectedPayrolls.is_empty());
 }

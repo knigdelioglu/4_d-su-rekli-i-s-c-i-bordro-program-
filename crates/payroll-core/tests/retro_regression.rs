@@ -536,6 +536,13 @@ fn chained_authoritative_retro_uses_only_incremental_source_delta_and_sgk() {
     assert_eq!(second_allocation.workerUnemploymentDelta, dec!(5.6));
     assert_eq!(second_allocation.employerSgkDelta, dec!(56));
     assert_eq!(second_allocation.employerUnemploymentDelta, dec!(2.8));
+    assert_eq!(second_allocation.originalEmployerLowerBound, dec!(200));
+    assert_eq!(second_allocation.targetEmployerLowerBound, Decimal::ZERO);
+    assert_eq!(second_allocation.employerLowerBoundDelta, Decimal::ZERO);
+    assert_eq!(
+        second_allocation.employerLowerBoundPremiumDelta,
+        Decimal::ZERO
+    );
 
     assert_eq!(
         first_allocation.retroPekDelta + second_allocation.retroPekDelta,
@@ -570,6 +577,26 @@ fn chained_authoritative_retro_uses_only_incremental_source_delta_and_sgk() {
     );
     assert_eq!(payment_income.tabanBrutAylik, Some(dec!(280)));
     assert_eq!(payment_month_pek_income.tabanBrutAylik, None);
+}
+
+#[test]
+fn zero_retro_delta_remains_unsettled_instead_of_becoming_offset_settled() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = wage_retro_result(source, "retro-zero-delta", "rev-zero-delta", dec!(100));
+
+    assert_eq!(result.batch.totalGrossDelta, Decimal::ZERO);
+    assert_eq!(result.batch.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(result.batch.offsetSettlementAmount, Decimal::ZERO);
+    assert_eq!(
+        result.batch.settlementStatus,
+        RetroSettlementStatus::UNSETTLED
+    );
+    assert!(result.allocations.is_empty());
 }
 
 #[test]
@@ -1295,6 +1322,58 @@ fn multi_allocation_sgk_residual_matches_canonical_source_total() {
     // the deterministic residual-cent allocation carries that correction.
     assert_eq!(source_allocations[0].workerSgkDelta, dec!(0.04));
     assert_eq!(source_allocations[1].workerSgkDelta, dec!(0.03));
+
+    let base = source_allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage source allocation");
+    let clothing = source_allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::CLOTHING)
+        .expect("clothing source allocation");
+    assert_eq!(base.employerSgkDelta, dec!(0.05));
+    assert_eq!(clothing.employerSgkDelta, dec!(-0.05));
+    assert_eq!(base.employerUnemploymentDelta, dec!(0.01));
+    assert_eq!(clothing.employerUnemploymentDelta, dec!(-0.01));
+}
+
+#[test]
+fn non_wage_only_retro_does_not_require_source_month_pek_allocations() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-non-wage-only",
+        revision("rev-non-wage-only", "2026-02-15"),
+        vec![CompensationRevisionOverride {
+            id: "ov-non-wage-only".into(),
+            revisionId: "rev-non-wage-only".into(),
+            parameter: RetroParameterKey::IS_PRIMI_YUZDE,
+            value: dec!(20),
+            personnelId: None,
+        }],
+        "2026-06-20",
+    ))
+    .expect("a non-wage-only retro must not enter source-month SGK replay");
+
+    assert_eq!(result.batch.totalGrossDelta, dec!(560));
+    assert_eq!(result.allocations.len(), 1);
+    assert_eq!(
+        result.allocations[0].earningCode,
+        RetroEarningCode::WORK_PREMIUM
+    );
+    assert_eq!(result.allocations[0].retroPekDelta, Decimal::ZERO);
+    assert_eq!(result.allocations[0].workerSgkDelta, Decimal::ZERO);
+    assert_eq!(result.allocations[0].workerUnemploymentDelta, Decimal::ZERO);
+    assert_eq!(result.allocations[0].employerSgkDelta, Decimal::ZERO);
+    assert_eq!(
+        result.allocations[0].employerUnemploymentDelta,
+        Decimal::ZERO
+    );
 }
 
 #[test]
