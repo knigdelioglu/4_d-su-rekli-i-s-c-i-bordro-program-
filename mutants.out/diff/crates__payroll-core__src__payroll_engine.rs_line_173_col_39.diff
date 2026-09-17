@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace != with == in validate_period
+@@ -165,17 +165,17 @@
+ 
+     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+     if start > end {
+         return Err(DomainError::ValidationError(
+             "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
+         ));
+     }
+-    if start.day() != 15 || end.day() != 14 {
++    if start.day() != 15 || end.day() == /* ~ changed by cargo-mutants ~ */ 14 {
+         return Err(DomainError::ValidationError(format!(
+             "Bordro dönemi 15-14 olmalıdır: {} - {}.",
+             period.baslangicTarihi, period.bitisTarihi
+         )));
+     }
+     let (expected_end_year, expected_end_month) = if start.month() == 12 {
+         (start.year() + 1, 1)
+     } else {

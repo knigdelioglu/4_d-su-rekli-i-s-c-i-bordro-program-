@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace + with - in full_period_sgk_day_weight
+@@ -124,17 +124,17 @@
+         .ok_or_else(|| DomainError::InvalidData("Ay sonu çözümlenemedi.".into()))
+ }
+ 
+ fn full_period_sgk_day_weight(date: NaiveDate, period_start: NaiveDate) -> Result<i32> {
+     if date.year() == period_start.year() && date.month() == period_start.month() {
+         let month_days = days_in_month(period_start)?;
+         if date.day() == month_days {
+             let actual_second_half_days = (month_days - 14) as i32;
+-            return Ok(1 + (16 - actual_second_half_days));
++            return Ok(1 - /* ~ changed by cargo-mutants ~ */ (16 - actual_second_half_days));
+         }
+     }
+     Ok(1)
+ }
+ 
+ fn is_prim_bearing_code(code: &str, date: NaiveDate, paid_sick_dates: &[NaiveDate]) -> bool {
+     matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT")
+         || (code == "R" && paid_sick_dates.contains(&date))

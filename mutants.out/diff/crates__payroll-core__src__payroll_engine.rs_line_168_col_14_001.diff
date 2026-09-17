@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace > with < in validate_period
+@@ -160,17 +160,17 @@
+     if period.taxYear <= 0 || !(1..=12).contains(&period.taxMonth) {
+         return Err(DomainError::ValidationError(
+             "Vergi yılı geçerli olmalı ve vergi ayı 1-12 arasında olmalıdır.".into(),
+         ));
+     }
+ 
+     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+-    if start > end {
++    if start < /* ~ changed by cargo-mutants ~ */ end {
+         return Err(DomainError::ValidationError(
+             "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
+         ));
+     }
+     if start.day() != 15 || end.day() != 14 {
+         return Err(DomainError::ValidationError(format!(
+             "Bordro dönemi 15-14 olmalıdır: {} - {}.",
+             period.baslangicTarihi, period.bitisTarihi

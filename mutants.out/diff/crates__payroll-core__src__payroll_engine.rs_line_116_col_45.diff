@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace + with - in days_in_month
+@@ -108,17 +108,17 @@
+     }
+     if let Some(value) = segment.gunlukYemekIstisnasiGV {
+         values.gunluk_yemek_istisnasi_gv = value;
+     }
+ }
+ 
+ fn days_in_month(date: NaiveDate) -> Result<u32> {
+     let next_month = if date.month() == 12 {
+-        NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
++        NaiveDate::from_ymd_opt(date.year() - /* ~ changed by cargo-mutants ~ */ 1, 1, 1)
+     } else {
+         NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
+     }
+     .ok_or_else(|| DomainError::InvalidData("Ay sonu çözümlenemedi.".into()))?;
+     next_month
+         .pred_opt()
+         .map(|day| day.day())
+         .ok_or_else(|| DomainError::InvalidData("Ay sonu çözümlenemedi.".into()))

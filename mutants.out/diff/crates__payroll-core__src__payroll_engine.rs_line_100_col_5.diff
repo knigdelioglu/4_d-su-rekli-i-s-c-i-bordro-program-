@@ -1,0 +1,32 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace apply_statutory_segment with ()
+@@ -92,28 +92,17 @@
+     gunluk_yemek_istisnasi_sgk: Decimal,
+     gunluk_yemek_istisnasi_gv: Decimal,
+ }
+ 
+ fn apply_statutory_segment(
+     values: &mut ResolvedStatutoryValues,
+     segment: &StatutoryParameterSegment,
+ ) {
+-    if let Some(value) = segment.gunlukAsgariUcret {
+-        values.gunluk_asgari_ucret = value;
+-    }
+-    if let Some(value) = segment.pekTavanKatsayisi {
+-        values.pek_tavan_katsayisi = value;
+-    }
+-    if let Some(value) = segment.gunlukYemekIstisnasiSGK {
+-        values.gunluk_yemek_istisnasi_sgk = value;
+-    }
+-    if let Some(value) = segment.gunlukYemekIstisnasiGV {
+-        values.gunluk_yemek_istisnasi_gv = value;
+-    }
++    () /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ fn days_in_month(date: NaiveDate) -> Result<u32> {
+     let next_month = if date.month() == 12 {
+         NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
+     } else {
+         NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
+     }

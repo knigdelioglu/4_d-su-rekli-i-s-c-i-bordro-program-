@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace hakedis_gun -> i32 with 1
+@@ -77,17 +77,17 @@
+                 period_id, code
+             )))
+         }
+     }
+     Ok(())
+ }
+ 
+ fn hakedis_gun(summary: &PuantajOzeti) -> i32 {
+-    summary.c + summary.t + summary.g + summary.i + summary.gc + summary.gct
++    1 /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ #[derive(Clone)]
+ struct ResolvedStatutoryValues {
+     gunluk_asgari_ucret: Decimal,
+     pek_tavan_katsayisi: Decimal,
+     gunluk_yemek_istisnasi_sgk: Decimal,
+     gunluk_yemek_istisnasi_gv: Decimal,

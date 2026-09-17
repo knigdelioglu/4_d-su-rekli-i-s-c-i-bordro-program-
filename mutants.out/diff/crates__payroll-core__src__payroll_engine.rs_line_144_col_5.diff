@@ -1,0 +1,26 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace parse_period_date -> Result<NaiveDate> with Ok(Default::default())
+@@ -136,22 +136,17 @@
+ }
+ 
+ fn is_prim_bearing_code(code: &str, date: NaiveDate, paid_sick_dates: &[NaiveDate]) -> bool {
+     matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT")
+         || (code == "R" && paid_sick_dates.contains(&date))
+ }
+ 
+ fn parse_period_date(value: &str, period_id: &str, field_name: &str) -> Result<NaiveDate> {
+-    NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|error| {
+-        DomainError::InvalidData(format!(
+-            "{} dönemi {} tarihi geçersiz: {}",
+-            period_id, field_name, error
+-        ))
+-    })
++    Ok(Default::default()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Validates the canonical 15–14 work-period definition. Persistence adapters
+ /// call this function instead of maintaining a second copy of the invariant.
+ pub fn validate_period(period: &BordroDonemi) -> Result<()> {
+     if period.yil <= 0 || !(1..=12).contains(&period.ay) {
+         return Err(DomainError::ValidationError(
+             "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),

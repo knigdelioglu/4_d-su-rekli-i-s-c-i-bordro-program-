@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ delete match arm "GÇ" in add_puantaj_kodu
+@@ -63,17 +63,17 @@
+ }
+ 
+ fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> Result<()> {
+     match code {
+         "Ç" => summary.c += 1,
+         "T" => summary.t += 1,
+         "G" => summary.g += 1,
+         "İ" => summary.i += 1,
+-        "GÇ" => summary.gc += 1,
++         /* ~ changed by cargo-mutants ~ */
+         "GÇT" => summary.gct += 1,
+         "R" => summary.r += 1,
+         _ => {
+             return Err(DomainError::InvalidData(format!(
+                 "{} döneminde desteklenmeyen puantaj kodu: {}",
+                 period_id, code
+             )))
+         }

@@ -1,0 +1,21 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace <= with > in validate_period
+@@ -152,17 +152,17 @@
+ /// Validates the canonical 15–14 work-period definition. Persistence adapters
+ /// call this function instead of maintaining a second copy of the invariant.
+ pub fn validate_period(period: &BordroDonemi) -> Result<()> {
+     if period.yil <= 0 || !(1..=12).contains(&period.ay) {
+         return Err(DomainError::ValidationError(
+             "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),
+         ));
+     }
+-    if period.taxYear <= 0 || !(1..=12).contains(&period.taxMonth) {
++    if period.taxYear > /* ~ changed by cargo-mutants ~ */ 0 || !(1..=12).contains(&period.taxMonth) {
+         return Err(DomainError::ValidationError(
+             "Vergi yılı geçerli olmalı ve vergi ayı 1-12 arasında olmalıdır.".into(),
+         ));
+     }
+ 
+     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+     if start > end {

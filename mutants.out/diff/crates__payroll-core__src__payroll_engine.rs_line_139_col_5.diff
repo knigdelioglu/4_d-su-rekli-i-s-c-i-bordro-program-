@@ -1,0 +1,22 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace is_prim_bearing_code -> bool with true
+@@ -131,18 +131,17 @@
+             let actual_second_half_days = (month_days - 14) as i32;
+             return Ok(1 + (16 - actual_second_half_days));
+         }
+     }
+     Ok(1)
+ }
+ 
+ fn is_prim_bearing_code(code: &str, date: NaiveDate, paid_sick_dates: &[NaiveDate]) -> bool {
+-    matches!(code, "Ç" | "T" | "G" | "İ" | "GÇ" | "GÇT")
+-        || (code == "R" && paid_sick_dates.contains(&date))
++    true /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ fn parse_period_date(value: &str, period_id: &str, field_name: &str) -> Result<NaiveDate> {
+     NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|error| {
+         DomainError::InvalidData(format!(
+             "{} dönemi {} tarihi geçersiz: {}",
+             period_id, field_name, error
+         ))

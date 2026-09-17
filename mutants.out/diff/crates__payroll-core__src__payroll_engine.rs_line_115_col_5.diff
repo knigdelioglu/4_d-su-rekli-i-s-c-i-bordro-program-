@@ -1,0 +1,30 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace days_in_month -> Result<u32> with Ok(0)
+@@ -107,26 +107,17 @@
+         values.gunluk_yemek_istisnasi_sgk = value;
+     }
+     if let Some(value) = segment.gunlukYemekIstisnasiGV {
+         values.gunluk_yemek_istisnasi_gv = value;
+     }
+ }
+ 
+ fn days_in_month(date: NaiveDate) -> Result<u32> {
+-    let next_month = if date.month() == 12 {
+-        NaiveDate::from_ymd_opt(date.year() + 1, 1, 1)
+-    } else {
+-        NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)
+-    }
+-    .ok_or_else(|| DomainError::InvalidData("Ay sonu çözümlenemedi.".into()))?;
+-    next_month
+-        .pred_opt()
+-        .map(|day| day.day())
+-        .ok_or_else(|| DomainError::InvalidData("Ay sonu çözümlenemedi.".into()))
++    Ok(0) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ fn full_period_sgk_day_weight(date: NaiveDate, period_start: NaiveDate) -> Result<i32> {
+     if date.year() == period_start.year() && date.month() == period_start.month() {
+         let month_days = days_in_month(period_start)?;
+         if date.day() == month_days {
+             let actual_second_half_days = (month_days - 14) as i32;
+             return Ok(1 + (16 - actual_second_half_days));

@@ -1,0 +1,62 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace validate_period -> Result<()> with Ok(())
+@@ -147,58 +147,17 @@
+             period_id, field_name, error
+         ))
+     })
+ }
+ 
+ /// Validates the canonical 15–14 work-period definition. Persistence adapters
+ /// call this function instead of maintaining a second copy of the invariant.
+ pub fn validate_period(period: &BordroDonemi) -> Result<()> {
+-    if period.yil <= 0 || !(1..=12).contains(&period.ay) {
+-        return Err(DomainError::ValidationError(
+-            "Dönem yılı geçerli olmalı ve ayı 1-12 arasında olmalıdır.".into(),
+-        ));
+-    }
+-    if period.taxYear <= 0 || !(1..=12).contains(&period.taxMonth) {
+-        return Err(DomainError::ValidationError(
+-            "Vergi yılı geçerli olmalı ve vergi ayı 1-12 arasında olmalıdır.".into(),
+-        ));
+-    }
+-
+-    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+-    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+-    if start > end {
+-        return Err(DomainError::ValidationError(
+-            "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.".into(),
+-        ));
+-    }
+-    if start.day() != 15 || end.day() != 14 {
+-        return Err(DomainError::ValidationError(format!(
+-            "Bordro dönemi 15-14 olmalıdır: {} - {}.",
+-            period.baslangicTarihi, period.bitisTarihi
+-        )));
+-    }
+-    let (expected_end_year, expected_end_month) = if start.month() == 12 {
+-        (start.year() + 1, 1)
+-    } else {
+-        (start.year(), start.month() + 1)
+-    };
+-    if end.year() != expected_end_year || end.month() != expected_end_month {
+-        return Err(DomainError::ValidationError(format!(
+-            "Bordro dönemi başlangıç ayını izleyen ayın 14'ünde bitmelidir: {} - {}.",
+-            period.baslangicTarihi, period.bitisTarihi
+-        )));
+-    }
+-    if period.yil != start.year() || period.ay != start.month() as i32 {
+-        return Err(DomainError::ValidationError(format!(
+-            "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
+-            period.yil, period.ay, period.baslangicTarihi
+-        )));
+-    }
+-    Ok(())
++    Ok(()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
+     validate_period(period)?;
+     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+     let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+     let matches_start = period.taxYear == start.year() && period.taxMonth == start.month() as i32;
+     let matches_end = period.taxYear == end.year() && period.taxMonth == end.month() as i32;

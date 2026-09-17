@@ -1,0 +1,32 @@
+--- crates/payroll-core/src/payroll_engine.rs
++++ replace validate_tax_month_overlap -> Result<()> with Ok(())
+@@ -192,28 +192,17 @@
+             "Dönem yıl/ay metadata'sı başlangıç tarihiyle uyuşmuyor: {}-{:02} / {}.",
+             period.yil, period.ay, period.baslangicTarihi
+         )));
+     }
+     Ok(())
+ }
+ 
+ pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
+-    validate_period(period)?;
+-    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
+-    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
+-    let matches_start = period.taxYear == start.year() && period.taxMonth == start.month() as i32;
+-    let matches_end = period.taxYear == end.year() && period.taxMonth == end.month() as i32;
+-    if !matches_start && !matches_end {
+-        return Err(DomainError::ValidationError(format!(
+-            "Vergi yılı/ayı {}-{:02}, {}–{} çalışma dönemiyle örtüşmüyor.",
+-            period.taxYear, period.taxMonth, period.baslangicTarihi, period.bitisTarihi
+-        )));
+-    }
+-    Ok(())
++    Ok(()) /* ~ changed by cargo-mutants ~ */
+ }
+ 
+ /// Validates period-local statutory overrides before they are persisted or
+ /// resolved into a payroll snapshot.
+ pub fn validate_statutory_segments_for_period(
+     period: &BordroDonemi,
+     settings: &DonemselKurumDegerleri,
+ ) -> Result<()> {
