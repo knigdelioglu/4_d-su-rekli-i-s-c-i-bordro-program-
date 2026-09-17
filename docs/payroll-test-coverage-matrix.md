@@ -81,10 +81,12 @@ Durumlar:
 - Mutation aday listesi: **2.147**; ayrıntılı makine manifesti
   `docs/payroll-mutation-baseline.json` içindedir.
 - Yerel smoke: `gv_exemption.rs` için 6/6 anlamlı mutant caught, 1 unviable,
-  0 missed. Tam skor haftalık/manual 8 shard CI artifact'larından alınır.
+  0 missed. Final full workflow 35013775841'de sekiz shard PASS olmuş;
+  aggregate sonuç 1.349 caught, 494 missed, 0 timeout, 304 unviable,
+  1.843 meaningful ve %73,20 skordur.
 - Canonical shard evidence yolu `target/cargo-mutants/outcomes.json`'dır.
   Eksik baseline/outcomes/shard veya parse edilemeyen JSON infrastructure
-  failure'dır; missed/timeout sonucu full baseline oluşana kadar advisory'dir.
+  failure'dır; missed/timeout quality findings advisory'dir.
 - Aggregate collector tam 8 shard ID'si (`0..7`) bekler; duplicate/missing shard,
   duplicate mutant ve denominator/file scope uyuşmazlığında fail olur ve tek
   machine-readable summary üretir.
@@ -93,9 +95,11 @@ Durumlar:
   lines/functions/regions metrikleri baseline'ın altına inemez. Weekly/manual
   ölçüm `PROPTEST_RNG_SEED=2026091001` ile çalışır; PR property keşfi sabitlenmez.
 - Generated WASM doğrulaması Cargo-built `wasm-bindgen-cli 0.2.127`, Cargo
-  `--locked` ve non-incremental build ile runner'lar arasında deterministic
-  hale getirilir ve exact package diff'i kullanır. Code/data/import/export/
-  custom-section drift'i gizlenmeden yakalanır.
+  `--locked` ve non-incremental build ile canonical runner freshness kontrolü
+  yapar ve exact package diff'i kullanır. Code/data/import/export/
+  custom-section drift'i gizlenmeden yakalanır. Linux/macOS arası generated
+  `.wasm` code/data layout byte eşitliği bu turda release şartı değildir; P2
+  risk olarak izlenir.
 
 Golden sütunundaki
 `—` işareti mevcut regression kapsamının zayıf olduğu anlamına gelmez; yalnızca

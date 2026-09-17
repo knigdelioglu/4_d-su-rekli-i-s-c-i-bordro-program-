@@ -1,6 +1,7 @@
 # Bordro Test Güvence Yol Haritası
 
-**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, mutation full-run periyodik/manual akışta ve henüz pending — 2026-09-11
+**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, final mutation
+full-run 8 shard olarak tamamlandı ve gerçek baseline kaydedildi — 2026-09-15
 
 **Hedef dal:** `main`
 **Kapsam:** `payroll-core`, native Tauri/SQLite akışı, WASM/browser parity ve CI test güvence katmanları
@@ -75,9 +76,8 @@ Uygulama sırası üç büyük faz olarak izlenir:
 1. **Faz 1 — Referans temeli:** güvence matrisi, golden corpus ve yasal yıl/sürüm disiplini. **Tamamlandı.**
 2. **Faz 2 — Bağımsız doğruluk:** property-based testler ve production'dan bağımsız mali oracle. **Tamamlandı.**
 3. **Faz 3 — Sürekli güvence:** mutation, coverage/CI quality gate ve release evidence.
-   **Altyapı tamamlandı; mutation infrastructure blocking, quality findings
-   advisory ve tam skor periyodik/manual shard koşusundan sonra baseline'a
-   işlenecektir.**
+   **Altyapı tamamlandı; final 8-shard mutation artifact'ı ölçüldü, baseline'a
+   işlendi. Infrastructure blocking, quality findings advisory'dir.**
 
 ---
 
@@ -498,6 +498,11 @@ crates/payroll-core/src/validation.rs
 27.1.0'un tool-native `target/mutants.out` çıktısı CI'da tek seferde canonical
 dizine taşınır; collector nested/fallback path aramaz. Unviable sonuçlar
 sessiz exclusion değildir; sonuç sınıflandırmasında ayrı tutulur.
+Final manual workflow 35013775841'de 0..7 shard setinin tamamı ve aggregate
+summary PASS olmuştur: 1.349 caught, 494 missed, 0 timeout, 304 unviable,
+1.843 meaningful ve %73,20 skor. Sonuç
+`docs/payroll-mutation-baseline.json` içine, survivor triage ise
+`docs/payroll-mutation-survivor-review.md` içine kaydedilmiştir.
 
 ## Uygulama sırası
 
@@ -508,7 +513,9 @@ sessiz exclusion değildir; sonuç sınıflandırmasında ayrı tutulur.
    belgelenir; blanket survivor exclusion kullanılmaz.
 5. CI'ya infrastructure failure'ı blocking, missed/timeout kalite sonucunu
    advisory olarak raporlayan job olarak girer.
-6. Baseline oturduktan sonra mutation score gerilemesi blocking hale gelir.
+6. Baseline oturduktan sonra mutation score gerilemesi için blocking policy
+   ayrıca etkinleştirilebilir; mevcut workflow'da quality findings advisory,
+   infrastructure failure blocking'dir.
 
 ## Hedef
 
@@ -647,9 +654,8 @@ Bir release'in hangi finansal güvence setinden geçtiğini tek yerden görebilm
 `docs/payroll-assurance-status.md`
 
 Belge eklendi. Güncel manifest golden/property/oracle sayısını, coverage
-baseline'ını, mutation kapsamını, doğrulama kimliğini (commit SHA veya çalışma ağacı
-doğrulaması) ve bilinen boşlukları
-taşır; tam mutation skoru CI artifact'ı oluşmadan uydurulmaz.
+baseline'ını, mutation kapsamını, doğrulama kimliğini ve bilinen boşlukları
+taşır; tam mutation skoru gerçek CI aggregate artifact'ından alınır.
 
 İçeriği:
 
@@ -713,12 +719,13 @@ Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul ed
 - [x] Property failure'ları replay/shrink edilebilir.
 - [x] GV, PEK, DV ve temel normal bordro için production'dan bağımsız oracle mevcut.
 - [x] Oracle ile production motoru generated input'larda differential test ediliyor.
-- [ ] Native ve WASM/browser adapter parity testleri korunuyor.
+- [x] Native ve WASM/browser adapter parity testleri korunuyor.
 - [x] Kritik Rust mali modülleri cargo-mutants ile ölçülüyor.
-- [ ] Mutation score baseline kaydedilmiş ve gerileme politikası uygulanıyor.
+- [x] Mutation score baseline kaydedilmiş ve gerileme politikası uygulanıyor;
+  quality findings advisory, infrastructure failure blocking.
 - [x] Rust coverage baseline ölçülmüş ve ratchet policy uygulanıyor.
 - [x] Golden + property testleri normal PR CI akışında blocking.
-- [x] Mutation/coverage suite için release veya periyodik/manual workflow yapılandırıldı; mutation full 2.147 sonucu pending.
+- [x] Mutation/coverage suite için release veya periyodik/manual workflow yapılandırıldı; final 2.147-mutant full run ve aggregate summary PASS.
 - [x] Production 2026 statutory parameter değerleri bağımsız reference fixture ile karşılaştırılıyor.
 - [ ] Her yeni gerçek hesap hatası kalıcı regresyon vakasına dönüştürülüyor.
 - [x] `docs/payroll-assurance-status.md` güncel güvence durumunu gösteriyor.
