@@ -2723,3 +2723,85 @@ fn one_day_closed_period_is_replayed_when_payment_date_equals_period_start_and_e
     assert_eq!(result.periods[0].deltaAmount, dec!(20));
     assert_eq!(result.batch.totalGrossDelta, dec!(20));
 }
+
+#[test]
+fn future_overpayment_on_other_source_period_does_not_offset_earlier_retro() {
+    let periods = vec![
+        period("2026-01", "2026-01-15", "2026-02-14", 2),
+        period("2026-02", "2026-02-15", "2026-03-14", 3),
+    ];
+    let mut source = dataset(&periods, dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let future_batch_id = "retro-future-other-period";
+    source.retroBatches.push(RetroAdjustmentBatch {
+        id: future_batch_id.into(),
+        revisionId: "rev-future-other-period".into(),
+        personnelId: "p1".into(),
+        paymentDate: "2026-07-20".into(),
+        status: CompensationRevisionStatus::CALCULATED,
+        settlementStatus: RetroSettlementStatus::OVERPAYMENT,
+        totalGrossDelta: dec!(-100),
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: dec!(100),
+        outstandingReceivable: dec!(100),
+        description: None,
+        createdAt: None,
+        calculatedAt: None,
+        finalizedAt: None,
+    });
+    let policy = retro_earning_policy(RetroEarningCode::BASE_WAGE);
+    source.retroAllocations.push(RetroAllocation {
+        id: "future-other-period-allocation".into(),
+        batchId: future_batch_id.into(),
+        personnelId: "p1".into(),
+        sourcePeriodId: "2026-01".into(),
+        earningCode: RetroEarningCode::BASE_WAGE,
+        originalRecognizedAmount: dec!(100),
+        previousAuthoritativeRetroAmount: Decimal::ZERO,
+        targetAmount: Decimal::ZERO,
+        deltaAmount: dec!(-100),
+        sgkTreatment: policy.sgkTreatment,
+        incomeTaxTreatment: policy.incomeTaxTreatment,
+        stampTaxTreatment: policy.stampTaxTreatment,
+        originalPek: Decimal::ZERO,
+        retroPekDelta: Decimal::ZERO,
+        adjustedPek: Decimal::ZERO,
+        workerSgkDelta: Decimal::ZERO,
+        workerUnemploymentDelta: Decimal::ZERO,
+        employerSgkDelta: Decimal::ZERO,
+        employerUnemploymentDelta: Decimal::ZERO,
+        originalEmployerLowerBound: Decimal::ZERO,
+        targetEmployerLowerBound: Decimal::ZERO,
+        employerLowerBoundDelta: Decimal::ZERO,
+        employerLowerBoundPremiumDelta: Decimal::ZERO,
+        originalSourceCarry: None,
+        targetSourceCarry: None,
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoverableAmount: dec!(100),
+        metadata: None,
+    });
+
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-before-future-receivable",
+        revision("rev-before-future-receivable", "2026-02-15"),
+        vec![wage_override(
+            "ov-before-future-receivable",
+            "rev-before-future-receivable",
+            dec!(110),
+        )],
+        "2026-06-20",
+    ))
+    .expect("future-dated overpayment on another source period must not affect earlier settlement");
+
+    assert_eq!(result.batch.totalGrossDelta, dec!(280));
+    assert_eq!(result.batch.offsetSettlementAmount, Decimal::ZERO);
+    assert_eq!(result.batch.payableSettlementAmount, dec!(280));
+    assert_eq!(result.batch.outstandingReceivable, Decimal::ZERO);
+}
