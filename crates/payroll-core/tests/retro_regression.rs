@@ -1867,3 +1867,51 @@ fn existing_retro_batch_id_rejects_changed_payment_date_and_finalized_replay() {
     .expect_err("a finalized batch must not be recalculated in place");
     assert!(finalized_error.to_string().contains("FINALIZED"));
 }
+
+#[test]
+fn retro_rate_override_boundaries_hold_for_each_percentage_parameter() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    for (index, parameter) in [
+        RetroParameterKey::IS_PRIMI_YUZDE,
+        RetroParameterKey::GECE_CALISMA_PRIMI_YUZDE,
+        RetroParameterKey::GECE_CALISMA_TATILI_PRIMI_YUZDE,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for (label, value, accepted) in [
+            ("zero", dec!(0), true),
+            ("maximum", dec!(100), true),
+            ("negative", dec!(-0.01), false),
+            ("above-maximum", dec!(100.01), false),
+        ] {
+            let revision_id = format!("rev-rate-{index}-{label}");
+            let batch_id = format!("retro-rate-{index}-{label}");
+            let override_id = format!("ov-rate-{index}-{label}");
+            let request = retro_request(
+                source.clone(),
+                &batch_id,
+                revision(&revision_id, "2026-02-15"),
+                vec![CompensationRevisionOverride {
+                    id: override_id,
+                    revisionId: revision_id,
+                    parameter,
+                    value,
+                    personnelId: None,
+                }],
+                "2026-06-20",
+            );
+            let result = RetroEntitlementEngine::calculate(&request);
+            assert_eq!(
+                result.is_ok(),
+                accepted,
+                "unexpected {label} boundary for {parameter:?}: {result:?}"
+            );
+        }
+    }
+}
