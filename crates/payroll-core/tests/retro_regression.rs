@@ -2187,3 +2187,58 @@ fn authoritative_batch_makes_a_draft_historical_revision_participate_and_validat
     .expect_err("authoritative batch should make the historical DRAFT revision participate");
     assert!(error.to_string().contains("bitiş tarihi"));
 }
+
+#[test]
+fn authoritative_legacy_tediye_is_preserved_in_target_without_becoming_a_retro_delta() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let tediye = calculate_payroll(&PayrollCalculationRequest {
+        personnelId: "p1".into(),
+        periodId: "2026-02".into(),
+        calculatedAt: "2026-03-11T00:00:00Z".into(),
+        manualIncome: None,
+        accrual: Some(PayrollAccrualInput {
+            accrualId: "p1_2026-02-legacy-tediye".into(),
+            accrualType: AccrualType::TEDIYE,
+            paymentDate: "2026-03-11".into(),
+            sequence: 1,
+            grossAmount: Some(dec!(500)),
+            description: Some("Legacy tediye".into()),
+        }),
+        dataset: source.clone(),
+    })
+    .expect("legacy tediye fixture should calculate");
+    source.payrolls.push(tediye);
+
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-preserve-legacy-tediye",
+        revision("rev-preserve-legacy-tediye", "2026-02-15"),
+        vec![wage_override(
+            "ov-preserve-legacy-tediye",
+            "rev-preserve-legacy-tediye",
+            dec!(110),
+        )],
+        "2026-06-20",
+    ))
+    .expect("retro should preserve the independent legacy tediye event");
+
+    assert_eq!(result.batch.totalGrossDelta, dec!(280));
+    assert!(
+        result
+            .allocations
+            .iter()
+            .all(|allocation| allocation.earningCode != RetroEarningCode::TEDIYE),
+        "unchanged legacy tediye must not be converted into a retro delta"
+    );
+    let base = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage delta");
+    assert_eq!(base.deltaAmount, dec!(280));
+}
