@@ -2477,3 +2477,124 @@ fn work_premium_override_updates_only_the_active_group_matching_the_personnel() 
     assert_eq!(premium.deltaAmount, dec!(280));
     assert_eq!(result.batch.totalGrossDelta, dec!(280));
 }
+
+#[test]
+fn zero_delta_authoritative_prior_batch_does_not_block_later_retro() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+    source.retroBatches.push(RetroAdjustmentBatch {
+        id: "retro-zero-prior".into(),
+        revisionId: "rev-zero-prior".into(),
+        personnelId: "p1".into(),
+        paymentDate: "2026-06-10".into(),
+        status: CompensationRevisionStatus::CALCULATED,
+        settlementStatus: RetroSettlementStatus::UNSETTLED,
+        totalGrossDelta: Decimal::ZERO,
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
+        outstandingReceivable: Decimal::ZERO,
+        description: None,
+        createdAt: None,
+        calculatedAt: None,
+        finalizedAt: None,
+    });
+
+    let later = wage_retro_result(
+        source,
+        "retro-after-zero-prior",
+        "rev-after-zero-prior",
+        dec!(120),
+    );
+    assert_eq!(later.batch.totalGrossDelta, dec!(560));
+    assert_eq!(
+        later.allocations[0].previousAuthoritativeRetroAmount,
+        Decimal::ZERO
+    );
+}
+
+#[test]
+fn settled_by_offset_requires_a_strictly_positive_offset_amount() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+    source.retroBatches.push(RetroAdjustmentBatch {
+        id: "retro-zero-offset-invalid".into(),
+        revisionId: "rev-zero-offset-invalid".into(),
+        personnelId: "p1".into(),
+        paymentDate: "2026-06-10".into(),
+        status: CompensationRevisionStatus::CALCULATED,
+        settlementStatus: RetroSettlementStatus::SETTLED_BY_OFFSET,
+        totalGrossDelta: Decimal::ZERO,
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
+        outstandingReceivable: Decimal::ZERO,
+        description: None,
+        createdAt: None,
+        calculatedAt: None,
+        finalizedAt: None,
+    });
+
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-after-zero-offset-invalid",
+        revision("rev-after-zero-offset-invalid", "2026-02-15"),
+        vec![wage_override(
+            "ov-after-zero-offset-invalid",
+            "rev-after-zero-offset-invalid",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("SETTLED_BY_OFFSET with a zero offset amount must be rejected");
+    assert!(error.to_string().contains("settlement status"));
+}
+
+#[test]
+fn legacy_v4_zero_flow_prior_batch_remains_authoritative_for_incremental_retro() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let mut legacy = wage_retro_result(
+        source.clone(),
+        "retro-legacy-v4-prior",
+        "rev-legacy-v4-prior",
+        dec!(120),
+    );
+    legacy.batch.payableSettlementAmount = Decimal::ZERO;
+    legacy.batch.offsetSettlementAmount = Decimal::ZERO;
+    legacy.batch.recoveredAmount = Decimal::ZERO;
+    legacy.batch.recoverableAmount = Decimal::ZERO;
+    legacy.batch.outstandingReceivable = Decimal::ZERO;
+    legacy.batch.settlementStatus = RetroSettlementStatus::UNSETTLED;
+    for allocation in &mut legacy.allocations {
+        allocation.payableSettlementAmount = Decimal::ZERO;
+        allocation.offsetSettlementAmount = Decimal::ZERO;
+        allocation.recoverableAmount = Decimal::ZERO;
+    }
+    append_retro_result(&mut source, legacy);
+
+    let later = wage_retro_result(
+        source,
+        "retro-after-legacy-v4",
+        "rev-after-legacy-v4",
+        dec!(130),
+    );
+    assert_eq!(later.batch.totalGrossDelta, dec!(280));
+    assert_eq!(
+        later.allocations[0].previousAuthoritativeRetroAmount,
+        dec!(560)
+    );
+    assert_eq!(later.allocations[0].deltaAmount, dec!(280));
+}
