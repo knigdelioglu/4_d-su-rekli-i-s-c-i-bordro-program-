@@ -2599,3 +2599,38 @@ fn legacy_v4_zero_flow_prior_batch_remains_authoritative_for_incremental_retro()
     );
     assert_eq!(later.allocations[0].deltaAmount, dec!(280));
 }
+
+#[test]
+fn missing_original_accrual_adds_two_paid_sick_days_by_multiplication_not_division() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source.attendances[0]
+        .gunler
+        .insert("2026-02-20".into(), "R".into());
+    source.attendances[0]
+        .gunler
+        .insert("2026-02-21".into(), "R".into());
+    source.sickLeaveRecords.push(SickLeaveRecord {
+        id: "paid-sick-two-days".into(),
+        personnelId: "p1".into(),
+        startDate: "2026-02-20".into(),
+        endDate: "2026-02-21".into(),
+        createdAt: None,
+        updatedAt: None,
+    });
+
+    let result = wage_retro_result(
+        source,
+        "retro-missing-two-paid-sick",
+        "rev-missing-two-paid-sick",
+        dec!(120),
+    );
+    let base = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage allocation");
+    assert_eq!(base.originalRecognizedAmount, Decimal::ZERO);
+    assert_eq!(base.targetAmount, dec!(3360));
+    assert_eq!(base.deltaAmount, dec!(3360));
+}
