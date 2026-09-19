@@ -2195,3 +2195,110 @@ fn malformed_historical_revision_date_range_is_rejected_before_replay() {
     .expect_err("historical effective-to before effective-from must fail");
     assert!(error.to_string().contains("bitiş tarihi"));
 }
+
+#[test]
+fn retro_calculate_rejects_blank_batch_id_and_foreign_revision_override() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let source = dataset(&[source_period], dec!(100), dec!(9));
+
+    let blank = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "   ",
+        revision("rev-blank-batch", "2026-02-15"),
+        vec![wage_override(
+            "ov-blank-batch",
+            "rev-blank-batch",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("blank batch id must fail before replay");
+    assert!(blank.to_string().contains("kimliği boş"));
+
+    let foreign_override = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-foreign-override",
+        revision("rev-owner", "2026-02-15"),
+        vec![wage_override(
+            "ov-foreign",
+            "rev-other",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("override belonging to another revision must be rejected");
+    assert!(foreign_override.to_string().contains("başka bir revision"));
+}
+
+#[test]
+fn existing_batch_id_cannot_be_rebound_to_another_personnel() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source.retroBatches.push(RetroAdjustmentBatch {
+        id: "retro-personnel-bound".into(),
+        revisionId: "rev-personnel-bound".into(),
+        personnelId: "p2".into(),
+        paymentDate: "2026-06-20".into(),
+        status: CompensationRevisionStatus::CALCULATED,
+        settlementStatus: RetroSettlementStatus::UNSETTLED,
+        totalGrossDelta: Decimal::ZERO,
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
+        outstandingReceivable: Decimal::ZERO,
+        description: None,
+        createdAt: None,
+        calculatedAt: None,
+        finalizedAt: None,
+    });
+
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-personnel-bound",
+        revision("rev-personnel-bound", "2026-02-15"),
+        vec![wage_override(
+            "ov-personnel-bound",
+            "rev-personnel-bound",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("existing batch id must remain bound to its original personnel");
+    assert!(error.to_string().contains("primary id"));
+}
+
+#[test]
+fn revision_effective_on_payment_date_is_valid_and_replays_that_day() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let mut same_day_revision = revision("rev-payment-day", "2026-03-14");
+    same_day_revision.decisionDate = Some("2026-03-14".into());
+    same_day_revision.signedAt = Some("2026-03-14".into());
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-payment-day",
+        same_day_revision,
+        vec![wage_override(
+            "ov-payment-day",
+            "rev-payment-day",
+            dec!(120),
+        )],
+        "2026-03-14",
+    ))
+    .expect("effective-from equal to payment date must be allowed");
+
+    assert_eq!(result.periods.len(), 1);
+    assert_eq!(result.batch.totalGrossDelta, dec!(20));
+    let base = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage allocation");
+    assert_eq!(base.targetAmount, dec!(2820));
+    assert_eq!(base.deltaAmount, dec!(20));
+}
