@@ -2060,3 +2060,138 @@ fn duplicate_global_override_fails_closed_but_specific_plus_global_is_valid() {
     .expect("one global plus one personnel-specific override is valid");
     assert_eq!(ok.batch.totalGrossDelta, dec!(840));
 }
+
+#[test]
+fn stale_out_of_scope_and_non_authoritative_draft_history_do_not_leak_into_replay() {
+    for (label, mut historical) in [
+        {
+            let mut r = revision("hist-stale", "2026-03-01");
+            r.status = CompensationRevisionStatus::STALE;
+            ("stale", r)
+        },
+        {
+            let mut r = revision("hist-other-person", "2026-03-01");
+            r.status = CompensationRevisionStatus::CALCULATED;
+            r.personnelIds = vec!["p2".into()];
+            ("out-of-scope", r)
+        },
+        {
+            let mut r = revision("hist-draft", "2026-03-01");
+            r.status = CompensationRevisionStatus::DRAFT;
+            ("draft-without-authoritative-batch", r)
+        },
+    ] {
+        let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+        let mut source = dataset(&[source_period], dec!(100), dec!(9));
+        source
+            .payrolls
+            .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+        let historical_id = historical.id.clone();
+        source.compensationRevisions.push(historical);
+        source.compensationRevisionOverrides.push(wage_override(
+            &format!("ov-{historical_id}"),
+            &historical_id,
+            dec!(200),
+        ));
+
+        let current_id = format!("rev-current-{label}");
+        let result = RetroEntitlementEngine::calculate(&retro_request(
+            source,
+            &format!("retro-current-{label}"),
+            revision(&current_id, "2026-02-15"),
+            vec![wage_override(
+                &format!("ov-current-{label}"),
+                &current_id,
+                dec!(120),
+            )],
+            "2026-06-20",
+        ))
+        .unwrap_or_else(|error| panic!("{label} historical revision should be ignored: {error}"));
+
+        assert_eq!(
+            result.batch.totalGrossDelta,
+            dec!(560),
+            "{label} historical revision leaked into replay"
+        );
+    }
+}
+
+#[test]
+fn calculated_and_finalized_historical_revisions_are_applied_chronologically() {
+    for status in [
+        CompensationRevisionStatus::CALCULATED,
+        CompensationRevisionStatus::FINALIZED,
+    ] {
+        let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+        let mut source = dataset(&[source_period], dec!(100), dec!(9));
+        source
+            .payrolls
+            .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+        let historical_id = format!("hist-authoritative-{status:?}");
+        let mut historical = revision(&historical_id, "2026-03-01");
+        historical.status = status;
+        source.compensationRevisions.push(historical);
+        source.compensationRevisionOverrides.push(wage_override(
+            &format!("ov-{historical_id}"),
+            &historical_id,
+            dec!(150),
+        ));
+
+        let current_id = format!("rev-current-{status:?}");
+        let result = RetroEntitlementEngine::calculate(&retro_request(
+            source,
+            &format!("retro-current-{status:?}"),
+            revision(&current_id, "2026-02-15"),
+            vec![wage_override(
+                &format!("ov-current-{status:?}"),
+                &current_id,
+                dec!(120),
+            )],
+            "2026-06-20",
+        ))
+        .unwrap_or_else(|error| panic!("{status:?} historical revision should apply: {error}"));
+
+        assert_eq!(result.batch.totalGrossDelta, dec!(980));
+        let base = result
+            .allocations
+            .iter()
+            .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+            .expect("base wage allocation");
+        assert_eq!(base.targetAmount, dec!(3780));
+        assert_eq!(base.deltaAmount, dec!(980));
+    }
+}
+
+#[test]
+fn malformed_historical_revision_date_range_is_rejected_before_replay() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let mut historical = revision("hist-invalid-range", "2026-03-01");
+    historical.status = CompensationRevisionStatus::CALCULATED;
+    historical.effectiveTo = Some("2026-02-28".into());
+    source.compensationRevisions.push(historical);
+    source.compensationRevisionOverrides.push(wage_override(
+        "ov-hist-invalid-range",
+        "hist-invalid-range",
+        dec!(150),
+    ));
+
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-invalid-history",
+        revision("rev-current-invalid-history", "2026-02-15"),
+        vec![wage_override(
+            "ov-current-invalid-history",
+            "rev-current-invalid-history",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("historical effective-to before effective-from must fail");
+    assert!(error.to_string().contains("bitiş tarihi"));
+}
