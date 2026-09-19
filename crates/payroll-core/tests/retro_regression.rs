@@ -1795,7 +1795,10 @@ fn retro_effective_to_date_is_inclusive_and_cannot_precede_effective_from() {
     .expect("an effective-to date equal to effective-from remains valid");
     assert_eq!(one_day.batch.totalGrossDelta, dec!(20));
     assert_eq!(one_day.allocations.len(), 1);
-    assert_eq!(one_day.allocations[0].earningCode, RetroEarningCode::BASE_WAGE);
+    assert_eq!(
+        one_day.allocations[0].earningCode,
+        RetroEarningCode::BASE_WAGE
+    );
     assert_eq!(one_day.allocations[0].deltaAmount, dec!(20));
 
     let mut reversed_revision = revision("rev-reversed", "2026-02-15");
