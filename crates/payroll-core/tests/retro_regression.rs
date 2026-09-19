@@ -2363,3 +2363,62 @@ fn personnel_group_scope_requires_exact_match_for_current_and_historical_revisio
         .expect("February preview");
     assert_eq!(february.targetAmount, dec!(2800));
 }
+
+#[test]
+fn split_replay_prorates_fixed_monthly_allowances_without_duplication() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    {
+        let settings = source
+            .institutionSettings
+            .get_mut("2026-02")
+            .expect("source settings");
+        settings.birlestirilmisSosyalYardim = dec!(280);
+        settings.giyimYardimi = dec!(140);
+        settings.hizmetZammiBirimi = dec!(10);
+        settings.ekOdeme = Some(dec!(70));
+        settings.digerGelirVarsayilan = Some(dec!(35));
+    }
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-split-fixed",
+        revision("rev-split-fixed", "2026-03-01"),
+        vec![wage_override(
+            "ov-split-fixed",
+            "rev-split-fixed",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect("mid-period wage revision should replay two segments");
+
+    let base = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage delta");
+    assert_eq!(base.originalRecognizedAmount, dec!(2800));
+    assert_eq!(base.targetAmount, dec!(3080));
+    assert_eq!(base.deltaAmount, dec!(280));
+
+    for code in [
+        RetroEarningCode::SOCIAL_AID,
+        RetroEarningCode::CLOTHING,
+        RetroEarningCode::SERVICE_INCREMENT,
+        RetroEarningCode::SUPPLEMENTAL,
+        RetroEarningCode::OTHER,
+    ] {
+        assert!(
+            result
+                .allocations
+                .iter()
+                .all(|allocation| allocation.earningCode != code),
+            "{code:?} is a fixed monthly amount and must not gain a retro delta merely because replay split the period"
+        );
+    }
+    assert_eq!(result.batch.totalGrossDelta, dec!(280));
+}
