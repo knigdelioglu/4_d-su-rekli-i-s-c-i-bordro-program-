@@ -1915,3 +1915,148 @@ fn retro_rate_override_boundaries_hold_for_each_percentage_parameter() {
         }
     }
 }
+
+#[test]
+fn personnel_specific_override_takes_precedence_over_global_and_other_parameters_stay_isolated() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let revision_id = "rev-specific-wins";
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-specific-wins",
+        revision(revision_id, "2026-02-15"),
+        vec![
+            CompensationRevisionOverride {
+                id: "ov-global-wage".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(120),
+                personnelId: None,
+            },
+            CompensationRevisionOverride {
+                id: "ov-specific-wage".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(130),
+                personnelId: Some("p1".into()),
+            },
+            CompensationRevisionOverride {
+                id: "ov-global-meal".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_YEMEK,
+                value: dec!(50),
+                personnelId: None,
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect("personnel-specific wage override should win without colliding with meal override");
+
+    let base = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage allocation");
+    assert_eq!(base.originalRecognizedAmount, dec!(2800));
+    assert_eq!(base.targetAmount, dec!(3640));
+    assert_eq!(base.deltaAmount, dec!(840));
+}
+
+#[test]
+fn duplicate_personnel_specific_override_fails_closed() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let revision_id = "rev-duplicate-specific";
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-duplicate-specific",
+        revision(revision_id, "2026-02-15"),
+        vec![
+            CompensationRevisionOverride {
+                id: "ov-specific-1".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(120),
+                personnelId: Some("p1".into()),
+            },
+            CompensationRevisionOverride {
+                id: "ov-specific-2".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(130),
+                personnelId: Some("p1".into()),
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect_err("duplicate personnel-specific override must be rejected");
+    assert!(error.to_string().contains("duplicate revision override"));
+}
+
+#[test]
+fn duplicate_global_override_fails_closed_but_specific_plus_global_is_valid() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let revision_id = "rev-duplicate-global";
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "retro-duplicate-global",
+        revision(revision_id, "2026-02-15"),
+        vec![
+            CompensationRevisionOverride {
+                id: "ov-global-1".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(120),
+                personnelId: None,
+            },
+            CompensationRevisionOverride {
+                id: "ov-global-2".into(),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(130),
+                personnelId: None,
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect_err("duplicate global override must be rejected");
+    assert!(error.to_string().contains("duplicate revision override"));
+
+    let ok = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-global-plus-specific",
+        revision("rev-global-plus-specific", "2026-02-15"),
+        vec![
+            CompensationRevisionOverride {
+                id: "ov-global-only".into(),
+                revisionId: "rev-global-plus-specific".into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(120),
+                personnelId: None,
+            },
+            CompensationRevisionOverride {
+                id: "ov-specific-only".into(),
+                revisionId: "rev-global-plus-specific".into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(130),
+                personnelId: Some("p1".into()),
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect("one global plus one personnel-specific override is valid");
+    assert_eq!(ok.batch.totalGrossDelta, dec!(840));
+}
