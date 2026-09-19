@@ -7,11 +7,11 @@ henüz tamamlanmamış fixture'ları belirtir.
 
 ## Son doğrulama kimliği
 
-- Tarih: `2026-09-15`
+- Tarih: `2026-09-19`
 - Verification identity: ölçülen kod commit'i
-  `34198be740843e8ae22ae459e1a4263e7618cf82`
-- Normal CI / verify: `35012763160` — PASS
-- Full mutation workflow: `35013775841` — PASS
+  `c9d0e9b838fbf2c6ae1a9fc1f1b07eaba11ea906`
+- Normal CI / verify: `35439156749` — PASS
+- Full mutation workflow: `35439833175` — PASS
 
 ## Golden corpus
 
@@ -67,7 +67,7 @@ henüz tamamlanmamış fixture'ları belirtir.
 - Oracle production hesap helper'larını import etmez; differential testler
   property suite içinde çalışır.
 
-## Mutation evidence
+## Mutation evidence (Round 1 baseline)
 
 - Araç: `cargo-mutants 27.1.0`
 - Kritik kapsam: `calculations.rs`, `gv_exemption.rs`, `payroll_engine.rs`,
@@ -87,6 +87,28 @@ henüz tamamlanmamış fixture'ları belirtir.
   | Unviable | 304 |
   | Meaningful | 1.843 |
   | Score | %73,20 |
+
+## Payroll Engine Quality Round 2
+
+- Başlangıç payroll-engine sonucu: **781 total, 408 caught, 241 missed,
+  0 timeout, 132 unviable, 649 meaningful, %62,87**.
+- Eklenen testler: `crates/payroll-core/tests/payroll_engine_quality_round2.rs`;
+  gün/hakediş ve SGK gün ağırlığı, period/finalization boundary, accrual/retro
+  carry, aynı-ay PEK, insurance GV ve earning classification public API
+  regression/table-driven/property kapsamı.
+- Targeted payroll-engine ölçümü: **781 total, 526 caught, 123 missed,
+  0 timeout, 132 unviable, 649 meaningful, %81,05**.
+- Full 8-shard aggregate (`35439833175`, summary job `105891611784`):
+  **2.147 total, 1.483 caught, 360 missed, 0 timeout, 304 unviable,
+  1.843 meaningful, %80,47**.
+- Full aggregate payroll-engine sonucu: **781 total, 533 caught, 116 missed,
+  0 timeout, 132 unviable, 649 meaningful, %82,13**.
+- Full run verify, coverage, shard `0..7` ve `mutation-summary` PASS'tır.
+- `docs/payroll-mutation-baseline.json` yeni full aggregate ile güncellendi;
+  önceki 494 overall survivor listesi `previousBaseline` altında korunur.
+- Payroll-engine final triage: `REAL_TEST_GAP 0`, `EQUIVALENT 0`,
+  `UNREACHABLE 0`, `NEEDS_REVIEW 116`. Bu turda production payroll bug'ı
+  bulunmadı ve production hesaplama kodu değiştirilmedi.
 
 - Score exact olarak `caught / (total - unviable)` formülüyle hesaplanır:
   `1.349 / 1.843`. Summary, duplicate/missing shard, invalid JSON veya
@@ -141,13 +163,18 @@ eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Coverage job yal
 
 ## Bilinen boşluklar
 
-- 2.147 adayın gerçek 8-shard aggregate sonucu baseline'a kaydedilmiştir:
-  `docs/payroll-mutation-baseline.json`. Quality findings advisory, infrastructure
-  failure blocking olmaya devam eder.
-- 494 anlamlı missed mutant için conservative triage:
+- 2.147 adayın Round 2 gerçek 8-shard aggregate sonucu baseline'a
+  kaydedilmiştir: `docs/payroll-mutation-baseline.json` — **360 missed, %80,47**.
+  Önceki full baseline listesi aynı dosyada `previousBaseline` altında
+  korunur. Quality findings advisory, infrastructure failure blocking olmaya
+  devam eder.
+- Round 1'deki 494 anlamlı missed mutant için historical conservative triage:
   `REAL_TEST_GAP` 0, `EQUIVALENT` 2, `UNREACHABLE` 0,
   `NEEDS_REVIEW` 492. Ayrıntı ve kapsam sınırı
   `docs/payroll-mutation-survivor-review.md` içindedir; blanket exclusion yoktur.
+- Round 2 payroll-engine survivor'ları için conservative triage:
+  `REAL_TEST_GAP` 0, `EQUIVALENT` 0, `UNREACHABLE` 0,
+  `NEEDS_REVIEW` 116. Ayrıntı `Payroll Engine Quality Round 2` bölümündedir.
 - Golden corpus'un 33 fixture'ından yalnız 15'i bağımsız evidence ile verified;
   kalan 18'i `pendingEvidence` durumundadır. Bu durum 33/33 bağımsız doğrulama
   iddiası olarak sunulmaz.
