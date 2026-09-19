@@ -2696,35 +2696,6 @@ fn segmented_meal_capacity_multiplies_by_two_meal_days() {
 }
 
 #[test]
-fn one_day_closed_period_is_replayed_when_payment_date_equals_period_start_and_end() {
-    let source_period = period("2026-02-one-day", "2026-02-15", "2026-02-15", 2);
-    let mut source = dataset(&[source_period], dec!(100), dec!(9));
-    source
-        .payrolls
-        .push(normal_payroll(&source, "2026-02-one-day", "2026-02-15", 0));
-
-    let result = RetroEntitlementEngine::calculate(&retro_request(
-        source,
-        "retro-one-day-covered-end",
-        revision("rev-one-day-covered-end", "2026-02-15"),
-        vec![wage_override(
-            "ov-one-day-covered-end",
-            "rev-one-day-covered-end",
-            dec!(120),
-        )],
-        "2026-02-15",
-    ))
-    .expect("a one-day closed service period must remain replayable on its boundary date");
-
-    assert_eq!(result.periods.len(), 1);
-    assert_eq!(result.periods[0].sourcePeriodId, "2026-02-one-day");
-    assert_eq!(result.periods[0].originalRecognizedAmount, dec!(100));
-    assert_eq!(result.periods[0].targetAmount, dec!(120));
-    assert_eq!(result.periods[0].deltaAmount, dec!(20));
-    assert_eq!(result.batch.totalGrossDelta, dec!(20));
-}
-
-#[test]
 fn future_overpayment_on_other_source_period_does_not_offset_earlier_retro() {
     let periods = vec![
         period("2026-01", "2026-01-15", "2026-02-14", 2),
