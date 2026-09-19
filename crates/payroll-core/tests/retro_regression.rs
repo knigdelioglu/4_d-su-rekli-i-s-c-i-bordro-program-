@@ -1774,3 +1774,93 @@ fn event_specific_tediye_and_tis_overrides_fail_closed() {
         .expect_err("event tarihini modellemeyen tediye override'ı sessizce replay edilmemeli");
     assert!(error.to_string().contains("event tarihini"));
 }
+
+#[test]
+fn retro_effective_to_date_is_inclusive_and_cannot_precede_effective_from() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let mut one_day_revision = revision("rev-one-day", "2026-02-15");
+    one_day_revision.effectiveTo = Some("2026-02-15".into());
+    let one_day = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "retro-one-day",
+        one_day_revision,
+        vec![wage_override("ov-one-day", "rev-one-day", dec!(120))],
+        "2026-06-20",
+    ))
+    .expect("an effective-to date equal to effective-from remains valid");
+    assert_eq!(one_day.batch.totalGrossDelta, dec!(20));
+    assert_eq!(one_day.allocations.len(), 1);
+    assert_eq!(one_day.allocations[0].earningCode, RetroEarningCode::BASE_WAGE);
+    assert_eq!(one_day.allocations[0].deltaAmount, dec!(20));
+
+    let mut reversed_revision = revision("rev-reversed", "2026-02-15");
+    reversed_revision.effectiveTo = Some("2026-02-14".into());
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-reversed",
+        reversed_revision,
+        vec![wage_override("ov-reversed", "rev-reversed", dec!(120))],
+        "2026-06-20",
+    ))
+    .expect_err("end date before start date must be rejected");
+    assert!(error.to_string().contains("bitiş tarihi"));
+}
+
+#[test]
+fn retro_payment_date_must_not_precede_revision_effective_date() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let source = dataset(&[source_period], dec!(100), dec!(9));
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-future-revision",
+        revision("rev-future-revision", "2026-06-21"),
+        vec![wage_override("ov-future", "rev-future-revision", dec!(120))],
+        "2026-06-20",
+    ))
+    .expect_err("future-effective revision must not be paid a day early");
+    assert!(error.to_string().contains("sonra olamaz"));
+}
+
+#[test]
+fn existing_retro_batch_id_rejects_changed_payment_date_and_finalized_replay() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+    let first = wage_retro_result(
+        source.clone(),
+        "retro-reused-id",
+        "rev-reused-id",
+        dec!(120),
+    );
+    append_retro_result(&mut source, first.clone());
+
+    let wrong_date_error = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "retro-reused-id",
+        revision("rev-reused-id", "2026-02-15"),
+        vec![wage_override("ov-reused-id", "rev-reused-id", dec!(120))],
+        "2026-06-21",
+    ))
+    .expect_err("an existing batch id must be bound to its original payment date");
+    assert!(wrong_date_error.to_string().contains("primary id"));
+
+    let mut finalized_source = source;
+    finalized_source.retroBatches[0].status = CompensationRevisionStatus::FINALIZED;
+    finalized_source.retroBatches[0].settlementStatus = RetroSettlementStatus::PAID;
+    let finalized_error = RetroEntitlementEngine::calculate(&retro_request(
+        finalized_source,
+        "retro-reused-id",
+        revision("rev-reused-id", "2026-02-15"),
+        vec![wage_override("ov-reused-id", "rev-reused-id", dec!(120))],
+        "2026-06-20",
+    ))
+    .expect_err("a finalized batch must not be recalculated in place");
+    assert!(finalized_error.to_string().contains("FINALIZED"));
+}
