@@ -547,9 +547,11 @@ fn explicit_partial_offset_requires_unsettled_status_until_cash_is_paid() {
         Decimal::ZERO,
     );
 
-    let (_, allocations, income, _) =
-        retro_payment_income(&dataset(valid_batch.clone(), vec![valid_allocation.clone()]), "partial-flow")
-            .expect("a split between cash and offset is a valid unsettled payment");
+    let (_, allocations, income, _) = retro_payment_income(
+        &dataset(valid_batch.clone(), vec![valid_allocation.clone()]),
+        "partial-flow",
+    )
+    .expect("a split between cash and offset is a valid unsettled payment");
     assert_eq!(allocations[0].payableSettlementAmount, dec!(40));
     assert_eq!(allocations[0].offsetSettlementAmount, dec!(60));
     assert_eq!(income.tabanBrutAylik, Some(dec!(40)));
@@ -562,8 +564,11 @@ fn explicit_partial_offset_requires_unsettled_status_until_cash_is_paid() {
         let mut invalid_batch = valid_batch.clone();
         invalid_batch.settlementStatus = wrong_status;
         assert!(
-            retro_payment_income(&dataset(invalid_batch, vec![valid_allocation.clone()]), "partial-flow")
-                .is_err(),
+            retro_payment_income(
+                &dataset(invalid_batch, vec![valid_allocation.clone()]),
+                "partial-flow"
+            )
+            .is_err(),
             "cash plus offset cannot be declared {wrong_status:?}"
         );
     }
@@ -571,9 +576,7 @@ fn explicit_partial_offset_requires_unsettled_status_until_cash_is_paid() {
     let mut paid = valid_batch;
     paid.status = CompensationRevisionStatus::FINALIZED;
     paid.settlementStatus = RetroSettlementStatus::PAID;
-    assert!(
-        retro_payment_income(&dataset(paid, vec![valid_allocation]), "partial-flow").is_ok()
-    );
+    assert!(retro_payment_income(&dataset(paid, vec![valid_allocation]), "partial-flow").is_ok());
 }
 
 #[test]
@@ -602,7 +605,8 @@ fn allocation_policy_snapshot_checks_sgk_income_tax_and_stamp_tax_independently(
     assert!(retro_payment_income(
         &dataset(valid_batch.clone(), vec![valid_allocation.clone()]),
         "policy-fields"
-    ).is_ok());
+    )
+    .is_ok());
 
     let mut wrong_sgk = valid_allocation.clone();
     wrong_sgk.sgkTreatment = payroll_core::RetroSgkTreatment::NON_WAGE_PAYMENT_MONTH;
@@ -662,7 +666,8 @@ fn balanced_batch_totals_do_not_hide_one_allocation_exceeding_its_entitlement() 
     let (_, allocations, income, _) = retro_payment_income(
         &dataset(valid_batch.clone(), vec![first.clone(), second.clone()]),
         "balanced-batch",
-    ).expect("both allocations should be valid at their own entitlement boundary");
+    )
+    .expect("both allocations should be valid at their own entitlement boundary");
     assert_eq!(allocations.len(), 2);
     assert_eq!(income.tabanBrutAylik, Some(dec!(30)));
     assert_eq!(income.isPrimi, Some(dec!(10)));
@@ -676,7 +681,8 @@ fn balanced_batch_totals_do_not_hide_one_allocation_exceeding_its_entitlement() 
     assert!(retro_payment_income(
         &dataset(valid_batch.clone(), vec![excess_cash, deficient_cash]),
         "balanced-batch"
-    ).is_err());
+    )
+    .is_err());
 
     // Repeat the same invariant with offset amounts, independently of cash.
     let mut deficient_offset = first;
@@ -686,5 +692,6 @@ fn balanced_batch_totals_do_not_hide_one_allocation_exceeding_its_entitlement() 
     assert!(retro_payment_income(
         &dataset(valid_batch, vec![deficient_offset, excess_offset]),
         "balanced-batch"
-    ).is_err());
+    )
+    .is_err());
 }
