@@ -2582,6 +2582,7 @@ mod tests {
             ..PayrollDatasetSnapshot::default()
         };
         assert!(retro_payment_income(&dataset, "b").is_err());
+    }
 
     #[test]
     fn attendance_summary_counts_each_rest_and_leave_code_independently() {
@@ -2643,7 +2644,5 @@ mod tests {
             vec![dec!(-7), Decimal::ZERO]
         );
         assert!(distribute_signed_delta(dec!(7), &[]).is_empty());
-    }
-
     }
 }
