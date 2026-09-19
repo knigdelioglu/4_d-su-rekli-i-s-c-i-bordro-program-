@@ -2356,12 +2356,13 @@ fn personnel_group_scope_requires_exact_match_for_current_and_historical_revisio
         "2026-06-20",
     ))
     .expect("non-matching historical group revision should be ignored");
-    let february = without_match
-        .periods
-        .iter()
-        .find(|preview| preview.sourcePeriodId == "2026-02")
-        .expect("February preview");
-    assert_eq!(february.targetAmount, dec!(2800));
+    assert!(
+        without_match
+            .periods
+            .iter()
+            .all(|preview| preview.sourcePeriodId != "2026-02"),
+        "out-of-scope historical revision must not pull the earlier February period into replay"
+    );
 }
 
 #[test]
