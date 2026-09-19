@@ -2060,3 +2060,130 @@ fn duplicate_global_override_fails_closed_but_specific_plus_global_is_valid() {
     .expect("one global plus one personnel-specific override is valid");
     assert_eq!(ok.batch.totalGrossDelta, dec!(840));
 }
+
+#[test]
+fn irrelevant_historical_revisions_are_filtered_before_their_invalid_dates_are_validated() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut base = dataset(&[source_period], dec!(100), dec!(9));
+    base.payrolls
+        .push(normal_payroll(&base, "2026-02", "2026-03-10", 0));
+
+    let current_id = "rev-filter-current";
+    let current_override = || wage_override("ov-filter-current", current_id, dec!(120));
+
+    let mut same_id = base.clone();
+    let mut duplicate_current = revision(current_id, "2026-02-15");
+    duplicate_current.status = CompensationRevisionStatus::CALCULATED;
+    duplicate_current.effectiveTo = Some("2026-02-14".into());
+    same_id.compensationRevisions.push(duplicate_current);
+    assert!(
+        RetroEntitlementEngine::calculate(&retro_request(
+            same_id,
+            "retro-filter-same-id",
+            revision(current_id, "2026-02-15"),
+            vec![current_override()],
+            "2026-06-20",
+        ))
+        .is_ok(),
+        "dataset copy of the current revision must be skipped before date validation"
+    );
+
+    let mut stale = base.clone();
+    let mut stale_prior = revision("rev-filter-stale", "2026-02-15");
+    stale_prior.status = CompensationRevisionStatus::STALE;
+    stale_prior.effectiveTo = Some("2026-02-14".into());
+    stale.compensationRevisions.push(stale_prior);
+    assert!(
+        RetroEntitlementEngine::calculate(&retro_request(
+            stale,
+            "retro-filter-stale",
+            revision(current_id, "2026-02-15"),
+            vec![current_override()],
+            "2026-06-20",
+        ))
+        .is_ok(),
+        "STALE historical revision must be skipped before date validation"
+    );
+
+    let mut out_of_scope = base.clone();
+    let mut foreign_prior = revision("rev-filter-foreign", "2026-02-15");
+    foreign_prior.status = CompensationRevisionStatus::CALCULATED;
+    foreign_prior.effectiveTo = Some("2026-02-14".into());
+    foreign_prior.personnelIds = vec!["other-personnel".into()];
+    out_of_scope.compensationRevisions.push(foreign_prior);
+    assert!(
+        RetroEntitlementEngine::calculate(&retro_request(
+            out_of_scope,
+            "retro-filter-foreign",
+            revision(current_id, "2026-02-15"),
+            vec![current_override()],
+            "2026-06-20",
+        ))
+        .is_ok(),
+        "out-of-scope historical revision must be skipped before date validation"
+    );
+
+    let mut unauthoritative_draft = base;
+    let mut draft_prior = revision("rev-filter-draft", "2026-02-15");
+    draft_prior.effectiveTo = Some("2026-02-14".into());
+    unauthoritative_draft
+        .compensationRevisions
+        .push(draft_prior);
+    assert!(
+        RetroEntitlementEngine::calculate(&retro_request(
+            unauthoritative_draft,
+            "retro-filter-draft",
+            revision(current_id, "2026-02-15"),
+            vec![current_override()],
+            "2026-06-20",
+        ))
+        .is_ok(),
+        "DRAFT historical revision without authoritative batch must be skipped"
+    );
+}
+
+#[test]
+fn authoritative_batch_makes_a_draft_historical_revision_participate_and_validate() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let prior_id = "rev-authoritative-draft";
+    let mut prior = revision(prior_id, "2026-02-15");
+    prior.effectiveTo = Some("2026-02-14".into());
+    source.compensationRevisions.push(prior);
+    source.retroBatches.push(RetroAdjustmentBatch {
+        id: "retro-authoritative-draft".into(),
+        revisionId: prior_id.into(),
+        personnelId: "p1".into(),
+        paymentDate: "2026-06-10".into(),
+        status: CompensationRevisionStatus::CALCULATED,
+        settlementStatus: RetroSettlementStatus::UNSETTLED,
+        totalGrossDelta: Decimal::ZERO,
+        payableSettlementAmount: Decimal::ZERO,
+        offsetSettlementAmount: Decimal::ZERO,
+        recoveredAmount: Decimal::ZERO,
+        recoverableAmount: Decimal::ZERO,
+        outstandingReceivable: Decimal::ZERO,
+        description: None,
+        createdAt: None,
+        calculatedAt: None,
+        finalizedAt: None,
+    });
+
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-after-authoritative-draft",
+        revision("rev-current-after-draft", "2026-02-15"),
+        vec![wage_override(
+            "ov-current-after-draft",
+            "rev-current-after-draft",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("authoritative batch should make the historical DRAFT revision participate");
+    assert!(error.to_string().contains("bitiş tarihi"));
+}
