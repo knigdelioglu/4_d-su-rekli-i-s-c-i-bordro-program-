@@ -2422,3 +2422,58 @@ fn split_replay_prorates_fixed_monthly_allowances_without_duplication() {
     }
     assert_eq!(result.batch.totalGrossDelta, dec!(280));
 }
+
+#[test]
+fn work_premium_override_updates_only_the_active_group_matching_the_personnel() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source.personnel[0].grup = "target-group".into();
+    {
+        let settings = source
+            .institutionSettings
+            .get_mut("2026-02")
+            .expect("source settings");
+        let groups = settings
+            .isPrimiGruplari
+            .as_mut()
+            .expect("work premium groups");
+        groups[0].id = "unrelated-id".into();
+        groups[0].ad = "Unrelated Group".into();
+        groups[0].oran = Decimal::ZERO;
+        groups[0].aktif = true;
+        groups[1].id = "target-group".into();
+        groups[1].ad = "Target Alias".into();
+        groups[1].oran = Decimal::ZERO;
+        groups[1].aktif = true;
+        groups[2].oran = Decimal::ZERO;
+    }
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let revision_id = "rev-work-premium-group";
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-work-premium-group",
+        revision(revision_id, "2026-02-15"),
+        vec![CompensationRevisionOverride {
+            id: "ov-work-premium-group".into(),
+            revisionId: revision_id.into(),
+            parameter: RetroParameterKey::IS_PRIMI_YUZDE,
+            value: dec!(10),
+            personnelId: None,
+        }],
+        "2026-06-20",
+    ))
+    .expect("work premium override should update the matching active group only");
+
+    let premium = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::WORK_PREMIUM)
+        .expect("work premium allocation");
+    assert_eq!(premium.originalRecognizedAmount, Decimal::ZERO);
+    assert_eq!(premium.targetAmount, dec!(280));
+    assert_eq!(premium.deltaAmount, dec!(280));
+    assert_eq!(result.batch.totalGrossDelta, dec!(280));
+}
