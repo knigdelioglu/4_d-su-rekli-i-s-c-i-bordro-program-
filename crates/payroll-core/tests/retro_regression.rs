@@ -2063,7 +2063,7 @@ fn duplicate_global_override_fails_closed_but_specific_plus_global_is_valid() {
 
 #[test]
 fn stale_out_of_scope_and_non_authoritative_draft_history_do_not_leak_into_replay() {
-    for (label, mut historical) in [
+    for (label, historical) in [
         {
             let mut r = revision("hist-stale", "2026-03-01");
             r.status = CompensationRevisionStatus::STALE;
