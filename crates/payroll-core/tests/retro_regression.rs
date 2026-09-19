@@ -2242,3 +2242,124 @@ fn authoritative_legacy_tediye_is_preserved_in_target_without_becoming_a_retro_d
         .expect("base wage delta");
     assert_eq!(base.deltaAmount, dec!(280));
 }
+
+#[test]
+fn personnel_group_scope_requires_exact_match_for_current_and_historical_revisions() {
+    let periods = vec![
+        period("2026-02", "2026-02-15", "2026-03-14", 3),
+        period("2026-03", "2026-03-15", "2026-04-14", 4),
+    ];
+    let mut base = dataset(&periods, dec!(100), dec!(9));
+    base.payrolls
+        .push(normal_payroll(&base, "2026-02", "2026-03-10", 0));
+    base.payrolls
+        .push(normal_payroll(&base, "2026-03", "2026-04-10", 0));
+
+    let mut current_match = revision("rev-current-group-match", "2026-03-15");
+    current_match.scope = CompensationRevisionScope::PERSONNEL_GROUP;
+    current_match.personnelIds.clear();
+    current_match.personnelGroup = Some("1. Grup".into());
+    assert!(
+        RetroEntitlementEngine::calculate(&retro_request(
+            base.clone(),
+            "retro-current-group-match",
+            current_match,
+            vec![wage_override(
+                "ov-current-group-match",
+                "rev-current-group-match",
+                dec!(120),
+            )],
+            "2026-06-20",
+        ))
+        .is_ok(),
+        "current revision should accept the personnel's exact group"
+    );
+
+    let mut current_mismatch = revision("rev-current-group-mismatch", "2026-03-15");
+    current_mismatch.scope = CompensationRevisionScope::PERSONNEL_GROUP;
+    current_mismatch.personnelIds.clear();
+    current_mismatch.personnelGroup = Some("Other Group".into());
+    let mismatch_error = RetroEntitlementEngine::calculate(&retro_request(
+        base.clone(),
+        "retro-current-group-mismatch",
+        current_mismatch,
+        vec![wage_override(
+            "ov-current-group-mismatch",
+            "rev-current-group-mismatch",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("current revision with another personnel group must be rejected");
+    assert!(mismatch_error.to_string().contains("grubu kapsamı dışında"));
+
+    let mut historical_match_source = base.clone();
+    let mut historical_match = revision("rev-historical-group-match", "2026-02-15");
+    historical_match.status = CompensationRevisionStatus::CALCULATED;
+    historical_match.scope = CompensationRevisionScope::PERSONNEL_GROUP;
+    historical_match.personnelIds.clear();
+    historical_match.personnelGroup = Some("1. Grup".into());
+    historical_match_source
+        .compensationRevisions
+        .push(historical_match);
+    historical_match_source
+        .compensationRevisionOverrides
+        .push(wage_override(
+            "ov-historical-group-match",
+            "rev-historical-group-match",
+            dec!(110),
+        ));
+    let with_match = RetroEntitlementEngine::calculate(&retro_request(
+        historical_match_source,
+        "retro-after-group-match",
+        revision("rev-after-group-match", "2026-03-15"),
+        vec![wage_override(
+            "ov-after-group-match",
+            "rev-after-group-match",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect("matching historical group revision should participate");
+    let february = with_match
+        .periods
+        .iter()
+        .find(|preview| preview.sourcePeriodId == "2026-02")
+        .expect("February preview");
+    assert_eq!(february.targetAmount, dec!(3080));
+
+    let mut historical_mismatch_source = base;
+    let mut historical_mismatch = revision("rev-historical-group-mismatch", "2026-02-15");
+    historical_mismatch.status = CompensationRevisionStatus::CALCULATED;
+    historical_mismatch.scope = CompensationRevisionScope::PERSONNEL_GROUP;
+    historical_mismatch.personnelIds.clear();
+    historical_mismatch.personnelGroup = Some("Other Group".into());
+    historical_mismatch_source
+        .compensationRevisions
+        .push(historical_mismatch);
+    historical_mismatch_source
+        .compensationRevisionOverrides
+        .push(wage_override(
+            "ov-historical-group-mismatch",
+            "rev-historical-group-mismatch",
+            dec!(110),
+        ));
+    let without_match = RetroEntitlementEngine::calculate(&retro_request(
+        historical_mismatch_source,
+        "retro-after-group-mismatch",
+        revision("rev-after-group-mismatch", "2026-03-15"),
+        vec![wage_override(
+            "ov-after-group-mismatch",
+            "rev-after-group-mismatch",
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect("non-matching historical group revision should be ignored");
+    let february = without_match
+        .periods
+        .iter()
+        .find(|preview| preview.sourcePeriodId == "2026-02")
+        .expect("February preview");
+    assert_eq!(february.targetAmount, dec!(2800));
+}
