@@ -1,0 +1,85 @@
+name: Retro Round 3 Mutation Probe
+
+on:
+  push:
+    branches:
+      - test/retro-round3-mutation-probe
+
+permissions:
+  contents: read
+
+jobs:
+  retro-targeted-mutation:
+    runs-on: ubuntu-latest
+    env:
+      PROPTEST_RNG_SEED: "2026091001"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.97.1
+          cache: false
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --version 27.1.0 --locked
+
+      - name: Run targeted retro mutation probe
+        run: |
+          set -euo pipefail
+          set +e
+          cargo mutants \
+            --no-config \
+            --output target \
+            --manifest-path crates/payroll-core/Cargo.toml \
+            --package payroll-core \
+            --file crates/payroll-core/src/retro.rs \
+            --re 'target_income_for_period|calculate_segment_income|apply_compensation_overrides|validate_override_value|revision_applications|validate_batch_ledger|RetroEntitlementEngine::calculate' \
+            --jobs 2 \
+            --no-shuffle
+          mutation_status=$?
+          set -e
+          case "$mutation_status" in
+            0|2|3) ;;
+            *) exit "$mutation_status" ;;
+          esac
+
+      - name: Summarize targeted mutation result
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("target/mutants.out/outcomes.json")
+          if not path.exists():
+              raise SystemExit("outcomes.json missing")
+          data = json.loads(path.read_text())
+          counts = {}
+          for item in data:
+              outcome = item.get("outcome", "unknown")
+              counts[outcome] = counts.get(outcome, 0) + 1
+          caught = counts.get("Caught", 0)
+          missed = counts.get("Missed", 0)
+          timeout = counts.get("Timeout", 0)
+          unviable = counts.get("Unviable", 0)
+          meaningful = caught + missed + timeout
+          score = (caught / meaningful * 100) if meaningful else 100.0
+          print("TARGETED_MUTATION_COUNTS", json.dumps(counts, sort_keys=True))
+          print(f"TARGETED_MUTATION_TOTAL={len(data)}")
+          print(f"TARGETED_MUTATION_CAUGHT={caught}")
+          print(f"TARGETED_MUTATION_MISSED={missed}")
+          print(f"TARGETED_MUTATION_TIMEOUT={timeout}")
+          print(f"TARGETED_MUTATION_UNVIABLE={unviable}")
+          print(f"TARGETED_MUTATION_SCORE={score:.2f}")
+          PY
+
+      - name: Upload targeted mutation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: retro-round3-targeted-mutation
+          path: target/mutants.out
+          if-no-files-found: error
