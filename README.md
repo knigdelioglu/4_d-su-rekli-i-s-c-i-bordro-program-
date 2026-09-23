@@ -29,7 +29,7 @@ etmesi önlenir.
 ```bash
 bun install
 bun run dev
-bun test
+bun run test:ci
 bun run lint
 cargo check --workspace
 cargo test --workspace
@@ -47,6 +47,7 @@ bun run test:e2e
 bun run test:netlify-smoke
 cargo check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
+bun run test:rust:coverage
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 ```
 
@@ -139,6 +140,6 @@ Vergi açılışında authoritative kaynak `personnel_tax_opening` tablosudur. A
 
 ## Test güvence yol haritası
 
-Mevcut regresyon ve invariant testlerini daha yüksek doğruluk güvencesine taşımak için Golden Payroll Corpus, property-based testing, bağımsız reference oracle, mutation testing ve coverage/CI quality gate aşamaları planlanmıştır.
+Test güvence katmanları Golden Payroll Corpus, property-based testing, bağımsız reference oracle, mutation baseline kapısı ve Rust/TypeScript coverage ratchet'larını içerir. Ayrıntılı durum ve bilinen boşluklar [`docs/payroll-assurance-status.md`](docs/payroll-assurance-status.md) içinde tutulur.
 
 Ayrıntılı plan: [`docs/payroll-test-assurance-roadmap.md`](docs/payroll-test-assurance-roadmap.md)

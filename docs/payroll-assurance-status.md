@@ -7,20 +7,38 @@ henüz tamamlanmamış fixture'ları belirtir.
 
 ## Son doğrulama kimliği
 
+Bu CI run ID'leri aşağıdaki commit için tarihsel kanıttır; çalışma ağacı
+doğrulamaları ayrıca listelenmiştir.
+
 - Tarih: `2026-09-19`
 - Verification identity: ölçülen kod commit'i
   `c9d0e9b838fbf2c6ae1a9fc1f1b07eaba11ea906`
 - Normal CI / verify: `35439156749` — PASS
 - Full mutation workflow: `35439833175` — PASS
 
+## 2026-09-23 çalışma ağacı doğrulaması
+
+- `bun run test:ci`: **207 geçti**; TypeScript coverage ratchet **16/16 metrikte PASS**.
+- `bun run lint`: TypeScript typecheck ve production graph doğrulaması PASS.
+- Golden corpus testi: **3 geçti**; 33/33 fixture ve evidence bağlantısı exact
+  replay ile doğrulandı.
+- Tauri mock-runtime IPC testi: **1 geçti**; 38/38 registered komut üretim
+  handler'ı üzerinden çağrılıyor. Kritik storage akışları ayrıca SQLite
+  round-trip ve state değişimiyle doğrulanıyor.
+- Gerçek Linux Tauri WebView/IPC smoke testi CI'a eklendi; ilk CI koşusuyla
+  doğrulanacak. Mevcut macOS çalışma ortamında native driver çalıştırılamadı.
+- `PROPTEST_RNG_SEED=2026091001 bun run test:rust:coverage`: payroll-core ve
+  Tauri test paketleri PASS; Rust coverage ratchet **28 dosya / 84 metrikte PASS**.
+- `cargo fmt --all -- --check`, `git diff --check` ve mutation enforcement
+  kontrolü PASS. Sentetik mutation gerilemesi beklenen şekilde blocking reddedildi.
+
 ## Golden corpus
 
 - Fixture sayısı: **33**
 - Kapsam: `G001`–`G033`, 2026 yasal parametre/sürüm sözleşmesi
 - Blocking test: `cargo test -p payroll-core --test golden_payroll_corpus`
-- Bağımsız evidence: **15/33 verified** — `G001, G003, G006, G007, G009,
-  G010, G011, G013, G014, G016, G017, G029, G030, G031, G032`;
-  kalan **18** fixture `pendingEvidence` durumundadır.
+- Bağımsız evidence: **33/33 verified**; her fixture'ın request girdilerinden
+  ayrı aritmetik hesabı `evidence/Gxxx.md` çalışma kâğıdına bağlıdır.
 - Evidence formatı: `crates/payroll-core/tests/golden/evidence/Gxxx.md`;
   loader JSON Schema'yı, kritik bağlantının varlığını ve zorunlu hesap
   bölümlerini kontrol eder. Her fixture ayrıca `source.verificationStatus` ile
@@ -113,8 +131,12 @@ henüz tamamlanmamış fixture'ları belirtir.
 - Score exact olarak `caught / (total - unviable)` formülüyle hesaplanır:
   `1.349 / 1.843`. Summary, duplicate/missing shard, invalid JSON veya
   denominator uyuşmazlığında fail-closed davranır.
-- Altyapı hataları (baseline, shard, JSON veya eksik artifact) blocking'dir;
-  `missed`/`timeout` quality findings advisory'dir.
+- Altyapı hataları (baseline, shard, JSON veya eksik artifact) blocking'dir.
+  Full scheduled/manual aggregate artık
+  `scripts/check-cargo-mutants-baseline.mjs --enforce` çalıştırır; score
+  düşüşü, `missed`/`timeout` artışı veya yeni missed mutant aggregate'i
+  başarısız kılar. Mevcut reviewed survivor'lar kabul edilen baseline olarak
+  korunur ve tek başlarına engel oluşturmaz.
 - Her shard'ın canonical yolu `target/cargo-mutants/outcomes.json`'dır;
   cargo-mutants 27.1.0'un tool-native `target/mutants.out` klasörü CI'da tek
   seferde bu dizine taşınır. Survivor triage kaydı
@@ -130,23 +152,61 @@ henüz tamamlanmamış fixture'ları belirtir.
 Komut:
 
 ```text
-cargo llvm-cov --package payroll-core --all-features --json --summary-only
+PROPTEST_RNG_SEED=2026091001 cargo llvm-cov --package payroll-core --package bordro-programi --all-features --json --summary-only
 node scripts/check-rust-coverage.mjs <coverage.json> docs/payroll-coverage-baseline.json
 ```
 
-| Kritik modül | Lines | Functions | Regions |
+| payroll-core kritik modül | Lines | Functions | Regions |
 |---|---:|---:|---:|
-| `calculations.rs` | 84.82% | 82.09% | 91.12% |
+| `calculations.rs` | 91.86% | 92.54% | 95.91% |
 | `gv_exemption.rs` | 100.00% | 100.00% | 100.00% |
-| `payroll_engine.rs` | 78.56% | 65.46% | 84.14% |
-| `policies.rs` | 81.64% | 79.45% | 84.18% |
-| `retro.rs` | 80.20% | 72.35% | 85.16% |
-| `validation.rs` | 71.81% | 57.69% | 79.90% |
+| `payroll_engine.rs` | 84.23% | 69.41% | 88.36% |
+| `policies.rs` | 91.88% | 87.67% | 94.11% |
+| `retro.rs` | 88.51% | 77.65% | 90.46% |
+| `validation.rs` | 76.63% | 73.08% | 87.80% |
 
 Ratchet dosya bazında lines/functions/regions metriklerinin exact
 `covered/count` oranını baseline'ın altına indirmeye izin vermez; dosya/metric
-eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Coverage job yalnız weekly/manual çalışır ve ölçüm sırasında
-`PROPTEST_RNG_SEED=2026091001` kullanır; normal PR property job'ı sabitlenmez.
+eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Baseline 6
+`payroll-core` ve 22 Tauri DB/repository/service/IPC dosyasını içerir. Ölçülen
+tüm kaynak toplamı lines `%82.15`, functions `%65.38`, regions `%82.57`'tir;
+blocking eşik toplam değil, dosya bazında exact ratchet'tır. PR'daki
+`CI / verify` job'ı `bun run test:rust:coverage` ile coverage ve ratchet'ı
+çalıştırır; ölçüm `PROPTEST_RNG_SEED=2026091001` kullanır.
+
+- `src-tauri/src/lib.rs`: lines `%97.95`, functions `%71.43`, regions `%96.69`.
+- `src-tauri/src/commands/period_cmd.rs`: lines `%57.14`, functions `%50.00`,
+  regions `%66.67`; `get_periods`, `save_period` ve
+  `save_period_with_settings` production handler üzerinden çağrılıyor.
+
+## TypeScript coverage ratchet
+
+- `bun run test:ci`, Bun test coverage'ını LCOV olarak üretir ve
+  `docs/typescript-coverage-baseline.json` içindeki 8 finansal adapter/storage
+  dosyasının satır/fonksiyon oranlarında düşüşü PR'da engeller.
+- Checker eksik/duplicate LCOV kaydında ve baseline düşüşünde fail-closed
+  davranır. `browserPayrollStore.ts` için başlangıç tabanı 145/347 satırdır;
+  bu oran düşük olduğu için iyileştirme adayı olarak görünür kalır.
+- CI, verify job'ında bu komutu her pull request'te çalıştırır.
+
+## Native command IPC
+
+- `src-tauri/src/lib.rs` içindeki production `invoke_handler` Tauri mock
+  runtime'ında 38/38 registered komut için doğrudan sınanır. Period/settings,
+  personnel/tax-opening, attendance, annual parameters, app settings ve sick
+  leave create/read/update/delete turları SQLite state'iyle doğrulanır.
+- Aynı test `FINALIZED` durumuna doğrudan geçişin reddedildiğini, retro preview
+  ve mutation-policy okumalarını, legacy import ve izole backup replacement
+  akışlarını da doğrular. Eksik payroll/retro kimlik veya DRAFT durumlarında
+  ilgili komutların fail-closed yanıtları sınanır.
+- Aynı IPC testi geçerli bordro için hesaplama → tahakkuk silme → yeniden
+  hesaplama → kesinleştirme zincirini SQLite state'i üzerinden tamamlar.
+- Mock runtime Tauri dispatch'i, argüman/yanıt serileştirmesini ve uygulama
+  state'ini kapsar; işletim sistemi WebView'ini açan masaüstü uçtan uca testi
+  değildir.
+- `.github/workflows/ci.yml`, Linux'ta `tauri-driver` ve WebKitWebDriver ile
+  uygulamayı açar; gerçek WebView render'ını, storage yüklemesini ve
+  `get_periods` IPC yanıtını doğrular (`bun run test:e2e:native`).
 
 ## Korunan kritik invariant'lar
 
@@ -166,8 +226,9 @@ eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Coverage job yal
 - 2.147 adayın Round 2 gerçek 8-shard aggregate sonucu baseline'a
   kaydedilmiştir: `docs/payroll-mutation-baseline.json` — **360 missed, %80,47**.
   Önceki full baseline listesi aynı dosyada `previousBaseline` altında
-  korunur. Quality findings advisory, infrastructure failure blocking olmaya
-  devam eder.
+  korunur. Scheduled/manual aggregate, score düşüşü, missed/timeout artışı ve
+  yeni missed mutant'ta blocking'dir; kapsamlı mutant çalışması her PR'da
+  çalıştırılmaz.
 - Round 1'deki 494 anlamlı missed mutant için historical conservative triage:
   `REAL_TEST_GAP` 0, `EQUIVALENT` 2, `UNREACHABLE` 0,
   `NEEDS_REVIEW` 492. Ayrıntı ve kapsam sınırı
@@ -175,20 +236,26 @@ eksikliği, duplicate path ve NaN/undefined değerler fail'dir. Coverage job yal
 - Round 2 payroll-engine survivor'ları için conservative triage:
   `REAL_TEST_GAP` 0, `EQUIVALENT` 0, `UNREACHABLE` 0,
   `NEEDS_REVIEW` 116. Ayrıntı `Payroll Engine Quality Round 2` bölümündedir.
-- Golden corpus'un 33 fixture'ından yalnız 15'i bağımsız evidence ile verified;
-  kalan 18'i `pendingEvidence` durumundadır. Bu durum 33/33 bağımsız doğrulama
-  iddiası olarak sunulmaz.
+- Mock IPC testi 38 registered komutun tümünü çağırır ve başarılı bordro
+  hesaplama/silme/yeniden hesaplama/kesinleştirme zincirini kapsar. Linux native
+  WebView smoke açılış, storage yükleme ve `get_periods` ile sınırlıdır;
+  Windows/macOS native E2E kapsamı açık kalır.
 - Linux/macOS generated WASM code/data layout farkı P2 riskidir; package
   allowlist, freshness, adapter ve browser E2E kontrolleri korunmuştur.
-- Frontend için bu fazda yeni toplam coverage yüzdesi kapısı eklenmedi; mevcut
-  WASM/browser adapter ve E2E testleri korunmaktadır.
+- TypeScript kapısı yalnız 8 kritik finansal adapter/storage dosyasını kapsar;
+  tüm UI bileşenleri için toplam repository coverage tabanı eklenmemiştir.
 - Mutation baseline'da kalan survivor'lar için gerekçe veya kalıcı regression
   testi ayrıca yazılmalıdır; bu turda kesinleştirilemeyen vakalar NEEDS_REVIEW
   olarak bırakılmıştır.
 - Yeni gerçek production hesap hatalarının kalıcı regression fixture'ına
-  dönüştürülmesi hâlâ inceleme/bug-fix akışının sorumluluğundadır.
+  dönüştürülmesi PR şablonunda kontrol edilir; gelecekteki her düzeltmede
+  kutucuğun tamamlanması author/reviewer incelemesine bağlıdır.
 
 ## Branch protection
 
 MAIN BRANCH PROTECTION: false; manual GitHub configuration required
 Required check önerisi: `CI / verify`
+
+Bu yerel değişikliklerle koruma etkinleştirilemedi: GitHub CLI oturumu geçersiz
+token bildiriyor. `CI / verify` check'inin main branch protection'a eklenmesi
+GitHub erişimi yenilendiğinde tamamlanmalıdır.

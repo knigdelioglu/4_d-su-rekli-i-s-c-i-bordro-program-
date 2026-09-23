@@ -51,8 +51,14 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: 1.97.1
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
           cache: false
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --version 2.0.6 --locked
 
       - name: Install WebAssembly toolchain
         run: |
@@ -74,7 +80,9 @@ jobs:
             libssl-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            webkit2gtk-driver \
+            xvfb
 
       - name: Rust workspace check
         run: cargo check --workspace
@@ -126,7 +134,15 @@ jobs:
         run: bun run verify:payroll-contract
 
       - name: Bun tests
-        run: bun test
+        run: bun run test:ci
+
+      - name: Upload TypeScript coverage evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-payroll-coverage
+          path: coverage/bun/lcov.info
+          if-no-files-found: warn
 
       - name: Vite build
         run: bun run build
@@ -161,46 +177,25 @@ jobs:
       - name: Rust workspace tests
         run: cargo test --workspace
 
-  rust-coverage:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    env:
-      # Measurement runs must be reproducible; the normal PR property suite
-      # intentionally does not inherit this seed.
-      PROPTEST_RNG_SEED: "2026091001"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Build desktop app for native WebView E2E
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi
 
-      - name: Setup Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-        with:
-          toolchain: 1.97.1
-          components: llvm-tools-preview
-          cache: false
+      - name: Native Tauri WebView E2E smoke test
+        env:
+          TAURI_WEBVIEW_APP: target/debug/bordro-programi
+        run: xvfb-run --auto-servernum bun run test:e2e:native
 
-      - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: Measure Rust coverage and enforce critical module ratchet
+        env:
+          PROPTEST_RNG_SEED: "2026091001"
+        run: bun run test:rust:coverage
 
-      - name: Measure payroll-core coverage
-        run: |
-          mkdir -p artifacts
-          cargo llvm-cov \
-            --package payroll-core \
-            --all-features \
-            --json \
-            --summary-only \
-            --output-path artifacts/payroll-core-coverage.json
-
-      - name: Enforce critical module coverage ratchet
-        run: node scripts/check-rust-coverage.mjs artifacts/payroll-core-coverage.json docs/payroll-coverage-baseline.json
-
-      - name: Upload payroll coverage evidence
+      - name: Upload Rust coverage evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: payroll-core-coverage
-          path: artifacts/payroll-core-coverage.json
+          name: payroll-coverage
+          path: target/payroll-coverage.json
           if-no-files-found: warn
 
   rust-mutation:
@@ -338,6 +333,10 @@ jobs:
             "${shard_args[@]}" > "$summary_tmp"
           mv "$summary_tmp" artifacts/payroll-core-mutation-summary.json
           cat artifacts/payroll-core-mutation-summary.json
+          node scripts/check-cargo-mutants-baseline.mjs \
+            --enforce \
+            artifacts/payroll-core-mutation-summary.json \
+            docs/payroll-mutation-baseline.json
           if [ "$shard_job_result" != "success" ]; then
             echo "::error::At least one mutation shard failed infrastructure validation."
             exit 1

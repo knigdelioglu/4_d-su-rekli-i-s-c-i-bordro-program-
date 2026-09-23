@@ -27,10 +27,9 @@ sonucu taşır. Bağımsızlık iddiasının denetlenebilir kanıtı kritik fixt
 ## Bağımsızlık kuralı
 
 `expected.result` CI sırasında production motorundan üretilmez. Fixture
-beklentisi commit edilmiş bir kanıttır; kritik 15 fixture için bağımsız ve
-insan tarafından okunabilir aritmetik `evidence/Gxxx.md` dosyalarında ayrıca
-gösterilir. Kalan 18 fixture'ın metadata'sı korunur ancak `pendingEvidence`
-durumundadır. Bu kanıt dış kurum veya mevzuat onayı anlamına gelmez; yasal
+beklentisi commit edilmiş bir kanıttır; 33 fixture için bağımsız ve insan
+tarafından okunabilir aritmetik `evidence/Gxxx.md` dosyalarında ayrıca gösterilir.
+Bu kanıt dış kurum veya mevzuat onayı anlamına gelmez; yasal
 parametrelerin doğruluğu ayrıca yetkili bordro/mevzuat incelemesi gerektirir.
 
 Fixture eklerken:
@@ -61,5 +60,5 @@ kuruş sınırları temsil edilir.
 Bu corpus, mevcut regression/parity testlerinin yerine geçmez. Yıl geçişi,
 devreden PEK'in çok aylı ömrü, retro ve FINALIZED/STALE lifecycle davranışları
 mevcut testlerde korunmaya devam eder; bunların golden kapsamı sonraki güvence
-fazlarında genişletilecektir. Loader, 15 `verified` evidence ve 18
-`pendingEvidence` fixture ayrımını fail-closed biçimde görünür tutar.
+fazlarında genişletilecektir. Loader tüm 33 fixture için `verified` evidence
+bağlantısını fail-closed biçimde doğrular.

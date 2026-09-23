@@ -20,6 +20,9 @@ rust_decimal_macros = "1.36"
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
+
 [lib]
 name = "bordro_programi_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

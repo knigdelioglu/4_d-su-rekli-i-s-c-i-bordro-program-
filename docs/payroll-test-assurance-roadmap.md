@@ -1,7 +1,10 @@
 # Bordro Test Güvence Yol Haritası
 
-**Durum:** Faz 3 altyapısı teslim edildi; coverage ratchet aktif, final mutation
-full-run 8 shard olarak tamamlandı ve gerçek baseline kaydedildi — 2026-09-15
+**Durum:** Yerel Faz 3 iyileştirmeleri: Rust/TypeScript coverage ratchet, mutation
+regression gate, 33/33 golden evidence, 38/38 Tauri mock-runtime IPC komutu ve
+başarılı bordro yaşam döngüsü smoke'u, Linux native WebView yapılandırması.
+GitHub main branch protection geçersiz CLI oturumu nedeniyle beklemede —
+2026-09-23
 
 **Hedef dal:** `main`
 **Kapsam:** `payroll-core`, native Tauri/SQLite akışı, WASM/browser parity ve CI test güvence katmanları
@@ -53,12 +56,14 @@ Dolayısıyla bu yol haritası mevcut regresyon testlerini topluca yeniden yazma
 
 ## Uygulama durumu
 
-Üç büyük uygulama fazı yaklaşımında Faz 1 ve Faz 2 tamamlandı. Test güvence
-matrisi, 2026 yılı için 33 exact golden fixture (15'i bağımsız evidence çalışma
-kâğıdına bağlı, kalan 18'i `pendingEvidence`), fixture JSON Schema doğrulaması, exact
+Üç büyük uygulama fazında Faz 1 ve Faz 2 tamamlandı. Test güvence matrisi,
+2026 yılı için 33 exact golden fixture ve hepsi için bağımsız evidence çalışma
+kâğıdı, fixture JSON Schema doğrulaması, exact
 `calculate_payroll_checked()` replay testi ve `legalYear`/parametre sürümü
 fail-closed kontrollerine ek olarak property-based testler ve test-only bağımsız
-mali oracle eklendi. Ayrıntılı kapsam
+mali oracle eklendi. Faz 3'te Bun coverage, payroll-core + Tauri coverage,
+mutation baseline regression enforcement ve native command IPC round-trip
+testi eklendi. Ayrıntılı kapsam
 `docs/payroll-test-coverage-matrix.md`, fixture sözleşmesi
 `crates/payroll-core/tests/golden/README.md` ve Faz 2 test topolojisi
 `crates/payroll-core/tests/property_tests.rs` altında görülebilir.
@@ -76,8 +81,10 @@ Uygulama sırası üç büyük faz olarak izlenir:
 1. **Faz 1 — Referans temeli:** güvence matrisi, golden corpus ve yasal yıl/sürüm disiplini. **Tamamlandı.**
 2. **Faz 2 — Bağımsız doğruluk:** property-based testler ve production'dan bağımsız mali oracle. **Tamamlandı.**
 3. **Faz 3 — Sürekli güvence:** mutation, coverage/CI quality gate ve release evidence.
-   **Altyapı tamamlandı; final 8-shard mutation artifact'ı ölçüldü, baseline'a
-   işlendi. Infrastructure blocking, quality findings advisory'dir.**
+   **Coverage ve mutation regression kapıları aktiftir. Mutation aggregate
+   scheduled/manual akışta ölçülür; `CI / verify` coverage ratchet'ları her PR'da
+   çalışır. Main branch protection GitHub CLI kimlik doğrulaması nedeniyle
+   dış aksiyon bekliyor.**
 
 ---
 
@@ -259,8 +266,8 @@ Test tüm fixture'ları yükler, `calculate_payroll_checked()` çalıştırır v
 
 ## Kabul kriteri
 
-- En az 30 exact golden fixture. **Tamamlandı: 33 fixture; 15 kritik fixture
-  repo içi bağımsız evidence çalışma kâğıdına bağlı, 18 fixture pendingEvidence.**
+- En az 30 exact golden fixture. **Tamamlandı: 33 fixture'ın tamamı bağımsız
+  repo içi evidence çalışma kâğıdına bağlı (33/33).**
 - Production kodundan otomatik expected üretimi yok.
 - Tüm golden fixture'lar CI'da çalışıyor. **Tamamlandı: ayrı blocking CI adımı eklendi.**
 - Fixture değişikliği kod değişikliğinden ayrı ve incelemeye açık diff üretir.
@@ -498,9 +505,9 @@ crates/payroll-core/src/validation.rs
 27.1.0'un tool-native `target/mutants.out` çıktısı CI'da tek seferde canonical
 dizine taşınır; collector nested/fallback path aramaz. Unviable sonuçlar
 sessiz exclusion değildir; sonuç sınıflandırmasında ayrı tutulur.
-Final manual workflow 35013775841'de 0..7 shard setinin tamamı ve aggregate
-summary PASS olmuştur: 1.349 caught, 494 missed, 0 timeout, 304 unviable,
-1.843 meaningful ve %73,20 skor. Sonuç
+Final full workflow 35439833175'te 0..7 shard setinin tamamı ve aggregate
+summary PASS olmuştur: 1.483 caught, 360 missed, 0 timeout, 304 unviable,
+1.843 meaningful ve %80,47 skor. Sonuç
 `docs/payroll-mutation-baseline.json` içine, survivor triage ise
 `docs/payroll-mutation-survivor-review.md` içine kaydedilmiştir.
 
@@ -511,11 +518,10 @@ summary PASS olmuştur: 1.349 caught, 494 missed, 0 timeout, 304 unviable,
 3. Gerçek test açığı olan her mutant için test eklenir.
 4. Equivalent/unreachable mutant'lar ancak ayrı kanıt ve inceleme ile
    belgelenir; blanket survivor exclusion kullanılmaz.
-5. CI'ya infrastructure failure'ı blocking, missed/timeout kalite sonucunu
-   advisory olarak raporlayan job olarak girer.
-6. Baseline oturduktan sonra mutation score gerilemesi için blocking policy
-   ayrıca etkinleştirilebilir; mevcut workflow'da quality findings advisory,
-   infrastructure failure blocking'dir.
+5. Scheduled/manual mutation aggregate CI'da baseline ve kalite
+   gerilemelerini blocking olarak denetler.
+6. Mevcut reviewed survivor'lar kabul edilen baseline'dır; yeni missed mutant,
+   missed/timeout artışı veya score düşüşü aggregate'i başarısız kılar.
 
 ## Hedef
 
@@ -549,12 +555,13 @@ Test kapsamının görünür olması ve fark edilmeden gerilememesi.
 
 ### Uygulama durumu
 
-`docs/payroll-coverage-baseline.json` altı kritik modül için lines/functions/
-regions baseline'ını taşır. `scripts/check-rust-coverage.mjs` her metriği dosya
-bazında karşılaştırır ve düşüşte fail olur. Bu kontrol haftalık/manual CI
-çalışmasında blocking'dir; ilk baseline'da toplam repository için keyfi bir
-minimum yüzde yoktur. Coverage job ölçümünde sabit `PROPTEST_RNG_SEED=2026091001`
-kullanır; normal PR property suite keşif için seed'siz kalır.
+`docs/payroll-coverage-baseline.json` altı payroll-core ve yirmi iki Tauri
+DB/repository/service/IPC kaynak dosyasının lines/functions/regions baseline'ını
+taşır. `scripts/check-rust-coverage.mjs` exact `covered/count` oranını dosya
+bazında karşılaştırır ve düşüşte fail olur. `CI / verify` bu gate'i her PR'da
+`PROPTEST_RNG_SEED=2026091001` ile çalıştırır; normal property suite keşif için
+seed'siz kalır. Bun testi ayrıca `docs/typescript-coverage-baseline.json`
+içindeki sekiz kritik finansal adapter/storage dosyasını ratchet eder.
 
 ## Rust coverage
 
@@ -581,7 +588,10 @@ Uzun vadeli hedefler:
 
 ## Frontend/WASM
 
-TypeScript coverage yalnız authoritative finansal adapter/storage katmanında anlamlı kalite kapısı olarak kullanılmalıdır. Sunum komponentlerinde yüksek coverage uğruna düşük değerli snapshot testleri üretilmemelidir.
+TypeScript coverage gate'i authoritative finansal adapter/storage katmanındaki
+8 dosyayla sınırlıdır. `browserPayrollStore.ts` başlangıç tabanı 145/347 satırdır;
+sonraki turda artırılması gereken düşük kapsam açıkça görünür. Sunum
+komponentleri için toplam coverage yüzdesi dayatılmaz.
 
 Öncelik:
 
@@ -602,14 +612,18 @@ TypeScript coverage yalnız authoritative finansal adapter/storage katmanında a
 - native integration
 - WASM tests
 - Bun tests
+- TypeScript coverage ratchet
+- Rust payroll-core + Tauri coverage ratchet
+- Tauri mock-runtime command IPC smoke
+- Linux Tauri WebDriver WebView startup and real `get_periods` IPC smoke
 - E2E smoke
 - lint/clippy/fmt
 - generated contract/WASM freshness
 
 ### Daha ağır periyodik/release gate
 
-- mutation testing
-- tam coverage raporu
+- full mutation testing ve baseline regression enforcement
+- geniş tam coverage raporu
 - geniş property case count
 - full golden corpus + differential oracle
 
@@ -712,8 +726,7 @@ Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul ed
 
 - [x] Kritik bordro kuralları için test güvence matrisi mevcut.
 - [x] En az 30 exact golden bordro mevcut; 33 fixture korunuyor.
-- [x] En az 10–15 kritik golden fixture bağımsız repo içi evidence'a bağlı; mevcut kapsam 15/15.
-- [ ] Kalan 18 golden fixture bağımsız evidence çalışma kâğıtlarına bağlandı.
+- [x] Golden corpus'taki 33 fixture bağımsız repo içi evidence'a bağlı (33/33).
 - [x] Golden expected değerleri production motorundan otomatik üretilmiyor.
 - [x] GV, PEK, payment-event, puantaj/rapor ve Decimal için property testleri mevcut.
 - [x] Property failure'ları replay/shrink edilebilir.
@@ -721,13 +734,21 @@ Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul ed
 - [x] Oracle ile production motoru generated input'larda differential test ediliyor.
 - [x] Native ve WASM/browser adapter parity testleri korunuyor.
 - [x] Kritik Rust mali modülleri cargo-mutants ile ölçülüyor.
-- [x] Mutation score baseline kaydedilmiş ve gerileme politikası uygulanıyor;
-  quality findings advisory, infrastructure failure blocking.
-- [x] Rust coverage baseline ölçülmüş ve ratchet policy uygulanıyor.
+- [x] Mutation score baseline kaydedilmiş; scheduled/manual aggregate kalite
+  gerilemesinde blocking.
+- [x] Rust coverage baseline core ve Tauri source dosyalarında ölçülmüş ve PR
+  ratchet policy uygulanıyor.
+- [x] TypeScript financial adapter/storage coverage ratchet PR CI'da çalışıyor.
+- [x] Tauri production invoke handler mock runtime ve SQLite üzerinden smoke test ediliyor.
+- [x] Mock runtime smoke, registered Tauri invoke handler'daki 38 komutun tamamını çağırıyor.
+- [x] Pull request şablonu, bordro hesap hatası düzeltmelerinde kalıcı regression testi ve mevzuat değişikliklerinde bağımsız kaynak kanıtı kontrol ediyor.
 - [x] Golden + property testleri normal PR CI akışında blocking.
 - [x] Mutation/coverage suite için release veya periyodik/manual workflow yapılandırıldı; final 2.147-mutant full run ve aggregate summary PASS.
 - [x] Production 2026 statutory parameter değerleri bağımsız reference fixture ile karşılaştırılıyor.
 - [ ] Her yeni gerçek hesap hatası kalıcı regresyon vakasına dönüştürülüyor.
+- [x] Linux CI'da OS WebView'ini açan masaüstü uçtan uca smoke test yapılandırıldı;
+  ilk CI koşusuyla doğrulanacak. macOS/Windows WebView E2E kapsamı açık kalıyor.
+- [ ] GitHub `CI / verify` required check'i main branch protection'a bağlanıyor.
 - [x] `docs/payroll-assurance-status.md` güncel güvence durumunu gösteriyor.
 
 ---

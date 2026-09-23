@@ -11,8 +11,9 @@ const MINIMUM_GOLDEN_CASES: usize = 30;
 const EXPECTED_ASSERTION_PROFILE: &str = "FULL_FINANCIAL";
 const EXPECTED_SOURCE_TYPE: &str = "independent_manual_calculation";
 const VERIFIED_EVIDENCE_IDS: &[&str] = &[
-    "G001", "G003", "G006", "G007", "G009", "G010", "G011", "G013", "G014", "G016", "G017", "G029",
-    "G030", "G031", "G032",
+    "G001", "G002", "G003", "G004", "G005", "G006", "G007", "G008", "G009", "G010", "G011", "G012",
+    "G013", "G014", "G015", "G016", "G017", "G018", "G019", "G020", "G021", "G022", "G023", "G024",
+    "G025", "G026", "G027", "G028", "G029", "G030", "G031", "G032", "G033",
 ];
 
 #[derive(Debug, Deserialize)]
@@ -607,6 +608,6 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
     assert_eq!(
         evidence_count,
         VERIFIED_EVIDENCE_IDS.len(),
-        "kritik golden evidence kapsamı beklenen 15 fixture ile eşleşmeli"
+        "golden evidence kapsamı beklenen fixture sayısıyla eşleşmeli"
     );
 }

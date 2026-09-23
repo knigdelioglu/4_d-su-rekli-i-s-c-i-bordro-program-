@@ -2,39 +2,485 @@
   "schemaVersion": 1,
   "tool": "cargo-llvm-cov",
   "toolVersion": "0.9.1",
-  "measuredAt": "2026-09-10",
-  "command": "cargo llvm-cov --package payroll-core --all-features --json --summary-only",
-  "scope": "payroll-core package tests; critical source files are ratcheted independently",
+  "measuredAt": "2026-09-23",
+  "command": "PROPTEST_RNG_SEED=2026091001 cargo llvm-cov --package payroll-core --package bordro-programi --all-features --json --summary-only",
+  "scope": "payroll-core and native Tauri package tests; 6 core and 22 native DB/repository/service/IPC files are ratcheted independently",
   "files": {
     "crates/payroll-core/src/calculations.rs": {
-      "lines": { "count": 1179, "covered": 1000, "percent": 84.81764206955047 },
-      "functions": { "count": 67, "covered": 55, "percent": 82.08955223880598 },
-      "regions": { "count": 1295, "covered": 1180, "percent": 91.1196911196911 }
+      "lines": {
+        "count": 1179,
+        "covered": 1083,
+        "percent": 91.85750636132316
+      },
+      "functions": {
+        "count": 67,
+        "covered": 62,
+        "percent": 92.53731343283582
+      },
+      "regions": {
+        "count": 1295,
+        "covered": 1242,
+        "percent": 95.9073359073359
+      }
     },
     "crates/payroll-core/src/gv_exemption.rs": {
-      "lines": { "count": 31, "covered": 31, "percent": 100 },
-      "functions": { "count": 2, "covered": 2, "percent": 100 },
-      "regions": { "count": 64, "covered": 64, "percent": 100 }
+      "lines": {
+        "count": 31,
+        "covered": 31,
+        "percent": 100
+      },
+      "functions": {
+        "count": 2,
+        "covered": 2,
+        "percent": 100
+      },
+      "regions": {
+        "count": 64,
+        "covered": 64,
+        "percent": 100
+      }
     },
     "crates/payroll-core/src/payroll_engine.rs": {
-      "lines": { "count": 3951, "covered": 3104, "percent": 78.56238926853962 },
-      "functions": { "count": 304, "covered": 199, "percent": 65.46052631578947 },
-      "regions": { "count": 5342, "covered": 4495, "percent": 84.14451516286036 }
+      "lines": {
+        "count": 3951,
+        "covered": 3328,
+        "percent": 84.23184004049608
+      },
+      "functions": {
+        "count": 304,
+        "covered": 211,
+        "percent": 69.4078947368421
+      },
+      "regions": {
+        "count": 5342,
+        "covered": 4720,
+        "percent": 88.35642081617372
+      }
     },
     "crates/payroll-core/src/policies.rs": {
-      "lines": { "count": 997, "covered": 814, "percent": 81.64493480441323 },
-      "functions": { "count": 73, "covered": 58, "percent": 79.45205479452055 },
-      "regions": { "count": 1359, "covered": 1144, "percent": 84.1795437821928 }
+      "lines": {
+        "count": 997,
+        "covered": 916,
+        "percent": 91.87562688064193
+      },
+      "functions": {
+        "count": 73,
+        "covered": 64,
+        "percent": 87.67123287671232
+      },
+      "regions": {
+        "count": 1359,
+        "covered": 1279,
+        "percent": 94.11331861662987
+      }
     },
     "crates/payroll-core/src/retro.rs": {
-      "lines": { "count": 2237, "covered": 1794, "percent": 80.19669199821189 },
-      "functions": { "count": 170, "covered": 123, "percent": 72.35294117647058 },
-      "regions": { "count": 2736, "covered": 2330, "percent": 85.1608187134503 }
+      "lines": {
+        "count": 2237,
+        "covered": 1980,
+        "percent": 88.51139919535092
+      },
+      "functions": {
+        "count": 170,
+        "covered": 132,
+        "percent": 77.64705882352942
+      },
+      "regions": {
+        "count": 2736,
+        "covered": 2475,
+        "percent": 90.46052631578947
+      }
     },
     "crates/payroll-core/src/validation.rs": {
-      "lines": { "count": 415, "covered": 298, "percent": 71.80722891566265 },
-      "functions": { "count": 26, "covered": 15, "percent": 57.692307692307686 },
-      "regions": { "count": 418, "covered": 334, "percent": 79.90430622009569 }
+      "lines": {
+        "count": 415,
+        "covered": 318,
+        "percent": 76.62650602409639
+      },
+      "functions": {
+        "count": 26,
+        "covered": 19,
+        "percent": 73.07692307692307
+      },
+      "regions": {
+        "count": 418,
+        "covered": 367,
+        "percent": 87.79904306220095
+      }
+    },
+    "src-tauri/src/commands/period_cmd.rs": {
+      "lines": {
+        "count": 28,
+        "covered": 8,
+        "percent": 28.57142857142857
+      },
+      "functions": {
+        "count": 6,
+        "covered": 2,
+        "percent": 33.33333333333333
+      },
+      "regions": {
+        "count": 36,
+        "covered": 15,
+        "percent": 41.66666666666667
+      }
+    },
+    "src-tauri/src/db/connection.rs": {
+      "lines": {
+        "count": 27,
+        "covered": 14,
+        "percent": 51.85185185185185
+      },
+      "functions": {
+        "count": 6,
+        "covered": 2,
+        "percent": 33.33333333333333
+      },
+      "regions": {
+        "count": 44,
+        "covered": 19,
+        "percent": 43.18181818181818
+      }
+    },
+    "src-tauri/src/db/migrations.rs": {
+      "lines": {
+        "count": 1069,
+        "covered": 866,
+        "percent": 81.01028999064546
+      },
+      "functions": {
+        "count": 39,
+        "covered": 32,
+        "percent": 82.05128205128204
+      },
+      "regions": {
+        "count": 873,
+        "covered": 588,
+        "percent": 67.35395189003437
+      }
+    },
+    "src-tauri/src/lib.rs": {
+      "lines": {
+        "count": 66,
+        "covered": 57,
+        "percent": 86.36363636363636
+      },
+      "functions": {
+        "count": 6,
+        "covered": 4,
+        "percent": 66.66666666666666
+      },
+      "regions": {
+        "count": 107,
+        "covered": 86,
+        "percent": 80.37383177570094
+      }
+    },
+    "src-tauri/src/repositories/annual_payroll_parameters_repo.rs": {
+      "lines": {
+        "count": 126,
+        "covered": 101,
+        "percent": 80.15873015873017
+      },
+      "functions": {
+        "count": 20,
+        "covered": 12,
+        "percent": 60
+      },
+      "regions": {
+        "count": 179,
+        "covered": 141,
+        "percent": 78.77094972067039
+      }
+    },
+    "src-tauri/src/repositories/attendance_repo.rs": {
+      "lines": {
+        "count": 192,
+        "covered": 163,
+        "percent": 84.89583333333334
+      },
+      "functions": {
+        "count": 24,
+        "covered": 15,
+        "percent": 62.5
+      },
+      "regions": {
+        "count": 271,
+        "covered": 222,
+        "percent": 81.91881918819189
+      }
+    },
+    "src-tauri/src/repositories/payroll_invalidation_repo.rs": {
+      "lines": {
+        "count": 77,
+        "covered": 73,
+        "percent": 94.8051948051948
+      },
+      "functions": {
+        "count": 7,
+        "covered": 6,
+        "percent": 85.71428571428571
+      },
+      "regions": {
+        "count": 87,
+        "covered": 77,
+        "percent": 88.50574712643679
+      }
+    },
+    "src-tauri/src/repositories/payroll_repo.rs": {
+      "lines": {
+        "count": 1527,
+        "covered": 1199,
+        "percent": 78.5199738048461
+      },
+      "functions": {
+        "count": 138,
+        "covered": 74,
+        "percent": 53.62318840579711
+      },
+      "regions": {
+        "count": 1911,
+        "covered": 1448,
+        "percent": 75.77184720041863
+      }
+    },
+    "src-tauri/src/repositories/period_repo.rs": {
+      "lines": {
+        "count": 306,
+        "covered": 261,
+        "percent": 85.29411764705883
+      },
+      "functions": {
+        "count": 41,
+        "covered": 19,
+        "percent": 46.34146341463415
+      },
+      "regions": {
+        "count": 434,
+        "covered": 332,
+        "percent": 76.49769585253456
+      }
+    },
+    "src-tauri/src/repositories/personnel_repo.rs": {
+      "lines": {
+        "count": 234,
+        "covered": 184,
+        "percent": 78.63247863247864
+      },
+      "functions": {
+        "count": 25,
+        "covered": 10,
+        "percent": 40
+      },
+      "regions": {
+        "count": 408,
+        "covered": 284,
+        "percent": 69.6078431372549
+      }
+    },
+    "src-tauri/src/repositories/retro_repo.rs": {
+      "lines": {
+        "count": 953,
+        "covered": 693,
+        "percent": 72.71773347324239
+      },
+      "functions": {
+        "count": 83,
+        "covered": 35,
+        "percent": 42.168674698795186
+      },
+      "regions": {
+        "count": 1290,
+        "covered": 880,
+        "percent": 68.21705426356588
+      }
+    },
+    "src-tauri/src/repositories/settings_repo.rs": {
+      "lines": {
+        "count": 268,
+        "covered": 214,
+        "percent": 79.8507462686567
+      },
+      "functions": {
+        "count": 44,
+        "covered": 24,
+        "percent": 54.54545454545454
+      },
+      "regions": {
+        "count": 405,
+        "covered": 318,
+        "percent": 78.51851851851852
+      }
+    },
+    "src-tauri/src/repositories/sick_leave_repo.rs": {
+      "lines": {
+        "count": 223,
+        "covered": 165,
+        "percent": 73.99103139013454
+      },
+      "functions": {
+        "count": 31,
+        "covered": 12,
+        "percent": 38.70967741935484
+      },
+      "regions": {
+        "count": 314,
+        "covered": 208,
+        "percent": 66.2420382165605
+      }
+    },
+    "src-tauri/src/repositories/tax_opening_repo.rs": {
+      "lines": {
+        "count": 223,
+        "covered": 135,
+        "percent": 60.53811659192825
+      },
+      "functions": {
+        "count": 30,
+        "covered": 15,
+        "percent": 50
+      },
+      "regions": {
+        "count": 313,
+        "covered": 187,
+        "percent": 59.7444089456869
+      }
+    },
+    "src-tauri/src/repositories/transaction.rs": {
+      "lines": {
+        "count": 13,
+        "covered": 11,
+        "percent": 84.61538461538461
+      },
+      "functions": {
+        "count": 3,
+        "covered": 1,
+        "percent": 33.33333333333333
+      },
+      "regions": {
+        "count": 19,
+        "covered": 13,
+        "percent": 68.42105263157895
+      }
+    },
+    "src-tauri/src/services/cumulative_tax_service.rs": {
+      "lines": {
+        "count": 456,
+        "covered": 287,
+        "percent": 62.93859649122807
+      },
+      "functions": {
+        "count": 32,
+        "covered": 17,
+        "percent": 53.125
+      },
+      "regions": {
+        "count": 503,
+        "covered": 366,
+        "percent": 72.76341948310139
+      }
+    },
+    "src-tauri/src/services/migration_service.rs": {
+      "lines": {
+        "count": 1234,
+        "covered": 907,
+        "percent": 73.50081037277147
+      },
+      "functions": {
+        "count": 63,
+        "covered": 33,
+        "percent": 52.38095238095239
+      },
+      "regions": {
+        "count": 1304,
+        "covered": 953,
+        "percent": 73.08282208588957
+      }
+    },
+    "src-tauri/src/services/payroll_notice_service.rs": {
+      "lines": {
+        "count": 481,
+        "covered": 360,
+        "percent": 74.84407484407485
+      },
+      "functions": {
+        "count": 28,
+        "covered": 21,
+        "percent": 75
+      },
+      "regions": {
+        "count": 659,
+        "covered": 490,
+        "percent": 74.35508345978755
+      }
+    },
+    "src-tauri/src/services/payroll_preflight_service.rs": {
+      "lines": {
+        "count": 7,
+        "covered": 7,
+        "percent": 100
+      },
+      "functions": {
+        "count": 1,
+        "covered": 1,
+        "percent": 100
+      },
+      "regions": {
+        "count": 6,
+        "covered": 6,
+        "percent": 100
+      }
+    },
+    "src-tauri/src/services/payroll_service.rs": {
+      "lines": {
+        "count": 662,
+        "covered": 536,
+        "percent": 80.96676737160121
+      },
+      "functions": {
+        "count": 55,
+        "covered": 31,
+        "percent": 56.36363636363636
+      },
+      "regions": {
+        "count": 831,
+        "covered": 635,
+        "percent": 76.41395908543923
+      }
+    },
+    "src-tauri/src/services/period_service.rs": {
+      "lines": {
+        "count": 52,
+        "covered": 34,
+        "percent": 65.38461538461539
+      },
+      "functions": {
+        "count": 4,
+        "covered": 2,
+        "percent": 50
+      },
+      "regions": {
+        "count": 76,
+        "covered": 50,
+        "percent": 65.78947368421053
+      }
+    },
+    "src-tauri/src/services/sick_leave_service.rs": {
+      "lines": {
+        "count": 69,
+        "covered": 58,
+        "percent": 84.05797101449275
+      },
+      "functions": {
+        "count": 5,
+        "covered": 4,
+        "percent": 80
+      },
+      "regions": {
+        "count": 100,
+        "covered": 85,
+        "percent": 85
+      }
     }
   }
 }

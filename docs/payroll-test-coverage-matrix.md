@@ -3,7 +3,7 @@
 Bu matris, kritik bordro kurallarını gerçek test/fixture kimlikleriyle
 eşleştirir. `Golden` sütunundaki kimlikler
 `crates/payroll-core/tests/golden/2026/` altındaki exact golden fixture'ları
-(bunların 15'i bağımsız `evidence/Gxxx.md` çalışma kâğıdına bağlıdır),
+(33'ünün tamamı bağımsız `evidence/Gxxx.md` çalışma kâğıdına bağlıdır),
 `Property`/`Oracle` sütunları Faz 2'nin generated differential testlerini,
 diğer sütunlar mevcut regression/parity testlerini gösterir. Faz 3 mutation
 kapsamı ve coverage ratchet'ı tablonun altındaki kalite kanıtı bölümünde
@@ -49,8 +49,8 @@ Durumlar:
 - Fixture sözleşmesi: `crates/payroll-core/tests/golden/schema.json`
 - Fixture kullanım ve ekleme kuralları: `crates/payroll-core/tests/golden/README.md`
 - Minimum corpus kapısı: 30 fixture; mevcut sayı: 33.
-- Evidence durumu: 15 `verified`, 18 `pendingEvidence`; kritik loader bağlantı
-  ve çalışma kâğıdı bölümlerini kontrol eder.
+- Evidence durumu: 33 `verified`; loader bağlantıyı ve her çalışma kâğıdındaki
+  zorunlu aritmetik bölümlerini kontrol eder.
 
 ## 2026 statutory parameter kanıtı
 
@@ -81,19 +81,33 @@ Durumlar:
 - Mutation aday listesi: **2.147**; ayrıntılı makine manifesti
   `docs/payroll-mutation-baseline.json` içindedir.
 - Yerel smoke: `gv_exemption.rs` için 6/6 anlamlı mutant caught, 1 unviable,
-  0 missed. Final full workflow 35013775841'de sekiz shard PASS olmuş;
-  aggregate sonuç 1.349 caught, 494 missed, 0 timeout, 304 unviable,
-  1.843 meaningful ve %73,20 skordur.
+  0 missed. Final full workflow 35439833175'te sekiz shard PASS olmuş;
+  aggregate sonuç 1.483 caught, 360 missed, 0 timeout, 304 unviable,
+  1.843 meaningful ve %80,47 skordur.
 - Canonical shard evidence yolu `target/cargo-mutants/outcomes.json`'dır.
   Eksik baseline/outcomes/shard veya parse edilemeyen JSON infrastructure
-  failure'dır; missed/timeout quality findings advisory'dir.
+  failure'dır; scheduled/manual aggregate kalite gerilemesini de blocking kılar.
 - Aggregate collector tam 8 shard ID'si (`0..7`) bekler; duplicate/missing shard,
   duplicate mutant ve denominator/file scope uyuşmazlığında fail olur ve tek
   machine-readable summary üretir.
 - Coverage baseline: `docs/payroll-coverage-baseline.json`.
-- Ratchet uygulayıcısı: `scripts/check-rust-coverage.mjs`; kritik dosyaların
-  lines/functions/regions metrikleri baseline'ın altına inemez. Weekly/manual
-  ölçüm `PROPTEST_RNG_SEED=2026091001` ile çalışır; PR property keşfi sabitlenmez.
+- Ratchet uygulayıcısı: `scripts/check-rust-coverage.mjs`; altı core ve yirmi iki
+  Tauri DB/repository/service/IPC dosyasında lines/functions/regions metrikleri
+  baseline'ın altına inemez. `CI / verify` ölçümü `PROPTEST_RNG_SEED=2026091001`
+  ile her PR'da çalışır; normal property keşfi sabitlenmez.
+- Bun coverage ratchet'ı `scripts/check-ts-coverage.mjs` ile 8 kritik
+  TypeScript finansal adapter/storage dosyasını PR'da denetler.
+- `src-tauri/src/lib.rs` mock-runtime testi 38 registered komutun tamamını
+  production invoke handler üzerinden çağırır; dönem/kurum ayarları, personel,
+  vergi açılışı, puantaj, yıllık parametre, sick-leave ve app-setting
+  round-trip'lerini SQLite state'iyle doğrular.
+- Payroll ve retro komutlarının geçersiz kimlik/DRAFT/finalization korumaları,
+  başarılı retro preview, legacy import ve izole backup replacement çağrıları
+  IPC üzerinden sınanır. Geçerli bordro için calculate → delete → recalculate
+  → finalize zinciri de doğrudan Tauri IPC ve SQLite state'iyle doğrulanır.
+- Linux CI'daki Tauri WebDriver smoke gerçek native WebView'i başlatır, app
+  storage yüklemesini ve `get_periods` IPC çağrısını doğrular; macOS/Windows
+  native WebView E2E kapsamı hâlâ açık kalır.
 - Generated WASM doğrulaması Cargo-built `wasm-bindgen-cli 0.2.127`, Cargo
   `--locked` ve non-incremental build ile canonical runner freshness kontrolü
   yapar ve exact package diff'i kullanır. Code/data/import/export/

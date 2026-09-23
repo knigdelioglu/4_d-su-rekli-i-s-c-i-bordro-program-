@@ -435,9 +435,9 @@
   "policy": {
     "meaningfulScore": "caught / (total - unviable)",
     "unviableHandling": "cargo-mutants sonucu olarak raporlanır; config içinde sessizce bastırılmaz",
-    "initialCiMode": "weekly schedule veya workflow_dispatch; infrastructure blocking, missed/timeout quality findings advisory",
+    "initialCiMode": "weekly schedule veya workflow_dispatch; infrastructure blocking; measured quality regression against the accepted baseline is blocking",
     "baselineLifecycle": "Bu dosya, 2026-09-19 tarihli ve 35439833175 run kimlikli gerçek 8-shard aggregate artifact ile complete durumundadır. Root total/caught/missed/timeout/unviable/meaningful/scorePercent alanları summary ile exact eşleşir; önceki full baseline ve survivor listesi previousBaseline altında korunur.",
-    "futureGate": "scripts/check-cargo-mutants-baseline.mjs score düşüşünü, yeni missed mutant'ı ve timeout artışını advisory kalite regression olarak raporlar; baseline politikası onaylandıktan sonra blocking yapılabilir.",
+    "activeGate": "scripts/check-cargo-mutants-baseline.mjs --enforce runs after each complete scheduled/manual aggregate; it blocks score regressions, missed/timeout increases, and newly missed mutants against this accepted baseline.",
     "survivorPolicy": "360 meaningful missed mutant için conservative triage docs/payroll-mutation-survivor-review.md içindedir. Payroll Engine Quality Round 2 başlangıcındaki 241 payroll_engine survivor 116ya düşürülmüştür. Survivorlar blanket exclusion listesine alınmaz; equivalent/unreachable kararı ayrı kanıt ve inceleme gerektirir."
   },
   "previousBaseline": {
