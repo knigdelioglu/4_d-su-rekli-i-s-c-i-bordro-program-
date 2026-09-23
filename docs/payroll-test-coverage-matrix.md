@@ -106,8 +106,10 @@ Durumlar:
   IPC üzerinden sınanır. Geçerli bordro için calculate → delete → recalculate
   → finalize zinciri de doğrudan Tauri IPC ve SQLite state'iyle doğrulanır.
 - Linux CI'daki Tauri WebDriver smoke gerçek native WebView'i başlatır, app
-  storage yüklemesini ve `get_periods` IPC çağrısını doğrular; macOS/Windows
-  native WebView E2E kapsamı hâlâ açık kalır.
+  storage yüklemesini ve `get_periods` IPC çağrısını doğrular. Windows smoke'u
+  Microsoft Edge WebDriver ile CI'a eklendi; iki platformun ilk koşusu bekliyor.
+  [Tauri WebDriver](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-driver/README.md)
+  macOS'u desteklemediği için oradaki native E2E kapsamı açıktır.
 - Generated WASM doğrulaması Cargo-built `wasm-bindgen-cli 0.2.127`, Cargo
   `--locked` ve non-incremental build ile canonical runner freshness kontrolü
   yapar ve exact package diff'i kullanır. Code/data/import/export/

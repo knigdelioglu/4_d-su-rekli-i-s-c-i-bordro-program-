@@ -204,9 +204,9 @@ blocking eşik toplam değil, dosya bazında exact ratchet'tır. PR'daki
 - Mock runtime Tauri dispatch'i, argüman/yanıt serileştirmesini ve uygulama
   state'ini kapsar; işletim sistemi WebView'ini açan masaüstü uçtan uca testi
   değildir.
-- `.github/workflows/ci.yml`, Linux'ta `tauri-driver` ve WebKitWebDriver ile
-  uygulamayı açar; gerçek WebView render'ını, storage yüklemesini ve
-  `get_periods` IPC yanıtını doğrular (`bun run test:e2e:native`).
+- `.github/workflows/ci.yml`, Linux'ta WebKitWebDriver ve Windows'ta Microsoft
+  Edge WebDriver ile uygulamayı açar; gerçek WebView render'ını, storage
+  yüklemesini ve `get_periods` IPC yanıtını doğrular (`bun run test:e2e:native`).
 
 ## Korunan kritik invariant'lar
 
@@ -237,9 +237,11 @@ blocking eşik toplam değil, dosya bazında exact ratchet'tır. PR'daki
   `REAL_TEST_GAP` 0, `EQUIVALENT` 0, `UNREACHABLE` 0,
   `NEEDS_REVIEW` 116. Ayrıntı `Payroll Engine Quality Round 2` bölümündedir.
 - Mock IPC testi 38 registered komutun tümünü çağırır ve başarılı bordro
-  hesaplama/silme/yeniden hesaplama/kesinleştirme zincirini kapsar. Linux native
-  WebView smoke açılış, storage yükleme ve `get_periods` ile sınırlıdır;
-  Windows/macOS native E2E kapsamı açık kalır.
+  hesaplama/silme/yeniden hesaplama/kesinleştirme zincirini kapsar. Linux ve
+  Windows native WebView smoke testleri CI'da yapılandırılmıştır; ilk workflow
+  koşuları henüz doğrulanmadı. macOS native E2E, Tauri'nin
+  [`tauri-driver` README'sinde](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-driver/README.md)
+  macOS için sürücü desteği TODO olarak işaretlendiğinden açık kalır.
 - Linux/macOS generated WASM code/data layout farkı P2 riskidir; package
   allowlist, freshness, adapter ve browser E2E kontrolleri korunmuştur.
 - TypeScript kapısı yalnız 8 kritik finansal adapter/storage dosyasını kapsar;

@@ -745,9 +745,13 @@ Bu yol haritası aşağıdaki koşullar sağlandığında tamamlanmış kabul ed
 - [x] Golden + property testleri normal PR CI akışında blocking.
 - [x] Mutation/coverage suite için release veya periyodik/manual workflow yapılandırıldı; final 2.147-mutant full run ve aggregate summary PASS.
 - [x] Production 2026 statutory parameter değerleri bağımsız reference fixture ile karşılaştırılıyor.
-- [ ] Her yeni gerçek hesap hatası kalıcı regresyon vakasına dönüştürülüyor.
-- [x] Linux CI'da OS WebView'ini açan masaüstü uçtan uca smoke test yapılandırıldı;
-  ilk CI koşusuyla doğrulanacak. macOS/Windows WebView E2E kapsamı açık kalıyor.
+- [x] PR şablonu ve review kontrolü, her gerçek hesap hatası için kalıcı
+  regresyon vakası istiyor.
+- [x] Linux ve Windows CI'da OS WebView'ini açan masaüstü uçtan uca smoke
+  testleri yapılandırıldı; her iki platformun ilk CI koşusu bekleniyor.
+- [ ] macOS WebView E2E. Tauri [`tauri-driver` README'si](https://github.com/tauri-apps/tauri/blob/dev/crates/tauri-driver/README.md)
+  macOS sürücüsünü hâlâ TODO olarak listeliyor; alternatif native test sürücüsü
+  bulunup doğrulanmalı.
 - [ ] GitHub `CI / verify` required check'i main branch protection'a bağlanıyor.
 - [x] `docs/payroll-assurance-status.md` güncel güvence durumunu gösteriyor.
 

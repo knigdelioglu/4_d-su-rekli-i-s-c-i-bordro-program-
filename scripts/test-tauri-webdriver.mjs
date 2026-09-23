@@ -9,18 +9,22 @@ const webdriverHost = '127.0.0.1';
 const webdriverPort = 4444;
 const nativeDriverPort = 4445;
 const webdriverUrl = `http://${webdriverHost}:${webdriverPort}`;
-const appPath = resolve(process.env.TAURI_WEBVIEW_APP ?? 'target/debug/bordro-programi');
+const defaultAppPath = resolve(
+  'target/debug',
+  process.platform === 'win32' ? 'bordro-programi.exe' : 'bordro-programi',
+);
+const appPath = resolve(process.env.TAURI_WEBVIEW_APP ?? defaultAppPath);
 const timeoutMs = 30_000;
 
-if (process.platform !== 'linux') {
-  throw new Error('Native Tauri WebView E2E currently requires Linux, tauri-driver, and WebKitWebDriver.');
+if (process.platform !== 'linux' && process.platform !== 'win32') {
+  throw new Error('Native Tauri WebView E2E currently supports Linux and Windows through tauri-driver.');
 }
 
 if (process.env.CI !== 'true') {
   throw new Error('Run this smoke test only in an isolated CI runner; it starts the app against its local application data directory.');
 }
 
-await access(appPath, constants.X_OK);
+await access(appPath, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
 
 let driverExitCode = null;
 let driverSpawnError = null;

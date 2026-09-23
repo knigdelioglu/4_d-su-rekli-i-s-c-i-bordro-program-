@@ -198,6 +198,76 @@ jobs:
           path: target/payroll-coverage.json
           if-no-files-found: warn
 
+  native-webview-windows:
+    name: Native Tauri WebView E2E (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+          cache-on-failure: true
+
+      - name: Install WebAssembly toolchain
+        shell: pwsh
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo install wasm-pack --version 0.15.0 --locked
+
+      - name: Build browser assets
+        run: bun run web:build
+
+      - name: Verify generated WASM package
+        run: |
+          bun run verify:wasm-package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          bun run verify:wasm-freshness
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install tauri-driver
+        run: cargo install tauri-driver --version 2.0.6 --locked
+
+      - name: Add Microsoft Edge WebDriver to PATH
+        shell: pwsh
+        run: |
+          $driverDirectory = $env:EDGEWEBDRIVER
+          if ($driverDirectory -and (Test-Path $driverDirectory -PathType Leaf)) {
+            $driverDirectory = Split-Path $driverDirectory -Parent
+          }
+          if (-not $driverDirectory -or -not (Test-Path (Join-Path $driverDirectory "msedgedriver.exe"))) {
+            $driverDirectory = "C:\SeleniumWebDrivers\EdgeDriver"
+          }
+          if (-not (Test-Path (Join-Path $driverDirectory "msedgedriver.exe"))) {
+            throw "Microsoft Edge WebDriver was not found on the Windows runner."
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $driverDirectory
+
+      - name: Build desktop app for native WebView E2E
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi
+
+      - name: Native Tauri WebView E2E smoke test
+        env:
+          CI: "true"
+          TAURI_WEBVIEW_APP: target/debug/bordro-programi.exe
+        run: bun run test:e2e:native
+
   rust-mutation:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
