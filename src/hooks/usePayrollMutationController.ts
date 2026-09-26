@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from 'react';
 import {
   AnnualPayrollParameters,
   BordroDonemi,
@@ -40,6 +41,7 @@ import {
   type PayrollStorageDto,
 } from '../services/payrollEngine/decimalBoundary';
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
+import { assertPayrollCalculationSnapshotCurrent } from '../services/payrollEngine/calculationSnapshot';
 import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 import {
@@ -222,13 +224,19 @@ export function usePayrollMutationController({
   updateAuthoritativePayload,
   loadData,
 }: PayrollMutationControllerOptions) {
+  const latestPayrollDataset = useRef(payrollDataset);
+  useLayoutEffect(() => {
+    latestPayrollDataset.current = payrollDataset;
+  }, [payrollDataset]);
+
   const evaluateBrowserMutations = async (
     mutation: PayrollMutation | PayrollMutation[],
-    dataset: PayrollDatasetSnapshot = payrollDataset
+    dataset?: PayrollDatasetSnapshot
   ): Promise<MutationImpact> => {
     const mutations = Array.isArray(mutation) ? mutation : [mutation];
+    const policyDataset = dataset ?? latestPayrollDataset.current;
     const impacts = await Promise.all(
-      mutations.map((item) => payrollEngine.evaluateMutationPolicy(item, dataset))
+      mutations.map((item) => payrollEngine.evaluateMutationPolicy(item, policyDataset))
     );
     const affected = new Map<string, MutationImpact['affectedPayrolls'][number]>();
     const blocked = new Map<string, MutationImpact['blockedByFinalized'][number]>();
@@ -642,14 +650,24 @@ export function usePayrollMutationController({
     }));
   };
 
-  const handleSaveBordro = async (updatedBordro: PayrollBoundaryPayroll) => {
+  const handleSaveBordro = async (
+    updatedBordro: PayrollBoundaryPayroll,
+    calculationSnapshot?: PayrollDatasetSnapshot
+  ) => {
     if (isNative) {
       // Native persistence already invalidates downstream calculated rows in
       // one transaction; re-fetch the whole ledger for the UI.
       await loadData();
       return;
     }
-    const existing = bordrolar.find(
+    const policySnapshot = calculationSnapshot ?? latestPayrollDataset.current;
+    if (calculationSnapshot) {
+      assertPayrollCalculationSnapshotCurrent(
+        calculationSnapshot,
+        latestPayrollDataset.current
+      );
+    }
+    const existing = policySnapshot.payrolls.find(
       (payroll) => payroll.id === updatedBordro.id || payroll.accrualId === updatedBordro.accrualId
     );
     const mutation: PayrollMutation = existing
@@ -667,7 +685,13 @@ export function usePayrollMutationController({
           paymentDate: updatedBordro.paymentDate,
           sequence: updatedBordro.sequence,
         };
-    const impact = await evaluateBrowserMutations(mutation);
+    const impact = await evaluateBrowserMutations(mutation, policySnapshot);
+    if (calculationSnapshot) {
+      assertPayrollCalculationSnapshotCurrent(
+        calculationSnapshot,
+        latestPayrollDataset.current
+      );
+    }
     updateAuthoritativePayload((current) => {
       const currentSettings = current.kurumDegerleriMap[updatedBordro.donemId];
       const capturedSnapshot = !currentSettings?.statutoryParameterSnapshot

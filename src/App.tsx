@@ -2,7 +2,7 @@
  * 4/D Sürekli İşçi Bordro Programı — Main App Component
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
@@ -183,6 +183,7 @@ export default function App() {
   );
 
   const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
+  const dataLoadGeneration = useRef(0);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const payrollEngine = getPayrollEngine();
@@ -281,12 +282,15 @@ export default function App() {
   );
 
   const loadData = useCallback(async () => {
+    const generation = ++dataLoadGeneration.current;
+    const isLatestLoad = () => generation === dataLoadGeneration.current;
     setLoadError(null);
     const isNative = tauriBridge.isTauriAvailable();
 
     try {
       if (isNative) {
         const isMigrated = await tauriBridge.checkLegacyMigrated();
+        if (!isLatestLoad()) return;
         if (!isMigrated) {
           const legacyStr = localStorage.getItem(STORAGE_KEY);
           if (legacyStr) {
@@ -295,6 +299,7 @@ export default function App() {
             await tauriBridge.migrateLegacyPayload(legacyStr);
           }
         }
+        if (!isLatestLoad()) return;
 
         const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, savedZamAylari, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations] =
           await Promise.all([
@@ -314,6 +319,7 @@ export default function App() {
             tauriBridge.getRetroAdjustmentAllocations(),
           ]);
 
+        if (!isLatestLoad()) return;
         applyDataset(toPayrollBoundaryDto({
           donemler: fetchedPeriods,
           aktifDonemId: savedActivePeriodId || fetchedPeriods[0]?.id || '',
@@ -335,6 +341,7 @@ export default function App() {
       }
 
       const saved = await browserPersistence.loadSnapshot();
+      if (!isLatestLoad()) return;
       if (saved) {
         applyDataset(saved);
       } else {
@@ -358,6 +365,7 @@ export default function App() {
       setIsDataLoaded(true);
       setLoadError(null);
     } catch (err) {
+      if (!isLatestLoad()) return;
       const browserError = isNative ? null : formatBrowserStorageLoadError(err);
       const message = isNative
         ? `Veri yüklenemedi: ${getErrorMessage(err)}`

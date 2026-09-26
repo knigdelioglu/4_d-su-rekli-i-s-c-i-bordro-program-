@@ -2,6 +2,16 @@ import type { BordroDonemi } from '../../types/payroll';
 import { getDefaultAccrualPaymentDate } from '../../utils/payrollPresentation';
 import type { PayrollDatasetSnapshot } from './types';
 
+/** Lock scope for allocating a shared payment-event sequence. */
+export function paymentEventSequenceScopeKey(
+  personnelId: string,
+  taxYear: number | undefined,
+  taxMonth: number | undefined,
+  paymentDate: string
+): string {
+  return [personnelId, taxYear ?? '', taxMonth ?? '', paymentDate].join('\u0000');
+}
+
 /** Presentation/input allocation only; Rust validates uniqueness at calculation. */
 export function nextPaymentSequence(
   dataset: PayrollDatasetSnapshot,

@@ -1,5 +1,12 @@
 import { useLayoutEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
-import { comparePaymentEvents, nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
+import {
+  comparePaymentEvents,
+  nextPaymentSequence,
+  paymentEventSequenceScopeKey,
+} from '../services/payrollEngine/paymentEventOrder';
+import {
+  assertPayrollCalculationSnapshotCurrent,
+} from '../services/payrollEngine/calculationSnapshot';
 import {
   AccrualType,
   BordroDonemi,
@@ -101,7 +108,24 @@ interface UseBordroCalculationControllerOptions {
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
   isSupplementaryView: boolean;
-  onSaveBordro: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
+  onSaveBordro: (
+    bordro: PayrollBoundaryPayroll,
+    calculationSnapshot?: PayrollDatasetSnapshot
+  ) => Promise<void> | void;
+}
+
+export function tryAcquireSupplementaryPaymentScope(
+  pendingScopes: Set<string>,
+  scope: string
+): (() => void) | null {
+  if (pendingScopes.has(scope)) return null;
+  pendingScopes.add(scope);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    pendingScopes.delete(scope);
+  };
 }
 
 export function useBordroCalculationController({
@@ -132,6 +156,9 @@ export function useBordroCalculationController({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [normalPaymentDateMap, setNormalPaymentDateMap] = useState<Record<string, string>>({});
   const [newAccrualPersonId, setNewAccrualPersonId] = useState<string | null>(null);
+  const pendingSupplementaryPaymentScopes = useRef(new Set<string>());
+  const [visiblePendingSupplementaryPaymentScopes, setVisiblePendingSupplementaryPaymentScopes] =
+    useState<Set<string>>(() => new Set());
   const [expandedTimelinePersonId, setExpandedTimelinePersonId] = useState<string | null>(null);
   const [supplementaryAccrualDraft, setSupplementaryAccrualDraft] = useState<SupplementaryAccrualDraft>({
     accrualType: 'TEDIYE',
@@ -160,14 +187,20 @@ export function useBordroCalculationController({
   const getActiveViewPayroll = (personId: string): BordroKaydi | undefined =>
     getActiveViewAccruals(personId)[0];
 
-  const getNormalAccrualInput = (personId: string): PayrollBoundaryAccrualInput => {
-    const exactPayroll = authoritativeDataset.payrolls.find(
+  const getNormalAccrualInput = (
+    personId: string,
+    dataset: PayrollDatasetSnapshot = authoritativeDatasetRef.current
+  ): PayrollBoundaryAccrualInput => {
+    const exactPayroll = dataset.payrolls.find(
       (item) =>
         item.personelId === personId &&
         item.donemId === aktifDonem.id &&
         item.accrualType === 'NORMAL'
     );
-    const existingPayroll = getNormalPayroll(personId);
+    const existingPayroll = dataset.payrolls
+      .filter((item) => item.personelId === personId && item.donemId === aktifDonem.id)
+      .sort((a, b) => comparePaymentEvents(a, b, aktifDonem))
+      .find((item) => item.accrualType === 'NORMAL');
     return {
       accrualId:
         exactPayroll?.accrualId ||
@@ -183,7 +216,7 @@ export function useBordroCalculationController({
           ? getDefaultAccrualPaymentDate(aktifDonem)
           : normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)),
       sequence: exactPayroll?.sequence ?? existingPayroll?.sequence ?? nextPaymentSequence(
-        authoritativeDataset,
+        dataset,
         personId,
         aktifDonem,
         normalPaymentDateMap[aktifDonem.id] ?? getDefaultAccrualPaymentDate(aktifDonem)
@@ -194,9 +227,10 @@ export function useBordroCalculationController({
   };
 
   const getLegacyManualIncomeInput = (
-    personId: string
+    personId: string,
+    dataset: PayrollDatasetSnapshot = authoritativeDatasetRef.current
   ): PayrollCalculationRequest['manualIncome'] => {
-    const exactPayroll = authoritativeDataset.payrolls.find(
+    const exactPayroll = dataset.payrolls.find(
       (item) =>
         item.personelId === personId &&
         item.donemId === aktifDonem.id &&
@@ -219,12 +253,18 @@ export function useBordroCalculationController({
   const buildDataset = (): PayrollDatasetSnapshot => authoritativeDatasetRef.current;
 
   const calculateAndSaveForPerson = async (person: Personel): Promise<BordroKaydi | null> => {
-    const pPuantaj = puantajlar.find(
+    const calculationSnapshot = buildDataset();
+    const pPuantaj = calculationSnapshot.attendances.find(
       (p) => p.personelId === person.id && p.donemId === aktifDonem.id
     );
     if (!pPuantaj || !pPuantaj.gunler || Object.keys(pPuantaj.gunler).length === 0) return null;
 
-    const existingBordro = getNormalPayroll(person.id);
+    const existingBordro = calculationSnapshot.payrolls.find(
+      (payroll) =>
+        payroll.personelId === person.id &&
+        payroll.donemId === aktifDonem.id &&
+        payroll.accrualType === 'NORMAL'
+    );
     if (existingBordro?.status === 'FINALIZED') {
       setErrorMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildiği için yeniden hesaplanamaz.`);
       return null;
@@ -235,11 +275,15 @@ export function useBordroCalculationController({
         personnelId: person.id,
         periodId: aktifDonem.id,
         calculatedAt: new Date().toISOString(),
-        manualIncome: getLegacyManualIncomeInput(person.id),
-        accrual: getNormalAccrualInput(person.id),
-        dataset: buildDataset(),
+        manualIncome: getLegacyManualIncomeInput(person.id, calculationSnapshot),
+        accrual: getNormalAccrualInput(person.id, calculationSnapshot),
+        dataset: calculationSnapshot,
       });
-      await onSaveBordro(calculated);
+      assertPayrollCalculationSnapshotCurrent(
+        calculationSnapshot,
+        authoritativeDatasetRef.current
+      );
+      await onSaveBordro(calculated, calculationSnapshot);
       return toPayrollUiModel(calculated) as unknown as BordroKaydi;
     } catch (err) {
       console.error('Payroll engine calculation failed:', err);
@@ -331,6 +375,7 @@ export function useBordroCalculationController({
       return;
     }
     try {
+      const calculationSnapshot = buildDataset();
       const calculated = await payrollEngine.calculatePayroll({
         personnelId: person.id,
         periodId: aktifDonem.id,
@@ -350,9 +395,13 @@ export function useBordroCalculationController({
           ),
           description: accrual.accrualDescription ?? null,
         },
-        dataset: buildDataset(),
+        dataset: calculationSnapshot,
       });
-      await onSaveBordro(calculated);
+      assertPayrollCalculationSnapshotCurrent(
+        calculationSnapshot,
+        authoritativeDatasetRef.current
+      );
+      await onSaveBordro(calculated, calculationSnapshot);
       setSuccessMessage(`${person.ad} ${person.soyad} için ${ACCRUAL_TYPE_LABELS[accrual.accrualType]} yeniden hesaplandı.`);
       setErrorMessage(null);
       setTimeout(() => setSuccessMessage(null), 3500);
@@ -374,25 +423,54 @@ export function useBordroCalculationController({
       setErrorMessage('Ödeme/tahakkuk tarihi YYYY-AA-GG biçiminde olmalıdır.');
       return;
     }
-    const nextSequence = nextPaymentSequence(authoritativeDataset, person.id, aktifDonem, paymentDate);
-    const accrual: PayrollBoundaryAccrualInput = {
-      accrualId: `${person.id}_${aktifDonem.id}_${supplementaryAccrualDraft.accrualType.toLowerCase()}_${paymentDate}_${nextSequence}`,
-      accrualType: supplementaryAccrualDraft.accrualType,
-      paymentDate,
-      sequence: nextSequence,
-      grossAmount,
-      description: supplementaryAccrualDraft.description.trim() || null,
-    };
+    const paymentScope = paymentEventSequenceScopeKey(
+      person.id,
+      aktifDonem.taxYear,
+      aktifDonem.taxMonth,
+      paymentDate
+    );
+    const releasePaymentScope = tryAcquireSupplementaryPaymentScope(
+      pendingSupplementaryPaymentScopes.current,
+      paymentScope
+    );
+    if (!releasePaymentScope) {
+      setErrorMessage('Bu kişi ve ödeme tarihi için başka bir ek tahakkuk hesaplaması sürüyor.');
+      return;
+    }
+    setVisiblePendingSupplementaryPaymentScopes((current) => {
+      const next = new Set(current);
+      next.add(paymentScope);
+      return next;
+    });
     try {
+      const calculationSnapshot = buildDataset();
+      const nextSequence = nextPaymentSequence(
+        calculationSnapshot,
+        person.id,
+        aktifDonem,
+        paymentDate
+      );
+      const accrual: PayrollBoundaryAccrualInput = {
+        accrualId: `${person.id}_${aktifDonem.id}_${supplementaryAccrualDraft.accrualType.toLowerCase()}_${paymentDate}_${nextSequence}`,
+        accrualType: supplementaryAccrualDraft.accrualType,
+        paymentDate,
+        sequence: nextSequence,
+        grossAmount,
+        description: supplementaryAccrualDraft.description.trim() || null,
+      };
       const calculated = await payrollEngine.calculatePayroll({
         personnelId: person.id,
         periodId: aktifDonem.id,
         calculatedAt: new Date().toISOString(),
         manualIncome: null,
         accrual,
-        dataset: buildDataset(),
+        dataset: calculationSnapshot,
       });
-      await onSaveBordro(calculated);
+      assertPayrollCalculationSnapshotCurrent(
+        calculationSnapshot,
+        authoritativeDatasetRef.current
+      );
+      await onSaveBordro(calculated, calculationSnapshot);
       setNewAccrualPersonId(null);
       setSuccessMessage(`${person.ad} ${person.soyad} için ${ACCRUAL_TYPE_LABELS[accrual.accrualType]} tahakkuku hesaplandı.`);
       setErrorMessage(null);
@@ -400,8 +478,29 @@ export function useBordroCalculationController({
     } catch (err) {
       console.error('Supplementary payroll calculation failed:', err);
       setErrorMessage(`Tahakkuk hesaplama hatası: ${formatPayrollError(err)}`);
+    } finally {
+      releasePaymentScope();
+      setVisiblePendingSupplementaryPaymentScopes((current) => {
+        if (!current.has(paymentScope)) return current;
+        const next = new Set(current);
+        next.delete(paymentScope);
+        return next;
+      });
     }
   };
+
+  const isSupplementaryPaymentScopePending = (
+    personId: string,
+    paymentDate: string
+  ): boolean =>
+    visiblePendingSupplementaryPaymentScopes.has(
+      paymentEventSequenceScopeKey(
+        personId,
+        aktifDonem.taxYear,
+        aktifDonem.taxMonth,
+        paymentDate
+      )
+    );
 
   const handleCalculateSingle = async (person: Personel, event: MouseEvent, requestedAccrual?: BordroKaydi) => {
     event.stopPropagation();
@@ -485,6 +584,7 @@ export function useBordroCalculationController({
     setExpandedTimelinePersonId,
     supplementaryAccrualDraft,
     setSupplementaryAccrualDraft,
+    isSupplementaryPaymentScopePending,
     manualKumulatifGvMap,
     setManualKumulatifGvMap,
     manualKumulatifAsgariGvMap,

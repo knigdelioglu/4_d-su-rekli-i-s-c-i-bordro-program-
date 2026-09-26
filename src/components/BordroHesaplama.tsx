@@ -79,7 +79,10 @@ interface BordroHesaplamaProps {
   activePayrollView: PayrollViewType;
   authoritativeDataset: PayrollDatasetSnapshot;
   onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
-  onSaveBordro: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
+  onSaveBordro: (
+    bordro: PayrollBoundaryPayroll,
+    calculationSnapshot?: PayrollDatasetSnapshot
+  ) => Promise<void> | void;
   onSavePersonelAndTaxOpening: (
     personel: Personel | PayrollBoundaryPersonel,
     opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
@@ -141,6 +144,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     setExpandedTimelinePersonId,
     supplementaryAccrualDraft,
     setSupplementaryAccrualDraft,
+    isSupplementaryPaymentScopePending,
     manualKumulatifGvMap,
     setManualKumulatifGvMap,
     manualKumulatifAsgariGvMap,
@@ -1080,10 +1084,17 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                               <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-5">
                                 <button
                                   type="submit"
-                                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-indigo-700"
+                                  disabled={isSupplementaryPaymentScopePending(
+                                    person.id,
+                                    supplementaryAccrualDraft.paymentDate
+                                  )}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-2 text-[11px] font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                   <Calculator className="h-3.5 w-3.5" />
-                                  Hesapla ve Kaydet
+                                  {isSupplementaryPaymentScopePending(
+                                    person.id,
+                                    supplementaryAccrualDraft.paymentDate
+                                  ) ? 'Hesaplanıyor…' : 'Hesapla ve Kaydet'}
                                 </button>
                                 <button
                                   type="button"

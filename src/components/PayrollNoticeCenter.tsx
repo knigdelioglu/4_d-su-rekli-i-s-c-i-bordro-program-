@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BellRing,
@@ -97,25 +97,30 @@ export function usePayrollNotices(
   const [notices, setNotices] = useState<PayrollNotice[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
     if (!enabled || !periodId) {
       setNotices([]);
       setLoadError(null);
+      setIsRefreshing(false);
       return;
     }
 
     setIsRefreshing(true);
     try {
       const next = await engine.getPayrollNotices(periodId, dataset);
+      if (generation !== refreshGeneration.current) return;
       next.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
       setNotices(next);
       setLoadError(null);
     } catch (err) {
+      if (generation !== refreshGeneration.current) return;
       console.error('Payroll notices could not be loaded:', err);
       setLoadError('Bordro uyarıları alınamadı.');
     } finally {
-      setIsRefreshing(false);
+      if (generation === refreshGeneration.current) setIsRefreshing(false);
     }
   }, [dataset, enabled, engine, periodId]);
 
@@ -128,6 +133,7 @@ export function usePayrollNotices(
     window.addEventListener('focus', onFocus);
 
     return () => {
+      refreshGeneration.current += 1;
       window.removeEventListener('payroll:data-changed', onDataChanged);
       window.removeEventListener('focus', onFocus);
     };

@@ -4,6 +4,7 @@ import {
   BrowserSnapshotConflictError,
   canonicalizeLegacyBackupPayload,
   isMigratableBackupPayload,
+  meetsSnapshotRevisionFloor,
   SerializedWriteQueue,
   shouldAdoptRemoteSnapshot,
 } from './browserPayrollStore';
@@ -1221,6 +1222,14 @@ describe('BrowserPayrollStore', () => {
       localDirty: false,
       pendingWrite: true,
     })).toBe(false);
+  });
+
+  test('does not accept a delayed load below an already observed revision', () => {
+    expect(meetsSnapshotRevisionFloor(null, 0)).toBe(true);
+    expect(meetsSnapshotRevisionFloor(null, 1)).toBe(false);
+    expect(meetsSnapshotRevisionFloor(4, 5)).toBe(false);
+    expect(meetsSnapshotRevisionFloor(5, 5)).toBe(true);
+    expect(meetsSnapshotRevisionFloor(6, 5)).toBe(true);
   });
 
   test('keeps CAS conflicts explicit for a stale dirty tab', () => {

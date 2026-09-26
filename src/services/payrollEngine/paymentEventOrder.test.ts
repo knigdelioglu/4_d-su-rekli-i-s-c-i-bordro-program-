@@ -1,5 +1,9 @@
 import { expect, test } from 'bun:test';
-import { comparePaymentEvents, nextPaymentSequence } from './paymentEventOrder';
+import {
+  comparePaymentEvents,
+  nextPaymentSequence,
+  paymentEventSequenceScopeKey,
+} from './paymentEventOrder';
 import type { PayrollDatasetSnapshot } from './types';
 import type { BordroDonemi } from '../../types/payroll';
 
@@ -15,6 +19,14 @@ test('all types allocate zero first and share same-day sequence across work peri
   expect(nextPaymentSequence(dataset, 'p', period, '2026-08-10')).toBe(2);
   expect(nextPaymentSequence(dataset, 'p', period, '2026-08-14')).toBe(0);
   expect(nextPaymentSequence(dataset, 'another', period, '2026-08-10')).toBe(0);
+});
+
+test('same person, tax period, and payment date share one sequence allocation scope', () => {
+  const scope = paymentEventSequenceScopeKey('p', 2026, 8, '2026-08-10');
+  expect(scope).toBe(['p', 2026, 8, '2026-08-10'].join('\u0000'));
+  expect(scope).not.toBe(paymentEventSequenceScopeKey('another', 2026, 8, '2026-08-10'));
+  expect(scope).not.toBe(paymentEventSequenceScopeKey('p', 2026, 9, '2026-08-10'));
+  expect(scope).not.toBe(paymentEventSequenceScopeKey('p', 2026, 8, '2026-08-11'));
 });
 
 test('canonical date and sequence precede type and id', () => {

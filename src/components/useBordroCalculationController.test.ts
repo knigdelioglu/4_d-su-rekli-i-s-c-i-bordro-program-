@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   formatPayrollError,
   isPayrollTaxOpeningConfigurationError,
+  tryAcquireSupplementaryPaymentScope,
 } from './useBordroCalculationController';
+import { paymentEventSequenceScopeKey } from '../services/payrollEngine/paymentEventOrder';
 
 describe('payroll error messages', () => {
   test('turns missing annual parameters into an actionable message', () => {
@@ -41,4 +43,18 @@ describe('payroll error messages', () => {
       )
     ).toBe(true);
   });
+});
+
+test('does not allocate one payment sequence scope to overlapping submissions', () => {
+  const pending = new Set<string>();
+  const scope = paymentEventSequenceScopeKey('person-1', 2026, 8, '2026-08-10');
+  const release = tryAcquireSupplementaryPaymentScope(pending, scope);
+
+  expect(release !== null).toBe(true);
+  expect(tryAcquireSupplementaryPaymentScope(pending, scope)).toBe(null);
+  release!();
+  release!();
+  const releaseAfterRetry = tryAcquireSupplementaryPaymentScope(pending, scope);
+  expect(releaseAfterRetry !== null).toBe(true);
+  releaseAfterRetry!();
 });

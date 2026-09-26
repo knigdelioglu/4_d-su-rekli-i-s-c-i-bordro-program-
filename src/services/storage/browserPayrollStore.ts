@@ -24,6 +24,14 @@ export interface BrowserPayrollSnapshot {
   sourceFormat?: BrowserSnapshotSourceFormat;
 }
 
+/** A delayed load must never move a tab behind a snapshot it has already seen. */
+export function meetsSnapshotRevisionFloor(
+  snapshotRevision: number | null,
+  minimumRevision: number
+): boolean {
+  return (snapshotRevision ?? 0) >= minimumRevision;
+}
+
 export interface BrowserRemoteSnapshotDecisionInput {
   currentRevision: number;
   remoteRevision: number;

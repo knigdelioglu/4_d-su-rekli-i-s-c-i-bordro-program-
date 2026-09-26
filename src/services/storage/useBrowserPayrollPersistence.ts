@@ -3,6 +3,7 @@ import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import {
   browserPayrollStore,
   BrowserSnapshotConflictError,
+  meetsSnapshotRevisionFloor,
   shouldAdoptRemoteSnapshot,
   type BrowserPayrollSnapshot,
 } from './browserPayrollStore';
@@ -123,8 +124,14 @@ export function useBrowserPayrollPersistence({
   }, [payrollEngine]);
 
   const loadSnapshot = useCallback(async (): Promise<PayrollStorageDto | null> => {
-    const saved = await browserPayrollStore.loadSnapshot();
-    await verifyStoredSnapshot(saved);
+    let saved: BrowserPayrollSnapshot | null;
+    do {
+      saved = await browserPayrollStore.loadSnapshot();
+      await verifyStoredSnapshot(saved);
+      // A BroadcastChannel snapshot can be adopted while replay verification
+      // is still running. Re-read IndexedDB instead of returning an older
+      // snapshot (or empty state) over the newer in-memory revision.
+    } while (!meetsSnapshotRevisionFloor(saved?.revision ?? null, snapshotRevision.current));
     if (!saved) {
       adoptSnapshot(null);
       return null;
