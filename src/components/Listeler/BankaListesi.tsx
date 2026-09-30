@@ -59,7 +59,7 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
       { header: 'IBAN', key: 'iban', width: 32 },
       { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
       { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
-      { header: 'Net Ödeme (TL)', key: 'netOdeme', width: 18 },
+      { header: 'Net Ödeme (TL)', key: 'netOdeme', width: 18, numFmt: '#,##0.00' },
     ];
 
     const data = filteredEntries.map((e) => ({

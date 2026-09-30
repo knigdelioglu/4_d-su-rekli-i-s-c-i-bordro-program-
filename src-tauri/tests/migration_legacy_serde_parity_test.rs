@@ -315,7 +315,7 @@ fn native_v3_restore_preserves_multi_accrual_payment_event_identity() {
 }
 
 #[test]
-fn native_v4_restore_rejects_retro_batch_payment_lifecycle_mismatch() {
+fn native_v4_restore_preserves_calculated_retro_with_stale_linked_payment() {
     let mut retro_payroll = legacy_payroll_value();
     retro_payroll["id"] = json!("retro-payment-v4");
     retro_payroll["accrualId"] = json!("batch-v4");
@@ -388,9 +388,26 @@ fn native_v4_restore_rejects_retro_batch_payment_lifecycle_mismatch() {
     .to_string();
 
     let mut conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
-    let error = MigrationService::replace_backup_data(&mut conn, &payload)
-        .expect_err("CALCULATED batch FINALIZED payment event ile restore edilmemeli");
-    assert!(error.to_string().contains("lifecycle"));
+    MigrationService::replace_backup_data(&mut conn, &payload)
+        .expect("V4 legacy normalization sonrası CALCULATED + STALE recovery state korunmalı");
+
+    let batch = get_batches(&conn)
+        .expect("retro batch okunmalı")
+        .into_iter()
+        .next()
+        .expect("batch restore edilmeli");
+    let payment = PayrollRepository::get_all(&conn)
+        .expect("payment event okunmalı")
+        .into_iter()
+        .next()
+        .expect("payment event restore edilmeli");
+    assert_eq!(batch.status, CompensationRevisionStatus::CALCULATED);
+    assert_eq!(payment.status, BordroStatus::STALE);
+    assert_eq!(payment.accrualType, AccrualType::RETRO_ADJUSTMENT);
+    assert_eq!(payment.accrualId, batch.id);
+    assert_eq!(payment.personelId, batch.personnelId);
+    assert_eq!(payment.paymentDate, batch.paymentDate);
+    assert_eq!(payment.gelirToplam, batch.payableSettlementAmount);
 }
 
 #[test]
@@ -642,6 +659,464 @@ fn native_current_v5_backup_roundtrip_replays_authoritative_snapshot(
 }
 
 #[test]
+fn normal_payroll_save_replaces_last_modified_timestamp() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (conn, _) = current_v5_fixture()?;
+    let mut payroll = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .next()
+        .expect("calculated payroll exists");
+    let created_at = payroll.olusturulmaTarihi.clone();
+    payroll.sonGuncellemeTarihi = "2099-01-01T00:00:00.000Z".into();
+
+    PayrollRepository::save_in_transaction(&conn, &payroll)?;
+
+    let saved = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .next()
+        .expect("payroll remains present");
+    assert_ne!(saved.sonGuncellemeTarihi, "2099-01-01T00:00:00.000Z");
+    assert_eq!(saved.olusturulmaTarihi, created_at);
+    Ok(())
+}
+
+#[test]
+fn native_reference_backup_restores_calculated_entitlement_with_stale_payment_exactly(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let payload = include_str!("../../tests/fixtures/session3-reference.json");
+    let mut expected: Value = serde_json::from_str(payload)?;
+    let mut conn = create_in_memory_connection()?;
+
+    MigrationService::replace_backup_data(&mut conn, payload)?;
+
+    let dataset = PayrollService::build_dataset_snapshot(&conn)?;
+    let mut restored = json!({
+        "donemler": dataset.periods,
+        "aktifDonemId": SettingsRepository::get_app_setting(&conn, "active_period_id")?,
+        "personeller": dataset.personnel,
+        "kurumDegerleriMap": dataset.institutionSettings,
+        "puantajlar": dataset.attendances,
+        "bordrolar": dataset.payrolls,
+        "taxOpenings": dataset.taxOpenings,
+        "sickLeaveRecords": dataset.sickLeaveRecords,
+        "annualPayrollParameters": dataset.annualPayrollParameters,
+        "zamAylari": dataset.zamAylari,
+        "compensationRevisions": dataset.compensationRevisions,
+        "compensationRevisionOverrides": dataset.compensationRevisionOverrides,
+        "retroBatches": dataset.retroBatches,
+        "retroAllocations": dataset.retroAllocations,
+    });
+    // SQLite's Decimal persistence emits a canonical string scale; compare
+    // decimal value, not its original lexical scale. Audit timestamps remain
+    // part of the exact authoritative restore snapshot.
+    fn normalize_restore_comparison(value: &mut Value, field_name: Option<&str>) {
+        fn is_decimal_field(field: &str) -> bool {
+            matches!(
+                field,
+                "devirKumulatifGvMatrahi"
+                    | "devirKumulatifAsgariGvMatrahi"
+                    | "gvCumulativeOpening"
+                    | "asgariGvCumulativeOpening"
+                    | "limit"
+                    | "oran"
+                    | "sigortaGvYillikBrutAsgariUcretTavani"
+                    | "sabitSendikaAidati"
+                    | "oksOraniYuzde"
+                    | "sabitBesTutar"
+                    | "icraTutar"
+                    | "kisiBorcuTutar"
+                    | "dogumAskerlikBorclanmasiTutar"
+                    | "hayatSaglikSigortasiTutar"
+                    | "digerKesintiTutar"
+                    | "dogumAskerlikGvIndirimTutar"
+                    | "hayatSigortasiPrimiTutar"
+                    | "saglikSigortasiPrimiTutar"
+                    | "tabanBrutAylik"
+                    | "tediye"
+                    | "tisIkramiyesi"
+                    | "ekOdeme"
+                    | "yemek"
+                    | "birlestirilmisSosyalYardim"
+                    | "vasitaYol"
+                    | "giyimYardimi"
+                    | "isPrimi"
+                    | "geceCalismasiUcreti"
+                    | "geceCalismasiTatiliUcreti"
+                    | "hizmetZammi"
+                    | "digerGelir"
+                    | "sabitTutar"
+                    | "value"
+                    | "totalGrossDelta"
+                    | "payableSettlementAmount"
+                    | "offsetSettlementAmount"
+                    | "recoveredAmount"
+                    | "recoverableAmount"
+                    | "outstandingReceivable"
+                    | "originalRecognizedAmount"
+                    | "previousAuthoritativeRetroAmount"
+                    | "targetAmount"
+                    | "deltaAmount"
+                    | "originalPek"
+                    | "retroPekDelta"
+                    | "adjustedPek"
+                    | "workerSgkDelta"
+                    | "workerUnemploymentDelta"
+                    | "employerSgkDelta"
+                    | "employerUnemploymentDelta"
+                    | "originalEmployerLowerBound"
+                    | "targetEmployerLowerBound"
+                    | "employerLowerBoundDelta"
+                    | "employerLowerBoundPremiumDelta"
+                    | "amount"
+                    | "tutar"
+                    | "hesaplananPek"
+                    | "hamPek"
+                    | "devredenPekKullanilan"
+                    | "primMatrahi"
+                    | "aylikOncekiPekTuketimi"
+                    | "aylikSonrasiPekTuketimi"
+                    | "finalPek"
+                    | "devredenPekAşanTutar"
+                    | "pekAltSinir"
+                    | "pekUstSinir"
+                    | "altSinirTamamlamaFarki"
+                    | "yemekIstisnasiTutar"
+                    | "isverenSgkPrimi"
+                    | "isverenIssizlikPrimi"
+                    | "pekAltSinirTamamlamaIsverenPrimi"
+                    | "isverenPrimToplami"
+                    | "sgkIsverenOraniYuzde"
+                    | "isverenIssizlikOraniYuzde"
+                    | "gelirToplam"
+                    | "kesintiToplam"
+                    | "netOdeme"
+                    | "oncekiKumulatifGvMatrahi"
+                    | "oncekiKumulatifAsgariGvMatrahi"
+                    | "manuelKumulatifGvMatrahi"
+                    | "persistedGvBase"
+                    | "grossAmount"
+                    | "isciSgkPrimi"
+                    | "isciIssizlikPrimi"
+                    | "gelirVergisi"
+                    | "damgaVergisi"
+                    | "sendikaAidati"
+                    | "bes"
+                    | "kisiBorcu"
+                    | "dogumAskerlikBorclanmasi"
+                    | "hayatSaglikSigortasi"
+                    | "digerKesinti"
+                    | "cariGvMatrahi"
+                    | "yeniKumulatifGvMatrahi"
+                    | "brutGelirVergisi"
+                    | "asgariUcretGvMatrahi"
+                    | "asgariUcretReferansKumulatifMatrahi"
+                    | "asgariUcretGvIstisnasi"
+                    | "ayniAyOncekiKullanilanGvIstisnasi"
+                    | "tahakkukOncesiKalanGvIstisnasi"
+                    | "uygulananGvIstisnasi"
+                    | "tahakkukSonrasiKalanGvIstisnasi"
+                    | "kesilenGelirVergisi"
+                    | "dogumAskerlikGvIndirimi"
+                    | "sigortaGvIndirimAdayi"
+                    | "sigortaGvAylikLimiti"
+                    | "sigortaGvYillikKalanLimiti"
+                    | "uygulanabilirSigortaGvIndirimi"
+                    | "brutDamgaVergisi"
+                    | "aylikDamgaIstisnaHakki"
+                    | "ayniAyOncekiKullanilanDamgaIstisnasi"
+                    | "uygulananDamgaIstisnasi"
+                    | "kalanDamgaIstisnasi"
+                    | "gunlukAsgariUcret"
+                    | "pekTavanKatsayisi"
+                    | "gunlukYemekIstisnasiSGK"
+                    | "gunlukYemekIstisnasiGV"
+                    | "sgkYemekIstisnasiToplam"
+                    | "gvYemekIstisnasiToplam"
+                    | "gunlukIsPrimi"
+            )
+        }
+
+        match value {
+            Value::String(text) if field_name.is_some_and(is_decimal_field) => {
+                if let Ok(decimal) = text.parse::<Decimal>() {
+                    *text = decimal.normalize().to_string();
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    normalize_restore_comparison(item, field_name);
+                }
+            }
+            Value::Object(fields) => {
+                for (name, field) in fields {
+                    normalize_restore_comparison(field, Some(name));
+                }
+            }
+            _ => {}
+        }
+    }
+    normalize_restore_comparison(&mut expected, None);
+    normalize_restore_comparison(&mut restored, None);
+    let mut numeric_identifier = json!({"id": "00123", "amount": "1.00", "tcNo": "000123"});
+    normalize_restore_comparison(&mut numeric_identifier, None);
+    assert_eq!(numeric_identifier["amount"], "1");
+    assert_eq!(numeric_identifier["id"], "00123");
+    assert_eq!(numeric_identifier["tcNo"], "000123");
+    let mut changed_numeric_identifier = json!({"id": "123", "amount": "1.0", "tcNo": "000123"});
+    normalize_restore_comparison(&mut changed_numeric_identifier, None);
+    assert_ne!(numeric_identifier["id"], changed_numeric_identifier["id"]);
+    assert_eq!(
+        numeric_identifier["amount"],
+        changed_numeric_identifier["amount"]
+    );
+    for key in [
+        "donemler",
+        "aktifDonemId",
+        "personeller",
+        "kurumDegerleriMap",
+        "puantajlar",
+        "bordrolar",
+        "taxOpenings",
+        "sickLeaveRecords",
+        "annualPayrollParameters",
+        "zamAylari",
+        "compensationRevisions",
+        "compensationRevisionOverrides",
+        "retroBatches",
+        "retroAllocations",
+    ] {
+        assert_eq!(restored[key], expected[key], "restored field {key}");
+    }
+
+    let entitlement = dataset
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.id == "p-1_2026-06")
+        .expect("reference entitlement payroll must remain present");
+    assert!(entitlement.isPrimiDetay.is_some());
+    let batch = dataset
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == "retro-d8374d9a-fa2d-4c24-a9c5-edc0a1800c93")
+        .expect("reference recovery batch must remain present");
+    let stale_payment = dataset
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == batch.id)
+        .expect("reference stale payment event must remain present");
+    assert_eq!(batch.status, CompensationRevisionStatus::CALCULATED);
+    assert_eq!(stale_payment.status, BordroStatus::STALE);
+    assert_eq!(stale_payment.gelirToplam, batch.payableSettlementAmount);
+
+    let mut forged: Value = serde_json::from_str(payload)?;
+    let forged_entitlement = forged["bordrolar"]
+        .as_array_mut()
+        .and_then(|payrolls| {
+            payrolls
+                .iter_mut()
+                .find(|payroll| payroll["id"] == "p-1_2026-06")
+        })
+        .expect("reference entitlement payroll must exist");
+    let daily_premium = forged_entitlement["isPrimiDetay"]["gunlukIsPrimi"]
+        .as_str()
+        .expect("daily premium decimal string")
+        .parse::<Decimal>()?;
+    forged_entitlement["isPrimiDetay"]["gunlukIsPrimi"] =
+        json!((daily_premium + dec!(1)).to_string());
+    let mut fresh_conn = create_in_memory_connection()?;
+    let error = MigrationService::replace_backup_data(&mut fresh_conn, &forged.to_string())
+        .expect_err("a forged work-premium amount must not be accepted");
+    assert!(error.to_string().contains("iş primi snapshot"));
+    assert!(PayrollRepository::get_all(&fresh_conn)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn native_calculated_retro_with_stale_link_restores_exactly_to_empty_database(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_, baseline) = current_v5_fixture()?;
+    let mut expected: Value = serde_json::from_str(&baseline)?;
+    let normal = expected["bordrolar"][0].clone();
+    let gross = normal["gelirToplam"].clone();
+    let payment_date = normal["paymentDate"].clone();
+    expected["bordrolar"][0]["status"] = json!("STALE");
+
+    let revision_id = "recovery-revision";
+    let batch_id = "recovery-batch";
+    expected["compensationRevisions"] = json!([{
+        "id": revision_id,
+        "reason": "COLLECTIVE_AGREEMENT",
+        "title": "Recovery fixture",
+        "effectiveFrom": "2026-01-15",
+        "status": "CALCULATED",
+        "scope": "SELECTED_PERSONNEL",
+        "personnelIds": ["v5-person"],
+        "effectiveTo": null,
+        "decisionDate": null,
+        "signedAt": null,
+        "description": null,
+        "personnelGroup": null,
+        "createdAt": null,
+        "updatedAt": null
+    }]);
+    expected["retroBatches"] = json!([{
+        "id": batch_id,
+        "revisionId": revision_id,
+        "personnelId": "v5-person",
+        "paymentDate": payment_date,
+        "status": "CALCULATED",
+        "settlementStatus": "UNSETTLED",
+        "totalGrossDelta": gross,
+        "payableSettlementAmount": gross,
+        "offsetSettlementAmount": "0",
+        "recoveredAmount": "0",
+        "recoverableAmount": "0",
+        "outstandingReceivable": "0",
+        "description": null,
+        "createdAt": null,
+        "calculatedAt": null,
+        "finalizedAt": null
+    }]);
+    expected["retroAllocations"] = json!([{
+        "id": "recovery-allocation",
+        "batchId": batch_id,
+        "personnelId": "v5-person",
+        "sourcePeriodId": "2026-01",
+        "earningCode": "BASE_WAGE",
+        "originalRecognizedAmount": "0",
+        "previousAuthoritativeRetroAmount": "0",
+        "targetAmount": gross,
+        "deltaAmount": gross,
+        "originalPek": "0",
+        "retroPekDelta": "0",
+        "adjustedPek": "0",
+        "workerSgkDelta": "0",
+        "workerUnemploymentDelta": "0",
+        "employerSgkDelta": "0",
+        "employerUnemploymentDelta": "0",
+        "originalEmployerLowerBound": "0",
+        "targetEmployerLowerBound": "0",
+        "employerLowerBoundDelta": "0",
+        "employerLowerBoundPremiumDelta": "0",
+        "payableSettlementAmount": gross,
+        "offsetSettlementAmount": "0",
+        "recoverableAmount": "0",
+        "originalSourceCarry": null,
+        "targetSourceCarry": null,
+        "metadata": null,
+        "sgkTreatment": "WAGE_SOURCE_MONTH",
+        "incomeTaxTreatment": "TAXABLE",
+        "stampTaxTreatment": "TAXABLE"
+    }]);
+
+    let mut stale_payment = normal;
+    stale_payment["id"] = json!(batch_id);
+    stale_payment["accrualId"] = json!(batch_id);
+    stale_payment["accrualType"] = json!("RETRO_ADJUSTMENT");
+    stale_payment["sequence"] = json!(1);
+    stale_payment["status"] = json!("STALE");
+    expected["bordrolar"]
+        .as_array_mut()
+        .unwrap()
+        .push(stale_payment);
+
+    let mut conn = create_in_memory_connection()?;
+    MigrationService::replace_backup_data(&mut conn, &expected.to_string())?;
+
+    let dataset = PayrollService::build_dataset_snapshot(&conn)?;
+    let restored = json!({
+        "donemler": dataset.periods,
+        "aktifDonemId": SettingsRepository::get_app_setting(&conn, "active_period_id")?,
+        "personeller": dataset.personnel,
+        "kurumDegerleriMap": dataset.institutionSettings,
+        "puantajlar": dataset.attendances,
+        "bordrolar": dataset.payrolls,
+        "taxOpenings": dataset.taxOpenings,
+        "sickLeaveRecords": dataset.sickLeaveRecords,
+        "annualPayrollParameters": dataset.annualPayrollParameters,
+        "zamAylari": dataset.zamAylari,
+        "compensationRevisions": dataset.compensationRevisions,
+        "compensationRevisionOverrides": dataset.compensationRevisionOverrides,
+        "retroBatches": dataset.retroBatches,
+        "retroAllocations": dataset.retroAllocations,
+    });
+    for key in [
+        "donemler",
+        "aktifDonemId",
+        "personeller",
+        "kurumDegerleriMap",
+        "puantajlar",
+        "bordrolar",
+        "taxOpenings",
+        "sickLeaveRecords",
+        "annualPayrollParameters",
+        "zamAylari",
+        "compensationRevisions",
+        "compensationRevisionOverrides",
+        "retroBatches",
+        "retroAllocations",
+    ] {
+        assert_eq!(restored[key], expected[key], "restored field {key}");
+    }
+    let batch = dataset
+        .retroBatches
+        .first()
+        .expect("recovery batch persists");
+    let payment = dataset
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == batch_id)
+        .expect("stale payment event persists");
+    assert_eq!(batch.status, CompensationRevisionStatus::CALCULATED);
+    assert_eq!(payment.status, BordroStatus::STALE);
+    assert_eq!(payment.gelirToplam, batch.payableSettlementAmount);
+
+    let good_payrolls = serde_json::to_value(PayrollRepository::get_all(&conn)?)?;
+    let good_batches = get_batches(&conn)?;
+    let good_allocations = get_allocations(&conn)?;
+    for (field, value) in [
+        ("personelId", json!("forged-person")),
+        ("paymentDate", json!("2026-02-13")),
+        ("status", json!("FINALIZED")),
+    ] {
+        let mut forged = expected.clone();
+        let event = forged["bordrolar"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|event| event["accrualId"] == batch_id)
+            .unwrap();
+        event[field] = value;
+        assert!(MigrationService::replace_backup_data(&mut conn, &forged.to_string()).is_err());
+        assert_eq!(
+            serde_json::to_value(PayrollRepository::get_all(&conn)?)?,
+            good_payrolls
+        );
+        assert_eq!(get_batches(&conn)?, good_batches);
+        assert_eq!(get_allocations(&conn)?, good_allocations);
+    }
+
+    let mut forged_gross = expected;
+    let event = forged_gross["bordrolar"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|event| event["accrualId"] == batch_id)
+        .unwrap();
+    event["gelirler"]["digerGelir"] = json!("1");
+    event["gelirToplam"] = json!("31001");
+    event["netOdeme"] = json!("26351");
+    assert!(MigrationService::replace_backup_data(&mut conn, &forged_gross.to_string()).is_err());
+    assert_eq!(
+        serde_json::to_value(PayrollRepository::get_all(&conn)?)?,
+        good_payrolls
+    );
+    assert_eq!(get_batches(&conn)?, good_batches);
+    assert_eq!(get_allocations(&conn)?, good_allocations);
+    Ok(())
+}
+
+#[test]
 fn native_legacy_sparse_backup_preserves_persisted_gv_base_without_rich_detail(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut conn, payload) = current_v5_fixture()?;
@@ -680,6 +1155,7 @@ fn native_legacy_sparse_backup_preserves_persisted_gv_base_without_rich_detail(
 fn native_current_v5_backup_rejects_semantically_forged_snapshot(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (mut conn, payload) = current_v5_fixture()?;
+    let prior_dataset = PayrollService::build_dataset_snapshot(&conn)?;
     let mut forged: Value = serde_json::from_str(&payload)?;
     let payroll = forged["bordrolar"]
         .as_array_mut()
@@ -701,7 +1177,12 @@ fn native_current_v5_backup_rejects_semantically_forged_snapshot(
     let error = MigrationService::replace_backup_data(&mut conn, &forged.to_string())
         .expect_err("semantically forged V5 snapshot must be rejected");
     assert!(error.to_string().contains("V5 backup replay"));
-    assert_eq!(PayrollRepository::get_all(&conn)?.len(), 1);
+    let after_failed_restore = PayrollService::build_dataset_snapshot(&conn)?;
+    assert_eq!(
+        serde_json::to_value(after_failed_restore)?,
+        serde_json::to_value(prior_dataset)?,
+        "a failed restore must preserve the complete previous dataset"
+    );
     Ok(())
 }
 

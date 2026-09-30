@@ -160,6 +160,8 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
                 <th scope="col" className="p-3">SGK Sicil No</th>
                 <th scope="col" className="p-3">Ad Soyad</th>
                 <th scope="col" className="p-3">Durum</th>
+                <th scope="col" className="p-3 text-right">SGK Gün Sayısı</th>
+                <th scope="col" className="p-3 text-right">Cari Dönem PEK</th>
                 <th scope="col" className="p-3 text-right">{rateLabels.isverenSgk}</th>
                 <th scope="col" className="p-3 text-right">{rateLabels.isverenIssizlik}</th>
                 <th scope="col" className="p-3 text-right">{rateLabels.isciSgk}</th>
@@ -188,18 +190,30 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
                       {getSgkPrimKontroluStatusLabel(row.status)}
                     </span>
                   </td>
-                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenSgkPrimi)}</td>
-                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenIssizlikPrimi)}</td>
-                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciSgkPrimi)}</td>
-                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciIssizlikPrimi)}</td>
-                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.retroPekDelta)}</td>
-                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.pekAltSinirTamamlamaIsverenPrimi)}</td>
-                  <td className="p-3 text-right font-mono text-sm font-bold tabular-nums text-indigo-900">{displayAmount(row, row.toplam)}</td>
+                  <td className="p-3 text-right font-mono font-semibold tabular-nums text-slate-900">
+                    {row.status !== 'authoritative'
+                      ? '—'
+                      : row.sgkPrimGunSayisiTutarsiz
+                        ? 'Tutarsız'
+                        : row.sgkPrimGunSayisi ?? '—'}
+                  </td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">
+                    {row.status === 'authoritative' && row.cariDonemPek !== null
+                      ? formatTL(row.cariDonemPek)
+                      : '—'}
+                  </td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenSgkPrimi)}</td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isverenIssizlikPrimi)}</td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciSgkPrimi)}</td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.isciIssizlikPrimi)}</td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.retroPekDelta)}</td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono font-semibold tabular-nums text-slate-900">{displayAmount(row, row.pekAltSinirTamamlamaIsverenPrimi)}</td>
+                  <td className="whitespace-nowrap p-3 text-right font-mono text-sm font-bold tabular-nums text-indigo-900">{displayAmount(row, row.toplam)}</td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="p-8 text-center font-sans italic text-slate-500">
+                  <td colSpan={14} className="p-8 text-center font-sans italic text-slate-500">
                     Bu dönem için kayıtlı personel bulunmamaktadır.
                   </td>
                 </tr>
@@ -211,6 +225,21 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="SGK prim toplamları">
         {[
+          {
+            label: 'SGK Gün Sayısı Toplamı',
+            value: totals.sgkPrimGunSayisi,
+            formatted: String(totals.sgkPrimGunSayisi),
+          },
+          {
+            label: 'Cari Dönem PEK Toplamı',
+            value: totals.cariDonemPek,
+            formatted: formatTL(totals.cariDonemPek),
+          },
+          {
+            label: 'Retro Kaynak PEK Farkı (Cari PEK’e dahil değildir)',
+            value: totals.retroPekDelta,
+            formatted: formatTL(totals.retroPekDelta),
+          },
           { label: `${rateLabels.isverenSgk} Toplamı`, value: totals.isverenSgkPrimi },
           { label: `${rateLabels.isverenIssizlik} Toplamı`, value: totals.isverenIssizlikPrimi },
           { label: `${rateLabels.isciSgk} Toplamı`, value: totals.isciSgkPrimi },
@@ -220,10 +249,12 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
             label: 'PEK Alt Sınır İşveren Tamamlama',
             value: totals.pekAltSinirTamamlamaIsverenPrimi,
           },
-        ].map(({ label, value }) => (
+        ].map(({ label, value, formatted }) => (
           <div key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-2xs">
             <div className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</div>
-            <div className="mt-2 font-mono text-lg font-bold tabular-nums text-slate-900">{formatTL(value)}</div>
+            <div className="mt-2 font-mono text-lg font-bold tabular-nums text-slate-900">
+              {formatted ?? formatTL(value)}
+            </div>
           </div>
         ))}
         <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4 shadow-2xs sm:col-span-2 xl:col-span-2">

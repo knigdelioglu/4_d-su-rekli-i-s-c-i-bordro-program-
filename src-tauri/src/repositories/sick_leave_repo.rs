@@ -93,6 +93,23 @@ impl SickLeaveRepository {
     /// Caller-owned transaction variant used by backup restore and composite
     /// use cases.
     pub fn save_in_transaction(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
+        Self::save_in_transaction_with_timestamp_policy(conn, record, false)
+    }
+
+    /// Restore/import persistence path that retains exported audit timestamps.
+    /// Missing timestamps keep the current-time fallback used by ordinary saves.
+    pub fn save_for_restore_in_transaction(
+        conn: &Connection,
+        record: &SickLeaveRecord,
+    ) -> Result<()> {
+        Self::save_in_transaction_with_timestamp_policy(conn, record, true)
+    }
+
+    fn save_in_transaction_with_timestamp_policy(
+        conn: &Connection,
+        record: &SickLeaveRecord,
+        preserve_imported_timestamps: bool,
+    ) -> Result<()> {
         Self::validate_record(record)?;
 
         let existing = Self::get_by_id(conn, &record.id)?;
@@ -129,7 +146,11 @@ impl SickLeaveRepository {
             .unwrap_or(true);
         let now = chrono::Utc::now().to_rfc3339();
         let created_at = record.createdAt.as_ref().unwrap_or(&now);
-        let updated_at = &now;
+        let updated_at = if preserve_imported_timestamps {
+            record.updatedAt.as_ref().unwrap_or(&now)
+        } else {
+            &now
+        };
 
         conn.execute(
             r#"
@@ -140,6 +161,7 @@ impl SickLeaveRepository {
                 personnel_id = excluded.personnel_id,
                 start_date = excluded.start_date,
                 end_date = excluded.end_date,
+                created_at = CASE WHEN ?7 THEN excluded.created_at ELSE sick_leave_records.created_at END,
                 updated_at = excluded.updated_at
             "#,
             params![
@@ -149,6 +171,7 @@ impl SickLeaveRepository {
                 record.endDate,
                 created_at,
                 updated_at,
+                preserve_imported_timestamps,
             ],
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -215,9 +238,10 @@ impl SickLeaveRepository {
             return Ok(());
         }
 
-        let record_start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|e| {
-            DomainError::ValidationError(format!("Rapor başlangıç tarihi geçersiz: {e}"))
-        })?;
+        let record_start =
+            NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|e| {
+                DomainError::ValidationError(format!("Rapor başlangıç tarihi geçersiz: {e}"))
+            })?;
         let record_end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d").map_err(|e| {
             DomainError::ValidationError(format!("Rapor bitiş tarihi geçersiz: {e}"))
         })?;

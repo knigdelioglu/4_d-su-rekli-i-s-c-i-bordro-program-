@@ -14,7 +14,7 @@ import {
  * "kayıtlı puantaj bulunamadı" hatası UI'da görünür ama DB'de puantaj vardır).
  */
 describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşleşmeli', () => {
-  const installMock = () => {
+  const installMock = (result: unknown = {}) => {
     let capturedCmd: string | null = null;
     let capturedArgs: Record<string, any> | null = null;
 
@@ -23,7 +23,7 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
         invoke: async (cmd: string, args: Record<string, any>) => {
           capturedCmd = cmd;
           capturedArgs = args;
-          return {};
+          return result;
         },
       },
     };
@@ -125,6 +125,32 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
     await tauriBridge.migrateLegacyPayload(payload);
     expect(mock.cmd()).toBe('migrate_legacy_payload');
     expect(mock.args()).toEqual({ payloadJson: payload });
+  });
+
+  test('exportBackup: native file save command should receive the serialized JSON and suggested name', async () => {
+    const mock = installMock(true);
+    const saved = await tauriBridge.exportBackup('{"backupVersion":5}', 'backup.json');
+    expect(saved).toBe(true);
+    expect(mock.cmd()).toBe('export_backup');
+    expect(mock.args()).toEqual({
+      payloadJson: '{"backupVersion":5}',
+      fileName: 'backup.json',
+    });
+  });
+
+  test('exportPdf: native file save command should receive unchanged bytes and suggested name', async () => {
+    const mock = installMock(true);
+    const pdfBytes = [0x25, 0x50, 0x44, 0x46, 0xff];
+    const saved = await tauriBridge.exportPdf(pdfBytes, 'bordro.pdf');
+    expect(saved).toBe(true);
+    expect(mock.cmd()).toBe('export_pdf');
+    expect(mock.args()).toEqual({ pdfBytes, fileName: 'bordro.pdf' });
+  });
+
+  test('exportPdf: native save cancellation is returned as false', async () => {
+    const mock = installMock(false);
+    expect(await tauriBridge.exportPdf([0x25, 0x50, 0x44, 0x46], 'bordro.pdf')).toBe(false);
+    expect(mock.cmd()).toBe('export_pdf');
   });
 
   test('saveAttendance: attendance anahtarı değişmemeli (kaydet zinciri)', async () => {

@@ -13,6 +13,7 @@ fn configure_builder<R: tauri::Runtime>(
 ) -> tauri::Builder<R> {
     builder
         .manage(state)
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             commands::get_personnel_list,
             commands::print_current_webview,
@@ -42,6 +43,9 @@ fn configure_builder<R: tauri::Runtime>(
             commands::check_legacy_migrated,
             commands::migrate_legacy_payload,
             commands::replace_backup_payload,
+            commands::export_backup,
+            commands::export_excel,
+            commands::export_pdf,
             commands::get_sick_leave_records,
             commands::save_sick_leave_record,
             commands::delete_sick_leave_record,

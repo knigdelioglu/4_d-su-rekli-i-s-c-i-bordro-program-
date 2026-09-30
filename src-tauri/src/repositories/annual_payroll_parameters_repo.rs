@@ -104,6 +104,24 @@ impl AnnualPayrollParametersRepository {
         conn: &Connection,
         parameters: &AnnualPayrollParameters,
     ) -> Result<()> {
+        Self::save_in_transaction_with_timestamp_policy(conn, parameters, false)
+    }
+
+    /// Restore/import persistence path that keeps an exported audit timestamp.
+    /// Older backups without `updatedAt` retain the existing current-time
+    /// fallback used by ordinary saves.
+    pub fn save_for_restore_in_transaction(
+        conn: &Connection,
+        parameters: &AnnualPayrollParameters,
+    ) -> Result<()> {
+        Self::save_in_transaction_with_timestamp_policy(conn, parameters, true)
+    }
+
+    fn save_in_transaction_with_timestamp_policy(
+        conn: &Connection,
+        parameters: &AnnualPayrollParameters,
+        preserve_imported_updated_at: bool,
+    ) -> Result<()> {
         Self::validate(parameters)?;
 
         // `updatedAt` DB metadata'sıdır; domain parametresi değildir. JSON içinde
@@ -138,11 +156,20 @@ impl AnnualPayrollParametersRepository {
             .transpose()?;
 
         let now = Utc::now().to_rfc3339();
+        let updated_at = if preserve_imported_updated_at {
+            parameters
+                .updatedAt
+                .as_deref()
+                .filter(|timestamp| !timestamp.trim().is_empty())
+                .unwrap_or(&now)
+        } else {
+            &now
+        };
         conn.execute(
             "INSERT INTO annual_payroll_parameters (year, params_json, updated_at)
              VALUES (?1, ?2, ?3)
              ON CONFLICT(year) DO UPDATE SET params_json = ?2, updated_at = ?3",
-            params![parameters.year, params_json, now],
+            params![parameters.year, params_json, updated_at],
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 

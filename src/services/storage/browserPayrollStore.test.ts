@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   browserPayrollStore,
   BrowserSnapshotConflictError,
@@ -388,6 +389,41 @@ function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
 }
 
 describe('BrowserPayrollStore', () => {
+  test('accepts and preserves the exported CALCULATED batch with a stale linked payment event', () => {
+    const referenceJson = readFileSync(
+      new URL('../../../tests/fixtures/session3-reference.json', import.meta.url),
+      'utf8'
+    );
+    const parsed = parseImportedBackup(referenceJson);
+    const batchId = 'retro-d8374d9a-fa2d-4c24-a9c5-edc0a1800c93';
+    const batch = parsed.retroBatches.find((item) => item.id === batchId);
+    const payment = parsed.bordrolar.find((item) => item.accrualId === batchId);
+
+    expect(batch?.status).toBe('CALCULATED');
+    expect(payment?.status).toBe('STALE');
+    expect(payment?.gelirToplam).toBe('3289');
+    expect(parseCurrentBrowserSnapshot(serializePayrollStorage(parsed))).toEqual(parsed);
+
+    const forged = JSON.parse(referenceJson) as TestRecord;
+    const linked = (forged.bordrolar as TestRecord[]).find((item) => item.accrualId === batchId)!;
+    const linkedIncome = linked.gelirler as TestRecord;
+    linkedIncome.tabanBrutAylik = '3101';
+    linked.gelirToplam = '3290';
+    linked.netOdeme = '2114.56';
+    expect(() => parseImportedBackup(JSON.stringify(forged))).toThrow();
+
+    for (const [field, value] of [
+      ['personelId', 'p-forged'],
+      ['paymentDate', '2027-03-15'],
+      ['status', 'FINALIZED'],
+    ] as const) {
+      const mismatched = JSON.parse(referenceJson) as TestRecord;
+      const event = (mismatched.bordrolar as TestRecord[]).find((item) => item.accrualId === batchId)!;
+      event[field] = value;
+      expect(() => parseImportedBackup(JSON.stringify(mismatched))).toThrow();
+    }
+  });
+
   test('current backup replay verifier accepts the canonical result and rejects a forged snapshot', async () => {
     const payload = parseCurrentBrowserSnapshot(makeV2Snapshot('3000.00'));
     const canonicalResult = payload.bordrolar[0];
@@ -412,6 +448,41 @@ describe('BrowserPayrollStore', () => {
       error = caught;
     }
     expect(String(error).includes('V5 backup replay')).toBe(true);
+  });
+
+  test('current backup replay accepts missing monthly PEK audit values but checks supplied values', async () => {
+    const payload = parseCurrentBrowserSnapshot(makeV2Snapshot('3000.00'));
+    const canonicalResult = structuredClone(payload.bordrolar[0]);
+    canonicalResult.pekDetay = {
+      ...canonicalResult.pekDetay!,
+      aylikOncekiPekTuketimi: '1250.00',
+      aylikSonrasiPekTuketimi: '4250.00',
+    };
+    const engine = {
+      kind: 'wasm',
+      calculatePayroll: async () => canonicalResult,
+    } as unknown as PayrollEngine;
+
+    for (const value of [null, undefined]) {
+      const olderSnapshot = structuredClone(payload);
+      const pekDetay = olderSnapshot.bordrolar[0].pekDetay!;
+      pekDetay.aylikOncekiPekTuketimi = value;
+      pekDetay.aylikSonrasiPekTuketimi = value;
+      await verifyCurrentPayrollBackupReplay(olderSnapshot, engine);
+      expect(pekDetay.aylikOncekiPekTuketimi).toBe(value);
+      expect(pekDetay.aylikSonrasiPekTuketimi).toBe(value);
+    }
+
+    const matchingSnapshot = structuredClone(payload);
+    matchingSnapshot.bordrolar[0].pekDetay!.aylikOncekiPekTuketimi = '1250.000';
+    matchingSnapshot.bordrolar[0].pekDetay!.aylikSonrasiPekTuketimi = '4250';
+    await verifyCurrentPayrollBackupReplay(matchingSnapshot, engine);
+
+    const mismatchingSnapshot = structuredClone(payload);
+    mismatchingSnapshot.bordrolar[0].pekDetay!.aylikSonrasiPekTuketimi = '4251.00';
+    await expect(verifyCurrentPayrollBackupReplay(mismatchingSnapshot, engine)).rejects.toThrow(
+      'V5 backup replay'
+    );
   });
 
   test('does not fall back to localStorage when IndexedDB is unavailable', async () => {
@@ -696,6 +767,111 @@ describe('BrowserPayrollStore', () => {
     finalizedWithoutPayment.retroAllocations = inconsistentSettlement.retroAllocations;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(finalizedWithoutPayment))).toThrow(
       'FINALIZED retro batch tam olarak bir payment event'
+    );
+  });
+
+  test('replays same-date receivables by batch creation chronology and rejects inconsistent balances', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const revisionId = 'revision-same-date-replay';
+    const positiveBatchId = 'retro-b40a20f7-114c-447b-b138-8e5486150a31';
+    const recoveryBatchId = 'retro-5b80adf8-da00-4820-a59e-85e8b49ffaad';
+    payload.compensationRevisions = [{
+      id: revisionId,
+      reason: 'COLLECTIVE_AGREEMENT',
+      title: 'Same date replay',
+      effectiveFrom: '2027-01-15',
+      status: 'CALCULATED',
+      scope: 'SELECTED_PERSONNEL',
+      personnelIds: ['person-1'],
+      createdAt: '2026-09-29T21:00:00.000Z',
+    }];
+    const positiveBatch = {
+      id: positiveBatchId,
+      revisionId,
+      personnelId: 'person-1',
+      paymentDate: '2027-03-14',
+      status: 'CALCULATED',
+      settlementStatus: 'UNSETTLED',
+      totalGrossDelta: '3268',
+      createdAt: '2026-09-29T21:04:01.133Z',
+      calculatedAt: '2026-09-29T21:04:01.133Z',
+      ...retroBatchSettlement('3268'),
+    };
+    const recoveryBatch = {
+      id: recoveryBatchId,
+      revisionId,
+      personnelId: 'person-1',
+      paymentDate: '2027-03-14',
+      status: 'CALCULATED',
+      settlementStatus: 'OVERPAYMENT',
+      totalGrossDelta: '-3268',
+      createdAt: '2026-09-30T11:43:10.586Z',
+      calculatedAt: '2026-09-30T11:43:10.586Z',
+      ...retroBatchSettlement('-3268'),
+    };
+    payload.retroBatches = [recoveryBatch, positiveBatch];
+    payload.retroAllocations = [
+      {
+        id: `${recoveryBatchId}_2027-01_BASE_WAGE`,
+        batchId: recoveryBatchId,
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'BASE_WAGE',
+        originalRecognizedAmount: '3268',
+        targetAmount: '0',
+        deltaAmount: '-3268',
+        ...retroAllocationSettlement('-3268'),
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+      {
+        id: `${positiveBatchId}_2027-01_BASE_WAGE`,
+        batchId: positiveBatchId,
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'BASE_WAGE',
+        originalRecognizedAmount: '0',
+        targetAmount: '3268',
+        deltaAmount: '3268',
+        ...retroAllocationSettlement('3268'),
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+    ];
+
+    const imported = parseImportedBackup(JSON.stringify(payload));
+    expect(imported.retroBatches.find((batch) => batch.id === positiveBatchId)?.outstandingReceivable).toBe('0.00');
+    expect(imported.retroBatches.find((batch) => batch.id === recoveryBatchId)?.outstandingReceivable).toBe('3268');
+    expect(imported.retroBatches.map((batch) => batch.id)).toEqual([recoveryBatchId, positiveBatchId]);
+
+    const mixedTimestamps = JSON.parse(JSON.stringify(payload)) as TestRecord;
+    const mixedBatches = mixedTimestamps.retroBatches as TestRecord[];
+    const mixedPositive = mixedBatches.find((batch) => batch.id === positiveBatchId)!;
+    const mixedRecovery = mixedBatches.find((batch) => batch.id === recoveryBatchId)!;
+    mixedPositive.id = 'retro-a-positive';
+    mixedRecovery.id = 'retro-z-recovery';
+    delete mixedRecovery.createdAt;
+    const mixedAllocations = mixedTimestamps.retroAllocations as TestRecord[];
+    mixedAllocations.forEach((allocation) => {
+      if (allocation.batchId === positiveBatchId) {
+        allocation.batchId = 'retro-a-positive';
+        allocation.id = 'retro-a-positive_2027-01_BASE_WAGE';
+      } else {
+        allocation.batchId = 'retro-z-recovery';
+        allocation.id = 'retro-z-recovery_2027-01_BASE_WAGE';
+      }
+    });
+    expect(() => parseImportedBackup(JSON.stringify(mixedTimestamps))).not.toThrow();
+
+    const inconsistent = JSON.parse(JSON.stringify(payload)) as TestRecord;
+    const malformedRecovery = (inconsistent.retroBatches as TestRecord[]).find(
+      (batch) => batch.id === recoveryBatchId
+    )!;
+    malformedRecovery.outstandingReceivable = '0';
+    expect(() => parseImportedBackup(JSON.stringify(inconsistent))).toThrow(
+      'outstanding receivable replay sonucu ile eşleşmiyor'
     );
   });
 

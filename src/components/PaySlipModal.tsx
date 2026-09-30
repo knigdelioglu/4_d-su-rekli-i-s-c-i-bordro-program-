@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Building2,
   FileArchive,
@@ -93,6 +93,21 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
     [uiDataset.attendances, personel, bordro, donem]
   );
 
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   const withBusy = async (action: Exclude<ExportAction, null>, fn: () => Promise<void> | void) => {
@@ -139,7 +154,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
     return { people, payrolls, notices, models };
   };
 
-  const handlePrint = () => void withBusy('print', () => printElement('payslip-print-container'));
+  const handlePrint = () => void withBusy('print', () => printElement('payslip-print-surface'));
 
   const visibleIncomeLines = previewModel.incomes.filter((line) => Math.abs(line.amount) > 0.0001);
   const visibleDeductionLines = previewModel.deductions.filter((line) => Math.abs(line.amount) > 0.0001);
@@ -150,6 +165,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
       onClick={onClose}
     >
       <div
+        id="payslip-print-surface"
         className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-5xl w-full max-h-[94vh] flex flex-col overflow-hidden my-auto"
         onClick={(event) => event.stopPropagation()}
       >
@@ -180,7 +196,9 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
               type="button"
               disabled={busyAction !== null}
               onClick={() =>
-                void withBusy('single-xlsx', async () => exportSinglePayrollExcel(await loadSingleModel()))
+                void withBusy('single-xlsx', async () => {
+                  await exportSinglePayrollExcel(await loadSingleModel());
+                })
               }
               className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center gap-1.5"
             >
@@ -214,7 +232,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
               onClick={() =>
                 void withBusy('period-xlsx', async () => {
                   const context = await loadPeriodContext();
-                  exportPeriodPayrollExcel({ period: donem, ...context });
+                  await exportPeriodPayrollExcel({ period: donem, ...context });
                 })
               }
               className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
@@ -279,7 +297,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
           id="payslip-print-container"
           className="p-7 bg-white overflow-y-auto flex-1 text-slate-900 print:p-0"
         >
-          <div className="border-b-2 border-slate-900 pb-4 text-center">
+          <div className="payslip-print-header border-b-2 border-slate-900 pb-4 text-center">
             <div className="flex items-center justify-center gap-2 text-slate-600 text-xs font-semibold uppercase tracking-wider">
               <Building2 className="w-4 h-4" />
               <span>4/D Sürekli İşçi Bordro Birimi</span>
@@ -290,8 +308,8 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </div>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-3 mt-5 text-xs">
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5">
+          <div className="payslip-print-identity grid md:grid-cols-2 gap-3 mt-5 text-xs">
+            <div className="payslip-print-identity-card rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5">
               <div><strong>T.C. Kimlik No:</strong> <span className="font-mono">{personel.tcNo}</span></div>
               <div><strong>Adı Soyadı:</strong> {personel.ad} {personel.soyad}</div>
               <div><strong>SGK Sicil No:</strong> <span className="font-mono">{personel.sgkSicilNo || '—'}</span></div>
@@ -302,7 +320,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                   : ''}
               </div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5">
+            <div className="payslip-print-identity-card rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-1.5">
               <div><strong>Ünvan:</strong> {personel.unvan || '—'}</div>
               <div><strong>Hizmet Yılı:</strong> {personel.hizmetYili}</div>
               <div><strong>IBAN:</strong> <span className="font-mono text-[11px]">{personel.iban || '—'}</span></div>
@@ -312,8 +330,8 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </div>
           </div>
 
-          <section className="mt-5 grid md:grid-cols-2 gap-3 text-[11px]">
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-1">
+          <section className="payslip-print-audits mt-5 grid md:grid-cols-2 gap-3 text-[11px]">
+            <div className="payslip-print-audit-card rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-1">
               <h2 className="mb-2 text-[10px] font-black uppercase tracking-wider text-indigo-900">
                 Gelir Vergisi Zinciri
               </h2>
@@ -335,7 +353,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
                 </div>
               ))}
             </div>
-            <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3 space-y-1">
+            <div className="payslip-print-audit-card rounded-xl border border-amber-200 bg-amber-50/60 p-3 space-y-1">
               <h2 className="mb-2 text-[10px] font-black uppercase tracking-wider text-amber-900">
                 Damga Vergisi Zinciri
               </h2>
@@ -355,7 +373,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </div>
           </section>
 
-          <section className="mt-5">
+          <section className="payslip-print-attendance mt-5">
             <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Puantaj Özeti</h2>
             <div className="grid grid-cols-7 gap-1.5">
               {previewModel.attendanceSummary.map((item) => (
@@ -368,7 +386,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </div>
           </section>
 
-          <div className="grid md:grid-cols-2 gap-5 mt-5">
+          <div className="payslip-print-amount-sections grid md:grid-cols-2 gap-5 mt-5">
             <section>
               <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">Gelirler</h2>
               <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -398,8 +416,8 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </section>
           </div>
 
-          <div className="grid md:grid-cols-2 gap-5 mt-5">
-            <section>
+          <div className="payslip-print-amount-sections payslip-print-final-amount-sections grid md:grid-cols-2 gap-5 mt-5">
+            <section className="payslip-print-sgk-tax-section">
               <h2 className="text-[11px] font-black uppercase tracking-wider text-slate-600 mb-2">SGK / Vergi Denetimi</h2>
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-1">
                 {previewModel.sgkTax.filter((line) => Math.abs(line.amount) > 0.0001).map((line) => (
@@ -426,7 +444,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             </section>
           </div>
 
-          <div className="mt-6 rounded-2xl bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
+          <div className="payslip-print-net mt-6 rounded-2xl bg-slate-900 text-white px-5 py-4 flex items-center justify-between">
             <div>
               <div className="text-[10px] uppercase tracking-[0.2em] text-slate-400 font-bold">Net Ödeme</div>
               <div className="text-xs text-slate-300 mt-1">Gelir toplamı - kesinti toplamı</div>
@@ -434,7 +452,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
             <div className="text-3xl font-black font-mono">{formatTL(previewModel.totals.net)}</div>
           </div>
 
-          <div className="mt-4 text-[9px] text-slate-400 border-t border-slate-200 pt-2">
+          <div className="payslip-print-footer mt-4 text-[9px] text-slate-400 border-t border-slate-200 pt-2">
             Bordro güncelleme zamanı: {bordro.sonGuncellemeTarihi}. Bu belge kaydedilmiş bordro verilerinden üretilmiştir.
           </div>
         </div>

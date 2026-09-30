@@ -1,4 +1,5 @@
 import { BordroDonemi } from '../types/payroll';
+import { tauriBridge } from '../services/tauriBridge';
 import {
   PayrollExportLine,
   PayrollExportModel,
@@ -44,12 +45,51 @@ function text(
   ctx.textAlign = 'left';
 }
 
+function wrappedLines(ctx: CanvasRenderingContext2D, value: string, maxWidth: number): string[] {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of value.split(/\s+/).filter(Boolean)) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      line = candidate;
+      continue;
+    }
+    if (line) lines.push(line);
+    line = '';
+    for (const character of word) {
+      const fragment = `${line}${character}`;
+      if (line && ctx.measureText(fragment).width > maxWidth) {
+        lines.push(line);
+        line = character;
+      } else {
+        line = fragment;
+      }
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length > 0 ? lines : [''];
+}
+
+function wrappedText(
+  ctx: CanvasRenderingContext2D,
+  value: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number
+): number {
+  const lines = wrappedLines(ctx, value, maxWidth);
+  lines.forEach((line, index) => ctx.fillText(line, x, y + index * lineHeight));
+  return lines.length * lineHeight;
+}
+
 function sectionTitle(
   ctx: CanvasRenderingContext2D,
   title: string,
   x: number,
   y: number,
-  width: number
+  width: number,
+  gapAfter = 10
 ): number {
   ctx.fillStyle = '#eef2ff';
   ctx.fillRect(x, y, width, 34);
@@ -58,7 +98,7 @@ function sectionTitle(
   ctx.fillStyle = '#1e293b';
   ctx.font = '700 19px Arial, Segoe UI, sans-serif';
   text(ctx, title, x + 12, y + 23, width - 24);
-  return y + 44;
+  return y + 34 + gapAfter;
 }
 
 function moneyRows(
@@ -110,6 +150,22 @@ function keyValue(
   text(ctx, value, x + width * 0.4, y, width * 0.6);
 }
 
+function wrappedKeyValue(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  value: string,
+  x: number,
+  y: number,
+  width: number
+): number {
+  ctx.fillStyle = '#64748b';
+  ctx.font = '600 15px Arial, Segoe UI, sans-serif';
+  text(ctx, label, x, y, width * 0.4);
+  ctx.fillStyle = '#0f172a';
+  ctx.font = '700 15px Arial, Segoe UI, sans-serif';
+  return wrappedText(ctx, value, x + width * 0.4, y, width * 0.6, 18);
+}
+
 export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasElement {
   if (typeof document === 'undefined') {
     throw new Error('PDF üretimi için tarayıcı/Tauri belge bağlamı gerekli.');
@@ -148,7 +204,7 @@ export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasEle
   ctx.stroke();
 
   let y = 136;
-  y = sectionTitle(ctx, 'PERSONEL BİLGİLERİ', margin, y, contentWidth);
+  y = sectionTitle(ctx, 'PERSONEL BİLGİLERİ', margin, y, contentWidth, 18);
   const leftMeta = [
     ['T.C. Kimlik No', model.employee.tcNo],
     ['Adı Soyadı', model.employee.fullName],
@@ -175,7 +231,7 @@ export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasEle
     columnWidth - 8
   );
   keyValue(ctx, 'Tahakkuk Sıra No', String(model.sequence), margin + 8, y + 5 * 26, columnWidth - 8);
-  keyValue(
+  const descriptionHeight = wrappedKeyValue(
     ctx,
     'Tahakkuk Açıklaması',
     model.accrualDescription || '—',
@@ -183,26 +239,36 @@ export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasEle
     y + 5 * 26,
     columnWidth - 8
   );
-  y += 168;
+  y += 5 * 26 + Math.max(26, descriptionHeight) + 12;
 
   y = sectionTitle(ctx, 'PUANTAJ ÖZETİ (15-14)', margin, y, contentWidth);
   const attendance = model.attendanceSummary;
   const boxGap = 7;
   const boxWidth = (contentWidth - boxGap * Math.max(0, attendance.length - 1)) / Math.max(1, attendance.length);
+  const attendanceLabels = attendance.map((item) => {
+    ctx.font = '600 12px Arial, Segoe UI, sans-serif';
+    return wrappedLines(ctx, `${item.label} (${item.code})`, boxWidth - 10);
+  });
+  const attendanceLabelLines = Math.max(1, ...attendanceLabels.map((lines) => lines.length));
+  const attendanceBoxHeight = 20 + attendanceLabelLines * 15 + 27;
   attendance.forEach((item, index) => {
     const x = margin + index * (boxWidth + boxGap);
     ctx.fillStyle = '#f8fafc';
-    ctx.fillRect(x, y, boxWidth, 62);
+    ctx.fillRect(x, y, boxWidth, attendanceBoxHeight);
     ctx.strokeStyle = '#cbd5e1';
-    ctx.strokeRect(x, y, boxWidth, 62);
+    ctx.strokeRect(x, y, boxWidth, attendanceBoxHeight);
     ctx.fillStyle = '#64748b';
     ctx.font = '600 12px Arial, Segoe UI, sans-serif';
-    text(ctx, `${item.label} (${item.code})`, x + boxWidth / 2, y + 22, boxWidth - 10, 'center');
+    ctx.textAlign = 'center';
+    attendanceLabels[index].forEach((line, lineIndex) => {
+      ctx.fillText(line, x + boxWidth / 2, y + 17 + lineIndex * 15);
+    });
+    ctx.textAlign = 'left';
     ctx.fillStyle = '#0f172a';
     ctx.font = '800 22px Arial, Segoe UI, sans-serif';
-    text(ctx, String(item.count), x + boxWidth / 2, y + 49, boxWidth - 10, 'center');
+    text(ctx, String(item.count), x + boxWidth / 2, y + attendanceBoxHeight - 7, boxWidth - 10, 'center');
   });
-  y += 84;
+  y += attendanceBoxHeight + 22;
 
   const leftX = margin;
   const rightX = margin + columnWidth + gap;
@@ -245,9 +311,17 @@ export function renderPayrollPdfCanvas(model: PayrollExportModel): HTMLCanvasEle
   if (notices.length > 0 && y < CANVAS_HEIGHT - 135) {
     y = sectionTitle(ctx, 'BORDRO KONTROL NOTLARI', margin, y, contentWidth);
     ctx.font = '500 13px Arial, Segoe UI, sans-serif';
-    notices.forEach((notice, index) => {
+    notices.forEach((notice) => {
       ctx.fillStyle = notice.severity === 'CRITICAL' ? '#991b1b' : notice.severity === 'WARNING' ? '#92400e' : '#334155';
-      text(ctx, `• ${notice.title}: ${notice.message}`, margin + 8, y + index * 24, contentWidth - 16);
+      const height = wrappedText(
+        ctx,
+        `• ${notice.title}: ${notice.message}`,
+        margin + 8,
+        y,
+        contentWidth - 16,
+        17
+      );
+      y += height + 5;
     });
   }
 
@@ -358,7 +432,13 @@ export async function canvasesToPdfBlob(canvases: HTMLCanvasElement[]): Promise<
   });
 }
 
-function download(blob: Blob, fileName: string): void {
+async function download(blob: Blob, fileName: string): Promise<void> {
+  if (tauriBridge.isTauriAvailable()) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    await tauriBridge.exportPdf(Array.from(bytes), fileName);
+    return;
+  }
+
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
@@ -371,7 +451,7 @@ function download(blob: Blob, fileName: string): void {
 }
 
 export async function exportSinglePayrollPdf(model: PayrollExportModel): Promise<void> {
-  download(
+  await download(
     await canvasesToPdfBlob([renderPayrollPdfCanvas(model)]),
     `${payrollExportFileStem(model)}.pdf`
   );
@@ -384,7 +464,7 @@ export async function exportPeriodPayrollPdf(
   if (models.length === 0) {
     throw new Error('Bu dönem için CALCULATED veya FINALIZED bordro bulunamadı.');
   }
-  download(
+  await download(
     await canvasesToPdfBlob(models.map(renderPayrollPdfCanvas)),
     `${periodExportFileStem(period)}_Ucret_Pusulalari.pdf`
   );

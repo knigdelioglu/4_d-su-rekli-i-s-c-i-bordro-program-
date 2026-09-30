@@ -1,0 +1,64 @@
+[
+  {
+    "case": "01-syntax",
+    "ui": "JSON syntax rejected",
+    "sqliteExact": true
+  },
+  {
+    "case": "02-missing",
+    "ui": "$.personeller mandatory missing",
+    "sqliteExact": true
+  },
+  {
+    "case": "03-type",
+    "ui": "hizmetYili integer required",
+    "sqliteExact": true
+  },
+  {
+    "case": "04-decimal",
+    "ui": "netOdeme plain exact Decimal required",
+    "sqliteExact": true
+  },
+  {
+    "case": "05-foreign-key",
+    "ui": "ghost personnel rejected",
+    "sqliteExact": true
+  },
+  {
+    "case": "06-duplicate-tc",
+    "ui": "duplicate TC rejected",
+    "sqliteExact": true
+  },
+  {
+    "case": "07-duplicate-attendance",
+    "ui": "duplicate person+period rejected",
+    "sqliteExact": true
+  },
+  {
+    "case": "08-version",
+    "ui": "version999 unsupported",
+    "sqliteExact": true
+  },
+  {
+    "case": "10-semantic-forgery",
+    "ui": "financial totals mismatch rejected",
+    "sqliteExact": true
+  },
+  {
+    "case": "11-replay-forgery-pre-fix",
+    "ui": "native transaction replay Decimal scale mismatch p1",
+    "sqliteExact": true
+  },
+  {
+    "case": "valid-self-backup-two-pre-fix-attempts",
+    "ui": "Decimal scale mismatch p1 calculated snapshot",
+    "sqliteExact": true
+  },
+  {
+    "case": "11-replay-forgery",
+    "build": "8543feb5",
+    "result": "canonical Rust replay rejects p-5 income discrepancy",
+    "sqlExact": true,
+    "comparison": "exact SQL lines; trailing file newline ignored"
+  }
+]

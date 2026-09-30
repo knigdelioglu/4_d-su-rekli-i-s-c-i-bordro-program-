@@ -22,7 +22,7 @@ use crate::payroll_engine::{
     PayrollDatasetSnapshot,
 };
 use crate::{DomainError, Result};
-use chrono::{Duration, NaiveDate};
+use chrono::{DateTime, Duration, FixedOffset, NaiveDate};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::{Deserialize, Serialize};
@@ -1145,7 +1145,7 @@ fn outstanding_receivable_before_current(
     payment_date: NaiveDate,
     current_batch_id: &str,
 ) -> Result<Decimal> {
-    let mut batches = index
+    let batches = index
         .retro_batches_for_person(dataset, personnel_id)
         .filter(|batch| {
             batch.id != current_batch_id
@@ -1156,11 +1156,7 @@ fn outstanding_receivable_before_current(
         })
         .cloned()
         .collect::<Vec<_>>();
-    batches.sort_by(|left, right| {
-        left.paymentDate
-            .cmp(&right.paymentDate)
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    let batches = sort_retro_batches_chronologically(batches)?;
 
     let mut outstanding = Decimal::ZERO;
     for batch in batches {
@@ -1201,6 +1197,39 @@ fn outstanding_receivable_before_current(
         }
     }
     Ok(outstanding)
+}
+
+/// Orders authoritative retro events by their payment date and then their
+/// recorded creation instant. IDs provide a stable tie-break for legacy or
+/// same-instant events; imported timestamps are read as-is and never rewritten.
+fn sort_retro_batches_chronologically(
+    batches: Vec<RetroAdjustmentBatch>,
+) -> Result<Vec<RetroAdjustmentBatch>> {
+    let mut keyed = batches
+        .into_iter()
+        .map(|batch| {
+            let payment_date = parse_date(&batch.paymentDate, "önceki retro ödeme")?;
+            let created_at = batch
+                .createdAt
+                .as_deref()
+                .map(DateTime::<FixedOffset>::parse_from_rfc3339)
+                .transpose()
+                .map_err(|_| {
+                    DomainError::InvalidData(format!(
+                        "{} retro batch createdAt geçerli RFC3339 timestamp değil.",
+                        batch.id
+                    ))
+                })?;
+            Ok((payment_date, created_at, batch))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    keyed.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+            .then_with(|| left.2.id.cmp(&right.2.id))
+    });
+    Ok(keyed.into_iter().map(|(_, _, batch)| batch).collect())
 }
 
 fn assign_current_settlement_allocations(
@@ -1248,25 +1277,19 @@ fn previous_authoritative_retro_by_period_and_code(
 ) -> Result<(RetroAmountsByPeriodAndCode, RetroAmountsByPeriodAndCode)> {
     let mut previous = HashMap::new();
     let mut previous_pek = HashMap::new();
-    let mut batches = index
+    let batches = index
         .retro_batches_for_person(dataset, personnel_id)
-        .filter(|batch| batch.id != current_batch_id)
+        .filter(|batch| {
+            batch.id != current_batch_id
+                && !matches!(
+                    batch.status,
+                    CompensationRevisionStatus::DRAFT | CompensationRevisionStatus::STALE
+                )
+        })
         .cloned()
         .collect::<Vec<_>>();
-    batches.sort_by(|left, right| {
-        left.paymentDate
-            .cmp(&right.paymentDate)
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    let batches = sort_retro_batches_chronologically(batches)?;
     for batch in batches {
-        if matches!(
-            batch.status,
-            CompensationRevisionStatus::DRAFT | CompensationRevisionStatus::STALE
-        ) {
-            // Draft and stale calculations are retained for audit/reproducibility
-            // but are not authoritative recognized entitlement.
-            continue;
-        }
         let batch_payment_date = parse_date(&batch.paymentDate, "önceki retro ödeme")?;
         if batch_payment_date > payment_date {
             continue;
@@ -1687,7 +1710,7 @@ fn previous_source_retro_state(
     current_batch_id: &str,
     source_period_id: &str,
 ) -> Result<SourcePekState> {
-    let mut batches = index
+    let batches = index
         .retro_batches_for_person(dataset, personnel_id)
         .filter(|batch| {
             batch.id != current_batch_id
@@ -1698,11 +1721,7 @@ fn previous_source_retro_state(
         })
         .cloned()
         .collect::<Vec<_>>();
-    batches.sort_by(|left, right| {
-        left.paymentDate
-            .cmp(&right.paymentDate)
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    let batches = sort_retro_batches_chronologically(batches)?;
 
     let mut state = SourcePekState::default();
     for batch in batches {
@@ -2196,7 +2215,6 @@ impl RetroEntitlementEngine {
             .map(|application| application.effective_from)
             .min()
             .unwrap_or(effective_from);
-
         let mut periods: Vec<BordroDonemi> = request
             .dataset
             .periods
@@ -2205,13 +2223,26 @@ impl RetroEntitlementEngine {
                 let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").ok();
                 let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").ok();
                 start.zip(end).is_some_and(|(start, end)| {
+                    // A retro calculation may only use a closed service period.
+                    // The payment month is an event month, not permission to
+                    // replay an open 15-14 period through the payment day.
                     end >= earliest_effective_from
-                            // A retro calculation may only use a closed
-                            // service period. The payment month is an event
-                            // month, not permission to replay an open 15-14
-                            // period through the payment day.
-                            && end <= payment_date
-                            && start <= payment_date
+                        && end <= payment_date
+                        && start <= payment_date
+                        // Historical revisions can predate this person's
+                        // payroll history. Only replay a period when this
+                        // person has source attendance or a source payroll;
+                        // if a payroll exists but its required attendance is
+                        // missing, downstream source validation still fails
+                        // closed.
+                        && (index.attendances(&request.dataset, &request.personnelId, &period.id).next().is_some()
+                            || index
+                                .payrolls_for_person_period(
+                                    &request.dataset,
+                                    &request.personnelId,
+                                    &period.id,
+                                )
+                                .any(|payroll| payroll.accrualType != AccrualType::RETRO_ADJUSTMENT))
                 })
             })
             .cloned()

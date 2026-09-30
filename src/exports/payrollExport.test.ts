@@ -9,6 +9,8 @@ import {
 import {
   buildPeriodPayrollWorkbook,
   buildSinglePayrollWorkbook,
+  exportPeriodPayrollExcel,
+  exportSinglePayrollExcel,
 } from './payrollExcelExport';
 import { buildPeriodPayrollCsv, buildSinglePayrollCsv, escapeCsvCell } from './payrollCsvExport';
 import { canvasesToPdfBlob } from './payrollPdfExport';
@@ -167,6 +169,61 @@ describe('payroll export contracts', () => {
     expect(puantajRows.length).toBe(3);
   });
 
+  test('payslip keeps employee identity values visible and merges only section headings', () => {
+    const model = buildPayrollExportModel({
+      person: { ...person, tcNo: '01234567890' },
+      payroll: payroll('CALCULATED'),
+      period,
+      attendance,
+    });
+    const workbook = XLSX.read(
+      XLSX.write(buildSinglePayrollWorkbook(model), { bookType: 'xlsx', type: 'array' }),
+      { type: 'array' }
+    );
+    const sheet = workbook.Sheets['Ücret Pusulası'];
+    const rows = XLSX.utils.sheet_to_json<Array<string | number>>(sheet, { header: 1, raw: true });
+    const valueFor = (label: string) => rows.find((row) => row[0] === label)?.[1];
+
+    expect(sheet['!merges']?.map((merge) => XLSX.utils.encode_range(merge))).toEqual([
+      'A1:B1',
+      'A11:B11',
+      'A21:B21',
+    ]);
+    expect(sheet.A12.v).toBe('T.C. Kimlik No');
+    expect(sheet.B12.v).toBe('01234567890');
+    expect(sheet.B12.t).toBe('s');
+    expect(sheet.B13.v).toBe('Şule Çığ');
+    expect(sheet.B14.v).toBe('SGK-1');
+    expect(sheet.B18.v).toBe(person.iban);
+    expect(valueFor('BRÜT GELİR TOPLAMI')).toBe(model.totals.gross);
+    expect(valueFor('KESİNTİ TOPLAMI')).toBe(model.totals.deductions);
+    expect(valueFor('NET ÖDEME')).toBe(model.totals.net);
+  });
+
+  test('payslip keeps money at two decimals and numeric year and attendance counts as integers', () => {
+    const sourcePayroll = payroll('CALCULATED');
+    const model = buildPayrollExportModel({
+      person: { ...person, hizmetYili: 3 },
+      payroll: { ...sourcePayroll, puantajOzeti: { ...sourcePayroll.puantajOzeti, 'Ç': 23 } },
+      period,
+      attendance,
+    });
+    const workbook = XLSX.read(
+      XLSX.write(buildSinglePayrollWorkbook(model), { bookType: 'xlsx', type: 'array' }),
+      { type: 'array', cellNF: true }
+    );
+    const sheet = workbook.Sheets['Ücret Pusulası'];
+    const rows = XLSX.utils.sheet_to_json<Array<string | number>>(sheet, { header: 1, raw: true });
+    const cellFor = (label: string) => `B${rows.findIndex((row) => row[0] === label) + 1}`;
+    const serviceYears = sheet[cellFor('Hizmet Yılı')];
+    const workedDays = sheet[cellFor('Çalışılan (Ç)')];
+    const gross = sheet[cellFor('BRÜT GELİR TOPLAMI')];
+
+    expect(serviceYears).toMatchObject({ t: 'n', v: 3, z: '0' });
+    expect(workedDays).toMatchObject({ t: 'n', v: 23, z: '0' });
+    expect(gross).toMatchObject({ t: 'n', v: model.totals.gross, z: '#,##0.00' });
+  });
+
   test('period workbook has seven audit sheets and marks stale payroll as excluded', () => {
     const secondPerson: Personel = { ...person, id: 'p2', tcNo: '22222222222', ad: 'Ali' };
     const good = payroll('FINALIZED');
@@ -196,6 +253,166 @@ describe('payroll export contracts', () => {
     const control = XLSX.utils.sheet_to_json<Record<string, string>>(workbook.Sheets.Kontrol);
     expect(control.length).toBe(2);
     expect(control.find((row) => row['T.C. Kimlik No'] === '22222222222')?.['Resmi Çıktıya Dahil']).toBe('HAYIR');
+  });
+
+  test('single and period Excel exports use native save with workbook values intact and cancellation returned', async () => {
+    const originalDoc = (globalThis as any).document;
+    const originalWindow = (globalThis as any).window;
+    const nativeCalls: Array<{ command: string; fileName: string; excelBytes: number[] }> = [];
+    (globalThis as any).document = {
+      createElement: () => ({ click() { throw new Error('native export must not trigger browser download'); } }),
+      body: { appendChild() {}, removeChild() {} },
+    };
+    (globalThis as any).window = {
+      __TAURI_INTERNALS__: {
+        invoke: async (command: string, args: { fileName: string; excelBytes: number[] }) => {
+          nativeCalls.push({ command, ...args });
+          return nativeCalls.length === 1;
+        },
+      },
+    };
+
+    try {
+      const exportPayroll = {
+        ...payroll('CALCULATED'),
+        gelirToplam: 86348.1,
+        kesintiToplam: 26313.79,
+        netOdeme: 60034.31,
+        pekDetay: { ...payroll('CALCULATED').pekDetay!, finalPek: 80348.1 },
+      };
+      const model = buildPayrollExportModel({
+        person,
+        payroll: exportPayroll,
+        period,
+        attendance,
+      });
+      const context = {
+        period,
+        models: [model],
+        people: [person],
+        payrolls: [exportPayroll],
+        notices: [],
+      };
+
+      expect(await exportSinglePayrollExcel(model)).toBe(true);
+      expect(await exportPeriodPayrollExcel(context)).toBe(false);
+      expect(nativeCalls).toHaveLength(2);
+      expect(nativeCalls.map(({ command }) => command)).toEqual(['export_excel', 'export_excel']);
+      expect(nativeCalls[0].fileName).toBe('Bordro_2026-07_Sule_Cig_NORMAL_2026-08-14_0.xlsx');
+      expect(nativeCalls[1].fileName).toMatch(/\.xlsx$/);
+
+      const single = XLSX.read(new Uint8Array(nativeCalls[0].excelBytes), { type: 'array' });
+      expect(single.SheetNames).toEqual(['Ücret Pusulası', 'Hesap Detayı', 'Puantaj']);
+      const slipRows = XLSX.utils.sheet_to_json<(string | number)[]>(single.Sheets['Ücret Pusulası'], {
+        header: 1,
+        raw: true,
+      });
+      const valueFor = (label: string) => slipRows.find((row) => row[0] === label)?.[1];
+      expect(valueFor('BRÜT GELİR TOPLAMI')).toBe(86348.1);
+      expect(valueFor('KESİNTİ TOPLAMI')).toBe(26313.79);
+      expect(valueFor('NET ÖDEME')).toBe(60034.31);
+      expect(valueFor('Nihai / Bildirim PEK')).toBe(80348.1);
+      expect(typeof valueFor('NET ÖDEME')).toBe('number');
+
+      const periodWorkbook = XLSX.read(new Uint8Array(nativeCalls[1].excelBytes), { type: 'array' });
+      expect(periodWorkbook.SheetNames).toEqual([
+        'Bordro İcmali', 'Gelirler', 'Kesintiler', 'SGK-Vergi', 'Puantaj', 'Banka', 'Kontrol',
+      ]);
+      const summaryRows = XLSX.utils.sheet_to_json<Record<string, string | number>>(
+        periodWorkbook.Sheets['Bordro İcmali']
+      );
+      expect(summaryRows[0]['Brüt Gelir']).toBe(86348.1);
+      expect(summaryRows[0]['Nihai PEK']).toBe(80348.1);
+      expect(summaryRows[0]['Kesinti Toplamı']).toBe(26313.79);
+      expect(summaryRows[0]['Net Ödeme']).toBe(60034.31);
+      expect(typeof summaryRows[0]['Net Ödeme']).toBe('number');
+    } finally {
+      (globalThis as any).document = originalDoc;
+      (globalThis as any).window = originalWindow;
+    }
+  });
+
+  test('browser Excel exports retain anchor download behavior for single and period workbooks', async () => {
+    const originalDoc = (globalThis as any).document;
+    const originalWindow = (globalThis as any).window;
+    const originalUrl = globalThis.URL;
+    const downloads: Array<{ fileName: string; blob: Blob }> = [];
+    let nextUrl = 0;
+    (globalThis as any).window = {};
+    (globalThis as any).URL = {
+      createObjectURL(blob: Blob) {
+        downloads.push({ fileName: '', blob });
+        return `blob:payroll-${++nextUrl}`;
+      },
+      revokeObjectURL() {},
+    };
+    (globalThis as any).document = {
+      createElement: () => ({
+        href: '',
+        set download(fileName: string) {
+          downloads[downloads.length - 1].fileName = fileName;
+        },
+        click() {},
+      }),
+      body: { appendChild() {}, removeChild() {} },
+    };
+
+    try {
+      const model = buildPayrollExportModel({
+        person,
+        payroll: payroll('CALCULATED'),
+        period,
+        attendance,
+      });
+      const savedSingle = await exportSinglePayrollExcel(model);
+      const savedPeriod = await exportPeriodPayrollExcel({
+        period,
+        models: [model],
+        people: [person],
+        payrolls: [payroll('CALCULATED')],
+      });
+
+      expect(savedSingle).toBe(true);
+      expect(savedPeriod).toBe(true);
+      expect(downloads).toHaveLength(2);
+      expect(downloads.every(({ fileName }) => fileName.endsWith('.xlsx'))).toBe(true);
+      const browserWorkbook = XLSX.read(new Uint8Array(await downloads[0].blob.arrayBuffer()), {
+        type: 'array',
+      });
+      expect(browserWorkbook.SheetNames).toEqual(['Ücret Pusulası', 'Hesap Detayı', 'Puantaj']);
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+    } finally {
+      (globalThis as any).document = originalDoc;
+      (globalThis as any).window = originalWindow;
+      globalThis.URL = originalUrl;
+    }
+  });
+
+  test('native payroll Excel save errors propagate to UI error handling', async () => {
+    const originalDoc = (globalThis as any).document;
+    const originalWindow = (globalThis as any).window;
+    let browserClicks = 0;
+    (globalThis as any).document = {
+      createElement: () => ({ click() { browserClicks += 1; } }),
+      body: { appendChild() {}, removeChild() {} },
+    };
+    (globalThis as any).window = {
+      __TAURI_INTERNALS__: { invoke: async () => { throw new Error('native payroll save failed'); } },
+    };
+
+    try {
+      const model = buildPayrollExportModel({
+        person,
+        payroll: payroll('CALCULATED'),
+        period,
+        attendance,
+      });
+      await expect(exportSinglePayrollExcel(model)).rejects.toThrow('native payroll save failed');
+      expect(browserClicks).toBe(0);
+    } finally {
+      (globalThis as any).document = originalDoc;
+      (globalThis as any).window = originalWindow;
+    }
   });
 
   test('CSV exports preserve UTF-8, Excel separators and authoritative payroll rows', () => {

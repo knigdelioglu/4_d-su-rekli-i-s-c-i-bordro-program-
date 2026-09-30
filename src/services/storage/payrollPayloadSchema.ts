@@ -1182,11 +1182,24 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
     }
   });
 
-  const orderedBatches = [...payload.retroBatches].sort((left, right) =>
-    left.personnelId.localeCompare(right.personnelId) ||
-    left.paymentDate.localeCompare(right.paymentDate) ||
-    left.id.localeCompare(right.id)
+  const personnelPaymentKey = (batch: PayrollStorageDto['retroBatches'][number]) =>
+    `${batch.personnelId}\u0000${batch.paymentDate}`;
+  const groupsWithMissingCreatedAt = new Set(
+    payload.retroBatches
+      .filter((batch) => !batch.createdAt)
+      .map(personnelPaymentKey)
   );
+  const orderedBatches = [...payload.retroBatches].sort((left, right) => {
+    const personnelOrder = left.personnelId.localeCompare(right.personnelId);
+    if (personnelOrder !== 0) return personnelOrder;
+    const paymentDateOrder = left.paymentDate.localeCompare(right.paymentDate);
+    if (paymentDateOrder !== 0) return paymentDateOrder;
+    const createdAtOrder = !groupsWithMissingCreatedAt.has(personnelPaymentKey(left)) &&
+      left.createdAt && right.createdAt
+      ? left.createdAt.localeCompare(right.createdAt)
+      : 0;
+    return createdAtOrder || left.id.localeCompare(right.id);
+  });
   const outstandingByPersonnel = new Map<string, bigint>();
   orderedBatches.forEach((batch) => {
     if (batch.status !== 'CALCULATED' && batch.status !== 'FINALIZED') {
@@ -1427,11 +1440,18 @@ function assertCrossRecordIntegrity(
     if (linked.length === 1) {
       const payment = linked[0];
       const expectedPaymentStatus = status === 'FINALIZED' ? 'FINALIZED' : status === 'CALCULATED' ? 'CALCULATED' : null;
+      // A source-data mutation can invalidate a previously calculated payment
+      // while leaving the retro entitlement batch itself unchanged. Preserve
+      // that event for audit/recovery, but only accept it when every linking
+      // and gross-amount field still matches the batch. STALE events are not
+      // replay targets and therefore never become authoritative again here.
+      const linkedStatusIsValid = payment.status === expectedPaymentStatus ||
+        (status === 'CALCULATED' && payment.status === 'STALE');
       const linkedStateIsValid = expectedPaymentStatus !== null &&
         payment.accrualType === 'RETRO_ADJUSTMENT' &&
         payment.personelId === batch.personnelId &&
         payment.paymentDate === batch.paymentDate &&
-        payment.status === expectedPaymentStatus &&
+        linkedStatusIsValid &&
         retroCents(payment.gelirToplam, `$.bordrolar[${payload.bordrolar.indexOf(payment)}].gelirToplam`) ===
           payable;
       if (!linkedStateIsValid) {

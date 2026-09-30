@@ -44,6 +44,8 @@ import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { PeriodSummary } from './components/Dashboard/PeriodSummary';
 import { DataBackupPage } from './components/DataBackupPage';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
+import { formatPayrollError } from './components/useBordroCalculationController';
+import { importConfirmedBackupFile } from './services/storage/confirmedBackupImport';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
@@ -190,7 +192,26 @@ export default function App() {
   const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
   const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
   const [isResettingSampleData, setIsResettingSampleData] = useState(false);
+  const [pendingBackupFile, setPendingBackupFile] = useState<File | null>(null);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
+  const backupImportCancelRef = useRef<HTMLButtonElement>(null);
   const payrollEngine = getPayrollEngine();
+
+  useEffect(() => {
+    if (pendingBackupFile) backupImportCancelRef.current?.focus();
+  }, [pendingBackupFile]);
+
+  useEffect(() => {
+    if (!pendingBackupFile) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !isImportingBackup) {
+        event.preventDefault();
+        setPendingBackupFile(null);
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
+    return () => document.removeEventListener('keydown', handleEscape);
+  }, [pendingBackupFile, isImportingBackup]);
 
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
     string | undefined
@@ -285,7 +306,7 @@ export default function App() {
     [browserPersistence.markDirty]
   );
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (): Promise<boolean> => {
     const generation = ++dataLoadGeneration.current;
     const isLatestLoad = () => generation === dataLoadGeneration.current;
     setLoadError(null);
@@ -294,7 +315,7 @@ export default function App() {
     try {
       if (isNative) {
         const isMigrated = await tauriBridge.checkLegacyMigrated();
-        if (!isLatestLoad()) return;
+        if (!isLatestLoad()) return false;
         if (!isMigrated) {
           const legacyStr = localStorage.getItem(STORAGE_KEY);
           if (legacyStr) {
@@ -303,7 +324,7 @@ export default function App() {
             await tauriBridge.migrateLegacyPayload(legacyStr);
           }
         }
-        if (!isLatestLoad()) return;
+        if (!isLatestLoad()) return false;
 
         const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, savedZamAylari, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations] =
           await Promise.all([
@@ -323,7 +344,7 @@ export default function App() {
             tauriBridge.getRetroAdjustmentAllocations(),
           ]);
 
-        if (!isLatestLoad()) return;
+        if (!isLatestLoad()) return false;
         applyDataset(toPayrollBoundaryDto({
           donemler: fetchedPeriods,
           aktifDonemId: savedActivePeriodId || fetchedPeriods[0]?.id || '',
@@ -341,11 +362,11 @@ export default function App() {
           retroAllocations: fetchedRetroAllocations,
         }));
         setIsDataLoaded(true);
-        return;
+        return true;
       }
 
       const saved = await browserPersistence.loadSnapshot();
-      if (!isLatestLoad()) return;
+      if (!isLatestLoad()) return false;
       if (saved) {
         applyDataset(saved);
       } else {
@@ -368,8 +389,9 @@ export default function App() {
       }
       setIsDataLoaded(true);
       setLoadError(null);
+      return true;
     } catch (err) {
-      if (!isLatestLoad()) return;
+      if (!isLatestLoad()) return false;
       const browserError = isNative ? null : formatBrowserStorageLoadError(err);
       const message = isNative
         ? `Veri yüklenemedi: ${getErrorMessage(err)}`
@@ -383,6 +405,7 @@ export default function App() {
       // Native failures stop here. Browser failures also remain visible rather
       // than being replaced with an empty, apparently valid dataset.
       setIsDataLoaded(false);
+      return false;
     }
   }, [applyDataset, browserPersistence.loadSnapshot]);
 
@@ -491,8 +514,23 @@ export default function App() {
     handleClearAndStartFresh,
     handleExportBackup,
     handleImportBackup,
-    handleRecoveryFileImport,
   } = backupController;
+
+  const handleBackupFileSelected = (file: File) => setPendingBackupFile(file);
+
+  const handleConfirmBackupImport = async () => {
+    if (!pendingBackupFile) return;
+    setIsImportingBackup(true);
+    try {
+      await importConfirmedBackupFile(pendingBackupFile, true, handleImportBackup);
+      setPendingBackupFile(null);
+    } catch (error) {
+      setLoadError(`Yedek dosyası okunamadı; kayıt değiştirilmedi. ${formatPayrollError(error)}`);
+      setPendingBackupFile(null);
+    } finally {
+      setIsImportingBackup(false);
+    }
+  };
 
   const handleConfirmResetSampleData = async () => {
     setIsResettingSampleData(true);
@@ -544,7 +582,7 @@ export default function App() {
           aktifDonemId={aktifDonemId}
           onSelectDonem={handleSelectDonem}
           onExportBackup={handleExportBackup}
-          onImportBackup={handleImportBackup}
+          onImportFileSelected={handleBackupFileSelected}
           onResetSampleData={() => setIsResetConfirmOpen(true)}
           noticeCount={payrollNoticeCount}
           onOpenNoticeSummary={() => setActiveTab('ozet')}
@@ -659,7 +697,11 @@ export default function App() {
                       type="file"
                       accept=".json,application/json"
                       className="hidden"
-                      onChange={handleRecoveryFileImport}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (file) handleBackupFileSelected(file);
+                        event.target.value = '';
+                      }}
                     />
                   </label>
                 </div>
@@ -819,7 +861,7 @@ export default function App() {
                       ? 'Veriler bu cihazdaki yerel uygulama veritabanında tutulur; düzenli JSON yedeği almanız önerilir.'
                       : 'Veriler bu tarayıcıda yerel olarak tutulur; düzenli JSON yedeği almanız önerilir.'}
                     onExportBackup={handleExportBackup}
-                    onImportBackup={handleImportBackup}
+                    onImportFileSelected={handleBackupFileSelected}
                     onResetSampleData={() => setIsResetConfirmOpen(true)}
                   />
                 )}
@@ -828,6 +870,46 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {pendingBackupFile && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="backup-import-confirm-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs"
+        >
+          <div className="w-full max-w-md space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div>
+              <h3 id="backup-import-confirm-title" className="text-base font-bold text-slate-900">
+                Yedekten geri yükleme onayı
+              </h3>
+              <p className="mt-1 break-all text-xs text-slate-500">{pendingBackupFile.name}</p>
+            </div>
+            <p className="text-xs leading-relaxed text-slate-600">
+              Bu işlem mevcut personel, dönem, puantaj, bordro, vergi açılışı, raporlar, yıllık parametreler ve geriye dönük fark kayıtlarını yedekteki verilerle değiştirecek. İşlem geri alınamaz. Devam etmek istiyor musunuz?
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                ref={backupImportCancelRef}
+                disabled={isImportingBackup}
+                onClick={() => setPendingBackupFile(null)}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={isImportingBackup}
+                onClick={() => void handleConfirmBackupImport()}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {isImportingBackup ? 'Yedek yükleniyor…' : 'Yedeği yükle'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Örnek Veri Reset Onay Modalı */}
       {isResetConfirmOpen && (

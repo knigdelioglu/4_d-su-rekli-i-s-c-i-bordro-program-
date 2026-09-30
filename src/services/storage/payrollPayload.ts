@@ -963,11 +963,29 @@ function currentPayrollReplayProjection(
   };
 }
 
+function importedReplayComparisonProjection(
+  imported: PayrollStorageDto['bordrolar'][number],
+  replayed: PayrollStorageDto['bordrolar'][number]
+): unknown {
+  const importedPek = imported.pekDetay;
+  const replayedPek = replayed.pekDetay;
+  if (!importedPek || !replayedPek) return currentPayrollReplayProjection(imported);
+
+  // Older V5 snapshots predate these nullable monthly PEK audit values. Treat
+  // only null/absent imported fields as unspecified; preserve and compare every
+  // value that the backup actually contains.
+  const pekDetay = { ...importedPek };
+  for (const key of ['aylikOncekiPekTuketimi', 'aylikSonrasiPekTuketimi'] as const) {
+    if (pekDetay[key] == null) pekDetay[key] = replayedPek[key];
+  }
+  return currentPayrollReplayProjection({ ...imported, pekDetay });
+}
+
 function assertCurrentReplayMatches(
   imported: PayrollStorageDto['bordrolar'][number],
   replayed: PayrollStorageDto['bordrolar'][number]
 ): void {
-  const importedProjection = JSON.stringify(stableReplayValue(currentPayrollReplayProjection(imported)));
+  const importedProjection = JSON.stringify(stableReplayValue(importedReplayComparisonProjection(imported, replayed)));
   const replayedProjection = JSON.stringify(stableReplayValue(currentPayrollReplayProjection(replayed)));
   if (importedProjection !== replayedProjection) {
     throw new Error(

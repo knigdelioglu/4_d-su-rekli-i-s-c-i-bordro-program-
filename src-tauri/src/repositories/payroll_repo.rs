@@ -1467,6 +1467,7 @@ impl PayrollRepository {
             !preserve_legacy_snapshot,
             false,
             !preserve_legacy_snapshot,
+            false,
         )?;
         let after =
             Self::dependency_fingerprint(tx, &bordro.personelId, &bordro.donemId, &accrual_id)?;
@@ -1482,7 +1483,15 @@ impl PayrollRepository {
     /// Bulk restore/import snapshot'ları olduğu gibi korur; production dependency
     /// invalidation `save()` giriş noktasında uygulanır.
     pub fn save_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
-        Self::save_in_transaction_with_options(conn, b, true, false, true)
+        Self::save_in_transaction_with_options(conn, b, true, false, true, false)
+    }
+
+    /// Restore/import persistence path that retains an authoritative exported
+    /// `sonGuncellemeTarihi`. Missing legacy timestamps keep the established
+    /// current-time fallback; normal mutations continue to use `save()` or
+    /// `save_in_transaction()` and receive a fresh update timestamp.
+    pub fn save_for_restore_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
+        Self::save_in_transaction_with_options(conn, b, true, false, true, true)
     }
 
     /// Explicit compatibility path for pre-current backups. Sparse legacy
@@ -1491,7 +1500,7 @@ impl PayrollRepository {
     /// STALE so that the placeholder can never enter an authoritative tax
     /// chain. The row remains available for an explicit recalculation/migration.
     pub fn save_legacy_in_transaction(conn: &Connection, b: &BordroKaydi) -> Result<()> {
-        Self::save_in_transaction_with_options(conn, b, false, true, false)
+        Self::save_in_transaction_with_options(conn, b, false, true, false, false)
     }
 
     fn save_in_transaction_with_options(
@@ -1500,6 +1509,7 @@ impl PayrollRepository {
         validate_financial_invariants: bool,
         allow_legacy_missing_gv_base: bool,
         require_current_gv_base_pair: bool,
+        preserve_imported_updated_at: bool,
     ) -> Result<()> {
         Self::validate_payment_date_matches_period(conn, b)?;
         // Even the explicit legacy compatibility path must keep ordinary
@@ -1519,6 +1529,12 @@ impl PayrollRepository {
             now.clone()
         } else {
             b.olusturulmaTarihi.clone()
+        };
+        let updated_at = if preserve_imported_updated_at && !b.sonGuncellemeTarihi.trim().is_empty()
+        {
+            b.sonGuncellemeTarihi.clone()
+        } else {
+            now
         };
         let accrual_id = Self::effective_accrual_id(b);
         let accrual_type = Self::accrual_type_to_str(b.accrualType);
@@ -1713,7 +1729,7 @@ impl PayrollRepository {
                 damga_snapshot_json,
                 b.notlar,
                 calculated_at,
-                now,
+                updated_at,
             ],
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;

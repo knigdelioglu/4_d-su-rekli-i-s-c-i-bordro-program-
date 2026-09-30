@@ -24,6 +24,12 @@ export interface SgkPrimKontroluRateCandidates {
 
 export interface SgkPrimKontroluRow {
   personel: Personel;
+  /** Canonical period day count when all authoritative event snapshots agree. */
+  sgkPrimGunSayisi: number | null;
+  /** True when authoritative event snapshots contain different valid day counts. */
+  sgkPrimGunSayisiTutarsiz: boolean;
+  /** Sum of authoritative payment-event PEK values, or null when any value is unavailable/invalid. */
+  cariDonemPek: number | null;
   isverenSgkPrimi: number;
   isverenIssizlikPrimi: number;
   isciSgkPrimi: number;
@@ -38,6 +44,9 @@ export interface SgkPrimKontroluRow {
 }
 
 export interface SgkPrimKontroluTotals {
+  sgkPrimGunSayisi: number;
+  cariDonemPek: number;
+  retroPekDelta: number;
   isverenSgkPrimi: number;
   isverenIssizlikPrimi: number;
   isciSgkPrimi: number;
@@ -60,8 +69,10 @@ export interface SgkPrimKontroluRateLabels {
 
 type SgkPrimKontroluExcelValue = string | number;
 
+const SGK_CURRENCY_NUMBER_FORMAT = '#,##0.00';
+
 export interface SgkPrimKontroluExcelPayload {
-  columns: Array<{ header: string; key: string; width: number }>;
+  columns: Array<{ header: string; key: string; width: number; numFmt?: string }>;
   data: Array<Record<string, SgkPrimKontroluExcelValue>>;
   summaryRows: Array<Record<string, SgkPrimKontroluExcelValue>>;
 }
@@ -90,6 +101,40 @@ const EMPTY_SNAPSHOT_TOTALS = {
 
 function isNonNegativeFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isValidSgkDayCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function getCanonicalSgkDayCount(payrolls: BordroKaydi[]): {
+  days: number | null;
+  inconsistent: boolean;
+} {
+  const dayCounts = payrolls.map((payroll) => payroll.statutorySnapshot?.sgkPrimGunSayisi);
+  if (dayCounts.length === 0 || !dayCounts.every(isValidSgkDayCount)) {
+    return { days: null, inconsistent: false };
+  }
+
+  const distinctDayCounts = new Set(dayCounts);
+  if (distinctDayCounts.size !== 1) return { days: null, inconsistent: true };
+  return { days: dayCounts[0], inconsistent: false };
+}
+
+function getCurrentPeriodPekKurus(payrolls: BordroKaydi[]): number | null {
+  if (payrolls.length === 0) return null;
+  let totalKurus = 0;
+  try {
+    for (const payroll of payrolls) {
+      const primMatrahi = payroll.pekDetay?.primMatrahi;
+      if (!isNonNegativeFiniteNumber(primMatrahi)) return null;
+      totalKurus += amountToKurus(primMatrahi);
+      if (!Number.isSafeInteger(totalKurus)) return null;
+    }
+    return totalKurus;
+  } catch {
+    return null;
+  }
 }
 
 function isValidRate(value: unknown): value is number {
@@ -378,6 +423,8 @@ export function getSgkPrimKontroluRows(
     );
     const hasAuthoritativeSourcePayroll =
       authoritativePayrolls.length > 0 && !hasMissingSnapshot;
+    const canonicalSgkDays = getCanonicalSgkDayCount(authoritativePayrolls);
+    const cariDonemPekKurus = getCurrentPeriodPekKurus(authoritativePayrolls);
     const status: SgkPrimKontroluRowStatus = hasStalePayroll
       ? 'stale'
       : hasMissingSnapshot
@@ -425,6 +472,13 @@ export function getSgkPrimKontroluRows(
 
     return {
       personel,
+      sgkPrimGunSayisi: status === 'authoritative' ? canonicalSgkDays.days : null,
+      sgkPrimGunSayisiTutarsiz:
+        status === 'authoritative' && canonicalSgkDays.inconsistent,
+      cariDonemPek:
+        status === 'authoritative' && cariDonemPekKurus !== null
+          ? kurusToAmount(cariDonemPekKurus)
+          : null,
       isverenSgkPrimi,
       isverenIssizlikPrimi,
       isciSgkPrimi,
@@ -443,6 +497,11 @@ export function getSgkPrimKontroluTotals(rows: SgkPrimKontroluRow[]): SgkPrimKon
   const totalsKurus = rows.reduce(
     (totals, row) => {
       if (row.status !== 'authoritative') return totals;
+      if (row.sgkPrimGunSayisi !== null) totals.sgkPrimGunSayisi += row.sgkPrimGunSayisi;
+      if (row.cariDonemPek !== null) {
+        totals.cariDonemPek += amountToKurus(row.cariDonemPek);
+      }
+      totals.retroPekDelta += amountToKurus(row.retroPekDelta);
       totals.isverenSgkPrimi += amountToKurus(row.isverenSgkPrimi);
       totals.isverenIssizlikPrimi += amountToKurus(row.isverenIssizlikPrimi);
       totals.isciSgkPrimi += amountToKurus(row.isciSgkPrimi);
@@ -454,6 +513,9 @@ export function getSgkPrimKontroluTotals(rows: SgkPrimKontroluRow[]): SgkPrimKon
     },
     {
       isverenSgkPrimi: 0,
+      sgkPrimGunSayisi: 0,
+      cariDonemPek: 0,
+      retroPekDelta: 0,
       isverenIssizlikPrimi: 0,
       isciSgkPrimi: 0,
       isciIssizlikPrimi: 0,
@@ -470,6 +532,9 @@ export function getSgkPrimKontroluTotals(rows: SgkPrimKontroluRow[]): SgkPrimKon
   const hazirOlmayanPersonelSayisi = rows.filter((row) => row.status !== 'authoritative').length;
 
   return {
+    sgkPrimGunSayisi: totalsKurus.sgkPrimGunSayisi,
+    cariDonemPek: kurusToAmount(totalsKurus.cariDonemPek),
+    retroPekDelta: kurusToAmount(totalsKurus.retroPekDelta),
     isverenSgkPrimi: kurusToAmount(totalsKurus.isverenSgkPrimi),
     isverenIssizlikPrimi: kurusToAmount(totalsKurus.isverenIssizlikPrimi),
     isciSgkPrimi: kurusToAmount(totalsKurus.isciSgkPrimi),
@@ -603,27 +668,66 @@ export function buildSgkPrimKontroluExcelPayload(
     { header: 'SGK Sicil No', key: 'sgkSicilNo', width: 18 },
     { header: 'Ad Soyad', key: 'adSoyad', width: 28 },
     { header: 'Durum', key: 'durum', width: 24 },
-    { header: rateLabels.isverenSgk, key: 'isverenSgkPrimi', width: 20 },
-    { header: rateLabels.isverenIssizlik, key: 'isverenIssizlikPrimi', width: 20 },
-    { header: rateLabels.isciSgk, key: 'isciSgkPrimi', width: 18 },
-    { header: rateLabels.isciIssizlik, key: 'isciIssizlikPrimi', width: 18 },
-    { header: 'Retro kaynak PEK farkı', key: 'retroPekDelta', width: 20 },
+    { header: 'SGK Gün Sayısı', key: 'sgkPrimGunSayisi', width: 16, numFmt: '0' },
+    {
+      header: 'Cari Dönem PEK',
+      key: 'cariDonemPek',
+      width: 20,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
+    },
+    {
+      header: rateLabels.isverenSgk,
+      key: 'isverenSgkPrimi',
+      width: 20,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
+    },
+    {
+      header: rateLabels.isverenIssizlik,
+      key: 'isverenIssizlikPrimi',
+      width: 20,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
+    },
+    {
+      header: rateLabels.isciSgk,
+      key: 'isciSgkPrimi',
+      width: 18,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
+    },
+    {
+      header: rateLabels.isciIssizlik,
+      key: 'isciIssizlikPrimi',
+      width: 18,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
+    },
+    {
+      header: 'Retro kaynak PEK farkı',
+      key: 'retroPekDelta',
+      width: 20,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
+    },
     {
       header: 'PEK Alt Sınır İşveren Tamamlama',
       key: 'pekAltSinirTamamlamaIsverenPrimi',
       width: 28,
+      numFmt: SGK_CURRENCY_NUMBER_FORMAT,
     },
-    { header: 'Toplam', key: 'toplam', width: 18 },
+    { header: 'Toplam', key: 'toplam', width: 18, numFmt: SGK_CURRENCY_NUMBER_FORMAT },
   ];
 
   const data = rows.map((row, index) => {
     const isReady = row.status === 'authoritative';
     return {
-      siraNo: index + 1,
+      siraNo: String(index + 1),
       tcNo: row.personel.tcNo,
       sgkSicilNo: row.personel.sgkSicilNo,
       adSoyad: `${row.personel.ad} ${row.personel.soyad}`,
       durum: getSgkPrimKontroluStatusLabel(row.status),
+      sgkPrimGunSayisi: isReady
+        ? row.sgkPrimGunSayisiTutarsiz
+          ? 'Tutarsız'
+          : row.sgkPrimGunSayisi ?? ''
+        : '',
+      cariDonemPek: isReady ? row.cariDonemPek ?? '' : '',
       isverenSgkPrimi: isReady ? row.isverenSgkPrimi : '',
       isverenIssizlikPrimi: isReady ? row.isverenIssizlikPrimi : '',
       isciSgkPrimi: isReady ? row.isciSgkPrimi : '',
@@ -642,6 +746,8 @@ export function buildSgkPrimKontroluExcelPayload(
     sgkSicilNo: '',
     adSoyad: label,
     durum: '',
+    sgkPrimGunSayisi: '',
+    cariDonemPek: '',
     isverenSgkPrimi: '',
     isverenIssizlikPrimi: '',
     isciSgkPrimi: '',
@@ -652,6 +758,18 @@ export function buildSgkPrimKontroluExcelPayload(
   });
 
   const summaryRows = [
+    {
+      ...emptySummaryRow('SGK Gün Sayısı Toplamı'),
+      sgkPrimGunSayisi: totals.sgkPrimGunSayisi,
+    },
+    {
+      ...emptySummaryRow('Cari Dönem PEK Toplamı'),
+      cariDonemPek: totals.cariDonemPek,
+    },
+    {
+      ...emptySummaryRow('Retro Kaynak PEK Farkı Toplamı'),
+      retroPekDelta: totals.retroPekDelta,
+    },
     {
       ...emptySummaryRow('SGK İşveren Toplamı'),
       isverenSgkPrimi: totals.isverenSgkPrimi,
@@ -690,7 +808,7 @@ export function buildSgkPrimKontroluExcelPayload(
     },
     {
       ...emptySummaryRow('Hazır Olmayan Personel Sayısı'),
-      toplam: totals.hazirOlmayanPersonelSayisi,
+      toplam: String(totals.hazirOlmayanPersonelSayisi),
     },
   ];
 

@@ -207,6 +207,21 @@ export const tauriBridge = {
     return mutateTauri<void>('replace_backup_payload', { payloadJson });
   },
 
+  async exportBackup(payloadJson: string, fileName: string): Promise<boolean> {
+    const saved = await invokeTauri<boolean | null>('export_backup', { payloadJson, fileName });
+    return saved === true;
+  },
+
+  async exportExcel(excelBytes: number[], fileName: string): Promise<boolean> {
+    const saved = await invokeTauri<boolean | null>('export_excel', { excelBytes, fileName });
+    return saved === true;
+  },
+
+  async exportPdf(pdfBytes: number[], fileName: string): Promise<boolean> {
+    const saved = await invokeTauri<boolean | null>('export_pdf', { pdfBytes, fileName });
+    return saved === true;
+  },
+
   async getAnnualPayrollParameters(): Promise<AnnualPayrollParameters[]> {
     return invokeTauri<AnnualPayrollParameters[]>('get_annual_payroll_parameters');
   },

@@ -178,7 +178,7 @@ export function sanitizeExportFilePart(value: string): string {
 
 export function payrollExportFileStem(model: PayrollExportModel): string {
   return sanitizeExportFilePart(
-    `Bordro_${model.taxYear}-${String(model.taxMonth).padStart(2, '0')}_${model.employee.fullName}_${model.accrualType}_${model.paymentDate}_${model.sequence}`
+    `Bordro_${model.periodStart.slice(0, 7)}_${model.employee.fullName}_${model.accrualType}_${model.paymentDate}_${model.sequence}`
   );
 }
 

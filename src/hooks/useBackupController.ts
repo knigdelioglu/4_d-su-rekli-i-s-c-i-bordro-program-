@@ -3,6 +3,7 @@ import { BACKUP_FORMAT_VERSION } from '../types/payroll';
 import { getInitialDataset } from '../utils/sampleData';
 import { tauriBridge } from '../services/tauriBridge';
 import type { PayrollEngine, PayrollMutation } from '../services/payrollEngine';
+import { formatPayrollError } from '../components/useBordroCalculationController';
 import {
   serializePayrollStorage,
   toPayrollBoundaryDto,
@@ -28,7 +29,7 @@ export interface BackupControllerOptions {
   browserPersistence: BrowserPersistenceAdapter;
   evaluateBrowserMutations: (mutation: PayrollMutation) => Promise<unknown>;
   payrollEngine: PayrollEngine;
-  loadData: () => Promise<void>;
+  loadData: () => Promise<void | boolean>;
   setAuthoritativePayload: (payload: PayrollStorageDto) => void;
   setIsDataLoaded: (loaded: boolean) => void;
   setLoadError: (message: string | null) => void;
@@ -41,6 +42,33 @@ function makeBackupPayload<T extends object>(dataset: T): PayrollStorageDto {
     exportedAt: new Date().toISOString(),
     ...toPayrollBoundaryDto(dataset),
   } as unknown as PayrollStorageDto;
+}
+
+function formatPreservedDataFailure(action: string, error: unknown): string {
+  return `${action}; mevcut kayıt korundu. ${formatPayrollError(error)}`;
+}
+
+class BackupReloadFailure extends Error {}
+
+async function reloadPersistedBackup(loadData: () => Promise<void | boolean>): Promise<void> {
+  try {
+    const loaded = await loadData();
+    if (loaded === false) throw new Error('Kaydedilen yedek uygulamaya yeniden yüklenemedi.');
+  } catch (error) {
+    throw new BackupReloadFailure(formatPayrollError(error));
+  }
+}
+
+function formatBackupOperationFailure(action: string, error: unknown): string {
+  if (error instanceof BackupReloadFailure) {
+    const subject = action.includes('Örnek')
+      ? 'Örnek veriler'
+      : action.includes('Veriler')
+        ? 'Veriler'
+        : 'Yedek';
+    return `${subject} veritabanına kaydedildi ancak uygulamaya yeniden yüklenemedi. Veritabanındaki kayıt korunuyor. ${error.message}`;
+  }
+  return formatPreservedDataFailure(action, error);
 }
 
 /**
@@ -85,7 +113,7 @@ export function useBackupController({
     try {
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
-        await loadData();
+        await reloadPersistedBackup(loadData);
         onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
         return;
       }
@@ -97,7 +125,7 @@ export function useBackupController({
       commitBrowserPayload(payload);
       onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
     } catch (err) {
-      const message = `Örnek veriler yüklenemedi: ${String(err)}`;
+      const message = formatBackupOperationFailure('Örnek veriler yüklenemedi', err);
       console.error(message, err);
       setLoadError(message);
       throw err;
@@ -138,29 +166,45 @@ export function useBackupController({
       }
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
-        await loadData();
+        await reloadPersistedBackup(loadData);
         return;
       }
       await browserPersistence.savePayload(serializePayrollStorage(payload));
       commitBrowserPayload(payload);
     } catch (err) {
-      const message = `Veriler sıfırlanamadı: ${String(err)}`;
+      const message = formatBackupOperationFailure('Veriler sıfırlanamadı', err);
       console.error(message, err);
       setLoadError(message);
       alert(message);
     }
   };
 
-  const handleExportBackup = () => {
+  const handleExportBackup = async () => {
     if (!authoritativePayload) return;
     const jsonStr = serializePayrollStorage(authoritativePayload, 2);
+    const fileName = `4D_Bordro_Yedek_${activePeriodId || 'bos'}_${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`;
+
+    if (tauriBridge.isTauriAvailable()) {
+      try {
+        const saved = await tauriBridge.exportBackup(jsonStr, fileName);
+        if (saved) {
+          setLoadError(null);
+          onSuccess?.('Yedek dosyası başarıyla kaydedildi.');
+        }
+      } catch (error) {
+        const message = `Yedek dosyası kaydedilemedi. ${formatPayrollError(error)}`;
+        setLoadError(message);
+      }
+      return;
+    }
+
     const blob = new Blob([jsonStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `4D_Bordro_Yedek_${activePeriodId || 'bos'}_${new Date()
-      .toISOString()
-      .slice(0, 10)}.json`;
+    anchor.download = fileName;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -175,7 +219,7 @@ export function useBackupController({
       const payload = parseImportedBackup(jsonStr);
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
-        await loadData();
+        await reloadPersistedBackup(loadData);
       } else {
         if (isCurrentBackup) {
           await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
@@ -191,10 +235,11 @@ export function useBackupController({
         );
         commitBrowserPayload(payload);
       }
-      alert('Yedek başarıyla yüklendi!');
+      setLoadError(null);
+      onSuccess?.('Yedek başarıyla yüklendi ve kalıcı olarak kaydedildi.');
     } catch (err) {
       console.error('Yedek yükleme başarısız:', err);
-      alert('Yedek yüklenemedi. Mevcut kayıt korunuyor.');
+      setLoadError(formatBackupOperationFailure('Yedek yüklenemedi', err));
     }
   };
 

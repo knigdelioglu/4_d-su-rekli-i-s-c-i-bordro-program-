@@ -754,6 +754,128 @@ fn open_service_period_after_payment_date_is_not_replayed() {
 }
 
 #[test]
+fn selected_person_retro_skips_historical_periods_without_person_source_data() {
+    let periods = vec![
+        period("2026-02", "2026-02-15", "2026-03-14", 3),
+        period("2026-03", "2026-03-15", "2026-04-14", 4),
+    ];
+    let mut source = dataset(&periods, dec!(100), dec!(9));
+    source
+        .attendances
+        .retain(|attendance| attendance.donemId != "2026-02");
+    let mut finalized = normal_payroll(&source, "2026-03", "2026-04-14", 0);
+    finalized.status = BordroStatus::FINALIZED;
+    source.payrolls.push(finalized.clone());
+
+    let mut prior_all_personnel = revision("prior-all-personnel", "2026-02-15");
+    prior_all_personnel.effectiveTo = Some("2026-03-14".into());
+    prior_all_personnel.scope = CompensationRevisionScope::ALL_PERSONNEL;
+    prior_all_personnel.personnelIds.clear();
+    prior_all_personnel.status = CompensationRevisionStatus::CALCULATED;
+    source.compensationRevisions.push(prior_all_personnel);
+    source.compensationRevisionOverrides.push(wage_override(
+        "prior-all-personnel-wage",
+        "prior-all-personnel",
+        dec!(110),
+    ));
+
+    let original_financial_data = serde_json::to_value(&source).expect("serialize source snapshot");
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "retro-selected-person-periods",
+        revision("selected-march-revision", "2026-03-15"),
+        vec![wage_override(
+            "selected-march-wage",
+            "selected-march-revision",
+            dec!(120),
+        )],
+        "2026-05-14",
+    ))
+    .expect("selected-person source period should calculate");
+
+    assert_eq!(result.periods.len(), 1);
+    assert_eq!(result.periods[0].sourcePeriodId, "2026-03");
+    assert!(result.batch.totalGrossDelta > Decimal::ZERO);
+    assert_eq!(source.payrolls[0].status, BordroStatus::FINALIZED);
+    assert_eq!(source.payrolls[0].id, finalized.id);
+    assert_eq!(
+        serde_json::to_value(&source).expect("serialize source snapshot after preview"),
+        original_financial_data,
+        "preview must not mutate any source personnel or period financial data"
+    );
+}
+
+#[test]
+fn retro_replays_source_periods_through_payment_even_after_revision_expires() {
+    let periods = vec![
+        period("2026-09", "2026-09-15", "2026-10-14", 10),
+        period("2026-10", "2026-10-15", "2026-11-14", 11),
+        period("2026-11", "2026-11-15", "2026-12-14", 12),
+    ];
+    let mut source = dataset(&periods, dec!(100), dec!(9));
+    for (period_id, payment_date) in [
+        ("2026-09", "2026-10-10"),
+        ("2026-10", "2026-11-10"),
+        ("2026-11", "2026-12-10"),
+    ] {
+        let payroll = normal_payroll(&source, period_id, payment_date, 0);
+        source.payrolls.push(payroll);
+    }
+
+    let mut revision = revision("retro-september-october", "2026-09-15");
+    revision.effectiveTo = Some("2026-11-14".into());
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-september-october-paid-december",
+        revision.clone(),
+        vec![wage_override(
+            "retro-september-october-wage",
+            &revision.id,
+            dec!(120),
+        )],
+        "2026-12-14",
+    ))
+    .expect("source periods through payment date should replay");
+
+    assert_eq!(
+        result
+            .periods
+            .iter()
+            .map(|period| period.sourcePeriodId.as_str())
+            .collect::<Vec<_>>(),
+        vec!["2026-09", "2026-10", "2026-11"]
+    );
+    assert!(result.periods[0].deltaAmount > Decimal::ZERO);
+    assert!(result.periods[1].deltaAmount > Decimal::ZERO);
+    assert_eq!(result.periods[2].deltaAmount, Decimal::ZERO);
+}
+
+#[test]
+fn source_payroll_without_required_attendance_fails_closed() {
+    let source_period = period("2026-03", "2026-03-15", "2026-04-14", 4);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let mut finalized = normal_payroll(&source, "2026-03", "2026-04-14", 0);
+    finalized.status = BordroStatus::FINALIZED;
+    source.payrolls.push(finalized);
+    source.attendances.clear();
+
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-source-missing-attendance",
+        revision("selected-march-revision", "2026-03-15"),
+        vec![wage_override(
+            "selected-march-wage",
+            "selected-march-revision",
+            dec!(120),
+        )],
+        "2026-05-14",
+    ))
+    .expect_err("an authoritative source payroll without attendance must fail closed");
+
+    assert!(error.to_string().contains("tarihsel puantaj bulunamadı"));
+}
+
+#[test]
 fn overlapping_revisions_use_chronological_absolute_targets() {
     let periods = vec![
         period("2026-02", "2026-02-15", "2026-03-14", 3),
@@ -1059,6 +1181,48 @@ fn negative_retro_delta_is_explicit_and_not_clamped_to_zero() {
     assert_eq!(result.allocations[0].employerSgkDelta, Decimal::ZERO);
     assert!(result.allocations[0].employerLowerBoundDelta > Decimal::ZERO);
     assert!(result.allocations[0].employerLowerBoundPremiumDelta > Decimal::ZERO);
+}
+
+#[test]
+fn same_date_retro_replay_uses_created_at_before_id_and_does_not_repeat_overpayment() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    source
+        .payrolls
+        .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
+
+    let positive = wage_retro_result(source.clone(), "z-positive", "rev-positive", dec!(120));
+    assert!(positive.batch.totalGrossDelta > Decimal::ZERO);
+    assert!(positive.batch.payableSettlementAmount > Decimal::ZERO);
+    let mut positive = positive;
+    positive.batch.createdAt = Some("2026-06-20T10:00:00Z".into());
+    append_retro_result(&mut source, positive);
+
+    let negative = wage_retro_result(source.clone(), "a-negative", "rev-negative", dec!(100));
+    assert!(negative.batch.totalGrossDelta < Decimal::ZERO);
+    assert!(negative.batch.recoverableAmount > Decimal::ZERO);
+    assert_eq!(negative.batch.paymentDate, "2026-06-20");
+    let mut negative = negative;
+    negative.batch.createdAt = Some("2026-06-20T11:00:00Z".into());
+    let negative_delta = negative.batch.totalGrossDelta;
+    append_retro_result(&mut source, negative);
+
+    let existing_batch_count = source.retroBatches.len();
+    let existing_allocation_count = source.retroAllocations.len();
+    let repeated = wage_retro_result(
+        source.clone(),
+        "0-repeated-preview",
+        "rev-negative",
+        dec!(100),
+    );
+
+    assert!("a-negative" < "z-positive");
+    assert_eq!(negative_delta, -source.retroBatches[0].totalGrossDelta);
+    assert_eq!(repeated.batch.totalGrossDelta, Decimal::ZERO);
+    assert_eq!(repeated.batch.recoverableAmount, Decimal::ZERO);
+    assert_eq!(repeated.batch.outstandingReceivable, dec!(560));
+    assert_eq!(source.retroBatches.len(), existing_batch_count);
+    assert_eq!(source.retroAllocations.len(), existing_allocation_count);
 }
 
 #[test]

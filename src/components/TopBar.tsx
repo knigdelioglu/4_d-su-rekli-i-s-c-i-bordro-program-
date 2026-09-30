@@ -21,7 +21,7 @@ interface TopBarProps {
   aktifDonemId: string;
   onSelectDonem: (donemId: string) => void;
   onExportBackup: () => void;
-  onImportBackup: (jsonStr: string) => void;
+  onImportFileSelected: (file: File) => void;
   onResetSampleData: () => void;
   noticeCount?: number;
   onOpenNoticeSummary: () => void;
@@ -34,7 +34,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   aktifDonemId,
   onSelectDonem,
   onExportBackup,
-  onImportBackup,
+  onImportFileSelected,
   onResetSampleData,
   noticeCount = 0,
   onOpenNoticeSummary,
@@ -45,24 +45,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-
-    const confirmed = window.confirm(
-      'Yedekten geri yükleme mevcut personel, dönem, puantaj, bordro, vergi açılışı, rapor kayıtları ve dönem parametrelerini yedekteki verilerle değiştirecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?'
-    );
-    if (!confirmed) {
-      e.target.value = '';
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
-        onImportBackup(content);
-      }
-    };
-    reader.readAsText(file);
+    if (file) onImportFileSelected(file);
     e.target.value = '';
   };
 

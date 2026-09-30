@@ -238,7 +238,10 @@ fn validate_retro_payment_links(conn: &Connection, backup_label: &str) -> Result
                 CompensationRevisionStatus::CALCULATED => Some(BordroStatus::CALCULATED),
                 CompensationRevisionStatus::DRAFT | CompensationRevisionStatus::STALE => None,
             };
-            if expected_status != Some(payroll.status)
+            let linked_status_is_valid = expected_status == Some(payroll.status)
+                || (batch.status == CompensationRevisionStatus::CALCULATED
+                    && payroll.status == BordroStatus::STALE);
+            if !linked_status_is_valid
                 || payroll.accrualType != AccrualType::RETRO_ADJUSTMENT
                 || payroll.personelId != batch.personnelId
                 || payroll.paymentDate != batch.paymentDate
@@ -447,6 +450,44 @@ fn compare_backup_optional_decimal(
     Ok(())
 }
 
+fn compare_backup_optional_decimal_if_imported(
+    payroll_id: &str,
+    field: &str,
+    imported: Option<rust_decimal::Decimal>,
+    replayed: Option<rust_decimal::Decimal>,
+) -> Result<()> {
+    if let Some(imported) = imported {
+        compare_backup_optional_decimal(payroll_id, field, Some(imported), replayed)?;
+    }
+    Ok(())
+}
+
+fn compare_backup_is_primi(
+    payroll_id: &str,
+    imported: Option<&IsPrimiHesapDetayi>,
+    replayed: Option<&IsPrimiHesapDetayi>,
+) -> Result<()> {
+    let matches = match (imported, replayed) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.grupId == right.grupId
+                && left.grupAd == right.grupAd
+                && left.oran == right.oran
+                && left.hakGunu == right.hakGunu
+                && left.gunlukIsPrimi == right.gunlukIsPrimi
+                && left.tutar == right.tutar
+        }
+        _ => false,
+    };
+    if !matches {
+        return Err(DomainError::InvalidData(format!(
+            "V5 backup replay: {} iş primi snapshot'ı canonical Rust replay ile eşleşmiyor.",
+            payroll_id
+        )));
+    }
+    Ok(())
+}
+
 fn compare_backup_income_and_deductions(
     imported: &BordroKaydi,
     replayed: &BordroKaydi,
@@ -638,16 +679,13 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
             id
         )));
     }
-    let imported_is_primi = serde_json::to_value(&imported.isPrimiDetay)
-        .map_err(|error| DomainError::InvalidData(error.to_string()))?;
-    let replayed_is_primi = serde_json::to_value(&replayed.isPrimiDetay)
-        .map_err(|error| DomainError::InvalidData(error.to_string()))?;
-    if imported_is_primi != replayed_is_primi {
-        return Err(DomainError::InvalidData(format!(
-            "V5 backup replay: {} iş primi snapshot'ı canonical Rust replay ile eşleşmiyor.",
-            id
-        )));
-    }
+    // Compare Decimal values as numbers: serde_json values preserve the
+    // imported scale, so equivalent values such as 219.9 and 219.90 differ.
+    compare_backup_is_primi(
+        id,
+        imported.isPrimiDetay.as_ref(),
+        replayed.isPrimiDetay.as_ref(),
+    )?;
 
     let imported_gv_base = imported
         .persistedGvBase
@@ -693,13 +731,16 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
             ] {
                 compare_backup_decimal(id, field, imported_value, replayed_value)?;
             }
-            compare_backup_optional_decimal(
+            // These fields were added after older V5 snapshots were written.
+            // An omitted historical value remains authoritative as omitted;
+            // a supplied value still has to match replay exactly.
+            compare_backup_optional_decimal_if_imported(
                 id,
                 "pekDetay.aylikOncekiPekTuketimi",
                 left.aylikOncekiPekTuketimi,
                 right.aylikOncekiPekTuketimi,
             )?;
-            compare_backup_optional_decimal(
+            compare_backup_optional_decimal_if_imported(
                 id,
                 "pekDetay.aylikSonrasiPekTuketimi",
                 left.aylikSonrasiPekTuketimi,
@@ -902,6 +943,59 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod backup_replay_comparison_tests {
+    use super::{compare_backup_is_primi, compare_backup_optional_decimal_if_imported};
+    use crate::domain::models::IsPrimiHesapDetayi;
+    use rust_decimal::Decimal;
+
+    #[test]
+    fn synthetic_decimal_scale_is_semantically_equal_but_forged_amount_is_rejected() {
+        let imported = IsPrimiHesapDetayi {
+            grupId: "1. Grup".into(),
+            grupAd: "1. Grup".into(),
+            oran: "9.00".parse().unwrap(),
+            hakGunu: 1,
+            gunlukIsPrimi: "219.9".parse().unwrap(),
+            tutar: "219.90".parse().unwrap(),
+        };
+        let replayed = IsPrimiHesapDetayi {
+            gunlukIsPrimi: "219.90".parse().unwrap(),
+            tutar: "219.900".parse().unwrap(),
+            ..imported.clone()
+        };
+
+        compare_backup_is_primi("synthetic-payroll", Some(&imported), Some(&replayed))
+            .expect("Decimal scale alone must not mark a snapshot corrupt");
+
+        let forged = IsPrimiHesapDetayi {
+            tutar: "220.90".parse().unwrap(),
+            ..replayed
+        };
+        assert!(
+            compare_backup_is_primi("synthetic-payroll", Some(&imported), Some(&forged))
+                .expect_err("a true amount change must fail closed")
+                .to_string()
+                .contains("iş primi snapshot")
+        );
+
+        assert!(compare_backup_optional_decimal_if_imported(
+            "synthetic-payroll",
+            "pekDetay.aylikOncekiPekTuketimi",
+            None,
+            Some(Decimal::ZERO),
+        )
+        .is_ok());
+        assert!(compare_backup_optional_decimal_if_imported(
+            "synthetic-payroll",
+            "pekDetay.aylikOncekiPekTuketimi",
+            Some(Decimal::ZERO),
+            Some(Decimal::ONE),
+        )
+        .is_err());
+    }
 }
 
 fn validate_current_backup_replay(conn: &Connection) -> Result<()> {
@@ -1205,7 +1299,11 @@ impl MigrationService {
 
         if let Some(sick_records) = sickLeaveRecords {
             for record in sick_records {
-                SickLeaveRepository::save_in_transaction(conn, &record)?;
+                if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+                    SickLeaveRepository::save_for_restore_in_transaction(conn, &record)?;
+                } else {
+                    SickLeaveRepository::save_in_transaction(conn, &record)?;
+                }
             }
         }
 
@@ -1224,7 +1322,13 @@ impl MigrationService {
                 }
             }
             for parameter in parameters {
-                AnnualPayrollParametersRepository::save_in_transaction(conn, &parameter)?;
+                if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+                    AnnualPayrollParametersRepository::save_for_restore_in_transaction(
+                        conn, &parameter,
+                    )?;
+                } else {
+                    AnnualPayrollParametersRepository::save_in_transaction(conn, &parameter)?;
+                }
             }
         }
 
@@ -1389,7 +1493,7 @@ impl MigrationService {
                 if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION {
                     PayrollRepository::save_legacy_in_transaction(conn, &payroll)?;
                 } else {
-                    PayrollRepository::save_in_transaction(conn, &payroll)?;
+                    PayrollRepository::save_for_restore_in_transaction(conn, &payroll)?;
                 }
             }
         }

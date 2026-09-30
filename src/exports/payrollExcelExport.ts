@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 import { PayrollNotice } from '../types/payrollNotice';
+import { tauriBridge } from '../services/tauriBridge';
 import {
   PayrollExportLine,
   PayrollExportModel,
@@ -10,6 +11,7 @@ import {
 } from './payrollExportModel';
 
 const MONEY_FORMAT = '#,##0.00';
+const INTEGER_FORMAT = '0';
 
 function setColumnWidths(sheet: XLSX.WorkSheet, widths: number[]): void {
   sheet['!cols'] = widths.map((wch) => ({ wch }));
@@ -81,13 +83,35 @@ function buildPayslipSheet(model: PayrollExportModel): XLSX.WorkSheet {
   setColumnWidths(sheet, [42, 28]);
   sheet['!merges'] = [
     XLSX.utils.decode_range('A1:B1'),
-    XLSX.utils.decode_range('A12:B12'),
+    XLSX.utils.decode_range('A11:B11'),
     XLSX.utils.decode_range('A21:B21'),
   ];
 
+  const moneyLabels = new Set([
+    ...model.incomes,
+    ...model.sgkTax,
+    ...model.deductions,
+    ...model.employer,
+  ].map(({ label }) => label));
+  const countLabels = new Set([
+    'Hizmet Yılı',
+    'Tahakkuk Sıra No',
+    ...model.attendanceSummary.map(({ label, code }) => `${label} (${code})`),
+  ]);
+
   for (let row = 1; row <= rows.length; row += 1) {
-    const value = rows[row - 1]?.[1];
-    if (typeof value === 'number' && row !== 13) setMoneyCells(sheet, [`B${row}`]);
+    const [label, value] = rows[row - 1] ?? [];
+    if (typeof value !== 'number') continue;
+
+    const ref = `B${row}`;
+    if (countLabels.has(String(label))) {
+      sheet[ref].z = INTEGER_FORMAT;
+    } else if (
+      moneyLabels.has(String(label)) ||
+      ['BRÜT GELİR TOPLAMI', 'KESİNTİ TOPLAMI', 'NET ÖDEME'].includes(String(label))
+    ) {
+      setMoneyCells(sheet, [ref]);
+    }
   }
   return sheet;
 }
@@ -165,8 +189,38 @@ export function buildSinglePayrollWorkbook(model: PayrollExportModel): XLSX.Work
   return workbook;
 }
 
-export function exportSinglePayrollExcel(model: PayrollExportModel): void {
-  XLSX.writeFile(buildSinglePayrollWorkbook(model), `${payrollExportFileStem(model)}.xlsx`);
+async function saveWorkbook(workbook: XLSX.WorkBook, fileName: string): Promise<boolean> {
+  if (tauriBridge.isTauriAvailable()) {
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    return tauriBridge.exportExcel(Array.from(new Uint8Array(excelBuffer)), fileName);
+  }
+
+  if (typeof document !== 'undefined') {
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    try {
+      document.body.appendChild(anchor);
+      anchor.click();
+    } finally {
+      document.body.removeChild(anchor);
+      // Browsers may consume the object URL after click() returns.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    return true;
+  }
+
+  XLSX.writeFile(workbook, fileName);
+  return true;
+}
+
+export function exportSinglePayrollExcel(model: PayrollExportModel): Promise<boolean> {
+  return saveWorkbook(buildSinglePayrollWorkbook(model), `${payrollExportFileStem(model)}.xlsx`);
 }
 
 function modelRow(model: PayrollExportModel): Record<string, string | number> {
@@ -408,6 +462,6 @@ export function exportPeriodPayrollExcel(args: {
   people: Personel[];
   payrolls: BordroKaydi[];
   notices?: PayrollNotice[];
-}): void {
-  XLSX.writeFile(buildPeriodPayrollWorkbook(args), `${periodExportFileStem(args.period)}.xlsx`);
+}): Promise<boolean> {
+  return saveWorkbook(buildPeriodPayrollWorkbook(args), `${periodExportFileStem(args.period)}.xlsx`);
 }

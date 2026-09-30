@@ -7,7 +7,7 @@ interface DataBackupPageProps {
   storageLabel?: string;
   storageDetail?: string;
   onExportBackup: () => void;
-  onImportBackup: (jsonStr: string) => void;
+  onImportFileSelected: (file: File) => void;
   onResetSampleData: () => void;
 }
 
@@ -25,27 +25,14 @@ export const DataBackupPage: React.FC<DataBackupPageProps> = ({
   storageLabel = 'Bu tarayıcıda yerel kayıt',
   storageDetail = 'Veriler bu tarayıcıda yerel olarak tutulur; düzenli JSON yedeği almanız önerilir.',
   onExportBackup,
-  onImportBackup,
+  onImportFileSelected,
   onResetSampleData,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file) return;
-    const confirmed = window.confirm(
-      'Yedekten geri yükleme mevcut verileri yedekteki verilerle değiştirecek. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?'
-    );
-    if (!confirmed) {
-      event.target.value = '';
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = (loadEvent) => {
-      const content = loadEvent.target?.result;
-      if (typeof content === 'string' && content) onImportBackup(content);
-    };
-    reader.readAsText(file);
+    if (file) onImportFileSelected(file);
     event.target.value = '';
   };
 

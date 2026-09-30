@@ -116,6 +116,25 @@ function addWorkerRateEvidence(
   return item;
 }
 
+function addSgkDaySnapshot(item: BordroKaydi, days: number): BordroKaydi {
+  item.statutorySnapshot = {
+    source: 'ATTENDANCE_BACKED',
+    segments: [],
+    sgkPrimGunSayisi: days,
+    pekAltSinir: 20000,
+    pekUstSinir: 150000,
+    sgkYemekIstisnasiToplam: 0,
+    gvYemekIstisnasiToplam: 0,
+    gvReferansGunlukAsgariUcret: 666.75,
+  };
+  return item;
+}
+
+function addCurrentPek(item: BordroKaydi, primMatrahi: number): BordroKaydi {
+  item.pekDetay = { ...item.pekDetay, primMatrahi } as NonNullable<BordroKaydi['pekDetay']>;
+  return item;
+}
+
 describe('SGK prim kontrolü dataset', () => {
   test('tek authoritative NORMAL bordroyu dört prim alanıyla gösterir', () => {
     const rows = getSgkPrimKontroluRows(period, [person1], [
@@ -198,6 +217,9 @@ describe('SGK prim kontrolü dataset', () => {
     ]);
 
     expect(getSgkPrimKontroluTotals(rows)).toEqual({
+      sgkPrimGunSayisi: 0,
+      cariDonemPek: 0,
+      retroPekDelta: 0,
       isverenSgkPrimi: 300,
       isverenIssizlikPrimi: 30,
       isciSgkPrimi: 210,
@@ -209,6 +231,73 @@ describe('SGK prim kontrolü dataset', () => {
       hazirOlmayanPersonelSayisi: 0,
       reconciliationReady: true,
     });
+  });
+
+  test('Normal ve Tediye günlerini toplamaz, authoritative PEK değerlerini kuruşla toplar; stale dışarıda kalır', () => {
+    const normal = addCurrentPek(
+      addSgkDaySnapshot(
+        payroll('p-1', 'normal-period-values', 'FINALIZED', completeAmounts),
+        30
+      ),
+      0.1
+    );
+    const tediye = addCurrentPek(
+      addSgkDaySnapshot(
+        payroll('p-1', 'tediye-period-values', 'CALCULATED', completeAmounts),
+        30
+      ),
+      0.2
+    );
+    tediye.accrualType = 'TEDIYE';
+    const stale = addCurrentPek(
+      addSgkDaySnapshot(
+        payroll('p-2', 'stale-period-values', 'STALE', completeAmounts),
+        30
+      ),
+      500
+    );
+
+    const rows = getSgkPrimKontroluRows(period, [person1, person2], [normal, tediye, stale]);
+    const totals = getSgkPrimKontroluTotals(rows);
+
+    expect(
+      rows.map(({ status, sgkPrimGunSayisi, cariDonemPek }) => ({
+        status,
+        sgkPrimGunSayisi,
+        cariDonemPek,
+      }))
+    ).toEqual([
+      { status: 'authoritative', sgkPrimGunSayisi: 30, cariDonemPek: 0.3 },
+      { status: 'stale', sgkPrimGunSayisi: null, cariDonemPek: null },
+    ]);
+    expect(totals.sgkPrimGunSayisi).toBe(30);
+    expect(totals.cariDonemPek).toBe(0.3);
+  });
+
+  test('authoritative day snapshot disagreement is visible and omitted from day total', () => {
+    const normal = addCurrentPek(
+      addSgkDaySnapshot(
+        payroll('p-1', 'normal-inconsistent-days', 'FINALIZED', completeAmounts),
+        30
+      ),
+      100
+    );
+    const tediye = addCurrentPek(
+      addSgkDaySnapshot(
+        payroll('p-1', 'tediye-inconsistent-days', 'FINALIZED', completeAmounts),
+        29
+      ),
+      25
+    );
+    tediye.accrualType = 'TEDIYE';
+
+    const rows = getSgkPrimKontroluRows(period, [person1], [normal, tediye]);
+    const totals = getSgkPrimKontroluTotals(rows);
+
+    expect(rows[0].sgkPrimGunSayisiTutarsiz).toBe(true);
+    expect(rows[0].sgkPrimGunSayisi).toBeNull();
+    expect(totals.sgkPrimGunSayisi).toBe(0);
+    expect(totals.cariDonemPek).toBe(125);
   });
 
   test('DRAFT ve STALE toplamdan çıkarılır; tüm personel uyarıyla görünür', () => {
@@ -354,12 +443,18 @@ describe('SGK prim kontrolü güvenilirlik sınırı', () => {
       employerSgkDelta: 20,
       employerUnemploymentDelta: 2,
     };
-    const sourcePayroll = payroll('p-1', 'source-payroll', 'FINALIZED', {
-      isverenSgkPrimi: 100,
-      isverenIssizlikPrimi: 10,
-      isciSgkPrimi: 70,
-      isciIssizlikPrimi: 5,
-    });
+    const sourcePayroll = addCurrentPek(
+      addSgkDaySnapshot(
+        payroll('p-1', 'source-payroll', 'FINALIZED', {
+          isverenSgkPrimi: 100,
+          isverenIssizlikPrimi: 10,
+          isciSgkPrimi: 70,
+          isciIssizlikPrimi: 5,
+        }),
+        30
+      ),
+      1000
+    );
 
     const rows = getSgkPrimKontroluRows(
       period,
@@ -372,11 +467,13 @@ describe('SGK prim kontrolü güvenilirlik sınırı', () => {
     expect(rows[0].status).toBe('authoritative');
     expect({
       retroPekDelta: rows[0].retroPekDelta,
+      cariDonemPek: rows[0].cariDonemPek,
       isverenSgkPrimi: rows[0].isverenSgkPrimi,
       isciSgkPrimi: rows[0].isciSgkPrimi,
       toplam: rows[0].toplam,
     }).toEqual({
       retroPekDelta: 100,
+      cariDonemPek: 1000,
       isverenSgkPrimi: 120,
       isciSgkPrimi: 84,
       toplam: 222,
@@ -620,28 +717,74 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
   test('Excel payload PEK kolonunu, mutabakat özetini ve hazır olmayan kişi sayısını taşır', () => {
     const ready = payroll('p-1', 'excel-ready', 'FINALIZED', {
       ...completeAmounts,
+      isverenSgkPrimi: 100.25,
       pekAltSinirTamamlamaIsverenPrimi: 150,
     });
+    addSgkDaySnapshot(ready, 30);
+    addCurrentPek(ready, 123.45);
     const notReady = payroll('p-2', 'excel-stale', 'STALE', completeAmounts);
     const rows = getSgkPrimKontroluRows(period, [person1, person2], [ready, notReady]);
     const totals = getSgkPrimKontroluTotals(rows);
     const rateLabels = getSgkPrimKontroluRateLabels(rows, institutionSettings);
-    const comparison = compareSgkPrimTotals(totals.sgkMutabakatToplami, '350,00', false);
+    const comparison = compareSgkPrimTotals(totals.sgkMutabakatToplami, '350,25', false);
     const payload = buildSgkPrimKontroluExcelPayload(rows, totals, rateLabels, comparison);
 
     expect(payload.columns.map((column) => column.header).includes('PEK Alt Sınır İşveren Tamamlama')).toBe(true);
+    const monetaryKeys = [
+      'cariDonemPek',
+      'isverenSgkPrimi',
+      'isverenIssizlikPrimi',
+      'isciSgkPrimi',
+      'isciIssizlikPrimi',
+      'retroPekDelta',
+      'pekAltSinirTamamlamaIsverenPrimi',
+      'toplam',
+    ];
+    expect(
+      payload.columns
+        .filter((column) => monetaryKeys.includes(column.key))
+        .map((column) => column.numFmt)
+    ).toEqual(monetaryKeys.map(() => '#,##0.00'));
+    expect(payload.data[0]).toMatchObject({
+      siraNo: '1',
+      tcNo: '10000000001',
+      sgkSicilNo: 'SGK-1',
+      sgkPrimGunSayisi: 30,
+      cariDonemPek: 123.45,
+      isverenSgkPrimi: 100.25,
+      isverenIssizlikPrimi: 20,
+      isciSgkPrimi: 70,
+      isciIssizlikPrimi: 10,
+      retroPekDelta: 0,
+      pekAltSinirTamamlamaIsverenPrimi: 150,
+      toplam: 350.25,
+    });
+    expect(typeof payload.data[0].siraNo).toBe('string');
+    expect(typeof payload.data[0].tcNo).toBe('string');
+    expect(typeof payload.data[0].sgkSicilNo).toBe('string');
+    for (const key of monetaryKeys) expect(typeof payload.data[0][key]).toBe('number');
+    expect(payload.columns.map((column) => column.header)).toContain('SGK Gün Sayısı');
+    expect(payload.columns.map((column) => column.header)).toContain('Cari Dönem PEK');
+    expect(payload.columns.find((column) => column.key === 'sgkPrimGunSayisi')?.numFmt).toBe('0');
     expect({
       durum: payload.data[1].durum,
+      sgkPrimGunSayisi: payload.data[1].sgkPrimGunSayisi,
+      cariDonemPek: payload.data[1].cariDonemPek,
       isverenSgkPrimi: payload.data[1].isverenSgkPrimi,
       pekAltSinirTamamlamaIsverenPrimi: payload.data[1].pekAltSinirTamamlamaIsverenPrimi,
       toplam: payload.data[1].toplam,
     }).toEqual({
       durum: 'Yeniden hesaplanmalı',
+      sgkPrimGunSayisi: '',
+      cariDonemPek: '',
       isverenSgkPrimi: '',
       pekAltSinirTamamlamaIsverenPrimi: '',
       toplam: '',
     });
     expect(payload.summaryRows.map((row) => row.adSoyad)).toEqual([
+      'SGK Gün Sayısı Toplamı',
+      'Cari Dönem PEK Toplamı',
+      'Retro Kaynak PEK Farkı Toplamı',
       'SGK İşveren Toplamı',
       'İşveren İşsizlik Toplamı',
       'SGK İşçi Toplamı',
@@ -653,8 +796,15 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
       'Fark',
       'Hazır Olmayan Personel Sayısı',
     ]);
-    expect(payload.summaryRows[6].toplam).toBe(350);
-    expect(payload.summaryRows[9].toplam).toBe(1);
+    expect(payload.summaryRows[0].sgkPrimGunSayisi).toBe(30);
+    expect(payload.summaryRows[1].cariDonemPek).toBe(123.45);
+    expect(payload.summaryRows[2].retroPekDelta).toBe(0);
+    expect(payload.summaryRows[9].toplam).toBe(350.25);
+    expect(typeof payload.summaryRows[9].toplam).toBe('number');
+    expect(payload.summaryRows[10].toplam).toBe(350.25);
+    expect(typeof payload.summaryRows[10].toplam).toBe('number');
+    expect(payload.summaryRows[12].toplam).toBe('1');
+    expect(typeof payload.summaryRows[12].toplam).toBe('string');
   });
 
   test('authoritative + stale farklı oran: stale satırın snapshot oranı header oranına sızmaz', () => {
