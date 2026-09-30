@@ -833,6 +833,73 @@ pub fn validate_kurum_degerleri_for_payroll(
     Ok(())
 }
 
+/// Validates only the statutory inputs used to build an historical monthly
+/// asgari-GV reference. Historical reference periods need not have unrelated
+/// payroll fields (for example employer premium and night-work rates) filled.
+pub fn validate_kurum_degerleri_for_asgari_gv_reference(
+    kurum_degerleri: &DonemselKurumDegerleri,
+) -> Result<()> {
+    let required = |field: &str, value: Option<Decimal>| {
+        value.ok_or_else(|| {
+            DomainError::ValidationError(format!(
+                "{} dönemi için zorunlu yasal referans parametresi eksik: {}.",
+                kurum_degerleri.donemId, field
+            ))
+        })
+    };
+
+    let daily_minimum = required("gunlukAsgariUcret", kurum_degerleri.gunlukAsgariUcret)?;
+    if daily_minimum <= Decimal::ZERO {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi günlük asgari ücreti sıfırdan büyük olmalıdır.",
+            kurum_degerleri.donemId
+        )));
+    }
+
+    let cap = required("pekTavanKatsayisi", kurum_degerleri.pekTavanKatsayisi)?;
+    if cap < Decimal::ONE {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi PEK tavan katsayısı en az 1 olmalıdır.",
+            kurum_degerleri.donemId
+        )));
+    }
+
+    let meal_sgk = required(
+        "gunlukYemekIstisnasiSGK",
+        kurum_degerleri.gunlukYemekIstisnasiSGK,
+    )?;
+    let meal_gv = required(
+        "gunlukYemekIstisnasiGV",
+        kurum_degerleri
+            .gunlukYemekIstisnasiGV
+            .or(kurum_degerleri.gunlukYemekIstisnasiSGK),
+    )?;
+    if meal_sgk < Decimal::ZERO || meal_gv < Decimal::ZERO {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi yemek istisnası negatif olamaz.",
+            kurum_degerleri.donemId
+        )));
+    }
+
+    for (field, value) in [
+        ("sgkIsciOraniYuzde", kurum_degerleri.sgkIsciOraniYuzde),
+        (
+            "issizlikIsciOraniYuzde",
+            kurum_degerleri.issizlikIsciOraniYuzde,
+        ),
+    ] {
+        let value = required(field, value)?;
+        if !(Decimal::ZERO..=dec!(100)).contains(&value) {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi yasal referans oranı %0-%100 arasında olmalıdır: {}.",
+                kurum_degerleri.donemId, field
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GvIndirimHesabi {
     pub dogum_askerlik_indirimi: Decimal,

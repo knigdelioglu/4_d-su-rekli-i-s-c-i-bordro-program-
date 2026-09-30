@@ -51,6 +51,9 @@ async function mutateTauri<T>(cmd: string, args: Record<string, any> = {}): Prom
 }
 
 export const tauriBridge = {
+  async printCurrentWebview(): Promise<boolean> {
+    return invokeTauri<boolean>('print_current_webview');
+  },
   async deletePayrollAccrual(personnelId: string, periodId: string, accrualId: string): Promise<void> {
     return mutateTauri<void>('delete_payroll_accrual', { personnelId, periodId, accrualId });
   },

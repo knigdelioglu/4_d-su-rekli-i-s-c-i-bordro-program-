@@ -371,6 +371,173 @@ fn missing_tax_month_period_fails_closed() {
 }
 
 #[test]
+fn stale_future_payroll_does_not_block_recalculation_of_earlier_period() {
+    let conn = create_in_memory_connection().unwrap();
+    let p = person("p-stale-future");
+    PersonnelRepository::save(&conn, &p).unwrap();
+
+    let mut active = None;
+    let mut future = None;
+    for (year, month, tax_month) in [
+        (2025, 12, 1),
+        (2026, 1, 2),
+        (2026, 2, 3),
+        (2026, 3, 4),
+        (2026, 4, 5),
+        (2026, 5, 6),
+        (2026, 6, 7),
+        (2026, 7, 8),
+        (2026, 8, 9),
+        (2026, 9, 10),
+        (2026, 10, 11),
+        (2026, 11, 12),
+    ] {
+        let id = format!("{year}-{month:02}");
+        let period = period(&id, year, month, 2026, tax_month);
+        PeriodRepository::save(&conn, &period).unwrap();
+        SettingsRepository::save_institution_settings(&conn, &settings(&period.id, dec!(1000)))
+            .unwrap();
+        if tax_month == 10 {
+            active = Some(period.clone());
+        } else if tax_month == 12 {
+            future = Some(period);
+        }
+    }
+
+    let active = active.unwrap();
+    let future = future.unwrap();
+    AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
+        .unwrap();
+    AttendanceRepository::save(&conn, &complete_attendance(&p.id, &active, "Ç")).unwrap();
+
+    let mut stale_current = calculated_payroll(&p.id, &active.id, None);
+    stale_current.status = BordroStatus::STALE;
+    PayrollRepository::save_legacy_in_transaction(&conn, &stale_current).unwrap();
+
+    let mut stale_future = calculated_payroll(&p.id, &future.id, None);
+    stale_future.paymentDate = "2026-12-14".into();
+    stale_future.status = BordroStatus::STALE;
+    PayrollRepository::save_legacy_in_transaction(&conn, &stale_future).unwrap();
+
+    let recalculated =
+        PayrollService::calculate_payroll_for_accrual_checked(&conn, &p.id, &active.id, None, None)
+            .expect("a later stale payroll must not block an earlier payment event");
+    assert_eq!(recalculated.status, BordroStatus::CALCULATED);
+    assert_eq!(status(&conn, &p.id, &future.id), BordroStatus::STALE);
+}
+
+#[test]
+fn finalizing_later_payroll_rejects_prior_stale_event_without_mutating_target() {
+    let conn = create_in_memory_connection().unwrap();
+    let p = person("p-finalize-stale-prior");
+    PersonnelRepository::save(&conn, &p).unwrap();
+
+    let mut prior = None;
+    let mut active = None;
+    for (year, month, tax_month) in [
+        (2025, 12, 1),
+        (2026, 1, 2),
+        (2026, 2, 3),
+        (2026, 3, 4),
+        (2026, 4, 5),
+        (2026, 5, 6),
+        (2026, 6, 7),
+        (2026, 7, 8),
+        (2026, 8, 9),
+        (2026, 9, 10),
+        (2026, 10, 11),
+        (2026, 11, 12),
+    ] {
+        let id = format!("{year}-{month:02}");
+        let period = period(&id, year, month, 2026, tax_month);
+        PeriodRepository::save(&conn, &period).unwrap();
+        SettingsRepository::save_institution_settings(&conn, &settings(&period.id, dec!(1000)))
+            .unwrap();
+        if tax_month == 10 {
+            prior = Some(period);
+        } else if tax_month == 11 {
+            active = Some(period);
+        }
+    }
+
+    let prior = prior.unwrap();
+    let active = active.unwrap();
+    AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
+        .unwrap();
+    AttendanceRepository::save(&conn, &complete_attendance(&p.id, &active, "Ç")).unwrap();
+
+    let mut stale_prior = calculated_payroll(&p.id, &prior.id, None);
+    stale_prior.status = BordroStatus::STALE;
+    PayrollRepository::save_legacy_in_transaction(&conn, &stale_prior).unwrap();
+    let target = calculated_payroll(&p.id, &active.id, None);
+    PayrollRepository::save_legacy_in_transaction(&conn, &target).unwrap();
+
+    let error = PayrollService::finalize_payroll_for_personnel(&conn, &p.id, &active.id)
+        .expect_err("a later payroll must not finalize over a stale prior event");
+    assert!(
+        error.to_string().contains("STALE durumda"),
+        "unexpected finalization error: {error}"
+    );
+    assert_eq!(status(&conn, &p.id, &active.id), BordroStatus::CALCULATED);
+}
+
+#[test]
+fn historical_asgari_gv_reference_ignores_unrelated_payroll_parameters() {
+    let conn = create_in_memory_connection().unwrap();
+    let p = person("p-asgari-ref-legacy-settings");
+    PersonnelRepository::save(&conn, &p).unwrap();
+
+    let mut active = None;
+    for (year, month, tax_month) in [
+        (2025, 12, 1),
+        (2026, 1, 2),
+        (2026, 2, 3),
+        (2026, 3, 4),
+        (2026, 4, 5),
+        (2026, 5, 6),
+        (2026, 6, 7),
+        (2026, 7, 8),
+        (2026, 8, 9),
+    ] {
+        let id = format!("{year}-{month:02}");
+        let period = period(&id, year, month, 2026, tax_month);
+        PeriodRepository::save(&conn, &period).unwrap();
+
+        let mut period_settings = settings(&period.id, dec!(1000));
+        SettingsRepository::save_institution_settings(&conn, &period_settings).unwrap();
+        if tax_month < 9 {
+            // Existing historical rows can predate these unrelated fields.
+            // The asgari-GV reference needs only worker rates and the
+            // statutory monthly reference inputs; GV meal falls back to SGK.
+            period_settings.gunlukYemekIstisnasiGV = None;
+            period_settings.sgkIsverenOraniYuzde = None;
+            period_settings.issizlikIsverenOraniYuzde = None;
+            period_settings.geceCalismaPrimiYuzde = None;
+            period_settings.geceCalismaTatiliPrimiYuzde = None;
+            let legacy_json = serde_json::to_string(&period_settings).unwrap();
+            conn.execute(
+                "UPDATE institution_settings SET settings_json = ?1 WHERE period_id = ?2",
+                rusqlite::params![legacy_json, period.id],
+            )
+            .unwrap();
+        }
+        if tax_month == 9 {
+            active = Some(period);
+        }
+    }
+
+    let active = active.unwrap();
+    AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
+        .unwrap();
+    AttendanceRepository::save(&conn, &complete_attendance(&p.id, &active, "Ç")).unwrap();
+
+    let calculated =
+        PayrollService::calculate_payroll_for_accrual_checked(&conn, &p.id, &active.id, None, None)
+            .expect("historical reference must not require unrelated payroll rates");
+    assert_eq!(calculated.status, BordroStatus::CALCULATED);
+}
+
+#[test]
 fn tax_month_minimum_wage_reference_mismatch_fails_closed() {
     let conn = create_in_memory_connection().unwrap();
     let p = person_with_asgari_opening("p-tax-ref", 2026, 12);

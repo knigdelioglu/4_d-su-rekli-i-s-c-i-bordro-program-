@@ -12,6 +12,8 @@ import {
   hasCompletePeriodLegalParameters,
   OPEN_ENDED_TAX_BRACKET_LIMIT,
   createBordroDonemi,
+  formatPeriodSelectorLabel,
+  withVisiblePeriodLegalDefaults,
 } from './payrollPresentation';
 
 const activePeriod = createBordroDonemi(2026, 9, 2026, 10);
@@ -129,6 +131,34 @@ describe('dönem vergi ve yasal oran readiness', () => {
     expect(hasCompletePeriodLegalParameters(institution({ isPrimiGruplari: [] }), activePeriod)).toBe(
       false
     );
+  });
+
+  test('materializes legal defaults visibly shown for legacy partial settings', () => {
+    const restoredForm = withVisiblePeriodLegalDefaults(
+      {
+        ...institution(),
+        sgkIsciOraniYuzde: undefined,
+        issizlikIsciOraniYuzde: undefined,
+        damgaVergisiOraniBinde: undefined,
+        geceCalismaPrimiYuzde: undefined,
+        geceCalismaTatiliPrimiYuzde: undefined,
+        sgkIsverenOraniYuzde: undefined,
+        issizlikIsverenOraniYuzde: undefined,
+        sendikaAidatiYuzde: undefined,
+        besOraniYuzde: undefined,
+        gunlukYemekIstisnasiSGK: undefined,
+        gunlukYemekIstisnasiGV: undefined,
+        gunlukAsgariUcret: undefined,
+        pekTavanKatsayisi: undefined,
+      },
+      periodId
+    );
+
+    expect(restoredForm.donemId).toBe(periodId);
+    expect(restoredForm.sgkIsciOraniYuzde).toBe(14);
+    expect(restoredForm.geceCalismaPrimiYuzde).toBe(0);
+    expect(restoredForm.gunlukYemekIstisnasiGV).toBe(300);
+    expect(hasCompletePeriodLegalParameters(restoredForm, activePeriod)).toBe(true);
   });
 
   test('accepts legal zero values and rejects invalid group rates', () => {
@@ -475,3 +505,71 @@ describe('kompakt puantaj sunumu', () => {
     expect(formatCompactPuantaj(summary)).toBe('20 Ç · 8 T · 1 R');
   });
 });
+
+describe('cross-year period creation (2026 Aralık -> 2027 Ocak)', () => {
+  test('creates 2026-12 period with 2027 tax year and ensures all legal defaults are present', () => {
+    const decemberPeriod = createBordroDonemi(2026, 12, 2027, 1);
+    expect(decemberPeriod.id).toBe('2026-12');
+    expect(decemberPeriod.baslangicTarihi).toBe('2026-12-15');
+    expect(decemberPeriod.bitisTarihi).toBe('2027-01-14');
+    expect(decemberPeriod.taxYear).toBe(2027);
+    expect(decemberPeriod.taxMonth).toBe(1);
+
+    // Ensure that withVisiblePeriodLegalDefaults populates complete statutory parameters
+    // even though getDefaultAnnualPayrollParameters(2027) is undefined
+    const settings = withVisiblePeriodLegalDefaults(
+      {
+        donemId: decemberPeriod.id,
+        ...DEFAULT_KURUM_DEGERLERI,
+        sgkIsciOraniYuzde: undefined,
+        issizlikIsciOraniYuzde: undefined,
+        gelirVergisiOraniYuzde: undefined,
+        damgaVergisiOraniBinde: undefined,
+        sgkIsverenOraniYuzde: undefined,
+        issizlikIsverenOraniYuzde: undefined,
+      },
+      decemberPeriod.id
+    );
+
+    expect(settings.donemId).toBe('2026-12');
+    expect(settings.sgkIsciOraniYuzde).toBe(14);
+    expect(settings.issizlikIsciOraniYuzde).toBe(1);
+    expect(settings.gelirVergisiOraniYuzde).toBe(15);
+    expect(settings.damgaVergisiOraniBinde).toBe(7.59);
+    expect(settings.sgkIsverenOraniYuzde).toBe(21.75);
+    expect(settings.issizlikIsverenOraniYuzde).toBe(2);
+    expect(hasCompletePeriodLegalParameters(settings, decemberPeriod)).toBe(true);
+  });
+});
+
+describe('formatPeriodSelectorLabel', () => {
+  test('formats period label with explicit year and service date range', () => {
+    const period2026 = createBordroDonemi(2026, 1);
+    expect(formatPeriodSelectorLabel(period2026)).toBe('Ocak 2026 · 15 Ocak - 14 Şubat');
+
+    const period2027 = createBordroDonemi(2027, 1);
+    expect(formatPeriodSelectorLabel(period2027)).toBe('Ocak 2027 · 15 Ocak - 14 Şubat');
+
+    const periodDec2026 = createBordroDonemi(2026, 12, 2027, 1);
+    expect(formatPeriodSelectorLabel(periodDec2026)).toBe('Aralık 2026 · 15 Aralık - 14 Ocak');
+  });
+
+  test('falls back gracefully when date range or month name is missing', () => {
+    expect(
+      formatPeriodSelectorLabel({
+        yil: 2026,
+        ay: 5,
+        donemAdi: 'Mayıs Özel Dönemi',
+      })
+    ).toBe('Mayıs 2026');
+
+    expect(
+      formatPeriodSelectorLabel({
+        yil: 2026,
+        ay: 99,
+        donemAdi: 'Bilinmeyen Dönem',
+      })
+    ).toBe('Bilinmeyen Dönem');
+  });
+});
+

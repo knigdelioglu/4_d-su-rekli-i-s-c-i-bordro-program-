@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -28,6 +28,9 @@ import {
 } from '../types/payroll';
 import type { RetroCalculationResultModel } from '../services/payrollEngine';
 import { formatTL } from '../utils/payrollPresentation';
+import { formatPayrollError } from './useBordroCalculationController';
+import { consumeRetroPreviewRefreshSuppression } from './retroPreviewRules';
+import { retroPaymentEventNeedsReplay } from './retroEventRecovery';
 
 export interface RetroPreviewInput {
   batchId: string;
@@ -200,6 +203,7 @@ export function GeriyeDonukFarklar({
   const [expandedPeriods, setExpandedPeriods] = useState<Set<string>>(new Set());
   const [isBusy, setIsBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+  const previewRefreshGuard = useRef({ suppressUntilPreviewVisible: false });
 
   const selectedPersonnel = personeller.find((person) => person.id === personnelId);
   const activeRevision = revisions.find((revision) => revision.id === revisionId);
@@ -225,11 +229,12 @@ export function GeriyeDonukFarklar({
     0
   ) ?? 0;
 
-  // A preview is a read-only projection. Any authoritative prop change
-  // invalidates it before the user can submit the old result.
+  // A preview is read-only. Authoritative changes invalidate it, except for
+  // refreshes caused by persisting its revision before the preview is rendered.
   useEffect(() => {
+    if (consumeRetroPreviewRefreshSuppression(previewRefreshGuard.current, preview !== null)) return;
     setPreview(null);
-  }, [revisions, savedOverrides, batches, allocations, bordrolar]);
+  }, [revisions, savedOverrides, batches, allocations, bordrolar, preview]);
 
   const updateOverride = (id: string, patch: Partial<(typeof overrideRows)[number]>) => {
     setOverrideRows((current) =>
@@ -285,12 +290,12 @@ export function GeriyeDonukFarklar({
 
   const handlePreview = async () => {
     setFeedback(null);
+    setPreview(null);
     setIsBusy(true);
     try {
       validateForm();
       const revision = makeRevision();
       const parsedOverrides = parseOverrides();
-      await onSaveRevision(revision, parsedOverrides);
       const result = await onCalculatePreview({
         batchId,
         revision,
@@ -300,10 +305,18 @@ export function GeriyeDonukFarklar({
         calculatedAt: new Date().toISOString(),
         description: description.trim() || null,
       });
+      previewRefreshGuard.current.suppressUntilPreviewVisible = true;
+      try {
+        await onSaveRevision(revision, parsedOverrides);
+      } catch (error) {
+        previewRefreshGuard.current.suppressUntilPreviewVisible = false;
+        setPreview(null);
+        throw error;
+      }
       setPreview(result);
       setFeedback({ kind: 'success', text: 'Shadow/replay hesaplaması tamamlandı. Özgün bordro kayıtları değiştirilmedi.' });
     } catch (error) {
-      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+      setFeedback({ kind: 'error', text: formatPayrollError(error) });
     } finally {
       setIsBusy(false);
     }
@@ -322,7 +335,7 @@ export function GeriyeDonukFarklar({
       setPreview(null);
       setBatchId(newId('retro'));
     } catch (error) {
-      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+      setFeedback({ kind: 'error', text: formatPayrollError(error) });
     } finally {
       setIsBusy(false);
     }
@@ -341,7 +354,37 @@ export function GeriyeDonukFarklar({
       setPreview(null);
       setBatchId(newId('retro'));
     } catch (error) {
-      setFeedback({ kind: 'error', text: error instanceof Error ? error.message : String(error) });
+      setFeedback({ kind: 'error', text: formatPayrollError(error) });
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleReplayPayment = async (batch: RetroAdjustmentBatch) => {
+    const revision = revisions.find((item) => item.id === batch.revisionId);
+    if (!revision) {
+      setFeedback({ kind: 'error', text: `Retro revision bulunamadı: ${batch.revisionId}` });
+      return;
+    }
+    setFeedback(null);
+    setIsBusy(true);
+    try {
+      const replay = await onCalculatePreview({
+        batchId: batch.id,
+        revision,
+        overrides: savedOverrides.filter((item) => item.revisionId === revision.id),
+        personnelId: batch.personnelId,
+        paymentDate: batch.paymentDate,
+        calculatedAt: batch.calculatedAt || batch.createdAt || new Date().toISOString(),
+        description: batch.description || null,
+      });
+      if (replay.batch.payableSettlementAmount <= 0) {
+        throw new Error('Güncel payable settlement pozitif değil; payment event otomatik yenilenmedi.');
+      }
+      await onCreatePayment(replay);
+      setFeedback({ kind: 'success', text: 'Retro ödeme olayı aynı batch kimliğiyle güncel veriden yeniden hesaplandı.' });
+    } catch (error) {
+      setFeedback({ kind: 'error', text: formatPayrollError(error) });
     } finally {
       setIsBusy(false);
     }
@@ -564,7 +607,7 @@ export function GeriyeDonukFarklar({
 
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="mb-3 flex items-center gap-2"><FileClock aria-hidden="true" className="h-4 w-4 text-slate-500" /><h2 className="text-sm font-black text-slate-900">Geçmiş retro batch’leri</h2></div>
-        {batches.length === 0 ? <p className="text-xs text-slate-500">Henüz kaydedilmiş retro batch bulunmuyor.</p> : <div className="overflow-x-auto"><table className="min-w-full text-left text-xs"><thead className="border-b border-slate-100 text-[10px] uppercase tracking-wide text-slate-500"><tr><th className="px-2 py-2">Revision</th><th className="px-2 py-2">Personel</th><th className="px-2 py-2">Ödeme</th><th className="px-2 py-2 text-right">Brüt fark</th><th className="px-2 py-2 text-right">Net ödeme</th><th className="px-2 py-2">Durum</th></tr></thead><tbody className="divide-y divide-slate-100">{[...batches].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)).map((batch) => { const person = personeller.find((item) => item.id === batch.personnelId); const payroll = bordrolar.find((item) => item.accrualId === batch.id); return <tr key={batch.id}><td className="px-2 py-2 font-semibold text-slate-700">{revisions.find((item) => item.id === batch.revisionId)?.title ?? batch.revisionId}</td><td className="px-2 py-2 text-slate-600">{person ? `${person.ad} ${person.soyad}` : batch.personnelId}</td><td className="px-2 py-2 text-slate-600">{batch.paymentDate}</td><td className={`px-2 py-2 text-right font-mono font-bold ${amountClass(batch.totalGrossDelta)}`}>{formatTL(batch.totalGrossDelta)}</td><td className="px-2 py-2 text-right font-mono text-slate-700">{payroll ? formatTL(payroll.netOdeme) : '—'}</td><td className="px-2 py-2"><div className="space-y-1"><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${batch.status === 'FINALIZED' ? 'bg-emerald-50 text-emerald-700' : batch.status === 'STALE' ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'}`}>{statusLabel(batch.status)}</span><div className="text-[10px] font-semibold text-slate-500">{settlementLabel(batch)}</div></div></td></tr>; })}</tbody></table></div>}
+        {batches.length === 0 ? <p className="text-xs text-slate-500">Henüz kaydedilmiş retro batch bulunmuyor.</p> : <div className="overflow-x-auto"><table className="min-w-full text-left text-xs"><thead className="border-b border-slate-100 text-[10px] uppercase tracking-wide text-slate-500"><tr><th className="px-2 py-2">Revision</th><th className="px-2 py-2">Personel</th><th className="px-2 py-2">Ödeme</th><th className="px-2 py-2 text-right">Brüt fark</th><th className="px-2 py-2 text-right">Net ödeme</th><th className="px-2 py-2">Durum</th><th className="px-2 py-2">İşlem</th></tr></thead><tbody className="divide-y divide-slate-100">{[...batches].sort((a, b) => b.paymentDate.localeCompare(a.paymentDate)).map((batch) => { const person = personeller.find((item) => item.id === batch.personnelId); const payroll = bordrolar.find((item) => item.accrualId === batch.id); const paymentNeedsReplay = retroPaymentEventNeedsReplay(batch, payroll); return <tr key={batch.id}><td className="px-2 py-2 font-semibold text-slate-700">{revisions.find((item) => item.id === batch.revisionId)?.title ?? batch.revisionId}</td><td className="px-2 py-2 text-slate-600">{person ? `${person.ad} ${person.soyad}` : batch.personnelId}</td><td className="px-2 py-2 text-slate-600">{batch.paymentDate}</td><td className={`px-2 py-2 text-right font-mono font-bold ${amountClass(batch.totalGrossDelta)}`}>{formatTL(batch.totalGrossDelta)}</td><td className="px-2 py-2 text-right font-mono text-slate-700">{payroll ? formatTL(payroll.netOdeme) : '—'}</td><td className="px-2 py-2"><div className="space-y-1"><span className={`rounded-full px-2 py-1 text-[10px] font-bold ${batch.status === 'FINALIZED' ? 'bg-emerald-50 text-emerald-700' : batch.status === 'STALE' || paymentNeedsReplay ? 'bg-amber-50 text-amber-700' : 'bg-indigo-50 text-indigo-700'}`}>{paymentNeedsReplay ? 'Ödeme olayı yeniden hesaplanmalı' : statusLabel(batch.status)}</span><div className="text-[10px] font-semibold text-slate-500">{settlementLabel(batch)}</div></div></td><td className="px-2 py-2">{paymentNeedsReplay && <button type="button" onClick={() => void handleReplayPayment(batch)} disabled={isBusy} data-testid={`replay-retro-payment-${batch.id}`} className="inline-flex items-center gap-1 rounded-lg bg-amber-100 px-2 py-1.5 text-[10px] font-bold text-amber-900 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"><RefreshCw aria-hidden="true" className="h-3 w-3" /><span>Ödeme olayını yenile</span></button>}</td></tr>; })}</tbody></table></div>}
       </section>
     </div>
   );

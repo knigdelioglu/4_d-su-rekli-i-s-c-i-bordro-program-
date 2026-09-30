@@ -2272,7 +2272,7 @@ fn previous_asgari_gv(
             continue;
         };
         let settings = historical_statutory_settings(dataset, period)?;
-        validate_kurum_degerleri_for_payroll(&settings)?;
+        validate_kurum_degerleri_for_asgari_gv_reference(&settings)?;
         let statutory_snapshot = resolve_statutory_snapshot_for_payment_month(period, &settings)?;
         let sgk_rate = settings
             .sgkIsciOraniYuzde

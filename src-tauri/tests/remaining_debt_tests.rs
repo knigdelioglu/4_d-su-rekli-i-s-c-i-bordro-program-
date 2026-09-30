@@ -150,20 +150,48 @@ fn period_creation_bootstraps_only_supported_annual_parameters() -> Result<()> {
     assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2026)?.is_some());
 
     let unsupported_period = BordroDonemi {
-        yil: 2027,
-        ay: 6,
-        baslangicTarihi: "2027-06-15".into(),
-        bitisTarihi: "2027-07-14".into(),
-        donemAdi: "Haziran 2027".into(),
-        taxMonth: 7,
-        ..period("unsupported-period", 2027)
+        yil: 2026,
+        ay: 12,
+        baslangicTarihi: "2026-12-15".into(),
+        bitisTarihi: "2027-01-14".into(),
+        donemAdi: "Aralık 2026".into(),
+        taxYear: 2027,
+        taxMonth: 1,
+        ..period("2026-12", 2027)
     };
-    PeriodService::save_period_with_settings(
-        &mut conn,
-        &unsupported_period,
-        &settings("unsupported-period"),
-    )?;
+    PeriodService::save_period_with_settings(&mut conn, &unsupported_period, &settings("2026-12"))?;
     assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2027)?.is_none());
+    let saved_period = PeriodRepository::get_by_id(&conn, "2026-12")?.unwrap();
+    assert_eq!(saved_period.baslangicTarihi, "2026-12-15");
+    assert_eq!(saved_period.bitisTarihi, "2027-01-14");
+    assert_eq!((saved_period.taxYear, saved_period.taxMonth), (2027, 1));
+    Ok(())
+}
+
+#[test]
+fn annual_tariff_is_persisted_under_the_explicitly_selected_year() -> Result<()> {
+    let conn =
+        create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let parameters = AnnualPayrollParameters {
+        year: 2027,
+        // Deliberately synthetic test values; this verifies year-key persistence,
+        // not a legal 2027 tariff.
+        gelirVergisiDilimleri: vec![TaxBracket {
+            limit: dec!(12345),
+            oran: dec!(0.17),
+        }],
+        sigortaGvYillikBrutAsgariUcretTavani: Some(dec!(23456)),
+        updatedAt: None,
+    };
+
+    AnnualPayrollParametersRepository::save(&conn, &parameters)?;
+
+    let saved_2027 = AnnualPayrollParametersRepository::get_by_year(&conn, 2027)?
+        .expect("explicitly selected year must be the persistence key");
+    assert_eq!(saved_2027.year, 2027);
+    assert_eq!(saved_2027.gelirVergisiDilimleri[0].limit, dec!(12345));
+    assert_eq!(saved_2027.gelirVergisiDilimleri[0].oran, dec!(0.17));
+    assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2026)?.is_some());
     Ok(())
 }
 

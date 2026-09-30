@@ -43,6 +43,7 @@ import { useBackupController } from './hooks/useBackupController';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { PeriodSummary } from './components/Dashboard/PeriodSummary';
 import { DataBackupPage } from './components/DataBackupPage';
+import { CheckCircle2, RotateCcw } from 'lucide-react';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
@@ -186,6 +187,9 @@ export default function App() {
   const dataLoadGeneration = useRef(0);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [globalSuccess, setGlobalSuccess] = useState<string | null>(null);
+  const [isResetConfirmOpen, setIsResetConfirmOpen] = useState(false);
+  const [isResettingSampleData, setIsResettingSampleData] = useState(false);
   const payrollEngine = getPayrollEngine();
 
   const [targetPersonelIdForBordro, setTargetPersonelIdForBordro] = useState<
@@ -436,6 +440,7 @@ export default function App() {
     payrollDataset,
     authoritativePayload,
     donemler,
+    puantajlar,
     bordrolar,
     sickLeaveRecords,
     compensationRevisions,
@@ -475,14 +480,31 @@ export default function App() {
     setAuthoritativePayload,
     setIsDataLoaded,
     setLoadError,
+    onSuccess: (msg) => {
+      setGlobalSuccess(msg);
+      setTimeout(() => setGlobalSuccess(null), 4000);
+    },
   });
   const {
+    executeResetSampleData,
     handleResetSampleData,
     handleClearAndStartFresh,
     handleExportBackup,
     handleImportBackup,
     handleRecoveryFileImport,
   } = backupController;
+
+  const handleConfirmResetSampleData = async () => {
+    setIsResettingSampleData(true);
+    try {
+      await executeResetSampleData();
+      setIsResetConfirmOpen(false);
+    } catch {
+      // Hata zaten useBackupController içinde setLoadError ile yakalanıyor
+    } finally {
+      setIsResettingSampleData(false);
+    }
+  };
 
   const handleSelectPersonelForBordro = (personelId: string) => {
     setTargetPersonelIdForBordro(personelId);
@@ -523,7 +545,7 @@ export default function App() {
           onSelectDonem={handleSelectDonem}
           onExportBackup={handleExportBackup}
           onImportBackup={handleImportBackup}
-          onResetSampleData={handleResetSampleData}
+          onResetSampleData={() => setIsResetConfirmOpen(true)}
           noticeCount={payrollNoticeCount}
           onOpenNoticeSummary={() => setActiveTab('ozet')}
           isSidebarOpen={isSidebarOpen}
@@ -547,8 +569,28 @@ export default function App() {
           />
         )}
 
-        <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main className="min-w-0 flex-1 px-4 py-4 sm:px-5 sm:py-5 lg:px-6">
           <div className="mx-auto w-full max-w-[1600px]">
+            {globalSuccess && (
+              <div
+                role="status"
+                data-testid="global-success-message"
+                className="mb-5 flex items-center justify-between rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-xs font-semibold text-emerald-900 shadow-xs"
+              >
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <span>{globalSuccess}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setGlobalSuccess(null)}
+                  className="text-emerald-700 hover:text-emerald-900 ml-3 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
             {loadError && isDataLoaded && (
               <div
                 role="alert"
@@ -597,7 +639,7 @@ export default function App() {
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={handleResetSampleData}
+                    onClick={() => setIsResetConfirmOpen(true)}
                     className="w-full sm:w-auto rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 cursor-pointer"
                   >
                     Örnek Verileri Yükle
@@ -649,7 +691,7 @@ export default function App() {
                     </p>
                     <div className="flex items-center justify-center gap-3 pt-2">
                       <button type="button" onClick={handleOpenNewPeriodSettings} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700">Yeni Dönem Aç</button>
-                      <button type="button" onClick={handleResetSampleData} className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">Örnek Verileri Yükle</button>
+                      <button type="button" onClick={() => setIsResetConfirmOpen(true)} className="rounded-xl bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200">Örnek Verileri Yükle</button>
                     </div>
                   </div>
                 )}
@@ -759,6 +801,7 @@ export default function App() {
                     personeller={personeller}
                     annualPayrollParameters={annualPayrollParameters}
                     onSaveAnnualPayrollParameters={handleSaveAnnualPayrollParameters}
+                    puantajlar={puantajlar}
                     sickLeaveRecords={sickLeaveRecords}
                     onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
                     onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
@@ -777,7 +820,7 @@ export default function App() {
                       : 'Veriler bu tarayıcıda yerel olarak tutulur; düzenli JSON yedeği almanız önerilir.'}
                     onExportBackup={handleExportBackup}
                     onImportBackup={handleImportBackup}
-                    onResetSampleData={handleResetSampleData}
+                    onResetSampleData={() => setIsResetConfirmOpen(true)}
                   />
                 )}
               </>
@@ -786,6 +829,53 @@ export default function App() {
         </main>
       </div>
 
+      {/* Örnek Veri Reset Onay Modalı */}
+      {isResetConfirmOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reset-sample-data-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-xl bg-amber-100 p-2.5 text-amber-700 shrink-0">
+                <RotateCcw className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 id="reset-sample-data-modal-title" className="text-base font-bold text-slate-900">
+                  Örnek Verileri Yeniden Yükle
+                </h3>
+                <p className="text-xs text-slate-500">Mevcut veriler sıfırlanacaktır</p>
+              </div>
+            </div>
+
+            <p className="text-xs leading-relaxed text-slate-600">
+              Tüm personel, dönem, puantaj, bordro ve ayar verileri sıfırlanarak standart örnek 4/D bordro verileri kalıcı olarak yüklenecektir. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isResettingSampleData}
+                onClick={() => setIsResetConfirmOpen(false)}
+                className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 cursor-pointer"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={isResettingSampleData}
+                onClick={() => void handleConfirmResetSampleData()}
+                className="rounded-xl bg-amber-600 hover:bg-amber-700 px-4 py-2 text-xs font-bold text-white shadow-xs disabled:opacity-50 flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw className={`h-3.5 w-3.5 ${isResettingSampleData ? 'animate-spin' : ''}`} />
+                <span>{isResettingSampleData ? 'Yükleniyor…' : 'Evet, Örnek Verileri Yükle'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

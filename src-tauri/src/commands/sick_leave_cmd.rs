@@ -22,11 +22,11 @@ pub fn save_sick_leave_record(
     record: SickLeaveRecord,
 ) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
-    SickLeaveRepository::save(&conn, &record).map_err(|e| e.to_string())
+    SickLeaveRepository::save_and_sync_attendance(&conn, &record).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_sick_leave_record(state: State<'_, DbState>, id: String) -> Result<(), String> {
     let conn = state.lock().map_err(|e| e.to_string())?;
-    SickLeaveRepository::delete(&conn, &id).map_err(|e| e.to_string())
+    SickLeaveRepository::delete_and_sync_attendance(&conn, &id).map_err(|e| e.to_string())
 }

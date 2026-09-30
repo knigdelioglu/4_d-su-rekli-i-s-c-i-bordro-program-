@@ -282,7 +282,9 @@ impl CumulativeTaxService {
             };
             let settings = historical_statutory_settings(conn, period, &settings)?;
             if require_settings {
-                crate::domain::calculations::validate_kurum_degerleri_for_payroll(&settings)?;
+                crate::domain::calculations::validate_kurum_degerleri_for_asgari_gv_reference(
+                    &settings,
+                )?;
             }
             let statutory_snapshot =
                 payroll_core::resolve_statutory_snapshot_for_payment_month(period, &settings)?;

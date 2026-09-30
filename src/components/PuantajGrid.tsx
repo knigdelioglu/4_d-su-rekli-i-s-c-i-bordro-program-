@@ -27,6 +27,7 @@ import {
   getPeriodDaysList,
 } from '../utils/payrollPresentation';
 import { exportToExcel } from '../utils/excelExport';
+import { formatPayrollError } from './useBordroCalculationController';
 
 interface PuantajGridProps {
   aktifDonem: BordroDonemi;
@@ -54,6 +55,9 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const [activeBulkCode, setActiveBulkCode] = useState<PuantajKodu>('Ç');
   const [rangeStart, setRangeStart] = useState<string>(periodDays[0]?.dateStr || '');
   const [rangeEnd, setRangeEnd] = useState<string>(periodDays.at(-1)?.dateStr || '');
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [puantajError, setPuantajError] = useState<string | null>(null);
 
   useEffect(() => {
     setRangeStart(periodDays[0]?.dateStr || '');
@@ -79,10 +83,11 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const isAttendanceCreated = Boolean(savedPuantaj);
 
   const persistPuantaj = async (updated: PersonelPuantaj) => {
+    setPuantajError(null);
     try {
       await onSavePuantaj(updated);
     } catch (err) {
-      alert(`Puantaj kaydedilemedi: ${String(err)}`);
+      setPuantajError(`Puantaj kaydedilemedi: ${formatPayrollError(err)}`);
     }
   };
 
@@ -154,75 +159,114 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const currentSummary = calculatePuantajOzeti(activePuantaj.gunler);
 
   // Export all employees Puantaj to Excel
-  const handleExportExcel = () => {
-    const cols = [
-      { header: 'T.C. Kimlik No', key: 'tcNo', width: 16 },
-      { header: 'Ad Soyad', key: 'adSoyad', width: 22 },
-      { header: 'Unvan', key: 'unvan', width: 22 },
-      ...periodDays.map((d) => ({
-        header: `${d.dayNumber} ${d.dayNameShort}`,
-        key: `d_${d.dateStr}`,
-        width: 6,
-      })),
-      { header: 'Ç', key: 's_Ç', width: 6 },
-      { header: 'T', key: 's_T', width: 6 },
-      { header: 'G', key: 's_G', width: 6 },
-      { header: 'İ', key: 's_İ', width: 6 },
-      { header: 'GÇ', key: 's_GÇ', width: 6 },
-      { header: 'GÇT', key: 's_GÇT', width: 6 },
-      { header: 'R', key: 's_R', width: 6 },
-    ];
+  const handleExportExcel = async () => {
+    if (isExporting) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      // Yield to let React re-render the loading state first
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
-    const rows = personeller.map((p) => {
-      const pPuantaj = puantajlar.find(
-        (pj) => pj.personelId === p.id && pj.donemId === aktifDonem.id
+      const cols = [
+        { header: 'T.C. Kimlik No', key: 'tcNo', width: 16 },
+        { header: 'Ad Soyad', key: 'adSoyad', width: 22 },
+        { header: 'Unvan', key: 'unvan', width: 22 },
+        ...periodDays.map((d) => ({
+          header: `${d.dayNumber} ${d.dayNameShort}`,
+          key: `d_${d.dateStr}`,
+          width: 6,
+        })),
+        { header: 'Ç', key: 's_Ç', width: 6 },
+        { header: 'T', key: 's_T', width: 6 },
+        { header: 'G', key: 's_G', width: 6 },
+        { header: 'İ', key: 's_İ', width: 6 },
+        { header: 'GÇ', key: 's_GÇ', width: 6 },
+        { header: 'GÇT', key: 's_GÇT', width: 6 },
+        { header: 'R', key: 's_R', width: 6 },
+      ];
+
+      const puantajByPersonelId = new Map<string, PersonelPuantaj>(
+        puantajlar
+          .filter((pj) => pj.donemId === aktifDonem.id)
+          .map((pj) => [pj.personelId, pj])
       );
+      const rows = personeller.map((p) => {
+        const pPuantaj = puantajByPersonelId.get(p.id);
 
-      const sum = pPuantaj ? calculatePuantajOzeti(pPuantaj.gunler) : null;
-      const rowObj: Record<string, any> = {
-        tcNo: p.tcNo,
-        adSoyad: `${p.ad} ${p.soyad}`,
-        unvan: p.unvan,
-        s_Ç: sum?.Ç ?? '',
-        s_T: sum?.T ?? '',
-        s_G: sum?.G ?? '',
-        s_İ: sum?.İ ?? '',
-        s_GÇ: sum?.GÇ ?? '',
-        s_GÇT: sum?.GÇT ?? '',
-        s_R: sum?.R ?? '',
-      };
+        const sum = pPuantaj ? calculatePuantajOzeti(pPuantaj.gunler) : null;
+        const rowObj: Record<string, any> = {
+          tcNo: p.tcNo,
+          adSoyad: `${p.ad} ${p.soyad}`,
+          unvan: p.unvan,
+          s_Ç: sum?.Ç ?? '',
+          s_T: sum?.T ?? '',
+          s_G: sum?.G ?? '',
+          s_İ: sum?.İ ?? '',
+          s_GÇ: sum?.GÇ ?? '',
+          s_GÇT: sum?.GÇT ?? '',
+          s_R: sum?.R ?? '',
+        };
 
-      periodDays.forEach((d) => {
-        rowObj[`d_${d.dateStr}`] = pPuantaj?.gunler[d.dateStr] || '';
+        periodDays.forEach((d) => {
+          rowObj[`d_${d.dateStr}`] = pPuantaj?.gunler[d.dateStr] || '';
+        });
+
+        return rowObj;
       });
 
-      return rowObj;
-    });
-
-    exportToExcel(
-      `4D_Puantaj_Cetveli_${aktifDonem.id}`,
-      'Puantaj Cetveli',
-      cols,
-      rows
-    );
+      await exportToExcel(
+        `4D_Puantaj_Cetveli_${aktifDonem.id}`,
+        'Puantaj Cetveli',
+        cols,
+        rows
+      );
+    } catch (err) {
+      const msg = `Excel aktarımı başarısız oldu: ${err instanceof Error ? err.message : String(err)}`;
+      console.error(msg, err);
+      setExportError(msg);
+      alert(msg);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
     <div className="space-y-4">
       {/* Puantaj Codes Legend & Excel Export */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-2">
+        {puantajError && (
+          <div
+            role="alert"
+            className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-800"
+          >
+            {puantajError}
+          </div>
+        )}
+        {exportError && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 flex items-center justify-between">
+            <span>{exportError}</span>
+            <button
+              type="button"
+              onClick={() => setExportError(null)}
+              className="text-rose-600 hover:text-rose-900 ml-2"
+            >
+              ✕
+            </button>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs font-semibold text-slate-700 uppercase tracking-wider text-[10px]">
             İşaretlenecek Kod
           </div>
           <button
             type="button"
-            onClick={handleExportExcel}
-            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+            onClick={() => void handleExportExcel()}
+            disabled={isExporting}
+            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
             title="Tüm personellerin puantaj cetvelini Excel'e aktar"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Excel'e Aktar</span>
+            <Download className={`w-3.5 h-3.5 ${isExporting ? 'animate-bounce' : ''}`} />
+            <span>{isExporting ? 'Aktarılıyor…' : "Excel'e Aktar"}</span>
           </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-1.5 sm:gap-2 text-xs">

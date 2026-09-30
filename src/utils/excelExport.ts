@@ -3,6 +3,7 @@
  */
 
 import * as XLSX from 'xlsx';
+import { tauriBridge } from '../services/tauriBridge';
 
 export interface ExcelExportColumn {
   header: string;
@@ -13,13 +14,16 @@ export interface ExcelExportColumn {
 /**
  * Export data array to XLSX file
  */
-export function exportToExcel<T extends Record<string, any>>(
+export async function exportToExcel<T extends Record<string, any>>(
   fileName: string,
   sheetName: string,
   columns: ExcelExportColumn[],
   data: T[],
   summaryRows?: Record<string, any>[]
-) {
+): Promise<void> {
+  // Yield thread so caller UI state (e.g. loading spinner) can render
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
   // Format headers and mapping
   const headers = columns.map((col) => col.header);
   
@@ -52,48 +56,80 @@ export function exportToExcel<T extends Record<string, any>>(
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
-  XLSX.writeFile(workbook, `${fileName}.xlsx`);
+  // Yield before binary serialization and download
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  if (typeof document !== 'undefined') {
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([excelBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=UTF-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${fileName}.xlsx`;
+    try {
+      document.body.appendChild(anchor);
+      anchor.click();
+    } finally {
+      document.body.removeChild(anchor);
+      // Browsers may consume the object URL after click() returns.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+  } else {
+    XLSX.writeFile(workbook, `${fileName}.xlsx`);
+  }
 }
 
 /**
- * Triggers browser window print for a given DOM element ID
+ * Prints one DOM element through the current WebView's native print flow.
+ * Opening a secondary window is unreliable in Tauri's WKWebView on macOS.
  */
-export function printElement(elementId: string) {
+export async function printElement(elementId: string): Promise<void> {
   const elem = document.getElementById(elementId);
   if (!elem) return;
 
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) {
-    window.print();
-    return;
+  const printStyle = document.createElement('style');
+  printStyle.dataset.printElementStyle = 'true';
+  printStyle.textContent = `
+    @media print {
+      body.print-element-active * { visibility: hidden !important; }
+      body.print-element-active .print-element-host,
+      body.print-element-active .print-element-host * { visibility: visible !important; }
+      body.print-element-active .print-element-host {
+        position: fixed !important;
+        inset: 0 auto auto 0 !important;
+        width: 100% !important;
+        height: auto !important;
+        max-height: none !important;
+        overflow: visible !important;
+        background: white !important;
+        color: black !important;
+      }
+      body.print-element-active .print-element-host .no-print { display: none !important; }
+      @page { size: auto; margin: 15mm; }
+    }
+  `;
+  const printHost = document.createElement('div');
+  printHost.className = 'print-element-host';
+  printHost.appendChild(elem.cloneNode(true));
+  const cleanup = () => {
+    document.body.classList.remove('print-element-active');
+    printHost.remove();
+    printStyle.remove();
+  };
+
+  document.head.appendChild(printStyle);
+  document.body.classList.add('print-element-active');
+  document.body.appendChild(printHost);
+  window.addEventListener('afterprint', cleanup, { once: true });
+  try {
+    const printedNatively = tauriBridge.isTauriAvailable()
+      ? await tauriBridge.printCurrentWebview()
+      : false;
+    if (!printedNatively) window.print();
+  } finally {
+    window.removeEventListener('afterprint', cleanup);
+    cleanup();
   }
-
-  const styles = Array.from(document.querySelectorAll('style, link[rel="stylesheet"]'))
-    .map((style) => style.outerHTML)
-    .join('');
-
-  printWindow.document.write(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Yazdır - 4/D Bordro Sistem</title>
-        ${styles}
-        <style>
-          body { background: white !important; color: black !important; padding: 20px; font-family: system-ui, sans-serif; }
-          @page { size: auto; margin: 15mm; }
-          .no-print { display: none !important; }
-        </style>
-      </head>
-      <body>
-        ${elem.innerHTML}
-        <script>
-          setTimeout(() => {
-            window.print();
-            window.close();
-          }, 300);
-        </script>
-      </body>
-    </html>
-  `);
-  printWindow.document.close();
 }

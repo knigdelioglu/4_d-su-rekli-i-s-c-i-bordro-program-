@@ -408,6 +408,72 @@ fn native_deleting_unfinalized_retro_payment_stales_its_ledger() {
 }
 
 #[test]
+fn native_retro_payment_replay_refreshes_stale_event_without_duplicate() {
+    let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
+    let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");
+    let result =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
+            batchId: "batch-replay-stale".into(),
+            revision,
+            overrides: vec![CompensationRevisionOverride {
+                id: "override-native-canonical".into(),
+                revisionId: "revision-native-canonical".into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: dec!(10000),
+                personnelId: None,
+            }],
+            personnelId: "retro-atomic-person".into(),
+            paymentDate: "2026-06-20".into(),
+            calculatedAt: "2026-06-20T00:00:00Z".into(),
+            description: Some("Replay stale retro event".into()),
+            dataset,
+        })
+        .expect("canonical preview hesaplanmalı");
+    PayrollService::create_retro_payment(
+        &conn,
+        &result.batch,
+        &result.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("ilk retro payment event oluşturulmalı");
+
+    let mut stale_payment = PayrollRepository::get_all(&conn)
+        .expect("bordrolar okunmalı")
+        .into_iter()
+        .find(|payroll| payroll.accrualId == result.batch.id)
+        .expect("payment event bulunmalı");
+    stale_payment.status = BordroStatus::STALE;
+    PayrollRepository::save_legacy_in_transaction(&conn, &stale_payment)
+        .expect("payment event stale duruma alınmalı");
+
+    let replayed = PayrollService::create_retro_payment(
+        &conn,
+        &result.batch,
+        &result.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("aynı retro payment event canonical olarak replay edilebilmeli");
+
+    assert_eq!(replayed.accrualId, result.batch.id);
+    assert_eq!(replayed.status, BordroStatus::CALCULATED);
+    assert_eq!(
+        PayrollRepository::get_all(&conn)
+            .expect("bordrolar okunmalı")
+            .iter()
+            .filter(|payroll| payroll.accrualId == result.batch.id)
+            .count(),
+        1,
+        "replay ikinci bir payment event oluşturmamalı"
+    );
+    assert_eq!(
+        get_batches(&conn).expect("retro batch listesi okunmalı")[0].status,
+        CompensationRevisionStatus::CALCULATED
+    );
+}
+
+#[test]
 fn native_retro_payment_rejects_forged_preview_before_any_write() {
     let (conn, source_period, payment_period, revision) = setup_full_retro_database();
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");

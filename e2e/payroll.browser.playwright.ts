@@ -120,6 +120,12 @@ type StoredSnapshot = {
     gunlukYemekIstisnasiGV?: string;
     damgaVergisiOraniBinde?: string;
   }>;
+  sickLeaveRecords?: Array<{
+    id: string;
+    personnelId: string;
+    startDate: string;
+    endDate: string;
+  }>;
 };
 
 const databaseName = '4d-bordro-programi';
@@ -263,7 +269,7 @@ async function installCalculableFixture(page: Page): Promise<void> {
                 taxYear: period.yil,
                 taxMonth: period.ay,
               }));
-              const activeYear = snapshot.donemler[0]?.taxYear;
+              const activeYear = Math.max(...snapshot.donemler.map((period) => period.yil));
               const annual = snapshot.annualPayrollParameters.find(
                 (parameters) => parameters.year === activeYear
               );
@@ -402,15 +408,8 @@ async function loadSampleDataset(page: Page): Promise<void> {
     (response) => /\.wasm(?:\?|$)/.test(response.url()),
     { timeout: 30_000 }
   );
-  const dialogHandled = page.waitForEvent('dialog').then(async (dialog) => {
-    expect(dialog.type()).toBe('confirm');
-    await dialog.accept();
-  });
-
-  await Promise.all([
-    page.getByTitle('Örnek Veriyi Yeniden Yükle').click(),
-    dialogHandled,
-  ]);
+  await page.getByTitle('Örnek Veriyi Yeniden Yükle').click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Evet, Örnek Verileri Yükle' }).click();
 
   const response = await wasmResponse;
   expect(response.status()).toBe(200);
@@ -527,6 +526,168 @@ test('normal payroll table keeps core columns and moves secondary details to the
   await expect(screen).not.toContainText(/Sıra\s+\d+|Yeni NORMAL|CALCULATED|FINALIZED|STALE|DRAFT|SUPPLEMENTAL/);
 });
 
+test('stale payment in the accrual timeline asks for confirmation before deletion', async ({ page }) => {
+  const payload = await seedCalculatedSnapshot(page);
+  const snapshot = JSON.parse(payload) as StoredSnapshot;
+  const payroll = snapshot.bordrolar.find((item) => item.personelId === 'p-1');
+  expect(payroll).toBeDefined();
+  payroll!.status = 'STALE';
+  await writeStoredPayload(page, JSON.stringify(snapshot));
+
+  await page.reload();
+  await openPayrollScreen(page);
+  await page.getByTestId('timeline-toggle-p-1').click();
+  const timeline = page.getByTestId('accrual-timeline-p-1');
+  await expect(timeline.getByRole('button', { name: 'Tahakkuku Sil' })).toBeVisible();
+  await timeline.getByRole('button', { name: 'Tahakkuku Sil' }).click();
+  await expect(timeline.getByRole('button', { name: 'Silmeyi Onayla' })).toBeVisible();
+  await expect(timeline.getByRole('button', { name: 'Vazgeç' })).toBeVisible();
+
+  await timeline.getByRole('button', { name: 'Silmeyi Onayla' }).click();
+  await expect(page.getByText('Tahakkuk başarıyla silindi.')).toBeVisible();
+  const persisted = await readStoredSnapshot(page);
+  expect(persisted?.bordrolar.some((item) => item.personelId === 'p-1')).toBe(false);
+});
+
+test('normal payroll screen keeps summary cards compact and desktop table rows visible without excessive scrolling', async ({ page }) => {
+  // Use Tauri desktop application default window size (1280x800)
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('/');
+  await loadSampleDataset(page);
+  const screen = page.getByTestId('payroll-screen');
+  await openPayrollScreen(page);
+
+  const summaryGrid = screen.getByTestId('payroll-summary-cards');
+  await expect(summaryGrid).toBeVisible();
+
+  // Calculate payrolls so cards show real monetary totals and rows have full actions and calculations
+  const calculateAllButton = page.getByRole('button', { name: /Tüm Hesaplanabilir Bordroları Hesapla/ });
+  await calculateAllButton.click();
+  await expect(page.getByText(/personelin bordrosu başarıyla güncellendi/i)).toBeVisible();
+
+  const monetaryCardConfigs = [
+    { cardId: 'kpi-card-gross', expectedTitle: 'Vergi ve SGK Öncesi' },
+    { cardId: 'kpi-card-deductions', expectedTitle: 'SGK + Vergi + Kesinti' },
+    { cardId: 'kpi-card-net', expectedTitle: 'Banka Ele Geçen' },
+    { cardId: 'kpi-card-employer-cost', expectedTitle: 'Kurum SGK + İşsizlik' },
+  ];
+
+  for (const { cardId, expectedTitle } of monetaryCardConfigs) {
+    const card = screen.getByTestId(cardId);
+    await expect(card).toBeVisible();
+    const box = await card.boundingBox();
+    expect(box).not.toBeNull();
+    // Compact summary cards must not push the table down (>100px); they must remain tight (~60-70px).
+    expect(box!.height).toBeLessThanOrEqual(75);
+
+    // Amount and currency must form a single unbreakable run without wrapping TL to a newline
+    const amountEl = card.locator('.font-mono');
+    await expect(amountEl).toBeVisible();
+    await expect(amountEl).toHaveText(/TL$/);
+    const whiteSpace = await amountEl.evaluate((el) => window.getComputedStyle(el).whiteSpace);
+    expect(whiteSpace).toBe('nowrap');
+
+    // Amount text must not span multiple lines
+    const amountBox = await amountEl.boundingBox();
+    expect(amountBox).not.toBeNull();
+    expect(amountBox!.height).toBeLessThanOrEqual(28);
+
+    // Supporting text must be readable and contain descriptive title attribute to avoid silent truncation
+    const supportingText = card.locator(`[title="${expectedTitle}"]`);
+    await expect(supportingText).toBeVisible();
+  }
+
+  // Personnel count card assertions
+  const personnelCard = screen.getByTestId('kpi-card-personnel');
+  await expect(personnelCard).toBeVisible();
+  const personnelBox = await personnelCard.boundingBox();
+  expect(personnelBox).not.toBeNull();
+  expect(personnelBox!.height).toBeLessThanOrEqual(75);
+  await expect(personnelCard.locator('.whitespace-nowrap')).toHaveText(/\d+\s+Kişi/);
+
+  // Ensure table header and the first 3 personnel data rows are visible in desktop viewport without scrolling
+  const table = screen.getByRole('table');
+  await expect(table).toBeVisible();
+
+  // Verify table does not overflow horizontally in the 1280px desktop viewport
+  const tableContainer = table.locator('..');
+  const overflowState = await tableContainer.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+    scrollLeft: el.scrollLeft,
+  }));
+  const colWidths = await table.locator('thead th').evaluateAll((ths) =>
+    ths.map((th) => ({
+      name: th.textContent?.trim(),
+      offsetWidth: (th as HTMLElement).offsetWidth,
+      clientWidth: (th as HTMLElement).clientWidth,
+    }))
+  );
+  console.log('[COLUMNS]', JSON.stringify(colWidths, null, 2));
+  console.log(`[TABLE CONTAINER] scrollWidth=${overflowState.scrollWidth}, clientWidth=${overflowState.clientWidth}`);
+  expect(overflowState.scrollWidth).toBeLessThanOrEqual(overflowState.clientWidth);
+
+  const rows = screen.getByRole('row');
+  // 1 header row + 5 personnel rows in sample dataset
+  await expect(rows).toHaveCount(6);
+
+  for (let r = 0; r < 6; r++) {
+    const box = await rows.nth(r).boundingBox();
+    console.log(`[MEASURED ROW ${r}] y=${box?.y}, height=${box?.height}, bottom=${(box?.y ?? 0) + (box?.height ?? 0)}`);
+  }
+
+  // Measure that the first 3 personnel data rows are fully visible within the 800px desktop window
+  for (const rowIndex of [1, 2, 3]) {
+    const row = rows.nth(rowIndex);
+    await expect(row).toBeVisible();
+    const box = await row.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThan(0);
+    expect(box!.y).toBeLessThan(800);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(800);
+
+    // Assert that every action button in the row is within the 1280px viewport
+    const actionButtons = row.locator('button');
+    const buttonCount = await actionButtons.count();
+    expect(buttonCount).toBeGreaterThan(0);
+    for (let b = 0; b < buttonCount; b++) {
+      const button = actionButtons.nth(b);
+      const bBox = await button.boundingBox();
+      expect(bBox).not.toBeNull();
+      const rightEdge = bBox!.x + bBox!.width;
+      const ariaLabel = (await button.getAttribute('aria-label')) || (await button.getAttribute('title')) || (await button.textContent());
+      console.log(`[ROW ${rowIndex} BUTTON ${b}] "${ariaLabel?.trim()}" x=${bBox!.x}, width=${bBox!.width}, right=${rightEdge}`);
+      expect(bBox!.x).toBeGreaterThanOrEqual(0);
+      expect(rightEdge).toBeLessThanOrEqual(1280);
+    }
+  }
+
+  // Verify the accessible 'Diğer işlemler' menu opens and renders its actions within viewport
+  const firstRow = rows.nth(1);
+  const moreActionsBtn = firstRow.getByRole('button', { name: /Diğer işlemler/i });
+  await expect(moreActionsBtn).toBeVisible();
+  await expect(moreActionsBtn).toHaveAttribute('aria-expanded', 'false');
+  await moreActionsBtn.click();
+  await expect(moreActionsBtn).toHaveAttribute('aria-expanded', 'true');
+
+  const menu = page.getByRole('menu', { name: /Diğer işlemler menüsü/i });
+  await expect(menu).toBeVisible();
+  const menuBox = await menu.boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(1280);
+
+  const viewPayslipItem = menu.getByRole('menuitem', { name: /Bordro Gör/i });
+  await expect(viewPayslipItem).toBeVisible();
+  const finalizeItem = menu.getByRole('menuitem', { name: /Kesinleştir/i });
+  await expect(finalizeItem).toBeVisible();
+
+  // Press Escape to dismiss menu cleanly
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(moreActionsBtn).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('period settings child navigation renders sections and persists after reload', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
@@ -598,6 +759,130 @@ test('period settings expose new period creation without an active period', asyn
     gunlukYemekIstisnasiGV: '300',
     damgaVergisiOraniBinde: '7.59',
   });
+});
+
+test('selecting existing period in new period form switches safely without recreating or overwriting parameters', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+
+  // Navigate to Period Settings -> New Period form
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await page.getByTestId('nav-parametre-yeni-donem').click();
+  await expect(page.getByTestId('period-settings-yeni-donem')).toBeVisible();
+
+  // In sample dataset, 2026-01 already exists
+  const form = page.getByTestId('period-settings-yeni-donem');
+  await form.locator('select').nth(0).selectOption('2026');
+  await form.locator('select').nth(1).selectOption('1');
+
+  // Verify warning indicates existing period is protected rather than rewritten
+  const banner = page.getByTestId('period-already-exists-banner');
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText('2026-01');
+  await expect(banner).toContainText('doğrudan bu döneme geçebilirsiniz');
+
+  // Verify action button shows safe switch text instead of create
+  const submitBtn = page.getByTestId('submit-period-action');
+  await expect(submitBtn).toBeVisible();
+  await expect(submitBtn).toContainText('Mevcut Döneme Geç');
+
+  // Click button and verify it safely switches to the period without errors
+  await submitBtn.click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-01');
+});
+
+test('creates 2026-12 period with 2027-01 tax transition and shows clear feedback', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+
+  // Navigate to Period Settings -> New Period form
+  await page.getByTestId('nav-parametrelar').click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await page.getByTestId('nav-parametre-yeni-donem').click();
+  await expect(page.getByTestId('period-settings-yeni-donem')).toBeVisible();
+
+  const form = page.getByTestId('period-settings-yeni-donem');
+  // Select 2026 and month 12
+  await form.locator('select').nth(0).selectOption('2026');
+  await form.locator('select').nth(1).selectOption('12');
+
+  // Verify tax defaults automatically set to 2027 January
+  await expect(form.locator('select').nth(2)).toHaveValue('2027');
+  await expect(form.locator('select').nth(3)).toHaveValue('1');
+
+  // Verify preview shows 2026-12 range and 2027-01 tax payment month
+  await expect(form).toContainText('2026-12-15 → 2027-01-14');
+  await expect(form).toContainText('Ödeme/Tahakkuk Ayı: Ocak 2027');
+
+  // Period does not exist yet
+  await expect(page.getByTestId('period-already-exists-banner')).toHaveCount(0);
+  const submitBtn = page.getByTestId('submit-period-action');
+  await expect(submitBtn).toBeVisible();
+  await expect(submitBtn).toContainText('Dönemi Oluştur ve Geç');
+
+  // Submit form
+  await submitBtn.click();
+
+  // Verify explicit success feedback and automatic transition to Ücretler
+  await expect(page.getByTestId('period-settings-success-banner')).toBeVisible();
+  await expect(page.getByTestId('period-settings-success-banner')).toContainText('2026-12');
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-12');
+
+  // Verify 2026-12 appears in period list
+  await page.getByTestId('nav-parametre-donemler').click();
+  await expect(page.getByTestId('period-settings-donemler')).toBeVisible();
+  await expect(page.getByTestId('period-row-2026-12')).toBeVisible();
+
+  // Re-open New Period form and select 2026-12 again
+  await page.getByTestId('nav-parametre-yeni-donem').click();
+  await expect(page.getByTestId('period-settings-yeni-donem')).toBeVisible();
+  await form.locator('select').nth(0).selectOption('2026');
+  await form.locator('select').nth(1).selectOption('12');
+
+  // Now existing preview warning must appear
+  await expect(page.getByTestId('period-already-exists-banner')).toBeVisible();
+  await expect(page.getByTestId('period-already-exists-banner')).toContainText('2026-12');
+  await expect(submitBtn).toContainText('Mevcut Döneme Geç');
+});
+
+test('active period selector shows explicit year and distinguishes same month across different years', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+
+  // In sample dataset, 2026-01 already exists
+  const selector = page.getByTestId('active-period-selector');
+  await expect(selector).toBeVisible();
+
+  // Create 2027-01 (Ocak 2027) via Period Settings -> New Period
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-yeni-donem').click();
+  const form = page.getByTestId('period-settings-yeni-donem');
+  await form.locator('select').nth(0).selectOption('2027');
+  await form.locator('select').nth(1).selectOption('1');
+  await page.getByTestId('submit-period-action').click();
+
+  await expect(page.getByTestId('period-settings-success-banner')).toBeVisible();
+  await expect(selector).toHaveValue('2027-01');
+
+  // Verify both 2026-01 and 2027-01 options exist with distinct, year-qualified labels
+  const option2026 = selector.locator('option[value="2026-01"]');
+  const option2027 = selector.locator('option[value="2027-01"]');
+  await expect(option2026).toBeAttached();
+  await expect(option2027).toBeAttached();
+
+  await expect(option2026).toHaveText('Ocak 2026 · 15 Ocak - 14 Şubat');
+  await expect(option2027).toHaveText('Ocak 2027 · 15 Ocak - 14 Şubat');
+
+  // Verify selecting 2026 by label explicitly activates 2026-01 (not 2027-01)
+  await selector.selectOption({ label: 'Ocak 2026 · 15 Ocak - 14 Şubat' });
+  await expect(selector).toHaveValue('2026-01');
+
+  // Verify selecting 2027 by label explicitly activates 2027-01 (not 2026-01)
+  await selector.selectOption({ label: 'Ocak 2027 · 15 Ocak - 14 Şubat' });
+  await expect(selector).toHaveValue('2027-01');
 });
 
 test('mobile navigation opens as a drawer without reducing the content area', async ({ page }) => {
@@ -857,7 +1142,10 @@ test('browser finalization uses WASM, persists FINALIZED, and rejects a finalize
   await calculateP1(page, periodId);
 
   const payrollRow = page.locator('tbody tr').filter({ hasText: 'Ahmet Yılmaz' }).first();
-  await payrollRow.getByRole('button', { name: 'Kesinleştir' }).click();
+  await payrollRow.getByRole('button', { name: /Diğer işlemler/i }).click();
+  const finalizeMenuItem = page.getByRole('menuitem', { name: /Kesinleştir/i });
+  await expect(finalizeMenuItem).toBeVisible();
+  await finalizeMenuItem.click();
   await expect(page.getByRole('heading', { name: 'Bordroyu Kesinleştir' })).toBeVisible();
   await expect(page.getByText('Kesinleştirmeye hazır')).toBeVisible();
   await page.getByRole('button', { name: 'Kesinleştir ve Kilitle' }).click();
@@ -926,4 +1214,182 @@ test('browser source mutation marks downstream calculated payrolls STALE and per
       .sort((a, b) => a.donemId.localeCompare(b.donemId))
       .map((item) => item.status)
   ).toEqual(['STALE', 'STALE']);
+});
+
+test('saving sick leave automatically marks puantaj as R across 15-14 boundary with conflict confirmation and preserves manual edits on delete', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByTestId('period-summary')).toBeVisible();
+  await loadSampleDataset(page);
+
+  // Navigate to Period Settings -> Raporlar
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-rapor').click();
+  await expect(page.getByTestId('period-settings-rapor')).toBeVisible();
+
+  // In sample dataset:
+  // p-1 is Ahmet Yılmaz
+  // Periods: 2026-06 (2026-06-15..2026-07-14) and 2026-07 (2026-07-15..2026-08-14)
+  const form = page.getByTestId('period-settings-rapor').locator('form');
+  await form.locator('input[type="date"]').nth(0).fill('2026-07-13');
+  await form.locator('input[type="date"]').nth(1).fill('2026-07-16');
+
+  // Click Save
+  await form.getByRole('button', { name: /Rapor Olayını Kaydet/i }).click();
+
+  // 1. Conflict modal must appear because 2026-07-13..2026-07-16 already have 'Ç' codes
+  const conflictModal = page.getByTestId('sick-leave-conflict-modal');
+  await expect(conflictModal).toBeVisible();
+  await expect(conflictModal).toContainText('Puantaj Kod Çakışması Onayı');
+  await expect(conflictModal).toContainText('2026-07-13');
+  await expect(conflictModal).toContainText('2026-07-14');
+  await expect(conflictModal).toContainText('2026-07-15');
+  await expect(conflictModal).toContainText('2026-07-16');
+
+  // 2. Click "İptal": neither record should change!
+  await page.getByTestId('sick-leave-conflict-cancel').click();
+  await expect(conflictModal).not.toBeVisible();
+
+  // Verify sick leave was NOT saved
+  const snapshotAfterCancel = await readStoredSnapshot(page);
+  expect(
+    (snapshotAfterCancel?.sickLeaveRecords ?? []).some((r) => r.startDate === '2026-07-13')
+  ).toBe(false);
+  // Verify puantaj was NOT changed
+  const p1AttendanceJunAfterCancel = snapshotAfterCancel?.puantajlar?.find(
+    (a) => a.personelId === 'p-1' && a.donemId === '2026-06'
+  );
+  expect(p1AttendanceJunAfterCancel?.gunler['2026-07-13']).toBe('Ç');
+
+  // 3. Submit again and click "Uygula"
+  await form.getByRole('button', { name: /Rapor Olayını Kaydet/i }).click();
+  await expect(conflictModal).toBeVisible();
+  await page.getByTestId('sick-leave-conflict-apply').click();
+  await expect(conflictModal).not.toBeVisible();
+
+  // Verify sick leave record is now listed in the table
+  const table = page.getByTestId('period-settings-rapor').locator('table');
+  await expect(table).toContainText('2026-07-13');
+  await expect(table).toContainText('2026-07-16');
+
+  // Verify puantaj in both 2026-06 and 2026-07 automatically became 'R'
+  await expect
+    .poll(async () => {
+      const snap = await readStoredSnapshot(page);
+      const jun = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-06');
+      const jul = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-07');
+      return {
+        jul13: jun?.gunler['2026-07-13'],
+        jul14: jun?.gunler['2026-07-14'],
+        jul15: jul?.gunler['2026-07-15'],
+        jul16: jul?.gunler['2026-07-16'],
+      };
+    })
+    .toEqual({
+      jul13: 'R',
+      jul14: 'R',
+      jul15: 'R',
+      jul16: 'R',
+    });
+
+  // 4. Test edit: Edit sick leave to end on 2026-07-15 (trimming 2026-07-16)
+  const initialRow = table.locator('tr', { hasText: '2026-07-13' });
+  const editBtn = initialRow.getByRole('button', { name: /Rapor Olayını Düzenle/i });
+  const deleteBtn = initialRow.getByRole('button', { name: /Rapor Olayını Sil/i });
+  await expect(editBtn).toBeVisible();
+  await expect(editBtn).toContainText('Düzenle');
+  await expect(deleteBtn).toBeVisible();
+  await expect(deleteBtn).toContainText('Sil');
+
+  await editBtn.click();
+  await expect(form.getByRole('button', { name: /Rapor Olayını Güncelle/i })).toBeVisible();
+  await form.locator('input[type="date"]').nth(1).fill('2026-07-15');
+  await form.getByRole('button', { name: /Rapor Olayını Güncelle/i }).click();
+  await expect(table).toContainText('2026-07-15');
+
+  // Verify 2026-07-16 was trimmed and restored to default ('Ç'), while 13..15 remain 'R'
+  await expect
+    .poll(async () => {
+      const snap = await readStoredSnapshot(page);
+      const jun = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-06');
+      const jul = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-07');
+      return {
+        jul13: jun?.gunler['2026-07-13'],
+        jul14: jun?.gunler['2026-07-14'],
+        jul15: jul?.gunler['2026-07-15'],
+        jul16: jul?.gunler['2026-07-16'],
+      };
+    })
+    .toEqual({
+      jul13: 'R',
+      jul14: 'R',
+      jul15: 'R',
+      jul16: 'Ç',
+    });
+
+  // 4. A same-day duplicate of an existing report is rejected visibly and atomically.
+  const beforeDuplicate = await readStoredSnapshot(page);
+  await form.locator('input[type="date"]').nth(0).fill('2026-07-13');
+  await form.locator('input[type="date"]').nth(1).fill('2026-07-13');
+  await form.getByRole('button', { name: /Rapor Olayını Kaydet/i }).click();
+  await expect(conflictModal).toBeVisible();
+  await page.getByTestId('sick-leave-conflict-apply').click();
+  const sickLeaveError = page.getByTestId('sick-leave-error-banner');
+  await expect(sickLeaveError).toBeVisible();
+  await expect(sickLeaveError).toContainText('Rapor tarihleri çakışıyor');
+  await expect(conflictModal).toBeVisible();
+  const afterDuplicate = await readStoredSnapshot(page);
+  expect(afterDuplicate?.sickLeaveRecords).toEqual(beforeDuplicate?.sickLeaveRecords);
+  expect(afterDuplicate?.puantajlar).toEqual(beforeDuplicate?.puantajlar);
+  await page.getByTestId('sick-leave-conflict-cancel').click();
+
+  // 5. Test delete preserves manual modification:
+  // User navigates to puantaj and manually changes 2026-07-15 from 'R' to 'Ç'
+  await page.getByTestId('nav-puantaj').click();
+  await page.getByTestId('active-period-selector').selectOption('2026-07');
+  await page.getByTestId('attendance-code-Ç').click();
+  const jul15Cell = page.getByTestId('attendance-day-2026-07-15');
+  await expect(jul15Cell).toBeVisible();
+  await jul15Cell.click();
+
+  // Verify manual change in snapshot: 2026-07-15 is now 'Ç'
+  await expect
+    .poll(async () => {
+      const snap = await readStoredSnapshot(page);
+      const jul = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-07');
+      return jul?.gunler['2026-07-15'];
+    })
+    .toBe('Ç');
+
+  // Now go back to Raporlar and delete the sick leave
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-rapor').click();
+  await expect(page.getByTestId('period-settings-rapor')).toBeVisible();
+
+  // Find delete button on the row for 2026-07-13
+  const row = table.locator('tr', { hasText: '2026-07-13' });
+  await row.getByRole('button', { name: /Rapor Olayını Sil/i }).click();
+
+  // Verify sick leave record is deleted
+  await expect(table.locator('tr', { hasText: '2026-07-13' })).toHaveCount(0);
+
+  // Verify dates still 'R' (2026-07-13, 2026-07-14, 2026-07-16) were restored to default ('Ç'),
+  // while manually modified date (2026-07-15) remains 'Ç' and was not overwritten!
+  await expect
+    .poll(async () => {
+      const snap = await readStoredSnapshot(page);
+      const jun = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-06');
+      const jul = snap?.puantajlar?.find((a) => a.personelId === 'p-1' && a.donemId === '2026-07');
+      return {
+        jul13: jun?.gunler['2026-07-13'],
+        jul14: jun?.gunler['2026-07-14'],
+        jul15: jul?.gunler['2026-07-15'],
+        jul16: jul?.gunler['2026-07-16'],
+      };
+    })
+    .toEqual({
+      jul13: 'Ç',
+      jul14: 'Ç',
+      jul15: 'Ç',
+      jul16: 'Ç',
+    });
 });

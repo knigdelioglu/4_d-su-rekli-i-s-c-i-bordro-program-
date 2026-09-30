@@ -20,6 +20,7 @@ import type {
 import { OPEN_ENDED_TAX_BRACKET_LIMIT } from '../services/storage/annualPayrollParametersValidation';
 import {
   DEFAULT_IS_PRIMI_GRUPLARI,
+  DEFAULT_PRODUCTION_KURUM_DEGERLERI,
   DEFAULT_STATUTORY_PERIOD_PARAMETERS,
   DEFAULT_TEDIYE_LISTESI,
   DEFAULT_TIS_IKRAMIYE_LISTESI,
@@ -175,6 +176,47 @@ export function hasCompletePeriodIncomeParameters(
     if (!isFiniteNumber(value)) return false;
     return field === 'gunlukTabanUcret' ? value > 0 : value >= 0;
   });
+}
+
+/**
+ * Materializes the same legal defaults shown by the period settings inputs.
+ * Older persisted settings may omit optional Rust fields; keeping those values
+ * only as input-level fallbacks makes the form look complete while saves still
+ * submit `undefined` and fail the authoritative payroll validation.
+ */
+export function withVisiblePeriodLegalDefaults(
+  settings: DönemselKurumDegerleri,
+  donemId: string
+): DönemselKurumDegerleri {
+  const defaults = DEFAULT_PRODUCTION_KURUM_DEGERLERI;
+  return {
+    ...settings,
+    donemId,
+    sgkIsciOraniYuzde: settings.sgkIsciOraniYuzde ?? defaults.sgkIsciOraniYuzde,
+    issizlikIsciOraniYuzde: settings.issizlikIsciOraniYuzde ?? defaults.issizlikIsciOraniYuzde,
+    gelirVergisiOraniYuzde: settings.gelirVergisiOraniYuzde ?? defaults.gelirVergisiOraniYuzde,
+    damgaVergisiOraniBinde: settings.damgaVergisiOraniBinde ?? defaults.damgaVergisiOraniBinde,
+    sendikaAidatiYuzde: settings.sendikaAidatiYuzde ?? defaults.sendikaAidatiYuzde,
+    sabitSendikaAidati: settings.sabitSendikaAidati ?? defaults.sabitSendikaAidati,
+    besOraniYuzde: settings.besOraniYuzde ?? defaults.besOraniYuzde,
+    sabitBesTutar: settings.sabitBesTutar ?? defaults.sabitBesTutar,
+    geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde ?? defaults.geceCalismaPrimiYuzde,
+    geceCalismaTatiliPrimiYuzde:
+      settings.geceCalismaTatiliPrimiYuzde ?? defaults.geceCalismaTatiliPrimiYuzde,
+    gunlukYemekIstisnasiSGK:
+      settings.gunlukYemekIstisnasiSGK ?? defaults.gunlukYemekIstisnasiSGK,
+    gunlukYemekIstisnasiGV:
+      settings.gunlukYemekIstisnasiGV ??
+      settings.gunlukYemekIstisnasiSGK ??
+      defaults.gunlukYemekIstisnasiGV,
+    pekTavanKatsayisi: settings.pekTavanKatsayisi ?? defaults.pekTavanKatsayisi,
+    gunlukAsgariUcret: settings.gunlukAsgariUcret ?? defaults.gunlukAsgariUcret,
+    sgkIsverenOraniYuzde: settings.sgkIsverenOraniYuzde ?? defaults.sgkIsverenOraniYuzde,
+    issizlikIsverenOraniYuzde:
+      settings.issizlikIsverenOraniYuzde ?? defaults.issizlikIsverenOraniYuzde,
+    isPrimiGruplari: settings.isPrimiGruplari ?? defaults.isPrimiGruplari,
+    statutoryParameterSegments: settings.statutoryParameterSegments ?? [],
+  };
 }
 
 function hasCompleteIsPrimiGroups(groups: unknown): boolean {
@@ -432,6 +474,24 @@ export function createBordroDonemi(
     taxYear: taxYear ?? defaultTaxYear,
     taxMonth: taxMonth ?? defaultTaxMonth,
   };
+}
+
+/**
+ * Formats a period label for selectors and headers with explicit year and service date range.
+ * E.g.: "Ocak 2027 · 15 Ocak - 14 Şubat"
+ */
+export function formatPeriodSelectorLabel(
+  period: Pick<BordroDonemi, 'donemAdi' | 'yil' | 'ay'>
+): string {
+  const ayAdi = AY_ISIMLERI[period.ay - 1];
+  const dateRange = period.donemAdi.match(/\(([^)]+)\)/)?.[1];
+  if (ayAdi && dateRange) {
+    return `${ayAdi} ${period.yil} · ${dateRange}`;
+  }
+  if (ayAdi && typeof period.yil === 'number') {
+    return `${ayAdi} ${period.yil}`;
+  }
+  return period.donemAdi;
 }
 
 /** Default accrual date that remains inside the period's authoritative tax month. */

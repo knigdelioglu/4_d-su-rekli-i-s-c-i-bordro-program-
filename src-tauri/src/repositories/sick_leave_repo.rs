@@ -1,8 +1,10 @@
 use crate::domain::models::SickLeaveRecord;
 use crate::domain::{DomainError, Result};
+use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::transaction::with_transaction;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
 pub struct SickLeaveRepository;
@@ -160,6 +162,14 @@ impl SickLeaveRepository {
         Ok(())
     }
 
+    pub fn save_and_sync_attendance(conn: &Connection, record: &SickLeaveRecord) -> Result<()> {
+        with_transaction(conn, |tx| {
+            let existing = Self::get_by_id(tx, &record.id)?;
+            Self::save_in_transaction(tx, record)?;
+            Self::sync_attendance_on_save(tx, record, existing.as_ref())
+        })
+    }
+
     pub fn delete(conn: &Connection, id: &str) -> Result<()> {
         with_transaction(conn, |tx| Self::delete_in_transaction(tx, id))
     }
@@ -183,6 +193,207 @@ impl SickLeaveRepository {
 
         conn.execute("DELETE FROM sick_leave_records WHERE id = ?1", params![id])
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn delete_and_sync_attendance(conn: &Connection, id: &str) -> Result<()> {
+        with_transaction(conn, |tx| {
+            if let Some(existing) = Self::get_by_id(tx, id)? {
+                Self::sync_attendance_on_delete(tx, &existing)?;
+            }
+            Self::delete_in_transaction(tx, id)
+        })
+    }
+
+    fn sync_attendance_on_save(
+        conn: &Connection,
+        record: &SickLeaveRecord,
+        existing: Option<&SickLeaveRecord>,
+    ) -> Result<()> {
+        let all_periods = PeriodRepository::get_all(conn)?;
+        if all_periods.is_empty() {
+            return Ok(());
+        }
+
+        let record_start = NaiveDate::parse_from_str(&record.startDate, "%Y-%m-%d").map_err(|e| {
+            DomainError::ValidationError(format!("Rapor başlangıç tarihi geçersiz: {e}"))
+        })?;
+        let record_end = NaiveDate::parse_from_str(&record.endDate, "%Y-%m-%d").map_err(|e| {
+            DomainError::ValidationError(format!("Rapor bitiş tarihi geçersiz: {e}"))
+        })?;
+
+        for period in &all_periods {
+            let p_start = match NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let p_end = match NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            let overlaps_new = record_start <= p_end && record_end >= p_start;
+            let overlaps_old = if let Some(old) = existing {
+                if let (Ok(old_s), Ok(old_e)) = (
+                    NaiveDate::parse_from_str(&old.startDate, "%Y-%m-%d"),
+                    NaiveDate::parse_from_str(&old.endDate, "%Y-%m-%d"),
+                ) {
+                    old_s <= p_end && old_e >= p_start
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !overlaps_new && !overlaps_old {
+                continue;
+            }
+
+            let existing_att = AttendanceRepository::get_by_personnel_and_period(
+                conn,
+                &record.personnelId,
+                &period.id,
+            )?;
+
+            let mut gunler = if let Some(att) = existing_att.as_ref() {
+                att.gunler.clone()
+            } else {
+                let mut default_gunler = std::collections::HashMap::new();
+                let mut curr = p_start;
+                while curr <= p_end {
+                    let code = if curr.weekday() == chrono::Weekday::Sat
+                        || curr.weekday() == chrono::Weekday::Sun
+                    {
+                        "T"
+                    } else {
+                        "Ç"
+                    };
+                    default_gunler.insert(curr.format("%Y-%m-%d").to_string(), code.to_string());
+                    curr += chrono::Duration::days(1);
+                }
+                default_gunler
+            };
+
+            let mut changed = false;
+
+            // If editing: restore old dates not in new record, ONLY if still "R"
+            if let Some(old) = existing {
+                if let (Ok(old_s), Ok(old_e)) = (
+                    NaiveDate::parse_from_str(&old.startDate, "%Y-%m-%d"),
+                    NaiveDate::parse_from_str(&old.endDate, "%Y-%m-%d"),
+                ) {
+                    let mut curr = old_s;
+                    while curr <= old_e {
+                        if curr >= p_start && curr <= p_end {
+                            if curr < record_start || curr > record_end {
+                                let date_str = curr.format("%Y-%m-%d").to_string();
+                                if gunler.get(&date_str).map(|s| s.as_str()) == Some("R") {
+                                    let default_code = if curr.weekday() == chrono::Weekday::Sat
+                                        || curr.weekday() == chrono::Weekday::Sun
+                                    {
+                                        "T"
+                                    } else {
+                                        "Ç"
+                                    };
+                                    gunler.insert(date_str, default_code.to_string());
+                                    changed = true;
+                                }
+                            }
+                        }
+                        curr += chrono::Duration::days(1);
+                    }
+                }
+            }
+
+            // Apply new record dates:
+            if overlaps_new {
+                let mut curr = record_start.max(p_start);
+                let end_overlap = record_end.min(p_end);
+                while curr <= end_overlap {
+                    let date_str = curr.format("%Y-%m-%d").to_string();
+                    if gunler.get(&date_str).map(|s| s.as_str()) != Some("R") {
+                        gunler.insert(date_str, "R".to_string());
+                        changed = true;
+                    }
+                    curr += chrono::Duration::days(1);
+                }
+            }
+
+            if changed || existing_att.is_none() {
+                let attendance = crate::domain::models::PersonelPuantaj {
+                    id: existing_att
+                        .map(|a| a.id)
+                        .unwrap_or_else(|| format!("{}_{}", record.personnelId, period.id)),
+                    personelId: record.personnelId.clone(),
+                    donemId: period.id.clone(),
+                    gunler,
+                };
+                AttendanceRepository::save_in_transaction(conn, &attendance)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn sync_attendance_on_delete(conn: &Connection, existing: &SickLeaveRecord) -> Result<()> {
+        let all_periods = PeriodRepository::get_all(conn)?;
+        if all_periods.is_empty() {
+            return Ok(());
+        }
+
+        let start = match NaiveDate::parse_from_str(&existing.startDate, "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+        let end = match NaiveDate::parse_from_str(&existing.endDate, "%Y-%m-%d") {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+
+        for period in &all_periods {
+            let p_start = match NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let p_end = match NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d") {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            if start <= p_end && end >= p_start {
+                if let Some(mut att) = AttendanceRepository::get_by_personnel_and_period(
+                    conn,
+                    &existing.personnelId,
+                    &period.id,
+                )? {
+                    let mut changed = false;
+                    let mut curr = start.max(p_start);
+                    let end_overlap = end.min(p_end);
+                    while curr <= end_overlap {
+                        let date_str = curr.format("%Y-%m-%d").to_string();
+                        // ONLY restore if currently "R" (never overwrite user's manual change)
+                        if att.gunler.get(&date_str).map(|s| s.as_str()) == Some("R") {
+                            let default_code = if curr.weekday() == chrono::Weekday::Sat
+                                || curr.weekday() == chrono::Weekday::Sun
+                            {
+                                "T"
+                            } else {
+                                "Ç"
+                            };
+                            att.gunler.insert(date_str, default_code.to_string());
+                            changed = true;
+                        }
+                        curr += chrono::Duration::days(1);
+                    }
+
+                    if changed {
+                        AttendanceRepository::save_in_transaction(conn, &att)?;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 

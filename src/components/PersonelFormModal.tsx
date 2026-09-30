@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react';
 import { User, Save, X, CreditCard, Shield, Briefcase, Calendar, Layers } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
 import { getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
+import { formatPersonnelSaveError } from '../utils/personnelError';
 
 interface PersonelFormModalProps {
   isOpen: boolean;
@@ -153,7 +154,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       await onSave(newPersonel);
       onClose();
     } catch (err) {
-      setErrors({ form: `Kayıt başarısız: ${String(err)}` });
+      setErrors({ form: `Kayıt başarısız: ${formatPersonnelSaveError(err)}` });
     } finally {
       setIsSaving(false);
     }

@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { BordroDonemi } from '../types/payroll';
+import { formatPeriodSelectorLabel } from '../utils/payrollPresentation';
 
 interface TopBarProps {
   donemler: BordroDonemi[];
@@ -105,14 +106,11 @@ export const TopBar: React.FC<TopBarProps> = ({
                     Henüz Dönem Yok
                   </option>
                 )}
-                {donemler.map((d) => {
-                  const dateRange = d.donemAdi.match(/\(([^)]+)\)/)?.[1] || d.donemAdi;
-                  return (
-                    <option key={d.id} value={d.id} className="bg-slate-900 text-white">
-                      {dateRange}
-                    </option>
-                  );
-                })}
+                {donemler.map((d) => (
+                  <option key={d.id} value={d.id} className="bg-slate-900 text-white">
+                    {formatPeriodSelectorLabel(d)}
+                  </option>
+                ))}
               </select>
             </div>
 

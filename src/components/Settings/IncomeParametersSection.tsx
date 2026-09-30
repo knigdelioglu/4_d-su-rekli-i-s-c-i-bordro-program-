@@ -14,6 +14,7 @@ interface IncomeParametersSectionProps {
   zamAylariForm: number[];
   setZamAylariForm: React.Dispatch<React.SetStateAction<number[]>>;
   savedSuccess: boolean;
+  errorMessage: string | null;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
 }
 
@@ -24,6 +25,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
   zamAylariForm,
   setZamAylariForm,
   savedSuccess,
+  errorMessage,
   onSubmit,
 }) => {
   const [isGrupModalOpen, setIsGrupModalOpen] = React.useState(false);
@@ -51,6 +53,16 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
           <div className="p-3 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-2 animate-in fade-in">
             <Check className="w-4 h-4 text-emerald-600" />
             <span>Dönem gelir ve zam ayarları başarıyla kaydedildi!</span>
+          </div>
+        )}
+
+        {errorMessage && (
+          <div
+            role="alert"
+            data-testid="period-settings-save-error"
+            className="p-3 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold"
+          >
+            {errorMessage}
           </div>
         )}
 

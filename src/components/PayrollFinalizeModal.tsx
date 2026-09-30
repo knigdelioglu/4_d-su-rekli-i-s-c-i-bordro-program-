@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -18,10 +18,12 @@ import {
 } from '../services/payrollEngine';
 import { toPayrollUiModel } from '../services/payrollEngine/decimalBoundary';
 import {
+  findEarlierUnfinalizedPaymentEvents,
   filterFinalizeNotices,
   hasBlockingFinalizeNotice,
 } from './payrollFinalizeRules';
 import { getPayrollStatusLabel } from './Listeler/accrualListData';
+import { formatPayrollError } from './useBordroCalculationController';
 
 const accrualTypeLabels: Record<BordroKaydi['accrualType'], string> = {
   NORMAL: 'Normal Maaş',
@@ -39,6 +41,9 @@ interface PayrollFinalizeModalProps {
   dataset: PayrollDatasetSnapshot;
   onFinalized: (bordro: PayrollBoundaryPayroll) => Promise<void> | void;
   onError?: (message: string) => void;
+  renderTrigger?: (openReview: (event: React.MouseEvent) => void) => React.ReactNode;
+  initialOpen?: boolean;
+  onClose?: () => void;
 }
 
 interface ReviewSnapshot {
@@ -87,12 +92,26 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
   dataset,
   onFinalized,
   onError,
+  renderTrigger,
+  initialOpen,
+  onClose,
 }) => {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(Boolean(initialOpen));
   const [isLoading, setIsLoading] = useState(false);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [review, setReview] = useState<ReviewSnapshot | null>(null);
   const [reviewError, setReviewError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (initialOpen) {
+      setIsOpen(true);
+      void loadReview(true).catch((err) => {
+        const message = `Kesinleştirme kontrolleri alınamadı: ${formatPayrollError(err)}`;
+        setReviewError(message);
+        onError?.(message);
+      });
+    }
+  }, [initialOpen, bordro.id, bordro.accrualId, personel.id, donem.id]);
 
   const relevantNotices = review?.notices ?? [];
   const counts = useMemo(
@@ -108,7 +127,8 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
   const isProvisionalSupplementary =
     authoritativeBordro.accrualType !== 'NORMAL' &&
     authoritativeBordro.statutorySnapshot?.source !== 'ATTENDANCE_BACKED';
-  const canFinalize = !isLoading && !isFinalizing && !reviewError && !isProvisionalSupplementary;
+  const canFinalize =
+    !isLoading && !isFinalizing && !reviewError && !hasCritical && !isProvisionalSupplementary;
 
   const loadReview = async (showLoading: boolean): Promise<ReviewSnapshot> => {
     if (showLoading) setIsLoading(true);
@@ -128,7 +148,17 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
         throw new Error('Kesinleştirilecek bordro kaydı bulunamadı.');
       }
 
-      const filtered = filterFinalizeNotices(allNotices, personel.id).sort(
+      const priorNotFinalized = findEarlierUnfinalizedPaymentEvents(payrolls, dataset.periods, current);
+      const chainNotices: PayrollNotice[] = priorNotFinalized.map((previous) => ({
+        code: 'PRIOR_ACCRUAL_NOT_FINALIZED',
+        severity: 'CRITICAL',
+        scope: 'PERSONNEL',
+        personnelId: personel.id,
+        title: 'Önceki tahakkuk kesinleşmedi',
+        message: `${previous.accrualId || previous.id} (${previous.donemId}) ${getPayrollStatusLabel(previous.status)} durumda. Önceki tahakkuklar kesinleştirilmeden sonraki tahakkuk kesinleştirilemez.`,
+        details: [],
+      }));
+      const filtered = [...filterFinalizeNotices(allNotices, personel.id), ...chainNotices].sort(
         (a, b) => severityRank[a.severity] - severityRank[b.severity]
       );
 
@@ -152,7 +182,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
     try {
       await loadReview(true);
     } catch (err) {
-      const message = `Kesinleştirme kontrolleri alınamadı: ${String(err)}`;
+      const message = `Kesinleştirme kontrolleri alınamadı: ${formatPayrollError(err)}`;
       setReviewError(message);
       onError?.(message);
     }
@@ -163,6 +193,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
     setIsOpen(false);
     setReview(null);
     setReviewError(null);
+    onClose?.();
   };
 
   const finalize = async () => {
@@ -172,6 +203,9 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
       // Modal açık kaldığı sırada başka bir girdi değişmiş olabilir. Kilitlemeden
       // hemen önce native bordro ve notice listesi ikinci kez authoritative kaynaktan okunur.
       const latestReview = await loadReview(false);
+      if (hasBlockingFinalizeNotice(latestReview.notices)) {
+        throw new Error('Kritik kontroller çözülmeden bordro kesinleştirilemez.');
+      }
       if (
         latestReview.bordro.accrualType !== 'NORMAL' &&
         latestReview.bordro.statutorySnapshot?.source !== 'ATTENDANCE_BACKED'
@@ -187,10 +221,9 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
         latestReview.bordro.accrualId || latestReview.bordro.id
       );
       await onFinalized(finalized);
-      setIsOpen(false);
-      setReview(null);
+      close();
     } catch (err) {
-      const message = `Bordro kesinleştirilemedi: ${String(err)}`;
+      const message = `Bordro kesinleştirilemedi: ${formatPayrollError(err)}`;
       setReviewError(message);
       onError?.(message);
     } finally {
@@ -200,15 +233,20 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
 
   return (
     <>
-      <button
-        type="button"
-        onClick={openReview}
-        title="Bordroyu kontrol ederek kesinleştir"
-        className="p-1.5 bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
-      >
-        <CheckCircle2 className="w-3.5 h-3.5" />
-        <span>Kesinleştir</span>
-      </button>
+      {renderTrigger ? (
+        renderTrigger(openReview)
+      ) : initialOpen ? null : (
+        <button
+          type="button"
+          onClick={openReview}
+          title="Bordroyu kontrol ederek kesinleştir"
+          aria-label="Bordroyu Kesinleştir"
+          className="px-1.5 py-1 bg-amber-50 text-amber-800 hover:bg-amber-600 hover:text-white rounded-md transition-colors text-[10.5px] font-semibold flex items-center gap-1 whitespace-nowrap"
+        >
+          <CheckCircle2 className="w-3 h-3" />
+          <span>Kesinleştir</span>
+        </button>
+      )}
 
       {isOpen && (
         <div
@@ -371,7 +409,7 @@ export const PayrollFinalizeModal: React.FC<PayrollFinalizeModalProps> = ({
                 <button
                   type="button"
                   onClick={() => void loadReview(true).catch((err) => {
-                    const message = `Kesinleştirme kontrolleri alınamadı: ${String(err)}`;
+                    const message = `Kesinleştirme kontrolleri alınamadı: ${formatPayrollError(err)}`;
                     setReviewError(message);
                     onError?.(message);
                   })}

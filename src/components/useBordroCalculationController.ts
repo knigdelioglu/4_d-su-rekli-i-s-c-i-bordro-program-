@@ -5,7 +5,7 @@ import {
   paymentEventSequenceScopeKey,
 } from '../services/payrollEngine/paymentEventOrder';
 import {
-  assertPayrollCalculationSnapshotCurrent,
+  assertPayrollCalculationSnapshotCurrentForEngine,
 } from '../services/payrollEngine/calculationSnapshot';
 import {
   AccrualType,
@@ -68,10 +68,14 @@ export function formatPayrollError(err: unknown): string {
     try {
       return JSON.stringify(err);
     } catch {
-      return String(err);
+      return 'Beklenmeyen bir hata oluştu.';
     }
   }
   return formatActionableParameterError(String(err));
+}
+
+export function formatStalePayrollMessage(personName: string): string {
+  return `${personName} bordrosu kaynak verilerindeki değişiklik nedeniyle güncelliğini yitirdi. Bordro zarfını açmadan/yazdırmadan önce yeniden hesaplayın.`;
 }
 
 export const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
@@ -279,7 +283,8 @@ export function useBordroCalculationController({
         accrual: getNormalAccrualInput(person.id, calculationSnapshot),
         dataset: calculationSnapshot,
       });
-      assertPayrollCalculationSnapshotCurrent(
+      assertPayrollCalculationSnapshotCurrentForEngine(
+        payrollEngine.kind,
         calculationSnapshot,
         authoritativeDatasetRef.current
       );
@@ -332,7 +337,7 @@ export function useBordroCalculationController({
   const handleOpenPaySlip = async (person: Personel, requestedBordro?: BordroKaydi) => {
     let bordro = requestedBordro || getActiveViewPayroll(person.id);
     if (bordro?.status === 'STALE') {
-      setErrorMessage(`${person.ad} ${person.soyad} bordrosu önceki dönem değişikliği nedeniyle güncelliğini yitirdi. Bordro zarfını açmadan/yazdırmadan önce yeniden hesaplayın.`);
+      setErrorMessage(formatStalePayrollMessage(`${person.ad} ${person.soyad}`));
       return;
     }
     if (bordro?.status === 'DRAFT') {
@@ -397,7 +402,8 @@ export function useBordroCalculationController({
         },
         dataset: calculationSnapshot,
       });
-      assertPayrollCalculationSnapshotCurrent(
+      assertPayrollCalculationSnapshotCurrentForEngine(
+        payrollEngine.kind,
         calculationSnapshot,
         authoritativeDatasetRef.current
       );
@@ -466,7 +472,8 @@ export function useBordroCalculationController({
         accrual,
         dataset: calculationSnapshot,
       });
-      assertPayrollCalculationSnapshotCurrent(
+      assertPayrollCalculationSnapshotCurrentForEngine(
+        payrollEngine.kind,
         calculationSnapshot,
         authoritativeDatasetRef.current
       );

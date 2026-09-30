@@ -54,6 +54,7 @@ interface PaySlipModalProps {
 }
 
 type ExportAction =
+  | 'print'
   | 'single-pdf'
   | 'single-xlsx'
   | 'single-csv'
@@ -138,7 +139,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
     return { people, payrolls, notices, models };
   };
 
-  const handlePrint = () => printElement('payslip-print-container');
+  const handlePrint = () => void withBusy('print', () => printElement('payslip-print-container'));
 
   const visibleIncomeLines = previewModel.incomes.filter((line) => Math.abs(line.amount) > 0.0001);
   const visibleDeductionLines = previewModel.deductions.filter((line) => Math.abs(line.amount) > 0.0001);

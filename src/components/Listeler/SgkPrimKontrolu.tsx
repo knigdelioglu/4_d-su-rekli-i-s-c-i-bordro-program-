@@ -8,7 +8,7 @@ import type {
   RetroAdjustmentBatch,
   RetroAllocation,
 } from '../../types/payroll';
-import { formatTL } from '../../utils/payrollPresentation';
+import { formatPeriodSelectorLabel, formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel } from '../../utils/excelExport';
 import {
   buildSgkPrimKontroluExcelPayload,
@@ -31,7 +31,7 @@ interface SgkPrimKontroluProps {
 }
 
 const periodLabel = (period: BordroDonemi): string =>
-  period.donemAdi.match(/\(([^)]+)\)/)?.[1] || period.donemAdi;
+  formatPeriodSelectorLabel(period);
 
 function displayAmount(row: SgkPrimKontroluRow, amount: number): string {
   return row.status === 'authoritative' ? formatTL(amount) : '—';

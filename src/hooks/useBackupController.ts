@@ -32,6 +32,7 @@ export interface BackupControllerOptions {
   setAuthoritativePayload: (payload: PayrollStorageDto) => void;
   setIsDataLoaded: (loaded: boolean) => void;
   setLoadError: (message: string | null) => void;
+  onSuccess?: (message: string) => void;
 }
 
 function makeBackupPayload<T extends object>(dataset: T): PayrollStorageDto {
@@ -58,6 +59,7 @@ export function useBackupController({
   setAuthoritativePayload,
   setIsDataLoaded,
   setLoadError,
+  onSuccess,
 }: BackupControllerOptions) {
   const commitBrowserPayload = (payload: PayrollStorageDto) => {
     browserPersistence.markClean();
@@ -66,15 +68,7 @@ export function useBackupController({
     setLoadError(null);
   };
 
-  const handleResetSampleData = async () => {
-    if (
-      !window.confirm(
-        'Tüm mevcut veriler sıfırlanıp örnek 4/D bordro verileri yüklenecek. Emin misiniz?'
-      )
-    ) {
-      return;
-    }
-
+  const executeResetSampleData = async () => {
     const initialData = getInitialDataset();
     const payload = makeBackupPayload({
       ...initialData,
@@ -92,6 +86,7 @@ export function useBackupController({
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await loadData();
+        onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
         return;
       }
 
@@ -100,13 +95,18 @@ export function useBackupController({
       }
       await browserPersistence.savePayload(serializePayrollStorage(payload));
       commitBrowserPayload(payload);
+      onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
     } catch (err) {
       const message = `Örnek veriler yüklenemedi: ${String(err)}`;
       console.error(message, err);
       setLoadError(message);
-      alert(message);
+      throw err;
     }
   };
+
+  // Confirmation belongs to the app UI so the same accessible dialog works in
+  // both the browser and Tauri webview. Keep this handler for existing callers.
+  const handleResetSampleData = async () => executeResetSampleData();
 
   const handleClearAndStartFresh = async () => {
     if (
@@ -213,6 +213,7 @@ export function useBackupController({
   };
 
   return {
+    executeResetSampleData,
     handleResetSampleData,
     handleClearAndStartFresh,
     handleExportBackup,

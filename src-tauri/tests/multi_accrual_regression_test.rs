@@ -309,12 +309,38 @@ fn payment_event_backdated_insert_delete_and_finalized_protection(
     }
     calculate(&normal)?;
     calculate(&tis)?;
+    // Legacy payroll rows can keep a distinct primary key. Re-key the target
+    // to model that persisted shape, then make another row's primary key equal
+    // the target accrual key. Delete must follow accrual_id only.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    conn.execute(
+        "UPDATE payroll_income_items SET id = 'legacy-' || id, payroll_id = 'legacy-tediye-row' WHERE payroll_id = 'tediye'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE payroll_deduction_items SET id = 'legacy-' || id, payroll_id = 'legacy-tediye-row' WHERE payroll_id = 'tediye'",
+        [],
+    )?;
+    conn.execute("UPDATE payroll_records SET id = 'legacy-tediye-row' WHERE id = 'tediye'", [])?;
+    conn.execute("UPDATE payroll_records SET id = 'tediye' WHERE id = 'normal'", [])?;
+    conn.execute(
+        "UPDATE payroll_income_items SET id = replace(id, 'normal_', 'tediye_'), payroll_id = 'tediye' WHERE payroll_id = 'normal'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE payroll_deduction_items SET id = replace(id, 'normal_', 'tediye_'), payroll_id = 'tediye' WHERE payroll_id = 'normal'",
+        [],
+    )?;
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    let before_delete = PayrollRepository::get_all(&conn)?;
+    assert_eq!(before_delete.iter().find(|row| row.accrualId == "tediye").unwrap().id, "legacy-tediye-row");
+    assert_eq!(before_delete.iter().find(|row| row.accrualId == "normal").unwrap().id, "tediye");
     PayrollRepository::delete_accrual(&conn, personnel_id, &active.id, "tediye")?;
     let records = PayrollRepository::get_all(&conn)?;
     assert_eq!(records.len(), 2);
-    assert!(records
-        .iter()
-        .all(|record| record.status == BordroStatus::STALE));
+    assert!(records.iter().all(|record| record.accrualId != "tediye"));
+    assert_eq!(records.iter().find(|row| row.accrualId == "normal").unwrap().id, "tediye");
+    assert!(records.iter().all(|record| record.status == BordroStatus::STALE));
     // The first event can be created/calculated with no NORMAL at all.
     PayrollRepository::delete_accrual(&conn, personnel_id, &active.id, "normal")?;
     calculate(&tediye)?;

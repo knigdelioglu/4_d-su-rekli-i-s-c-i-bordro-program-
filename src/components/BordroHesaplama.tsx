@@ -22,6 +22,7 @@ import {
   Building2,
   X,
   Plus,
+  MoreHorizontal,
 } from 'lucide-react';
 import {
   AccrualType,
@@ -190,6 +191,29 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     errorMessage && isPayrollTaxOpeningConfigurationError(errorMessage)
   );
 
+  const [openMenuPersonId, setOpenMenuPersonId] = React.useState<string | null>(null);
+  const [activeFinalize, setActiveFinalize] = React.useState<{ person: Personel; bordro: BordroKaydi } | null>(null);
+  const [confirmDeleteAccrualId, setConfirmDeleteAccrualId] = React.useState<string | null>(null);
+  const actionMenuRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!openMenuPersonId) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (actionMenuRef.current && !actionMenuRef.current.contains(event.target as Node)) {
+        setOpenMenuPersonId(null);
+      }
+    };
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenMenuPersonId(null);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [openMenuPersonId]);
+
   // Filtered personnel list
   const normalizedSearchTerm = searchTerm.toLocaleLowerCase('tr-TR');
   const filteredPersoneller = personeller.filter(
@@ -231,20 +255,20 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
   return (
     <div
-      className="space-y-6"
+      className="space-y-3"
       data-testid="payroll-screen"
       data-period-id={aktifDonem.id}
       data-payroll-view={activePayrollView}
       data-payroll-engine-kind={payrollEngine.kind}
     >
       {/* Top Banner / Title */}
-      <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-slate-900 rounded-xl px-5 py-3 text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
-            <Calculator className="w-6 h-6 text-indigo-400" />
+          <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+            <Calculator className="w-5 h-5 text-indigo-400" />
             <span>{activeViewTitle}</span>
           </h2>
-          <p className="text-xs text-slate-300 mt-1 max-w-2xl">
+          <p className="text-[11px] text-slate-300 mt-0.5 max-w-2xl leading-normal">
             {isSupplementaryView
               ? `${activeViewTitle} kayıtları mevcut tahakkuklardan gösterilir. Aynı türden birden fazla tahakkuk ayrı satır olarak listelenir.`
               : 'Kesintiler ve özlük hakları personelin kayıtlı kartından otomatik çekilir. Kişi adına tıklayarak detaylı bordro zarfını görüntüleyebilirsiniz.'}
@@ -256,22 +280,22 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
             <>
               <button
                 onClick={() => setIsKumulatifModalOpen(true)}
-                className="px-4 py-3 bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold text-xs rounded-xl shadow-md transition-all flex items-center justify-center gap-2 border border-slate-700"
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-300 font-semibold text-xs rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 border border-slate-700"
                 title="Sisteme ilk defa girildiğinde veya yıl ortasında önceki kümülatif vergi matrahlarını elle girmek için tıklayın"
               >
-                <Receipt className="w-4 h-4 text-amber-400" />
+                <Receipt className="w-3.5 h-3.5 text-amber-400" />
                 <span>Önceki Kümülatif Matrah Girişi</span>
               </button>
 
               <button
                 onClick={handleCalculateAll}
                 disabled={isBatchProcessing || personeller.length === 0}
-                className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 whitespace-nowrap"
+                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg shadow-sm transition-all flex items-center justify-center gap-1.5 whitespace-nowrap"
               >
                 {isBatchProcessing ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                 ) : (
-                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                 )}
                 <span>Tüm Hesaplanabilir Bordroları Hesapla ({personeller.length})</span>
               </button>
@@ -280,12 +304,12 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         </div>
       </div>
 
-      {!isSupplementaryView && <div className="flex flex-col gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+      {!isSupplementaryView && <div className="flex flex-col gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3.5 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-xs font-bold uppercase tracking-wide text-indigo-900">
             Normal Maaş Ödeme / Tahakkuk Tarihi
           </div>
-          <p className="mt-1 text-[11px] text-indigo-800">
+          <p className="mt-0.5 text-[11px] text-indigo-800">
             Yeni normal maaş bordrosu için kullanılacak tarihtir. Kaydedilmiş tahakkukların tarihi değiştirilemez.
             Tediye ve TİS ikramiyesi ayrı tahakkuk olarak eklenir.
           </p>
@@ -303,7 +327,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 [aktifDonem.id]: event.target.value,
               }))
             }
-            className="rounded-xl border border-indigo-200 bg-white px-3 py-2 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500"
+            className="rounded-lg border border-indigo-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-500"
           />
         </label>
       </div>}
@@ -311,13 +335,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       {isSupplementaryView && activeAccrualType !== 'SUPPLEMENTAL' && (
         <div
           data-testid="accrual-reference-banner"
-          className="flex flex-col gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3.5 py-2 sm:flex-row sm:items-center sm:justify-between"
         >
           <div>
             <div className="text-xs font-bold uppercase tracking-wide text-indigo-900">
               {activeViewTitle} takvim bağlantısı
             </div>
-            <p className="mt-1 text-[11px] text-indigo-800">
+            <p className="mt-0.5 text-[11px] text-indigo-800">
               Referans takvimde ödeme bekliyor: <strong>{activeReferenceExists ? '✓ Evet' : '— İşaretli değil'}</strong> ·
               Tahakkuk oluşturulan: <strong>{activeViewAccrualCount} / {personeller.length}</strong>
               {missingActiveViewAccrualCount > 0 && ` · Eksik: ${missingActiveViewAccrualCount}`}
@@ -331,16 +355,16 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
 
       {/* Alert Banners */}
       {successMessage && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center gap-2 animate-fade-in shadow-xs">
+        <div className="px-3.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-xs font-semibold flex items-center gap-2 animate-fade-in shadow-xs">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
           <span>{successMessage}</span>
         </div>
       )}
 
       {errorMessage && (
-        <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 rounded-xl text-xs font-semibold flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fade-in shadow-xs">
+        <div className="px-3.5 py-2 bg-rose-50 border border-rose-200 text-rose-900 rounded-xl text-xs font-semibold flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 animate-fade-in shadow-xs">
           <div className="flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
             <span>{errorMessage}</span>
           </div>
           {taxOpeningConfigurationError ? (
@@ -349,7 +373,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 setErrorMessage(null);
                 setIsKumulatifModalOpen(true);
               }}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors flex items-center gap-1 shadow-xs"
+              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors flex items-center gap-1 shadow-xs"
             >
               <Receipt className="w-3.5 h-3.5" />
               <span>Önceki Kümülatif Matrah Girişine Git →</span>
@@ -357,7 +381,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           ) : onGoToPuantaj && (
             <button
               onClick={() => onGoToPuantaj()}
-              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors flex items-center gap-1 shadow-xs"
+              className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shrink-0 transition-colors flex items-center gap-1 shadow-xs"
             >
               <CalendarCheck className="w-3.5 h-3.5" />
               <span>Puantaj Cetveline Git →</span>
@@ -367,72 +391,109 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       )}
 
       {/* KPI Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
-          <div className="p-3 bg-blue-50 text-blue-700 rounded-xl shrink-0">
-            <Users className="w-5 h-5" />
+      <div
+        data-testid="payroll-summary-cards"
+        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5"
+      >
+        <div
+          data-testid="kpi-card-personnel"
+          className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2.5 min-w-0"
+        >
+          <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center shrink-0">
+            <Users className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <span className="text-xs text-slate-500 font-medium">Toplam Personel</span>
-            <div className="text-lg font-bold text-slate-900">{personeller.length} Kişi</div>
-            <span className="text-[11px] text-blue-600 font-medium">
-              {calculatedViewPersonnelCount} / {personeller.length} {isSupplementaryView ? 'Kayıt' : 'Hesaplandı'}
-            </span>
-            <span className="block text-[10px] text-slate-500">
-              Toplam Tahakkuk: {activePeriodBordrolar.length}
-            </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-1">
+              <span className="text-[11px] text-slate-500 font-medium truncate" title="Toplam Personel">Toplam Personel</span>
+              <span className="text-[10px] text-blue-600 font-semibold shrink-0">
+                {calculatedViewPersonnelCount}/{personeller.length}
+              </span>
+            </div>
+            <div className="text-sm 2xl:text-base font-bold text-slate-900 leading-tight whitespace-nowrap">
+              {personeller.length} Kişi
+            </div>
+            <div
+              className="text-[10px] text-slate-500 leading-tight mt-0.5 truncate"
+              title={isSupplementaryView
+                ? `${activePeriodBordrolar.length} Tahakkuk Kaydı`
+                : `${calculatedViewPersonnelCount} / ${personeller.length} ${isSupplementaryView ? 'Kayıt' : 'Hesaplandı'}`}
+            >
+              {isSupplementaryView
+                ? `${activePeriodBordrolar.length} Tahakkuk Kaydı`
+                : `${calculatedViewPersonnelCount} / ${personeller.length} ${isSupplementaryView ? 'Kayıt' : 'Hesaplandı'}`}
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
-          <div className="p-3 bg-indigo-50 text-indigo-700 rounded-xl shrink-0">
-            <Wallet className="w-5 h-5" />
+        <div
+          data-testid="kpi-card-gross"
+          className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2.5 min-w-0"
+        >
+          <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+            <Wallet className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <span className="text-xs text-slate-500 font-medium">Toplam Brüt Gelir</span>
-            <div className="text-lg font-bold text-indigo-900 font-mono">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] text-slate-500 font-medium block truncate" title="Toplam Brüt Gelir">Toplam Brüt Gelir</span>
+            <div className="text-sm 2xl:text-base font-bold text-indigo-900 font-mono tabular-nums leading-tight whitespace-nowrap">
               {formatTL(totalGross)}
             </div>
-            <span className="text-[11px] text-slate-400">Vergi ve SGK Öncesi</span>
+            <div className="text-[10px] text-slate-500 leading-tight mt-0.5" title="Vergi ve SGK Öncesi">
+              Vergi ve SGK Öncesi
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
-          <div className="p-3 bg-rose-50 text-rose-700 rounded-xl shrink-0">
-            <Receipt className="w-5 h-5" />
+        <div
+          data-testid="kpi-card-deductions"
+          className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2.5 min-w-0"
+        >
+          <div className="w-7 h-7 rounded-lg bg-rose-50 text-rose-700 flex items-center justify-center shrink-0">
+            <Receipt className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <span className="text-xs text-slate-500 font-medium">İşçi Kesintileri</span>
-            <div className="text-lg font-bold text-rose-800 font-mono">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] text-slate-500 font-medium block truncate" title="İşçi Kesintileri">İşçi Kesintileri</span>
+            <div className="text-sm 2xl:text-base font-bold text-rose-800 font-mono tabular-nums leading-tight whitespace-nowrap">
               {formatTL(totalDeductions)}
             </div>
-            <span className="text-[11px] text-slate-400">SGK + Vergi + Özel Kesinti</span>
+            <div className="text-[10px] text-slate-500 leading-tight mt-0.5" title="SGK + Vergi + Kesinti">
+              SGK + Vergi + Kesinti
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
-          <div className="p-3 bg-emerald-50 text-emerald-700 rounded-xl shrink-0">
-            <TrendingUp className="w-5 h-5" />
+        <div
+          data-testid="kpi-card-net"
+          className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2.5 min-w-0"
+        >
+          <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">
+            <TrendingUp className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <span className="text-xs text-slate-500 font-medium">Toplam Net Ödeme</span>
-            <div className="text-lg font-bold text-emerald-700 font-mono">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] text-slate-500 font-medium block truncate" title="Toplam Net Ödeme">Toplam Net Ödeme</span>
+            <div className="text-sm 2xl:text-base font-bold text-emerald-700 font-mono tabular-nums leading-tight whitespace-nowrap">
               {formatTL(totalNet)}
             </div>
-            <span className="text-[11px] text-emerald-600 font-semibold">Banka Ele Geçen</span>
+            <div className="text-[10px] text-emerald-600 font-medium leading-tight mt-0.5" title="Banka Ele Geçen">
+              Banka Ele Geçen
+            </div>
           </div>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3.5">
-          <div className="p-3 bg-amber-50 text-amber-700 rounded-xl shrink-0">
-            <Building2 className="w-5 h-5" />
+        <div
+          data-testid="kpi-card-employer-cost"
+          className="bg-white px-3 py-2 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2.5 min-w-0"
+        >
+          <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center shrink-0">
+            <Building2 className="w-3.5 h-3.5" />
           </div>
-          <div>
-            <span className="text-xs text-slate-500 font-medium">İşveren Prim Maliyeti</span>
-            <div className="text-lg font-bold text-amber-900 font-mono">
+          <div className="min-w-0 flex-1">
+            <span className="text-[11px] text-slate-500 font-medium block truncate" title="İşveren Prim Maliyeti">İşveren Prim Maliyeti</span>
+            <div className="text-sm 2xl:text-base font-bold text-amber-900 font-mono tabular-nums leading-tight whitespace-nowrap">
               {formatTL(totalEmployerCost)}
             </div>
-            <span className="text-[11px] text-amber-700 font-semibold">Kurum SGK + İşsizlik</span>
+            <div className="text-[10px] text-amber-700 font-medium leading-tight mt-0.5" title="Kurum SGK + İşsizlik">
+              Kurum SGK + İşsizlik
+            </div>
           </div>
         </div>
       </div>
@@ -440,16 +501,16 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
       {/* Main Personnel Payroll List Table */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
         {/* Table Header / Toolbar */}
-        <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col gap-3">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex flex-col gap-2">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5">
           <div className="relative w-full sm:w-80">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2" />
             <input
               type="text"
               placeholder="Personel adı, T.C. No veya Unvan ile ara..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+              className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
             />
           </div>
 
@@ -466,7 +527,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                 data-testid={`payroll-filter-${filter.id}`}
                 aria-pressed={rowFilter === filter.id}
                 onClick={() => setRowFilter(filter.id)}
-                className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                className={`rounded-md border px-2 py-1 text-[11px] font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                   rowFilter === filter.id
                     ? 'border-indigo-300 bg-indigo-100 text-indigo-800'
                     : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-200 hover:bg-indigo-50'
@@ -483,22 +544,22 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-slate-100 text-slate-700 text-[11px] uppercase tracking-wider font-bold border-b border-slate-200">
-                {isSupplementaryView && <th className="py-3 px-4">S.No</th>}
-                <th className="py-3 px-4">{isSupplementaryView ? 'Personel Adı Soyadı' : 'Personel'}</th>
-                {!isSupplementaryView && <th className="py-3 px-4 text-center">Puantaj</th>}
-                {isSupplementaryView && <th className="py-3 px-4 text-center">Ödeme Tarihi</th>}
-                <th className="py-3 px-4 text-right">Brüt</th>
+                {isSupplementaryView && <th className="py-2 px-2">S.No</th>}
+                <th className="py-2 px-2">{isSupplementaryView ? 'Personel Adı Soyadı' : 'Personel'}</th>
+                {!isSupplementaryView && <th className="py-2 px-1 text-center">Puantaj</th>}
+                {isSupplementaryView && <th className="py-2 px-1 text-center">Ödeme Tarihi</th>}
+                <th className="py-2 px-1 text-right">Brüt</th>
                 {isSupplementaryView ? (
                   <>
-                    <th className="py-3 px-4 text-right">SGK</th>
-                    <th className="py-3 px-4 text-right">GV</th>
+                    <th className="py-2 px-1 text-right">SGK</th>
+                    <th className="py-2 px-1 text-right">GV</th>
                   </>
                 ) : (
-                  <th className="py-3 px-4 text-right">Kesinti</th>
+                  <th className="py-2 px-1 text-right">Kesinti</th>
                 )}
-                <th className="py-3 px-4 text-right">{isSupplementaryView ? 'Net Ele Geçen' : 'Net'}</th>
-                <th className="py-3 px-4 text-center">Durum</th>
-                <th className="py-3 px-4 text-center">İşlemler</th>
+                <th className="py-2 px-1 text-right">{isSupplementaryView ? 'Net Ele Geçen' : 'Net'}</th>
+                <th className="py-2 px-1 text-center">Durum</th>
+                <th className="py-2 px-1 text-center w-28">İşlemler</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 text-xs text-slate-800">
@@ -544,71 +605,84 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     <React.Fragment key={person.id}>
                     <tr
                       data-testid={isSupplementaryView && bordro ? `accrual-row-${getAccrualId(bordro)}` : `payroll-row-${person.id}`}
-                      onClick={() => void handleOpenPaySlip(person, bordro)}
+                      onClick={(event) => {
+                        const target = event.target as HTMLElement | null;
+                        if (
+                          target?.closest('button') ||
+                          target?.closest('[role="menu"]') ||
+                          target?.closest('td[data-cell="actions"]')
+                        ) {
+                          return;
+                        }
+                        void handleOpenPaySlip(person, bordro);
+                      }}
                       className={`transition-colors group ${isStale || isDraft ? 'bg-amber-50/40 cursor-default' : 'hover:bg-indigo-50/50 cursor-pointer'}`}
                     >
                       {isSupplementaryView && (
-                        <td className="py-3 px-4 font-mono text-slate-400 font-medium">
+                        <td className="py-1.5 px-2 font-mono text-slate-400 font-medium whitespace-nowrap">
                           {idx + 1}{viewAccruals.length > 1 ? '.1' : ''}
                         </td>
                       )}
 
                       {/* Person Name & TC */}
-                      <td className="py-3 px-4 font-medium">
-                        <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-xs shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
+                      <td className="py-1.5 px-2 font-medium">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <div className="w-6 h-6 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-[10.5px] shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-colors">
                             {person.ad.charAt(0)}
                             {person.soyad.charAt(0)}
                           </div>
-                          <div>
-                            <div className="font-bold text-slate-900 group-hover:text-indigo-700 transition-colors flex items-center gap-1">
-                              <span>{person.ad} {person.soyad}</span>
-                              {!isStale && !isDraft && <ChevronRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity" />}
+                          <div className="min-w-0 flex-1">
+                            <div className="font-bold text-slate-900 group-hover:text-indigo-700 transition-colors flex items-center gap-1 leading-tight">
+                              <span className="truncate max-w-[150px]" title={`${person.ad} ${person.soyad}`}>{person.ad} {person.soyad}</span>
+                              {!isStale && !isDraft && <ChevronRight className="w-3 h-3 text-slate-400 group-hover:text-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />}
                             </div>
-                            <span className="font-mono text-[11px] text-slate-500">
-                              TC: {person.tcNo}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 font-mono text-[10.5px] text-slate-500 leading-tight mt-0.5">
+                              <span>TC: {person.tcNo}</span>
+                              <span>·</span>
+                              <button
+                                type="button"
+                                data-testid={`timeline-toggle-${person.id}`}
+                                aria-expanded={expandedTimelinePersonId === person.id}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setExpandedTimelinePersonId((current) =>
+                                    current === person.id ? null : person.id
+                                  );
+                                }}
+                                title="Ödeme Geçmişi"
+                                aria-label="Ödeme Geçmişi"
+                                className="text-left text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-indigo-500 whitespace-nowrap cursor-pointer"
+                              >
+                                Geçmiş {expandedTimelinePersonId === person.id ? '▴' : '▾'}
+                              </button>
+                            </div>
                             {isSupplementaryView && bordro?.accrualDescription && (
-                              <div className="max-w-64 truncate text-[10px] font-medium text-slate-500" title={bordro.accrualDescription}>
+                              <div className="max-w-48 truncate text-[10px] font-medium text-slate-500 mt-0.5" title={bordro.accrualDescription}>
                                 {bordro.accrualDescription}
                               </div>
                             )}
-                            <button
-                              type="button"
-                              data-testid={`timeline-toggle-${person.id}`}
-                              aria-expanded={expandedTimelinePersonId === person.id}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setExpandedTimelinePersonId((current) =>
-                                  current === person.id ? null : person.id
-                                );
-                              }}
-                              className="mt-1 text-left text-[10px] font-semibold text-indigo-600 hover:text-indigo-800 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                            >
-                              Ödeme Geçmişi {expandedTimelinePersonId === person.id ? '▴' : '▾'}
-                            </button>
                           </div>
                         </div>
                       </td>
 
                       {/* Compact attendance summary */}
-                      {!isSupplementaryView && <td className="py-3 px-4 text-center">
+                      {!isSupplementaryView && <td className="py-1.5 px-1 text-center">
                         {bordro ? (
                           <span
-                            className="inline-flex max-w-[155px] items-center gap-1 whitespace-nowrap text-[10px] font-mono font-semibold"
+                            className="inline-flex max-w-[120px] items-center gap-1 text-[10px] font-mono font-semibold"
                             title={`Puantaj: ${formatCompactPuantaj(bordro.puantajOzeti)}`}
                             aria-label={`Puantaj: ${formatCompactPuantaj(bordro.puantajOzeti)}`}
                           >
-                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+                            <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden="true" />
                             <span className="truncate">{formatCompactPuantaj(bordro.puantajOzeti)}</span>
                           </span>
                         ) : hasPuantaj ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 whitespace-nowrap">
                             <CalendarCheck className="w-3 h-3 text-amber-600" />
                             <span>Puantaj Girildi</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 text-rose-600 text-[11px] font-bold">
+                          <span className="inline-flex items-center gap-1 text-rose-600 text-[10.5px] font-bold whitespace-nowrap">
                             <AlertTriangle className="w-3 h-3 text-rose-500" />
                             <span>Puantaj Yok</span>
                           </span>
@@ -616,7 +690,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       </td>}
 
                       {/* Ödeme/tahakkuk tarihi — supplementary views only */}
-                      {isSupplementaryView && <td className="py-3 px-4 text-center font-mono text-[11px]">
+                      {isSupplementaryView && <td className="py-1.5 px-1 text-center font-mono text-[11px] whitespace-nowrap">
                         <div className="font-bold text-slate-800">
                           {bordro ? bordro.paymentDate || getDefaultAccrualPaymentDate(aktifDonem) : '—'}
                         </div>
@@ -624,142 +698,201 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                       </td>}
 
                       {/* Brüt */}
-                      <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
+                      <td className={`py-1.5 px-1 text-right font-mono font-medium text-xs whitespace-nowrap ${isStale ? 'text-amber-700 line-through' : 'text-slate-800'}`}>
                         {hasPayrollSnapshot ? formatTL(brut) : '—'}
                       </td>
 
                       {/* Kesintiler / supplementary breakdown */}
                       {isSupplementaryView ? (
                         <>
-                          <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
+                          <td className={`py-1.5 px-1 text-right font-mono font-medium text-xs whitespace-nowrap ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
                             {hasPayrollSnapshot ? formatTL(bordro?.kesintiler.isciSgkPrimi ?? 0) : '—'}
                           </td>
-                          <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
+                          <td className={`py-1.5 px-1 text-right font-mono font-medium text-xs whitespace-nowrap ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
                             {hasPayrollSnapshot ? formatTL(bordro?.kesintiler.gelirVergisi ?? 0) : '—'}
                           </td>
                         </>
                       ) : (
-                        <td className={`py-3 px-4 text-right font-mono font-medium ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
+                        <td className={`py-1.5 px-1 text-right font-mono font-medium text-xs whitespace-nowrap ${isStale ? 'text-amber-700 line-through' : 'text-rose-700'}`}>
                           {hasPayrollSnapshot ? formatTL(kesinti) : '—'}
                         </td>
                       )}
 
                       {/* Net */}
-                      <td className={`py-3 px-4 text-right font-mono font-bold text-sm ${isStale ? 'text-amber-700 line-through' : 'text-emerald-700'}`}>
+                      <td className={`py-1.5 px-1 text-right font-mono font-bold text-xs whitespace-nowrap ${isStale ? 'text-amber-700 line-through' : 'text-emerald-700'}`}>
                         {hasPayrollSnapshot ? formatTL(net) : '—'}
                       </td>
 
                       {/* Durum */}
-                      <td className="py-3 px-4 text-center">
+                      <td className="py-1.5 px-1 text-center whitespace-nowrap">
                         {isFinalized ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-200 text-slate-800 border border-slate-300">
-                            <CheckCircle2 className="w-3 h-3 text-slate-700" />
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-200 text-slate-800 border border-slate-300">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-slate-700" />
                             <span>Kesinleştirildi</span>
                           </span>
                         ) : isStale ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-100 text-amber-900 border border-amber-300">
-                            <AlertTriangle className="w-3 h-3 text-amber-700" />
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-100 text-amber-900 border border-amber-300">
+                            <AlertTriangle className="w-2.5 h-2.5 text-amber-700" />
                             <span>Yeniden Hesaplanmalı</span>
                           </span>
                         ) : isDraft ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-100 text-slate-700 border border-slate-300">
-                            <Clock className="w-3 h-3 text-slate-600" />
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-700 border border-slate-300">
+                            <Clock className="w-2.5 h-2.5 text-slate-600" />
                             <span>Taslak</span>
                           </span>
                         ) : isCalculated ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
                             <span>Hesaplandı</span>
                           </span>
                         ) : isSupplementaryView || hasPuantaj ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                            <Clock className="w-3 h-3 text-amber-600" />
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            <Clock className="w-2.5 h-2.5 text-amber-600" />
                             <span>{isSupplementaryView ? 'Tahakkuk Eklenmedi' : 'Hesaplanmadı'}</span>
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-rose-100 text-rose-800 border border-rose-200">
-                            <AlertTriangle className="w-3 h-3 text-rose-600" />
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800 border border-rose-200">
+                            <AlertTriangle className="w-2.5 h-2.5 text-rose-600" />
                             <span>Puantaj Eksik</span>
                           </span>
                         )}
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3 px-4 text-center">
-                        <div className="flex flex-wrap items-center justify-center gap-1.5">
+                      <td
+                        data-cell="actions"
+                        className="py-1.5 px-1 text-center whitespace-nowrap"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <div ref={openMenuPersonId === person.id ? actionMenuRef : undefined} className="relative inline-flex items-center justify-center gap-1">
                           {isSupplementaryView || hasPuantaj ? (
                             <>
-                              {!isFinalized && (
-                                <button
-                                  data-testid={isSupplementaryView && bordro ? `recalculate-accrual-${getAccrualId(bordro)}` : `calculate-payroll-${person.id}`}
-                                  onClick={(e) => handleCalculateSingle(person, e, bordro)}
-                                  title={isSupplementaryView
-                                    ? (bordro ? 'Bu tahakkuku yeniden hesapla' : `${activeViewTitle} tahakkuku ekle`)
-                                    : isStale ? 'Güncelliğini yitiren bordroyu yeniden hesapla' : 'Bordroyu Hesapla/Yeniden Hesapla'}
-                                  className="p-1.5 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
-                                >
-                                  <RefreshCw className="w-3.5 h-3.5" />
-                                  <span>{isSupplementaryView ? (bordro ? 'Yeniden Hesapla' : `${activeViewTitle} Ekle`) : isStale ? 'Yeniden Hesapla' : 'Hesapla'}</span>
-                                </button>
-                              )}
+                              {!isFinalized ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    data-testid={isSupplementaryView && bordro ? `recalculate-accrual-${getAccrualId(bordro)}` : `calculate-payroll-${person.id}`}
+                                    onClick={(e) => handleCalculateSingle(person, e, bordro)}
+                                    title={isSupplementaryView
+                                      ? (bordro ? 'Bu tahakkuku yeniden hesapla' : `${activeViewTitle} tahakkuku ekle`)
+                                      : isStale ? 'Güncelliğini yitiren bordroyu yeniden hesapla' : isCalculated ? 'Bordroyu yeniden hesapla' : 'Bordroyu Hesapla'}
+                                    aria-label={isSupplementaryView
+                                      ? (bordro ? 'Yeniden Hesapla' : `${activeViewTitle} Ekle`)
+                                      : isStale || isCalculated ? 'Yeniden Hesapla' : 'Hesapla'}
+                                    className="px-1.5 py-1 bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 rounded-md transition-colors text-[10.5px] font-semibold flex items-center gap-0.5 whitespace-nowrap cursor-pointer"
+                                  >
+                                    <RefreshCw className="w-3 h-3" />
+                                    <span>{isSupplementaryView ? (bordro ? 'Yeniden' : 'Ekle') : isStale || isCalculated ? 'Yeniden' : 'Hesapla'}</span>
+                                  </button>
 
-                              {isSupplementaryView && bordro && canAddSupplementary && (
+                                  {bordro && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        data-testid={`row-more-actions-${person.id}`}
+                                        aria-label="Diğer işlemler"
+                                        aria-haspopup="menu"
+                                        aria-expanded={openMenuPersonId === person.id}
+                                        title="Diğer işlemler"
+                                        onClick={(e) => {
+                                          e.preventDefault();
+                                          e.stopPropagation();
+                                          setOpenMenuPersonId((prev) => (prev === person.id ? null : person.id));
+                                        }}
+                                        className="p-1 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors border border-slate-200 cursor-pointer"
+                                      >
+                                        <MoreHorizontal className="w-3.5 h-3.5" />
+                                      </button>
+
+                                      {openMenuPersonId === person.id && (
+                                        <div
+                                          role="menu"
+                                          aria-label="Diğer işlemler menüsü"
+                                          className="absolute right-0 top-full z-30 mt-1 min-w-[130px] rounded-lg border border-slate-200 bg-white py-1 shadow-lg text-left"
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          <button
+                                            type="button"
+                                            role="menuitem"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setOpenMenuPersonId(null);
+                                              void handleOpenPaySlip(person, bordro);
+                                            }}
+                                            title="Bordro Zarfını Görüntüle & Yazdır"
+                                            aria-label="Bordro Gör"
+                                            className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 transition-colors cursor-pointer"
+                                          >
+                                            <FileText className="w-3.5 h-3.5 text-indigo-600" />
+                                            <span>Bordro Gör</span>
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            role="menuitem"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              setOpenMenuPersonId(null);
+                                              setActiveFinalize({ person, bordro });
+                                            }}
+                                            title="Bordroyu kontrol ederek kesinleştir"
+                                            aria-label="Kesinleştir"
+                                            className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-amber-800 hover:bg-amber-50 transition-colors cursor-pointer"
+                                          >
+                                            <CheckCircle2 className="w-3.5 h-3.5 text-amber-600" />
+                                            <span>Kesinleştir</span>
+                                          </button>
+
+                                          {isSupplementaryView && canAddSupplementary && (
+                                            <button
+                                              type="button"
+                                              role="menuitem"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setOpenMenuPersonId(null);
+                                                openSupplementaryAccrualForm(person);
+                                              }}
+                                              title={`Aynı kişiye yeni ${activeViewTitle} tahakkuku ekle`}
+                                              aria-label={`Yeni ${activeViewTitle} Ekle`}
+                                              className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium text-indigo-700 hover:bg-indigo-50 transition-colors cursor-pointer"
+                                            >
+                                              <Plus className="w-3.5 h-3.5 text-indigo-600" />
+                                              <span>Yeni Ekle</span>
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </>
+                              ) : (
                                 <button
                                   type="button"
-                                  data-testid={`add-same-type-accrual-${person.id}`}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    openSupplementaryAccrualForm(person);
-                                  }}
-                                  title={`Aynı kişiye yeni ${activeViewTitle} tahakkuku ekle`}
-                                  className="p-1.5 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
-                                >
-                                  <Plus className="w-3.5 h-3.5" />
-                                  <span>Yeni</span>
-                                </button>
-                              )}
-
-                              {!isStale && !isDraft && (bordro || !isSupplementaryView) && (
-                                <button
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     void handleOpenPaySlip(person, bordro);
                                   }}
                                   title="Bordro Zarfını Görüntüle & Yazdır"
-                                  className="p-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-lg transition-colors text-[11px] font-semibold flex items-center gap-1"
+                                  aria-label="Bordro Zarfını Görüntüle"
+                                  className="px-2 py-1 bg-indigo-50 text-indigo-700 hover:bg-indigo-600 hover:text-white rounded-md transition-colors text-[10.5px] font-semibold flex items-center gap-1 whitespace-nowrap cursor-pointer"
                                 >
-                                  <FileText className="w-3.5 h-3.5" />
+                                  <FileText className="w-3 h-3" />
                                   <span>Bordro Gör</span>
                                 </button>
-                              )}
-
-                              {isCalculated && !isFinalized && bordro && (
-                                <PayrollFinalizeModal
-                                  personel={person}
-                                  bordro={bordro}
-                                  donem={aktifDonem}
-                                  engine={payrollEngine}
-                                  dataset={buildDataset()}
-                                  onFinalized={(finalizedBordro) =>
-                                    handleFinalizeSuccess(person, finalizedBordro)
-                                  }
-                                  onError={(message) => {
-                                    setSuccessMessage(null);
-                                    setErrorMessage(message);
-                                  }}
-                                />
                               )}
                             </>
                           ) : (
                             <button
+                              type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 if (onGoToPuantaj) onGoToPuantaj(person.id);
                               }}
                               title="Puantaj Cetveline Git ve Puantaj Gir"
-                              className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 border border-rose-200 rounded-lg transition-colors text-[11px] font-bold flex items-center gap-1"
+                              aria-label="Puantaj Cetveline Git"
+                              className="px-2 py-1 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 border border-rose-200 rounded-md transition-colors text-[10.5px] font-bold flex items-center gap-1 whitespace-nowrap cursor-pointer"
                             >
-                              <CalendarCheck className="w-3.5 h-3.5" />
+                              <CalendarCheck className="w-3 h-3" />
                               <span>Puantaj Gir</span>
                             </button>
                           )}
@@ -899,7 +1032,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     })}
 
                     {expandedTimelinePersonId === person.id && <tr key={`${person.id}-accrual-timeline`}>
-                      <td colSpan={isSupplementaryView ? 9 : 7} className="px-4 py-3 bg-slate-50/80">
+                      <td data-testid={`accrual-timeline-${person.id}`} colSpan={isSupplementaryView ? 9 : 7} className="px-4 py-3 bg-slate-50/80">
                         <div className="flex flex-col gap-2">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-slate-500">
@@ -975,18 +1108,55 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                       </button>
                                     )}
                                     {accrual.status !== 'FINALIZED' && (
-                                      <button type="button" disabled={deletingAccrualId !== null || isBatchProcessing}
-                                        className="rounded-lg px-2 py-1 text-[10px] font-bold text-rose-700 disabled:opacity-50"
-                                        onClick={async (event) => {
-                                          event.stopPropagation();
-                                          if (!window.confirm('Bu tahakkuk silinecek; sonraki tahakkukların yeniden hesaplanması gerekebilir. Devam edilsin mi?')) return;
-                                          setDeletingAccrualId(getAccrualId(accrual));
-                                          try { await onDeleteBordro(accrual); }
-                                          catch (error) { setErrorMessage(error instanceof Error ? error.message : String(error)); }
-                                          finally { setDeletingAccrualId(null); }
-                                        }}>
-                                        {deletingAccrualId === getAccrualId(accrual) ? 'Siliniyor…' : 'Tahakkuku Sil'}
-                                      </button>
+                                      confirmDeleteAccrualId === getAccrualId(accrual) ? (
+                                        <div className="inline-flex items-center gap-1">
+                                          <button
+                                            type="button"
+                                            disabled={deletingAccrualId !== null || isBatchProcessing}
+                                            className="rounded-lg bg-rose-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
+                                            onClick={async (event) => {
+                                              event.stopPropagation();
+                                              setConfirmDeleteAccrualId(null);
+                                              setDeletingAccrualId(getAccrualId(accrual));
+                                              try {
+                                                await onDeleteBordro(accrual);
+                                                setSuccessMessage('Tahakkuk başarıyla silindi.');
+                                                setErrorMessage(null);
+                                                setTimeout(() => setSuccessMessage(null), 3000);
+                                              } catch (error) {
+                                                setErrorMessage(error instanceof Error ? error.message : String(error));
+                                              } finally {
+                                                setDeletingAccrualId(null);
+                                              }
+                                            }}
+                                          >
+                                            {deletingAccrualId === getAccrualId(accrual) ? 'Siliniyor…' : 'Silmeyi Onayla'}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            disabled={deletingAccrualId !== null}
+                                            className="rounded-lg bg-slate-100 px-1.5 py-1 text-[10px] font-semibold text-slate-700 hover:bg-slate-200 cursor-pointer"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              setConfirmDeleteAccrualId(null);
+                                            }}
+                                          >
+                                            Vazgeç
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          disabled={deletingAccrualId !== null || isBatchProcessing}
+                                          className="rounded-lg px-2 py-1 text-[10px] font-bold text-rose-700 hover:bg-rose-50 disabled:opacity-50 cursor-pointer"
+                                          onClick={(event) => {
+                                            event.stopPropagation();
+                                            setConfirmDeleteAccrualId(getAccrualId(accrual));
+                                          }}
+                                        >
+                                          Tahakkuku Sil
+                                        </button>
+                                      )
                                     )}
                                     {accrual.accrualType !== 'NORMAL' &&
                                       accrual.status === 'CALCULATED' && (
@@ -1132,6 +1302,28 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           isPrimiGruplari={activeKurumDegerleri?.isPrimiGruplari}
           engine={payrollEngine}
           dataset={buildDataset()}
+        />
+      )}
+
+      {/* Finalize Modal */}
+      {activeFinalize && (
+        <PayrollFinalizeModal
+          personel={activeFinalize.person}
+          bordro={activeFinalize.bordro}
+          donem={aktifDonem}
+          engine={payrollEngine}
+          dataset={buildDataset()}
+          initialOpen={true}
+          onClose={() => setActiveFinalize(null)}
+          onFinalized={(finalizedBordro) => {
+            const person = activeFinalize.person;
+            setActiveFinalize(null);
+            handleFinalizeSuccess(person, finalizedBordro);
+          }}
+          onError={(message) => {
+            setSuccessMessage(null);
+            setErrorMessage(message);
+          }}
         />
       )}
 

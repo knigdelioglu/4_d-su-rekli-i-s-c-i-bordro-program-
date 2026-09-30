@@ -47,6 +47,7 @@ export const PeriodListSection: React.FC<PeriodListSectionProps> = ({
             <button
               key={donem.id}
               type="button"
+              data-testid={`period-row-${donem.id}`}
               onClick={() => void onSelectDonem(donem.id)}
               className={`w-full p-4 flex items-center justify-between text-left cursor-pointer transition-colors ${
                 isSelected ? 'bg-indigo-50/80 hover:bg-indigo-50' : 'hover:bg-slate-50'

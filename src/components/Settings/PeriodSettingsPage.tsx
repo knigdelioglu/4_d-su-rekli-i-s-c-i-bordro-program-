@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import type {
   AnnualPayrollParameters,
   BordroDonemi,
   DönemselKurumDegerleri,
   Personel,
+  PersonelPuantaj,
   SickLeaveRecord,
   TaxBracket,
   TediyeKalemi,
@@ -13,9 +15,13 @@ import {
   AY_ISIMLERI,
   createBordroDonemi,
   DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+  withVisiblePeriodLegalDefaults,
 } from '../../utils/payrollPresentation';
 import {
-  DEFAULT_STATUTORY_PERIOD_PARAMETERS,
+  findSickLeaveConflicts,
+  type SickLeaveConflict,
+} from '../../utils/sickLeaveSync';
+import {
   getDefaultAnnualPayrollParameters,
 } from '../../services/storage/payrollDefaults';
 import { AnnualTaxSection } from './AnnualTaxSection';
@@ -23,8 +29,10 @@ import { DeductionLegalRatesSection } from './DeductionLegalRatesSection';
 import { IncomeParametersSection } from './IncomeParametersSection';
 import { NewPeriodSection } from './NewPeriodSection';
 import { PeriodListSection } from './PeriodListSection';
+import { SickLeaveConflictModal } from './SickLeaveConflictModal';
 import { SickLeaveSection } from './SickLeaveSection';
 import { TediyeTisSection } from './TediyeTisSection';
+import { savePeriodSettings } from './periodSettingsSave';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -42,6 +50,7 @@ export interface PeriodSettingsPageProps {
   personeller: Personel[];
   annualPayrollParameters: AnnualPayrollParameters[];
   onSaveAnnualPayrollParameters: (parameters: AnnualPayrollParameters) => Promise<void> | void;
+  puantajlar?: PersonelPuantaj[];
   sickLeaveRecords: SickLeaveRecord[];
   onSaveSickLeaveRecord: (record: SickLeaveRecord) => Promise<void> | void;
   onDeleteSickLeaveRecord: (id: string) => Promise<void> | void;
@@ -54,6 +63,17 @@ const sanitizeTediyeList = (list?: TediyeKalemi[]) =>
     ...item,
     ad: item.ad.replace(/\s*\(\d+\s*gün\)/i, ''),
   }));
+
+const createParamsForm = (
+  settings: DönemselKurumDegerleri,
+  donemId: string
+): DönemselKurumDegerleri => ({
+  ...withVisiblePeriodLegalDefaults(settings, donemId),
+  isPrimiGruplari: settings.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
+  tediyeListesi: sanitizeTediyeList(settings.tediyeListesi),
+  tisIkramiyeListesi:
+    settings.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
+});
 
 interface MissingPeriodSectionProps {
   testId: string;
@@ -102,6 +122,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   personeller,
   annualPayrollParameters,
   onSaveAnnualPayrollParameters,
+  puantajlar,
   sickLeaveRecords,
   onSaveSickLeaveRecord,
   onDeleteSickLeaveRecord,
@@ -124,12 +145,38 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   const [newMonth, setNewMonth] = useState<number>(1);
   const [newTaxYear, setNewTaxYear] = useState<number>(currentYear);
   const [newTaxMonth, setNewTaxMonth] = useState<number>(2);
+  const [periodGlobalSuccess, setPeriodGlobalSuccess] = useState<string | null>(null);
+  const [periodGlobalError, setPeriodGlobalError] = useState<string | null>(null);
+  const [isSubmittingPeriod, setIsSubmittingPeriod] = useState(false);
 
   const resetTaxDefaults = (year: number, month: number) => {
+    setPeriodGlobalError(null);
     const taxMonth = month === 12 ? 1 : month + 1;
     const taxYear = month === 12 ? year + 1 : year;
     setNewTaxMonth(taxMonth);
     setNewTaxYear(taxYear);
+  };
+
+  const handleYearChange = (year: number) => {
+    setPeriodGlobalError(null);
+    setNewYear(year);
+    resetTaxDefaults(year, newMonth);
+  };
+
+  const handleMonthChange = (month: number) => {
+    setPeriodGlobalError(null);
+    setNewMonth(month);
+    resetTaxDefaults(newYear, month);
+  };
+
+  const handleTaxYearChange = (year: number) => {
+    setPeriodGlobalError(null);
+    setNewTaxYear(year);
+  };
+
+  const handleTaxMonthChange = (month: number) => {
+    setPeriodGlobalError(null);
+    setNewTaxMonth(month);
   };
 
   const activeKurumDegerleri =
@@ -137,20 +184,11 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       donemId: aktifDonemId,
       ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
     };
-  const [paramsForm, setParamsForm] = useState<DönemselKurumDegerleri>({
-    ...activeKurumDegerleri,
-    isPrimiGruplari:
-      activeKurumDegerleri.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
-    tediyeListesi: sanitizeTediyeList(activeKurumDegerleri.tediyeListesi),
-    tisIkramiyeListesi:
-      activeKurumDegerleri.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
-    gunlukYemekIstisnasiGV:
-      activeKurumDegerleri.gunlukYemekIstisnasiGV ??
-      activeKurumDegerleri.gunlukYemekIstisnasiSGK ??
-      DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
-    statutoryParameterSegments: activeKurumDegerleri.statutoryParameterSegments || [],
-  });
+  const [paramsForm, setParamsForm] = useState<DönemselKurumDegerleri>(
+    createParamsForm(activeKurumDegerleri, aktifDonemId)
+  );
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [paramsSaveError, setParamsSaveError] = useState<string | null>(null);
   const [annualTaxYear, setAnnualTaxYear] = useState<number>(currentYear);
   const initialAnnualDefaults = getDefaultAnnualPayrollParameters(currentYear);
   const [annualTaxBrackets, setAnnualTaxBrackets] = useState<TaxBracket[]>(
@@ -181,37 +219,36 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       donemId: aktifDonemId,
       ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
     };
-    setParamsForm({
-      ...active,
-      isPrimiGruplari: active.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
-      tediyeListesi: sanitizeTediyeList(active.tediyeListesi),
-      tisIkramiyeListesi: active.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
-      gunlukYemekIstisnasiGV:
-        active.gunlukYemekIstisnasiGV ??
-        active.gunlukYemekIstisnasiSGK ??
-        DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemekIstisnasiGV,
-      statutoryParameterSegments: active.statutoryParameterSegments || [],
-    });
+    setParamsForm(createParamsForm(active, aktifDonemId));
   }, [aktifDonemId, kurumDegerleriMap]);
 
+  const activePeriodForTaxYear = donemler.find((period) => period.id === aktifDonemId);
+  const activeTaxYear = activePeriodForTaxYear?.taxYear || newTaxYear;
+
   useEffect(() => {
-    const activePeriod = donemler.find((period) => period.id === aktifDonemId);
-    const year = activePeriod?.taxYear || newTaxYear;
+    setAnnualTaxYear(activeTaxYear);
+  }, [aktifDonemId, activeTaxYear]);
+
+  useEffect(() => {
+    // Keep a manually selected tariff year and its currently edited brackets
+    // when a save refreshes the annual parameter list. Only hydrate the form
+    // from persisted data while it is showing the active period's year.
+    if (annualTaxYear !== activeTaxYear) return;
+
     const savedParameters = annualPayrollParameters.find(
-      (parameters) => parameters.year === year
+      (parameters) => parameters.year === activeTaxYear
     );
-    setAnnualTaxYear(year);
     setAnnualTaxBrackets(
       savedParameters?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) ||
-        getDefaultAnnualPayrollParameters(year)?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) ||
+        getDefaultAnnualPayrollParameters(activeTaxYear)?.gelirVergisiDilimleri.map((bracket) => ({ ...bracket })) ||
         []
     );
     setAnnualInsuranceGvCap(
       savedParameters?.sigortaGvYillikBrutAsgariUcretTavani ??
-        getDefaultAnnualPayrollParameters(year)?.sigortaGvYillikBrutAsgariUcretTavani ??
+        getDefaultAnnualPayrollParameters(activeTaxYear)?.sigortaGvYillikBrutAsgariUcretTavani ??
         0
     );
-  }, [aktifDonemId, annualPayrollParameters, donemler, newTaxYear]);
+  }, [annualPayrollParameters, annualTaxYear, activeTaxYear]);
 
   useEffect(() => {
     setZamAylariForm([...zamAylari].sort((a, b) => a - b));
@@ -227,29 +264,101 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     (existingPreview.taxYear !== previewDonem.taxYear ||
       existingPreview.taxMonth !== previewDonem.taxMonth);
 
+  const [editingSickRecord, setEditingSickRecord] = useState<SickLeaveRecord | null>(null);
+  const [pendingSickLeave, setPendingSickLeave] = useState<SickLeaveRecord | null>(null);
+  const [pendingConflicts, setPendingConflicts] = useState<SickLeaveConflict[]>([]);
+  const [isConflictModalOpen, setIsConflictModalOpen] = useState(false);
+  const [isSubmittingSickLeave, setIsSubmittingSickLeave] = useState(false);
+  const [sickLeaveError, setSickLeaveError] = useState<string | null>(null);
+
+  const handleStartEditSickLeave = (record: SickLeaveRecord) => {
+    setEditingSickRecord(record);
+    setSelectedPersonForSick(record.personnelId);
+    setSickStartDate(record.startDate);
+    setSickEndDate(record.endDate);
+  };
+
+  const handleCancelEditSickLeave = () => {
+    setEditingSickRecord(null);
+    setSickStartDate('');
+    setSickEndDate('');
+  };
+
+  const executeSaveSickLeave = async (targetRecord: SickLeaveRecord) => {
+    setIsSubmittingSickLeave(true);
+    setSickLeaveError(null);
+    try {
+      await onSaveSickLeaveRecord(targetRecord);
+      setSickSuccessMsg(
+        editingSickRecord
+          ? 'Rapor olayı başarıyla güncellendi.'
+          : 'Rapor olayı başarıyla kaydedildi.'
+      );
+      setTimeout(() => setSickSuccessMsg(null), 2500);
+      setSickStartDate('');
+      setSickEndDate('');
+      setEditingSickRecord(null);
+      setIsConflictModalOpen(false);
+      setPendingSickLeave(null);
+      setPendingConflicts([]);
+    } catch (error) {
+      const reason =
+        error instanceof Error
+          ? error.message
+          : typeof error === 'string'
+            ? error
+            : JSON.stringify(error);
+      setSickLeaveError(`Rapor kaydedilemedi: ${reason || 'Beklenmeyen bir hata oluştu.'}`);
+    } finally {
+      setIsSubmittingSickLeave(false);
+    }
+  };
+
   const handleAddSickLeave = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!selectedPersonForSick || !sickStartDate || !sickEndDate) return;
 
-    const newRecord: SickLeaveRecord = {
-      id: `sick_${selectedPersonForSick}_${Date.now()}`,
+    const targetRecord: SickLeaveRecord = {
+      id: editingSickRecord ? editingSickRecord.id : `sick_${selectedPersonForSick}_${Date.now()}`,
       personnelId: selectedPersonForSick,
       startDate: sickStartDate,
       endDate: sickEndDate,
     };
 
-    try {
-      await onSaveSickLeaveRecord(newRecord);
-      setSickSuccessMsg('Rapor olayı başarıyla kaydedildi.');
-      setTimeout(() => setSickSuccessMsg(null), 2500);
-      setSickStartDate('');
-      setSickEndDate('');
-    } catch (error) {
-      alert(`Rapor olayı kaydedilemedi: ${String(error)}`);
+    const conflicts = findSickLeaveConflicts({
+      personnelId: selectedPersonForSick,
+      startDate: sickStartDate,
+      endDate: sickEndDate,
+      donemler,
+      puantajlar: puantajlar ?? [],
+    });
+
+    if (conflicts.length > 0) {
+      setPendingSickLeave(targetRecord);
+      setPendingConflicts(conflicts);
+      setIsConflictModalOpen(true);
+      return;
     }
+
+    await executeSaveSickLeave(targetRecord);
+  };
+
+  const handleApplyConflict = async () => {
+    if (!pendingSickLeave) return;
+    await executeSaveSickLeave(pendingSickLeave);
+  };
+
+  const handleCancelConflict = () => {
+    setIsConflictModalOpen(false);
+    setPendingSickLeave(null);
+    setPendingConflicts([]);
+    setSickLeaveError(null);
   };
 
   const handleDeleteSickLeave = async (id: string) => {
+    if (editingSickRecord?.id === id) {
+      handleCancelEditSickLeave();
+    }
     try {
       await onDeleteSickLeaveRecord(id);
     } catch (error) {
@@ -259,85 +368,86 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
 
   const handleCreateNewPeriod = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (isSubmittingPeriod) return;
+
+    setPeriodGlobalError(null);
+    setPeriodGlobalSuccess(null);
+    setIsSubmittingPeriod(true);
+
     const newDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
-    const statutoryDefaults = getDefaultAnnualPayrollParameters(newDonem.taxYear)
-      ? DEFAULT_STATUTORY_PERIOD_PARAMETERS
-      : undefined;
-    const initialKurum: DönemselKurumDegerleri = {
-      ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
-      ...paramsForm,
-      donemId: newDonem.id,
-      gunlukTabanUcret:
-        paramsForm.gunlukTabanUcret ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukTabanUcret,
-      gunlukYemek: paramsForm.gunlukYemek ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemek,
-      birlestirilmisSosyalYardim:
-        paramsForm.birlestirilmisSosyalYardim ??
-        DEFAULT_PRODUCTION_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
-      gunlukVasitaYol:
-        paramsForm.gunlukVasitaYol ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukVasitaYol,
-      giyimYardimi: paramsForm.giyimYardimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.giyimYardimi,
-      hizmetZammiBirimi:
-        paramsForm.hizmetZammiBirimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.hizmetZammiBirimi,
-      isPrimiYuzde: paramsForm.isPrimiYuzde || 0,
-      isPrimiGruplari:
-        paramsForm.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
-      ekOdeme: paramsForm.ekOdeme || 0,
-      tediyeListesi: paramsForm.tediyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeListesi,
-      tisIkramiyeListesi:
-        paramsForm.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
-      tediyeTisNotu: paramsForm.tediyeTisNotu || DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeTisNotu,
-      sgkIsciOraniYuzde:
-        statutoryDefaults ? paramsForm.sgkIsciOraniYuzde ?? statutoryDefaults.sgkIsciOraniYuzde : undefined,
-      issizlikIsciOraniYuzde:
-        statutoryDefaults ? paramsForm.issizlikIsciOraniYuzde ?? statutoryDefaults.issizlikIsciOraniYuzde : undefined,
-      gelirVergisiOraniYuzde: statutoryDefaults
-        ? paramsForm.gelirVergisiOraniYuzde ?? statutoryDefaults.gelirVergisiOraniYuzde
-        : undefined,
-      damgaVergisiOraniBinde: statutoryDefaults
-        ? paramsForm.damgaVergisiOraniBinde ?? statutoryDefaults.damgaVergisiOraniBinde
-        : undefined,
-      sgkIsverenOraniYuzde:
-        statutoryDefaults ? paramsForm.sgkIsverenOraniYuzde ?? statutoryDefaults.sgkIsverenOraniYuzde : undefined,
-      issizlikIsverenOraniYuzde:
-        statutoryDefaults
-          ? paramsForm.issizlikIsverenOraniYuzde ?? statutoryDefaults.issizlikIsverenOraniYuzde
-          : undefined,
-      gunlukYemekIstisnasiSGK:
-        statutoryDefaults
-          ? paramsForm.gunlukYemekIstisnasiSGK ?? statutoryDefaults.gunlukYemekIstisnasiSGK
-          : undefined,
-      gunlukYemekIstisnasiGV:
-        statutoryDefaults
-          ? paramsForm.gunlukYemekIstisnasiGV ?? statutoryDefaults.gunlukYemekIstisnasiGV
-          : undefined,
-      statutoryParameterSegments: statutoryDefaults
-        ? paramsForm.statutoryParameterSegments ?? []
-        : [],
-      pekTavanKatsayisi:
-        statutoryDefaults ? paramsForm.pekTavanKatsayisi ?? statutoryDefaults.pekTavanKatsayisi : undefined,
-      gunlukAsgariUcret:
-        statutoryDefaults ? paramsForm.gunlukAsgariUcret ?? statutoryDefaults.gunlukAsgariUcret : undefined,
-      statutoryParameterSnapshot: undefined,
-    };
 
     try {
+      if (previewExists) {
+        // Mevcut dönemi koru: tahakkuk veya parametreleri asla ezme, sadece seç ve geç
+        await onSelectDonem(newDonem.id);
+        setPeriodGlobalSuccess(`${newDonem.id} dönemi seçildi.`);
+        setTimeout(() => setPeriodGlobalSuccess(null), 4000);
+        onSectionChange('gelir');
+        return;
+      }
+
+      const initialKurum: DönemselKurumDegerleri = withVisiblePeriodLegalDefaults(
+        {
+          ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+          ...paramsForm,
+          donemId: newDonem.id,
+          gunlukTabanUcret:
+            paramsForm.gunlukTabanUcret ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukTabanUcret,
+          gunlukYemek: paramsForm.gunlukYemek ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemek,
+          birlestirilmisSosyalYardim:
+            paramsForm.birlestirilmisSosyalYardim ??
+            DEFAULT_PRODUCTION_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
+          gunlukVasitaYol:
+            paramsForm.gunlukVasitaYol ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukVasitaYol,
+          giyimYardimi: paramsForm.giyimYardimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.giyimYardimi,
+          hizmetZammiBirimi:
+            paramsForm.hizmetZammiBirimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.hizmetZammiBirimi,
+          isPrimiYuzde: paramsForm.isPrimiYuzde || 0,
+          isPrimiGruplari:
+            paramsForm.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
+          ekOdeme: paramsForm.ekOdeme || 0,
+          tediyeListesi: sanitizeTediyeList(paramsForm.tediyeListesi),
+          tisIkramiyeListesi:
+            paramsForm.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
+          tediyeTisNotu: paramsForm.tediyeTisNotu || DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeTisNotu,
+          statutoryParameterSegments: paramsForm.statutoryParameterSegments ?? [],
+          statutoryParameterSnapshot: undefined,
+        },
+        newDonem.id
+      );
+
       await onCreateDonem(newDonem, initialKurum);
       await onSelectDonem(newDonem.id);
+      setPeriodGlobalSuccess(`${newDonem.id} dönemi başarıyla oluşturuldu ve seçildi.`);
+      setTimeout(() => setPeriodGlobalSuccess(null), 4000);
       onSectionChange('gelir');
     } catch (error) {
-      alert(`Dönem kaydedilemedi: ${String(error)}`);
+      const message = error instanceof Error ? error.message : String(error);
+      setPeriodGlobalError(`Dönem işlemi tamamlanamadı: ${message}`);
+    } finally {
+      setIsSubmittingPeriod(false);
     }
   };
 
   const handleSaveParams = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    try {
-      await onSaveKurumDegerleri({ ...paramsForm, donemId: aktifDonemId });
-      await onSaveZamAylari(zamAylariForm);
+    setParamsSaveError(null);
+    setSavedSuccess(false);
+    const outcome = await savePeriodSettings(
+      { ...paramsForm, donemId: aktifDonemId },
+      zamAylariForm,
+      createParamsForm(activeKurumDegerleri, aktifDonemId),
+      zamAylari,
+      onSaveKurumDegerleri,
+      onSaveZamAylari
+    );
+    if (outcome.kind === 'success') {
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 2500);
-    } catch (error) {
-      alert(`Kurum ayarları kaydedilemedi: ${String(error)}`);
+    } else {
+      setParamsForm(outcome.paramsForm);
+      setZamAylariForm(outcome.zamAylariForm);
+      setParamsSaveError(outcome.message);
     }
   };
 
@@ -389,6 +499,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
           zamAylariForm={zamAylariForm}
           setZamAylariForm={setZamAylariForm}
           savedSuccess={savedSuccess}
+          errorMessage={paramsSaveError}
           onSubmit={handleSaveParams}
         />
       ) : (
@@ -453,19 +564,41 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
 
     if (activeSection === 'sickLeave') {
       return (
-        <SickLeaveSection
-          personeller={personeller}
-          sickLeaveRecords={sickLeaveRecords}
-          selectedPersonForSick={selectedPersonForSick}
-          setSelectedPersonForSick={setSelectedPersonForSick}
-          sickStartDate={sickStartDate}
-          setSickStartDate={setSickStartDate}
-          sickEndDate={sickEndDate}
-          setSickEndDate={setSickEndDate}
-          sickSuccessMsg={sickSuccessMsg}
-          onAddSickLeave={handleAddSickLeave}
-          onDeleteSickLeave={handleDeleteSickLeave}
-        />
+        <>
+          {sickLeaveError && (
+            <div
+              role="alert"
+              data-testid="sick-leave-error-banner"
+              className="mb-4 p-3.5 bg-rose-50 text-rose-900 border border-rose-300 rounded-xl text-xs font-semibold flex items-center gap-2.5"
+            >
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+              <span>{sickLeaveError}</span>
+            </div>
+          )}
+          <SickLeaveSection
+            personeller={personeller}
+            sickLeaveRecords={sickLeaveRecords}
+            selectedPersonForSick={selectedPersonForSick}
+            setSelectedPersonForSick={setSelectedPersonForSick}
+            sickStartDate={sickStartDate}
+            setSickStartDate={setSickStartDate}
+            sickEndDate={sickEndDate}
+            setSickEndDate={setSickEndDate}
+            sickSuccessMsg={sickSuccessMsg}
+            onAddSickLeave={handleAddSickLeave}
+            onDeleteSickLeave={handleDeleteSickLeave}
+            editingSickRecord={editingSickRecord}
+            onStartEditSickLeave={handleStartEditSickLeave}
+            onCancelEditSickLeave={handleCancelEditSickLeave}
+          />
+          <SickLeaveConflictModal
+            isOpen={isConflictModalOpen}
+            conflicts={pendingConflicts}
+            onApply={handleApplyConflict}
+            onCancel={handleCancelConflict}
+            isSubmitting={isSubmittingSickLeave}
+          />
+        </>
       );
     }
 
@@ -483,19 +616,22 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     return (
       <NewPeriodSection
         newYear={newYear}
-        setNewYear={setNewYear}
+        setNewYear={handleYearChange}
         newMonth={newMonth}
-        setNewMonth={setNewMonth}
+        setNewMonth={handleMonthChange}
         newTaxYear={newTaxYear}
-        setNewTaxYear={setNewTaxYear}
+        setNewTaxYear={handleTaxYearChange}
         newTaxMonth={newTaxMonth}
-        setNewTaxMonth={setNewTaxMonth}
+        setNewTaxMonth={handleTaxMonthChange}
         yearOptions={yearOptions}
         resetTaxDefaults={resetTaxDefaults}
         previewDonem={previewDonem}
         previewExists={previewExists}
         previewTaxChanged={previewTaxChanged}
         onSubmit={handleCreateNewPeriod}
+        isSubmitting={isSubmittingPeriod}
+        errorMessage={periodGlobalError}
+        successMessage={periodGlobalSuccess}
       />
     );
   };
@@ -509,6 +645,26 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
           Bölümler arasında geçiş yapmak için sol menüyü kullanın.
         </p>
       </header>
+      {periodGlobalSuccess && (
+        <div
+          role="status"
+          data-testid="period-settings-success-banner"
+          className="p-3.5 bg-emerald-50 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-semibold flex items-center gap-2.5 animate-in fade-in"
+        >
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+          <span>{periodGlobalSuccess}</span>
+        </div>
+      )}
+      {periodGlobalError && activeSection !== 'newPeriod' && (
+        <div
+          role="alert"
+          data-testid="period-settings-error-banner"
+          className="p-3.5 bg-rose-50 text-rose-900 border border-rose-300 rounded-xl text-xs font-semibold flex items-center gap-2.5 animate-in fade-in"
+        >
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
+          <span>{periodGlobalError}</span>
+        </div>
+      )}
       {renderActiveSection()}
     </section>
   );

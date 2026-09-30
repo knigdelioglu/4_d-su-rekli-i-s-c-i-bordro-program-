@@ -15,6 +15,7 @@ fn configure_builder<R: tauri::Runtime>(
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::get_personnel_list,
+            commands::print_current_webview,
             commands::save_personnel,
             commands::save_personnel_and_tax_opening,
             commands::delete_personnel,

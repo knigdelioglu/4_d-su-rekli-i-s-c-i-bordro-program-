@@ -1,23 +1,26 @@
 import React from 'react';
-import { Info, Plus } from 'lucide-react';
+import { AlertCircle, ArrowRight, CheckCircle2, Info, Loader2, Plus } from 'lucide-react';
 import { AY_ISIMLERI } from '../../utils/payrollPresentation';
 import type { BordroDonemi } from '../../types/payroll';
 
 interface NewPeriodSectionProps {
   newYear: number;
-  setNewYear: React.Dispatch<React.SetStateAction<number>>;
+  setNewYear: (year: number) => void;
   newMonth: number;
-  setNewMonth: React.Dispatch<React.SetStateAction<number>>;
+  setNewMonth: (month: number) => void;
   newTaxYear: number;
-  setNewTaxYear: React.Dispatch<React.SetStateAction<number>>;
+  setNewTaxYear: (year: number) => void;
   newTaxMonth: number;
-  setNewTaxMonth: React.Dispatch<React.SetStateAction<number>>;
+  setNewTaxMonth: (month: number) => void;
   yearOptions: number[];
   resetTaxDefaults: (year: number, month: number) => void;
   previewDonem: BordroDonemi;
   previewExists: boolean;
   previewTaxChanged: boolean;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
+  isSubmitting?: boolean;
+  errorMessage?: string | null;
+  successMessage?: string | null;
 }
 
 export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
@@ -35,6 +38,9 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
   previewExists,
   previewTaxChanged,
   onSubmit,
+  isSubmitting = false,
+  errorMessage,
+  successMessage,
 }) => (
   <section data-testid="period-settings-yeni-donem" className="space-y-5">
     <header>
@@ -106,13 +112,13 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
       </div>
 
       {previewExists && (
-        <div className="bg-orange-50 border border-orange-300 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-orange-900">
-          <Info className="w-5 h-5 text-orange-600 shrink-0 mt-0.5" />
+        <div
+          data-testid="period-already-exists-banner"
+          className="bg-amber-50 border border-amber-300 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-amber-900"
+        >
+          <Info className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
           <div className="leading-relaxed">
-            <strong>{previewDonem.id}</strong> dönemi zaten mevcut; bu kayıt güncelleme olarak işlenecek.
-            {previewTaxChanged && (
-              <> Vergi Yılı/Ayı değişikliği yalnız bu dönemde hiç bordro kaydı yoksa kaydedilir; bordro kaydı varsa sistem bu iki alanı kilitleyecektir.</>
-            )}
+            <strong>{previewDonem.id}</strong> dönemi zaten mevcut. Mevcut tahakkuk ve parametrelerin korunması için yeniden oluşturma yapılmaz; doğrudan bu döneme geçebilirsiniz.
           </div>
         </div>
       )}
@@ -157,13 +163,53 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
         </div>
       </div>
 
+      {errorMessage && (
+        <div
+          role="alert"
+          data-testid="period-creation-error-banner"
+          className="bg-rose-50 border border-rose-300 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-rose-900"
+        >
+          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+          <div className="leading-relaxed">
+            <strong>İşlem gerçekleştirilemedi:</strong> {errorMessage}
+          </div>
+        </div>
+      )}
+
+      {successMessage && (
+        <div
+          role="status"
+          data-testid="period-creation-success-banner"
+          className="bg-emerald-50 border border-emerald-300 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-emerald-900"
+        >
+          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div className="leading-relaxed">{successMessage}</div>
+        </div>
+      )}
+
       <div className="pt-2 flex justify-end">
         <button
           type="submit"
-          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
+          data-testid="submit-period-action"
+          disabled={isSubmitting}
+          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 disabled:cursor-not-allowed text-white rounded-xl text-xs font-semibold shadow-xs transition-colors flex items-center gap-2"
         >
-          <Plus className="w-4 h-4" />
-          <span>Dönemi Oluştur ve Geç</span>
+          {isSubmitting ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>İşleniyor...</span>
+            </>
+          ) : previewExists ? (
+            <>
+              <ArrowRight className="w-4 h-4" />
+              <span>Mevcut Döneme Geç</span>
+            </>
+          ) : (
+            <>
+              <Plus className="w-4 h-4" />
+              <span>Dönemi Oluştur ve Geç</span>
+            </>
+          )}
         </button>
       </div>
     </form>

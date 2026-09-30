@@ -106,9 +106,17 @@ export function getInitialDataset() {
   const currentYear = new Date().getFullYear();
   const annualDefaults = getDefaultAnnualPayrollParameters(currentYear);
   
-  // Create periods from January (1) to August (8) for the current year
+  // Include the preceding December as tax month 1 for the current year's
+  // minimum-wage income-tax reference chain, then January through August.
   const donemler: BordroDonemi[] = [];
   const kurumDegerleriMap: Record<string, DönemselKurumDegerleri> = {};
+
+  const referencePeriod = createBordroDonemi(currentYear - 1, 12, currentYear, 1);
+  donemler.push(referencePeriod);
+  kurumDegerleriMap[referencePeriod.id] = {
+    donemId: referencePeriod.id,
+    ...DEFAULT_KURUM_DEGERLERI,
+  };
 
   for (let m = 1; m <= 8; m++) {
     const d = createBordroDonemi(currentYear, m);

@@ -49,6 +49,9 @@ import {
   validatePuantaj,
   validateSickLeaveRecord,
 } from '../services/storage/payrollPayloadSchema';
+import {
+  syncPuantajForSickLeaveSave,
+} from '../utils/sickLeaveSync';
 
 export interface PayrollMutationControllerOptions {
   isNative: boolean;
@@ -56,6 +59,7 @@ export interface PayrollMutationControllerOptions {
   payrollDataset: PayrollDatasetSnapshot;
   authoritativePayload: PayrollStorageDto | null;
   donemler: BordroDonemi[];
+  puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
   sickLeaveRecords: SickLeaveRecord[];
   compensationRevisions: CompensationRevision[];
@@ -216,6 +220,7 @@ export function usePayrollMutationController({
   payrollDataset,
   authoritativePayload,
   donemler,
+  puantajlar,
   bordrolar,
   sickLeaveRecords,
   compensationRevisions,
@@ -522,6 +527,8 @@ export function usePayrollMutationController({
 
   const handleSaveSickLeaveRecord = async (record: SickLeaveRecord) => {
     if (isNative) {
+      // The native repository owns sick leave + puantaj persistence in one
+      // transaction, including overlap validation. Do not pre-write attendance.
       await tauriBridge.saveSickLeaveRecord(record);
       await loadData();
       return;
@@ -553,9 +560,18 @@ export function usePayrollMutationController({
       const nextRecords = [...current.sickLeaveRecords];
       if (index < 0) nextRecords.push(record);
       else nextRecords[index] = record;
+
+      const nextPuantajlar = syncPuantajForSickLeaveSave({
+        record,
+        existingRecord: existing,
+        donemler: current.donemler,
+        puantajlar: current.puantajlar,
+      });
+
       return {
         ...current,
         sickLeaveRecords: nextRecords,
+        puantajlar: nextPuantajlar,
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
         retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
@@ -604,12 +620,12 @@ export function usePayrollMutationController({
   };
 
   const handleDeleteSickLeaveRecord = async (id: string) => {
+    const record = sickLeaveRecords.find((item) => item.id === id);
     if (isNative) {
       await tauriBridge.deleteSickLeaveRecord(id);
       await loadData();
       return;
     }
-    const record = sickLeaveRecords.find((item) => item.id === id);
     const impact = record
       ? await evaluateBrowserMutations({
           kind: 'PERSON_FROM_DATE',
@@ -617,16 +633,27 @@ export function usePayrollMutationController({
           effectiveFrom: record.startDate,
         })
       : null;
-    updateAuthoritativePayload((current) => ({
-      ...current,
-      sickLeaveRecords: current.sickLeaveRecords.filter((item) => item.id !== id),
-      bordrolar: record
-        ? applyBrowserPayrollImpact(current.bordrolar, impact!)
-        : current.bordrolar,
-      retroBatches: record
-        ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact!)
-        : current.retroBatches,
-    }));
+    updateAuthoritativePayload((current) => {
+      const nextPuantajlar = record
+        ? syncPuantajForSickLeaveDelete({
+            deletedRecord: record,
+            donemler: current.donemler,
+            puantajlar: current.puantajlar,
+          })
+        : current.puantajlar;
+
+      return {
+        ...current,
+        sickLeaveRecords: current.sickLeaveRecords.filter((item) => item.id !== id),
+        puantajlar: nextPuantajlar,
+        bordrolar: record
+          ? applyBrowserPayrollImpact(current.bordrolar, impact!)
+          : current.bordrolar,
+        retroBatches: record
+          ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact!)
+          : current.retroBatches,
+      };
+    });
   };
 
   const handleDeleteBordro = async (event: BordroKaydi) => {
@@ -645,7 +672,7 @@ export function usePayrollMutationController({
     updateAuthoritativePayload((current) => ({
       ...current,
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact)
-        .filter((item) => (item.accrualId || item.id) !== eventId),
+        .filter((item) => (item.accrualId || item.id) !== eventId && item.id !== event.id && (!event.accrualId || item.accrualId !== event.accrualId)),
       retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
     }));
   };

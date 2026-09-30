@@ -779,6 +779,48 @@ mod tests {
             .any(|key| key.accrualId == accrual_id)
     }
 
+    #[test]
+    fn recalculating_one_persons_tediye_only_invalidates_their_later_events() {
+        let period = period_for_year("2027-03", 2027, 3, 2027, 4);
+        let mut payrolls = Vec::new();
+        for personnel_id in ["ahmet", "ayse", "mehmet", "mustafa", "fatma"] {
+            let mut normal = payroll(&period.id, BordroStatus::CALCULATED);
+            normal.id = format!("{personnel_id}-normal");
+            normal.accrualId = normal.id.clone();
+            normal.personelId = personnel_id.into();
+            normal.paymentDate = "2027-04-14".into();
+
+            let mut tediye = supplementary(
+                &format!("{personnel_id}-tediye-2"),
+                &period.id,
+                BordroStatus::CALCULATED,
+                StatutorySnapshotSource::AttendanceBacked,
+                "2027-04-01",
+                2,
+                AccrualType::TEDIYE,
+            );
+            tediye.personelId = personnel_id.into();
+            payrolls.extend([normal, tediye]);
+        }
+
+        let impact = evaluate_payroll_invalidation(
+            &dataset_with_periods(vec![period.clone()], payrolls),
+            &PayrollMutation::AccrualCalculation {
+                personnelId: "ahmet".into(),
+                periodId: period.id,
+                accrualId: "ahmet-tediye-2".into(),
+            },
+        )
+        .expect("Tediye recalculation impact should evaluate");
+
+        assert_eq!(impact.affectedPayrolls.len(), 1);
+        assert!(has_accrual(&impact, "ahmet-normal"));
+        assert!(impact
+            .affectedPayrolls
+            .iter()
+            .all(|key| key.personnelId == "ahmet"));
+    }
+
     fn dataset() -> PayrollDatasetSnapshot {
         PayrollDatasetSnapshot {
             periods: vec![
