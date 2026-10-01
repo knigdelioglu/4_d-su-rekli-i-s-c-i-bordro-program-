@@ -1058,6 +1058,7 @@ impl PayrollRepository {
             "sendikaAidati" => kesintiler.sendikaAidati = Some(amount),
             "bes" => kesintiler.bes = Some(amount),
             "icra" => kesintiler.icra = Some(amount),
+            "nafaka" => kesintiler.nafaka = Some(amount),
             "kisiBorcu" => kesintiler.kisiBorcu = Some(amount),
             "dogumAskerlikBorclanmasi" => kesintiler.dogumAskerlikBorclanmasi = Some(amount),
             "hayatSaglikSigortasi" => kesintiler.hayatSaglikSigortasi = Some(amount),
@@ -1791,7 +1792,7 @@ impl PayrollRepository {
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
-        let deduction_map: [(&str, Option<Decimal>); 11] = [
+        let deduction_map: [(&str, Option<Decimal>); 12] = [
             ("isciSgkPrimi", b.kesintiler.isciSgkPrimi),
             ("isciIssizlikPrimi", b.kesintiler.isciIssizlikPrimi),
             ("gelirVergisi", b.kesintiler.gelirVergisi),
@@ -1799,6 +1800,7 @@ impl PayrollRepository {
             ("sendikaAidati", b.kesintiler.sendikaAidati),
             ("bes", b.kesintiler.bes),
             ("icra", b.kesintiler.icra),
+            ("nafaka", b.kesintiler.nafaka),
             ("kisiBorcu", b.kesintiler.kisiBorcu),
             (
                 "dogumAskerlikBorclanmasi",

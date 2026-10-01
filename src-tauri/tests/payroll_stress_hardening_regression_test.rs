@@ -55,6 +55,7 @@ fn person(id: &str, bes_uyesi: bool) -> Personel {
             oksOraniYuzde: None,
             sabitBesTutar: None,
             icraTutar: None,
+            nafakaTutar: None,
             kisiBorcuTutar: None,
             dogumAskerlikBorclanmasiTutar: None,
             hayatSaglikSigortasiTutar: None,

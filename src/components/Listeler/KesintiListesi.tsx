@@ -10,6 +10,7 @@ import {
   ShieldAlert,
   Scale,
   Receipt,
+  Heart,
   Wallet,
   Search,
   Baby,
@@ -49,6 +50,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
     sendikaAidati: row.bordro.kesintiler.sendikaAidati ?? 0,
     bes: row.bordro.kesintiler.bes ?? 0,
     icra: row.bordro.kesintiler.icra ?? 0,
+    nafaka: row.bordro.kesintiler.nafaka ?? 0,
     kisiBorcu: row.bordro.kesintiler.kisiBorcu ?? 0,
     dogumAskerlikBorclanmasi: row.bordro.kesintiler.dogumAskerlikBorclanmasi ?? 0,
     hayatSaglikSigortasi: row.bordro.kesintiler.hayatSaglikSigortasi ?? 0,
@@ -84,6 +86,15 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
           label: 'İcra Kesintisi',
           totalLabel: 'TOPLAM İCRA KESİNTİSİ',
           color: 'rose',
+        };
+      case 'nafaka':
+        return {
+          title: 'Nafaka Kesintisi Listesi',
+          icon: Heart,
+          fieldKey: 'nafaka' as const,
+          label: 'Nafaka Kesintisi',
+          totalLabel: 'TOPLAM NAFAKA KESİNTİSİ',
+          color: 'pink',
         };
       case 'kisiBorcu':
         return {

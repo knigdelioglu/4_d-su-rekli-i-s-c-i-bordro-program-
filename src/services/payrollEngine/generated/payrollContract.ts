@@ -88,6 +88,8 @@ export const RUST_DECIMAL_KEYS = [
   "kisiBorcuTutar",
   "limit",
   "manuelKumulatifGvMatrahi",
+  "nafaka",
+  "nafakaTutar",
   "netOdeme",
   "offsetSettlementAmount",
   "oksOraniYuzde",
@@ -314,6 +316,15 @@ export const RUST_STRUCT_CONTRACT = {
       },
       "icraTutar": {
         "rustName": "icraTutar",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "nafakaTutar": {
+        "rustName": "nafakaTutar",
         "rustType": "Option<Decimal>",
         "required": false,
         "optional": true,
@@ -1759,6 +1770,15 @@ export const RUST_STRUCT_CONTRACT = {
       },
       "icra": {
         "rustName": "icra",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "nafaka": {
+        "rustName": "nafaka",
         "rustType": "Option<Decimal>",
         "required": false,
         "optional": true,

@@ -32,7 +32,7 @@ import { PeriodListSection } from './PeriodListSection';
 import { SickLeaveConflictModal } from './SickLeaveConflictModal';
 import { SickLeaveSection } from './SickLeaveSection';
 import { TediyeTisSection } from './TediyeTisSection';
-import { savePeriodSettings } from './periodSettingsSave';
+import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -422,8 +422,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       setTimeout(() => setPeriodGlobalSuccess(null), 4000);
       onSectionChange('gelir');
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setPeriodGlobalError(`Dönem işlemi tamamlanamadı: ${message}`);
+      setPeriodGlobalError(formatPeriodSettingsSaveError(error, 'Dönem işlemi'));
     } finally {
       setIsSubmittingPeriod(false);
     }

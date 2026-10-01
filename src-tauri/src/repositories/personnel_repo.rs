@@ -29,6 +29,7 @@ impl PersonnelRepository {
         let dogum_gv: Option<i64> = row.get(25)?;
         let hayat_gv: Option<i64> = row.get(26)?;
         let saglik_gv: Option<i64> = row.get(27)?;
+        let nafaka: Option<i64> = row.get(28)?;
 
         Ok(Personel {
             id: row.get(0)?,
@@ -53,6 +54,7 @@ impl PersonnelRepository {
                 oksOraniYuzde: oks_orani,
                 sabitBesTutar: opt_kurus_to_dec(sabit_bes),
                 icraTutar: opt_kurus_to_dec(icra),
+                nafakaTutar: opt_kurus_to_dec(nafaka),
                 kisiBorcuTutar: opt_kurus_to_dec(kisi_borcu),
                 dogumAskerlikBorclanmasiTutar: opt_kurus_to_dec(dogum),
                 hayatSaglikSigortasiTutar: opt_kurus_to_dec(hayat),
@@ -74,7 +76,8 @@ impl PersonnelRepository {
                     devir_kumulatif_asgari_gv_matrahi_yili, sendika_uyesi, sabit_sendika_aidati,
                     bes_uyesi, oks_orani_yuzde, sabit_bes_tutar, icra_tutar, kisi_borcu_tutar,
                     dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar,
-                    dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar
+                    dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar,
+                    nafaka_tutar
              FROM personnel ORDER BY ad ASC, soyad ASC",
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
@@ -97,7 +100,8 @@ impl PersonnelRepository {
                     devir_kumulatif_asgari_gv_matrahi_yili, sendika_uyesi, sabit_sendika_aidati,
                     bes_uyesi, oks_orani_yuzde, sabit_bes_tutar, icra_tutar, kisi_borcu_tutar,
                     dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar,
-                    dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar
+                    dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar,
+                    nafaka_tutar
              FROM personnel WHERE id = ?1",
             params![id],
             Self::from_row,
@@ -160,6 +164,7 @@ impl PersonnelRepository {
         let oks_orani = opt_rate_to_sql_value(k.and_then(|k| k.oksOraniYuzde))?;
         let sabit_bes = opt_money_to_kurus(k.and_then(|k| k.sabitBesTutar))?;
         let icra = opt_money_to_kurus(k.and_then(|k| k.icraTutar))?;
+        let nafaka = opt_money_to_kurus(k.and_then(|k| k.nafakaTutar))?;
         let kisi_borcu = opt_money_to_kurus(k.and_then(|k| k.kisiBorcuTutar))?;
         let dogum = opt_money_to_kurus(k.and_then(|k| k.dogumAskerlikBorclanmasiTutar))?;
         let hayat = opt_money_to_kurus(k.and_then(|k| k.hayatSaglikSigortasiTutar))?;
@@ -220,8 +225,8 @@ impl PersonnelRepository {
                 bes_uyesi, oks_orani_yuzde, sabit_bes_tutar, icra_tutar, kisi_borcu_tutar,
                 dogum_askerlik_borclanmasi_tutar, hayat_saglik_sigortasi_tutar, diger_kesinti_tutar,
                 dogum_askerlik_gv_indirim_tutar, hayat_sigortasi_gv_prim_tutar, saglik_sigortasi_gv_prim_tutar,
-                created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)
+                nafaka_tutar, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
             ON CONFLICT(id) DO UPDATE SET
                 tc_no=?2, ad=?3, soyad=?4, grup=?5, unvan=?6, sgk_sicil_no=?7, iban=?8, hizmet_yili=?9, aciklama=?10,
                 devir_kumulatif_gv_matrahi=?11, devir_kumulatif_gv_matrahi_yili=?12,
@@ -230,13 +235,13 @@ impl PersonnelRepository {
                 bes_uyesi=?18, oks_orani_yuzde=?19, sabit_bes_tutar=?20, icra_tutar=?21,
                 kisi_borcu_tutar=?22, dogum_askerlik_borclanmasi_tutar=?23, hayat_saglik_sigortasi_tutar=?24,
                 diger_kesinti_tutar=?25, dogum_askerlik_gv_indirim_tutar=?26, hayat_sigortasi_gv_prim_tutar=?27,
-                saglik_sigortasi_gv_prim_tutar=?28, updated_at=?30",
+                saglik_sigortasi_gv_prim_tutar=?28, nafaka_tutar=?29, updated_at=?31",
             params![
                 p.id, p.tcNo, p.ad, p.soyad, p.grup, p.unvan, p.sgkSicilNo, p.iban, p.hizmetYili, p.aciklama,
                 opt_money_to_kurus(p.devirKumulatifGvMatrahi)?, p.devirKumulatifGvMatrahiYili,
                 p.devirKumulatifGvMatrahiBaslangicAyi, opt_money_to_kurus(p.devirKumulatifAsgariGvMatrahi)?,
                 p.devirKumulatifAsgariGvMatrahiYili, sendika_uyesi, sabit_sendika, bes_uyesi, oks_orani, sabit_bes,
-                icra, kisi_borcu, dogum, hayat, diger, dogum_gv_indirim, hayat_gv_prim, saglik_gv_prim, now, now
+                icra, kisi_borcu, dogum, hayat, diger, dogum_gv_indirim, hayat_gv_prim, saglik_gv_prim, nafaka, now, now
             ],
         ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 

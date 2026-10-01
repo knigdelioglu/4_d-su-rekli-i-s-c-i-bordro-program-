@@ -551,6 +551,30 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                 </div>
 
                 <div>
+                  <label className="block text-[11px] font-semibold text-pink-700 mb-0.5">
+                    Nafaka Kesintisi (TL)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="0.00"
+                    value={formData.kesintiler?.nafakaTutar ?? ''}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        kesintiler: {
+                          ...(formData.kesintiler || {}),
+                          nafakaTutar: parseFloat(e.target.value) || 0,
+                        },
+                      })
+                    }
+                    className="w-full px-2.5 py-1.5 bg-white border border-pink-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-pink-500"
+                  />
+                  <p className="mt-1 text-[10px] text-pink-700">Kartta tanımlı aylık sabit tutar bordroya ayrı kesinti olarak yansır.</p>
+                </div>
+
+                <div>
                   <label className="block text-[11px] font-semibold text-amber-700 mb-0.5">
                     Kişi Borcu (TL)
                   </label>

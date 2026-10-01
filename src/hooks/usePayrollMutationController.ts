@@ -50,6 +50,7 @@ import {
   validateSickLeaveRecord,
 } from '../services/storage/payrollPayloadSchema';
 import {
+  syncPuantajForSickLeaveDelete,
   syncPuantajForSickLeaveSave,
 } from '../utils/sickLeaveSync';
 

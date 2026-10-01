@@ -174,6 +174,7 @@ export function useBordroCalculationController({
   const [manualKumulatifAsgariGvMap, setManualKumulatifAsgariGvMap] = useState<Record<string, string>>({});
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState(false);
   const firstBatchCalculationErrorRef = useRef<string | null>(null);
+  const batchCalculationErrorsRef = useRef<string[]>([]);
 
   const getAccrualId = (payroll: BordroKaydi): string => payroll.accrualId || payroll.id;
 
@@ -296,6 +297,7 @@ export function useBordroCalculationController({
       if (firstBatchCalculationErrorRef.current === null) {
         firstBatchCalculationErrorRef.current = formattedError;
       }
+      batchCalculationErrorsRef.current.push(`${person.ad} ${person.soyad}: ${formattedError}`);
       setErrorMessage(formattedError);
       return null;
     }
@@ -303,34 +305,57 @@ export function useBordroCalculationController({
 
   const handleCalculateAll = async () => {
     firstBatchCalculationErrorRef.current = null;
+    batchCalculationErrorsRef.current = [];
     setIsBatchProcessing(true);
     let successCount = 0;
-    let failCount = 0;
+    let calculationFailureCount = 0;
+    let finalizedCount = 0;
     const missingPuantajPersons: string[] = [];
     for (const person of personeller) {
+      const currentDataset = buildDataset();
+      const attendance = currentDataset.attendances.find(
+        (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+      );
+      if (!attendance || !attendance.gunler || Object.keys(attendance.gunler).length === 0) {
+        missingPuantajPersons.push(`${person.ad} ${person.soyad}`);
+        continue;
+      }
+      const existing = currentDataset.payrolls.find(
+        (item) => item.personelId === person.id && item.donemId === aktifDonem.id && item.accrualType === 'NORMAL'
+      );
+      if (existing?.status === 'FINALIZED') {
+        finalizedCount++;
+        continue;
+      }
       const res = await calculateAndSaveForPerson(person);
       if (res) successCount++;
-      else {
-        failCount++;
-        missingPuantajPersons.push(`${person.ad} ${person.soyad}`);
-      }
+      else calculationFailureCount++;
     }
     setIsBatchProcessing(false);
-    if (failCount === 0) {
+    const outcomeSummary = `Hesaplanan bordro: ${successCount}/${personeller.length}.`;
+    if (calculationFailureCount === 0 && missingPuantajPersons.length === 0) {
       setErrorMessage(null);
-      setSuccessMessage(`${successCount} personelin bordrosu başarıyla güncellendi.`);
+      setSuccessMessage(
+        `${successCount} personelin bordrosu başarıyla güncellendi.${finalizedCount > 0 ? ` ${finalizedCount} kesinleşmiş bordro atlandı.` : ''}`
+      );
       setTimeout(() => setSuccessMessage(null), 3500);
-    } else if (successCount > 0) {
-      setSuccessMessage(`${successCount} personelin bordrosu hesaplandı.`);
-      setErrorMessage(
-        `${failCount} personelin bordrosu hesaplanamadı (${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '...' : ''}). ${firstBatchCalculationErrorRef.current ?? 'Hata ayrıntısı için ilgili personelin kaydını ve dönem parametrelerini kontrol edin.'}`
-      );
     } else {
-      setSuccessMessage(null);
-      setErrorMessage(
-        firstBatchCalculationErrorRef.current ??
-          'Hiçbir personelin bordrosu hesaplanamadı. Kayıtlı puantaj, dönem kurum ayarları ve yıllık vergi parametrelerini kontrol edin.'
+      setSuccessMessage(
+        successCount > 0
+          ? `${outcomeSummary}${finalizedCount > 0 ? ` Kesinleşmiş bordro atlandı: ${finalizedCount}.` : ''}`
+          : null
       );
+      const problems: string[] = [];
+      if (missingPuantajPersons.length > 0) {
+        problems.push(`Puantaj eksik (${missingPuantajPersons.length}): ${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '…' : ''}.`);
+      }
+      if (calculationFailureCount > 0) {
+        const failures = batchCalculationErrorsRef.current.slice(0, 3).join(' | ');
+        problems.push(
+          `${calculationFailureCount} hesaplama hatası${failures ? `: ${failures}` : firstBatchCalculationErrorRef.current ? `: ${firstBatchCalculationErrorRef.current}` : '.'}`
+        );
+      }
+      setErrorMessage(`${outcomeSummary} ${problems.join(' ')}`);
     }
   };
 

@@ -262,6 +262,7 @@ pub fn get_migrations() -> Migrations<'static> {
                 oks_orani_yuzde INTEGER DEFAULT 0,
                 sabit_bes_tutar INTEGER DEFAULT 0,
                 icra_tutar INTEGER DEFAULT 0,
+                nafaka_tutar INTEGER DEFAULT 0,
                 kisi_borcu_tutar INTEGER DEFAULT 0,
                 dogum_askerlik_borclanmasi_tutar INTEGER DEFAULT 0,
                 hayat_saglik_sigortasi_tutar INTEGER DEFAULT 0,
@@ -508,6 +509,20 @@ pub fn get_migrations() -> Migrations<'static> {
                     error.to_string(),
                 )))
             })?;
+            Ok(())
+        }),
+        M::up_with_hook("SELECT 1;", |tx| {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('personnel') WHERE name = 'nafaka_tutar'",
+                [],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                tx.execute(
+                    "ALTER TABLE personnel ADD COLUMN nafaka_tutar INTEGER DEFAULT 0",
+                    [],
+                )?;
+            }
             Ok(())
         }),
         M::up(

@@ -74,6 +74,7 @@ mod smoke_tests {
                     oksOraniYuzde: None,
                     sabitBesTutar: None,
                     icraTutar: None,
+                    nafakaTutar: Some(dec!(125.50)),
                     kisiBorcuTutar: None,
                     dogumAskerlikBorclanmasiTutar: None,
                     hayatSaglikSigortasiTutar: None,
@@ -237,6 +238,14 @@ mod smoke_tests {
             assert_eq!(restored_payrolls.len(), 1);
             assert_eq!(restored_openings.len(), 1);
             assert_eq!(restored_payrolls[0].donemId, "2026-05");
+            assert_eq!(
+                restored_personnel[0]
+                    .kesintiler
+                    .as_ref()
+                    .and_then(|deductions| deductions.nafakaTutar),
+                Some(dec!(125.50))
+            );
+            assert_eq!(restored_payrolls[0].kesintiler.nafaka, Some(dec!(125.50)));
 
             // Verify snapshot of pekDetay, employer costs, raporluGun and odenenRaporluGun persisted across SQLite restart
             assert_eq!(restored_payrolls[0].raporluGun, Some(0));

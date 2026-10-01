@@ -572,6 +572,9 @@ pub fn calculate_kesinti_toplam(kesintiler: &KesintiKalemleri) -> Decimal {
     if let Some(v) = kesintiler.icra {
         sum += v;
     }
+    if let Some(v) = kesintiler.nafaka {
+        sum += v;
+    }
     if let Some(v) = kesintiler.kisiBorcu {
         sum += v;
     }
@@ -1478,6 +1481,9 @@ pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_
     let icra = p_kesintiler
         .and_then(|pk| pk.icraTutar)
         .filter(|v| *v > dec!(0));
+    let nafaka = p_kesintiler
+        .and_then(|pk| pk.nafakaTutar)
+        .filter(|v| *v > dec!(0));
     let kisi_borcu = p_kesintiler
         .and_then(|pk| pk.kisiBorcuTutar)
         .filter(|v| *v > dec!(0));
@@ -1501,6 +1507,7 @@ pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_
         sendikaAidati: Some(sendika_aidati),
         bes: Some(bes),
         icra,
+        nafaka,
         kisiBorcu: kisi_borcu,
         dogumAskerlikBorclanmasi: dogum_askerlik,
         hayatSaglikSigortasi: hayat_saglik,

@@ -268,6 +268,7 @@ function validatePersonelKesintileri(value: unknown, path: string): void {
     'oksOraniYuzde',
     'sabitBesTutar',
     'icraTutar',
+    'nafakaTutar',
     'kisiBorcuTutar',
     'dogumAskerlikBorclanmasiTutar',
     'hayatSaglikSigortasiTutar',
@@ -377,6 +378,7 @@ function validateKesintiKalemleri(value: unknown, path: string): void {
     'hayatSaglikSigortasi',
     'digerKesinti',
   ].forEach((key) => requiredNullableDecimal(value, key, path));
+  optionalDecimal(value, 'nafaka', path);
 }
 
 function validateDevredenPekKaydi(value: unknown, path: string): void {
@@ -886,6 +888,7 @@ const PAYROLL_PAYMENT_DEDUCTION_KEYS = [
   'sendikaAidati',
   'bes',
   'icra',
+  'nafaka',
   'kisiBorcu',
   'dogumAskerlikBorclanmasi',
   'hayatSaglikSigortasi',

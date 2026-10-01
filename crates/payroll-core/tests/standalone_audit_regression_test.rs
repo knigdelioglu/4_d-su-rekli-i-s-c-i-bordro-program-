@@ -270,6 +270,7 @@ fn test_audit_direct_statutory_deductions_union_fee_deduction() {
             oksOraniYuzde: None,
             sabitBesTutar: None,
             icraTutar: None,
+            nafakaTutar: None,
             kisiBorcuTutar: None,
             dogumAskerlikBorclanmasiTutar: None,
             hayatSaglikSigortasiTutar: None,

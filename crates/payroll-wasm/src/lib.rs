@@ -603,6 +603,7 @@ mod tests {
         // 17. Negative net edge case.
         let mut negative_net = standard_request();
         negative_net.dataset.personnel[0].kesintiler = Some(PersonelKesintileri {
+            nafakaTutar: None,
             kisiBorcuTutar: Some(dec!(999999)),
             ..Default::default()
         });

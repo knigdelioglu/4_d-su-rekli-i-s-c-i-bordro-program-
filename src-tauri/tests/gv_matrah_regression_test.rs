@@ -75,6 +75,7 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
             oksOraniYuzde: None,
             sabitBesTutar: None,
             icraTutar: None,
+            nafakaTutar: None,
             kisiBorcuTutar: None,
             dogumAskerlikBorclanmasiTutar: None,
             hayatSaglikSigortasiTutar: None,

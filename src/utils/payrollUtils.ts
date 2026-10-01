@@ -229,6 +229,7 @@ export function getEmptyKesintiler(): KesintiKalemleri {
     sendikaAidati: null,
     bes: null,
     icra: null,
+    nafaka: null,
     kisiBorcu: null,
     dogumAskerlikBorclanmasi: null,
     hayatSaglikSigortasi: null,
@@ -933,6 +934,7 @@ export function calculateStatutoryDeductions(
 
   // Personal recurring deduction amounts from employee profile
   const icra = (pKesintiler?.icraTutar && pKesintiler.icraTutar > 0) ? pKesintiler.icraTutar : null;
+  const nafaka = (pKesintiler?.nafakaTutar && pKesintiler.nafakaTutar > 0) ? pKesintiler.nafakaTutar : null;
   const kisiBorcu = (pKesintiler?.kisiBorcuTutar && pKesintiler.kisiBorcuTutar > 0) ? pKesintiler.kisiBorcuTutar : null;
   const dogumAskerlikBorclanmasi = (pKesintiler?.dogumAskerlikBorclanmasiTutar && pKesintiler.dogumAskerlikBorclanmasiTutar > 0) ? pKesintiler.dogumAskerlikBorclanmasiTutar : null;
   const hayatSaglikSigortasi = (pKesintiler?.hayatSaglikSigortasiTutar && pKesintiler.hayatSaglikSigortasiTutar > 0) ? pKesintiler.hayatSaglikSigortasiTutar : null;
@@ -946,6 +948,7 @@ export function calculateStatutoryDeductions(
     sendikaAidati,
     bes,
     icra,
+    nafaka,
     kisiBorcu,
     dogumAskerlikBorclanmasi,
     hayatSaglikSigortasi,

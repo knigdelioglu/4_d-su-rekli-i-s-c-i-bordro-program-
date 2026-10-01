@@ -79,6 +79,7 @@ export interface PersonelKesintiBilgileri {
   oksOraniYuzde?: number;
   sabitBesTutar?: number;
   icraTutar?: number;
+  nafakaTutar?: number;
   kisiBorcuTutar?: number;
   dogumAskerlikBorclanmasiTutar?: number;
   hayatSaglikSigortasiTutar?: number;
@@ -483,6 +484,7 @@ export interface KesintiKalemleri {
   sendikaAidati: number | null;
   bes: number | null;
   icra: number | null;
+  nafaka?: number | null;
   kisiBorcu: number | null;
   dogumAskerlikBorclanmasi: number | null;
   hayatSaglikSigortasi: number | null;

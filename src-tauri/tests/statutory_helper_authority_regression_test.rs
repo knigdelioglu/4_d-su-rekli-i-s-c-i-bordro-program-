@@ -29,6 +29,7 @@ fn oks_person() -> Personel {
             oksOraniYuzde: None,
             sabitBesTutar: None,
             icraTutar: None,
+            nafakaTutar: None,
             kisiBorcuTutar: None,
             dogumAskerlikBorclanmasiTutar: None,
             hayatSaglikSigortasiTutar: None,

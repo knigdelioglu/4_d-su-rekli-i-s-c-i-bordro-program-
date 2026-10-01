@@ -710,6 +710,32 @@ fn normal_with_icra(icra: Decimal) -> PayrollCalculationRequest {
     request
 }
 
+fn normal_with_nafaka(nafaka: Decimal) -> PayrollCalculationRequest {
+    let mut request = normal_with_icra(Decimal::ZERO);
+    request.dataset.personnel[0]
+        .kesintiler
+        .as_mut()
+        .expect("personnel deductions")
+        .nafakaTutar = Some(nafaka);
+    request
+}
+
+#[test]
+fn nafaka_is_persisted_as_a_separate_fixed_deduction_and_counts_toward_net() {
+    let zero_net = calculate_payroll_checked(&normal_with_nafaka(dec!(100)))
+        .expect("income equal to alimony deduction is valid");
+    assert_eq!(zero_net.gelirToplam, dec!(100));
+    assert_eq!(zero_net.kesintiler.nafaka, Some(dec!(100)));
+    assert_eq!(zero_net.kesintiler.icra, None);
+    assert_eq!(zero_net.kesintiToplam, dec!(100));
+    assert_eq!(zero_net.netOdeme, Decimal::ZERO);
+
+    assert!(matches!(
+        calculate_payroll_checked(&normal_with_nafaka(dec!(101))),
+        Err(DomainError::NegativeNetPayment { .. })
+    ));
+}
+
 #[test]
 fn negative_net_boundary_allows_zero_and_reports_exact_positive_deficit() {
     let zero = calculate_payroll_checked(&normal_with_icra(dec!(100)))

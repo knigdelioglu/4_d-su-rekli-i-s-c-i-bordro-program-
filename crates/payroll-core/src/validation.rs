@@ -69,6 +69,7 @@ fn validate_payroll_line_items_internal(
         ("sendikaAidati", kesintiler.sendikaAidati),
         ("bes", kesintiler.bes),
         ("icra", kesintiler.icra),
+        ("nafaka", kesintiler.nafaka),
         ("kisiBorcu", kesintiler.kisiBorcu),
         (
             "dogumAskerlikBorclanmasi",
@@ -358,6 +359,7 @@ pub fn validate_personnel_for_payroll(personel: &Personel) -> Result<()> {
             ("sabitSendikaAidati", k.sabitSendikaAidati),
             ("sabitBesTutar", k.sabitBesTutar),
             ("icraTutar", k.icraTutar),
+            ("nafakaTutar", k.nafakaTutar),
             ("kisiBorcuTutar", k.kisiBorcuTutar),
             (
                 "dogumAskerlikBorclanmasiTutar",

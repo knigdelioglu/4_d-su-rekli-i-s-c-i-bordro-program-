@@ -31,6 +31,8 @@ pub struct PersonelKesintileri {
     pub oksOraniYuzde: Option<Decimal>,
     pub sabitBesTutar: Option<Decimal>,
     pub icraTutar: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nafakaTutar: Option<Decimal>,
     pub kisiBorcuTutar: Option<Decimal>,
     pub dogumAskerlikBorclanmasiTutar: Option<Decimal>,
     pub hayatSaglikSigortasiTutar: Option<Decimal>,
@@ -544,6 +546,8 @@ pub struct KesintiKalemleri {
     pub sendikaAidati: Option<Decimal>,
     pub bes: Option<Decimal>,
     pub icra: Option<Decimal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nafaka: Option<Decimal>,
     pub kisiBorcu: Option<Decimal>,
     pub dogumAskerlikBorclanmasi: Option<Decimal>,
     pub hayatSaglikSigortasi: Option<Decimal>,

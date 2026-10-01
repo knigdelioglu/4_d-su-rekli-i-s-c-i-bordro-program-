@@ -120,6 +120,7 @@ const DEDUCTION_LABELS: Array<[keyof BordroKaydi['kesintiler'], string]> = [
   ['sendikaAidati', 'Sendika Aidatı'],
   ['bes', 'BES / OKS'],
   ['icra', 'İcra Kesintisi'],
+  ['nafaka', 'Nafaka Kesintisi'],
   ['kisiBorcu', 'Kişi Borcu'],
   ['dogumAskerlikBorclanmasi', 'Doğum / Askerlik Borçlanması'],
   ['hayatSaglikSigortasi', 'Hayat / Sağlık Sigortası'],

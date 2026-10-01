@@ -51,6 +51,7 @@ export type KesintiTipi =
   | 'sendika'
   | 'bes'
   | 'icra'
+  | 'nafaka'
   | 'kisiBorcu'
   | 'dogumAskerlik'
   | 'hayatSaglik'
@@ -60,6 +61,7 @@ export const KESINTI_TIPLERI: readonly KesintiTipi[] = [
   'sendika',
   'bes',
   'icra',
+  'nafaka',
   'kisiBorcu',
   'dogumAskerlik',
   'hayatSaglik',
