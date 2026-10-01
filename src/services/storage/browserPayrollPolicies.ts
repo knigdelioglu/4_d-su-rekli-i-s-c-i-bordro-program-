@@ -9,20 +9,29 @@ import type { MutationImpact, PayrollMutation } from '../payrollEngine/types';
  */
 export type BrowserPayrollMutation = PayrollMutation;
 
-export function assertBrowserMutationImpactAllowed(impact: MutationImpact): void {
+export interface MutationBlockLabels {
+  person?: (personnelId: string) => string | undefined;
+  period?: (periodId: string) => string | undefined;
+}
+
+export function assertBrowserMutationImpactAllowed(
+  impact: MutationImpact,
+  labels: MutationBlockLabels = {}
+): void {
   if (impact.blockedByFinalized.length === 0 && impact.blockedByFinalizedRetroBatches.length === 0) return;
-  const listed = impact.blockedByFinalized
+  const examples = impact.blockedByFinalized
     .slice(0, 3)
-    .map((key) => `${key.personnelId} / ${key.periodId} / ${key.accrualId ?? ''}`);
-  const remaining = impact.blockedByFinalized.length - listed.length;
-  const keys = `${listed.join(', ')}${remaining > 0 ? ` ve ${remaining} kayıt daha` : ''}`;
-  const batches = impact.blockedByFinalizedRetroBatches.join(', ');
-  const detail = [listed.length ? keys : '', batches ? `retro batch: ${batches}` : '']
-    .filter(Boolean)
-    .join(', ');
+    .map((key) =>
+      `${labels.person?.(key.personnelId) ?? key.personnelId} – ${labels.period?.(key.periodId) ?? key.periodId}`
+    );
+  const remaining = impact.blockedByFinalized.length - examples.length;
+  if (remaining > 0) examples.push(`ve ${remaining} kayıt daha`);
+  if (impact.blockedByFinalizedRetroBatches.length > 0) {
+    examples.push(`${impact.blockedByFinalizedRetroBatches.length} kesinleşmiş geriye dönük fark ödemesi`);
+  }
   throw new Error(
-    `Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez: ${detail}. ` +
-      'Değişikliği kesinleşmiş son dönemden sonraki bir döneme uygulayın; kesinleşmiş dönemler için ücret farkını Geriye Dönük Farklar (ücret revizyonu) ile hesaplayın.'
+    `Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez (${examples.join(', ')}). ` +
+      'Değişikliği kesinleşmiş son dönemden sonraki bir döneme uygulayın; kesinleşmiş dönemlerdeki ücret farkları için Geriye Dönük Farklar ekranını kullanın.'
   );
 }
 

@@ -66,6 +66,7 @@ import {
   useBordroCalculationController,
 } from './useBordroCalculationController';
 import { describeError } from '../utils/errorMessage';
+import { matchesPersonSearch } from '../utils/personSearch';
 
 interface BordroHesaplamaProps {
   aktifDonem: BordroDonemi;
@@ -216,15 +217,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   }, [openMenuPersonId]);
 
   // Filtered personnel list
-  const normalizedSearchTerm = searchTerm.toLocaleLowerCase('tr-TR');
   const filteredPersoneller = personeller.filter(
-    (p) =>
-      (p.ad.toLocaleLowerCase('tr-TR').includes(normalizedSearchTerm) ||
-        p.soyad.toLocaleLowerCase('tr-TR').includes(normalizedSearchTerm) ||
-        p.tcNo.includes(searchTerm) ||
-        (p.grup && p.grup.toLocaleLowerCase('tr-TR').includes(normalizedSearchTerm)) ||
-        (p.unvan && p.unvan.toLocaleLowerCase('tr-TR').includes(normalizedSearchTerm))) &&
-      matchesRowFilter(p)
+    (p) => matchesPersonSearch(p, searchTerm) && matchesRowFilter(p)
   );
 
   // Period statistics include only authoritative snapshots. STALE/DRAFT values

@@ -40,27 +40,56 @@ impl PayrollInvalidationRepository {
         if !impact.blockedByFinalized.is_empty()
             || !impact.blockedByFinalizedRetroBatches.is_empty()
         {
-            let keys = impact
-                .blockedByFinalized
-                .iter()
-                .map(|key| format!("{} / {} / {}", key.personnelId, key.periodId, key.accrualId))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let batches = impact.blockedByFinalizedRetroBatches.join(", ");
-            let detail = [
-                (!keys.is_empty()).then_some(keys),
-                (!batches.is_empty()).then_some(format!("retro batch: {batches}")),
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join(", ");
-            return Err(DomainError::PayrollFinalized(format!(
-                "Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez: {}.",
-                detail
+            return Err(DomainError::PayrollFinalized(Self::finalized_block_message(
+                conn, &impact,
             )));
         }
         Ok(impact)
+    }
+
+    /// User-facing explanation of a FINALIZED blocker: names instead of raw
+    /// ids, at most three examples, and the way forward.
+    fn finalized_block_message(conn: &Connection, impact: &MutationImpact) -> String {
+        let person_name = |id: &str| -> String {
+            conn.query_row(
+                "SELECT ad || ' ' || soyad FROM personnel WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_else(|_| id.to_string())
+        };
+        let period_name = |id: &str| -> String {
+            conn.query_row(
+                "SELECT donem_adi FROM payroll_periods WHERE id = ?1",
+                params![id],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| id.to_string())
+        };
+        let mut examples: Vec<String> = impact
+            .blockedByFinalized
+            .iter()
+            .take(3)
+            .map(|key| format!("{} – {}", person_name(&key.personnelId), period_name(&key.periodId)))
+            .collect();
+        let remaining = impact.blockedByFinalized.len().saturating_sub(examples.len());
+        if remaining > 0 {
+            examples.push(format!("ve {remaining} kayıt daha"));
+        }
+        if !impact.blockedByFinalizedRetroBatches.is_empty() {
+            examples.push(format!(
+                "{} kesinleşmiş geriye dönük fark ödemesi",
+                impact.blockedByFinalizedRetroBatches.len()
+            ));
+        }
+        format!(
+            "Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez ({}). \
+             Değişikliği kesinleşmiş son dönemden sonraki bir döneme uygulayın; kesinleşmiş \
+             dönemlerdeki ücret farkları için Geriye Dönük Farklar ekranını kullanın.",
+            examples.join(", ")
+        )
     }
 
     pub fn apply_impact(conn: &Connection, impact: &MutationImpact) -> Result<usize> {

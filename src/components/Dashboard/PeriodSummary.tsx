@@ -22,6 +22,7 @@ import type { ParametreSection, PayrollViewType, TabType } from '../../types/nav
 import {
   AY_ISIMLERI,
   formatDateTR,
+  formatPeriodPaymentMonthLabel,
   hasCompleteAnnualPayrollParameters,
   hasCompletePeriodIncomeParameters,
   hasCompletePeriodLegalParameters,
@@ -206,10 +207,12 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
             data-testid="period-summary-title"
             className="mt-1 text-2xl font-bold tracking-tight text-slate-900"
           >
-            {AY_ISIMLERI[aktifDonem.taxMonth - 1]} {aktifDonem.taxYear}
+            {AY_ISIMLERI[aktifDonem.ay - 1]} {aktifDonem.yil} Dönemi
           </h2>
           <p className="mt-1 text-sm text-slate-600">
-            {formatDateTR(aktifDonem.baslangicTarihi)} – {formatDateTR(aktifDonem.bitisTarihi)}
+            Çalışma: {formatDateTR(aktifDonem.baslangicTarihi)} – {formatDateTR(aktifDonem.bitisTarihi)}
+            {' · '}
+            <span className="font-semibold text-slate-700">{formatPeriodPaymentMonthLabel(aktifDonem)}</span>
           </p>
         </div>
         {nextTask ? (

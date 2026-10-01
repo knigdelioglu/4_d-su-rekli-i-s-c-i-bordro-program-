@@ -267,7 +267,13 @@ export function usePayrollMutationController({
       affectedRetroBatches: [...affectedRetroBatches],
       blockedByFinalizedRetroBatches: [...blockedByFinalizedRetroBatches],
     } satisfies MutationImpact;
-    assertBrowserMutationImpactAllowed(merged);
+    assertBrowserMutationImpactAllowed(merged, {
+      person: (id) => {
+        const person = policyDataset.personnel.find((item) => item.id === id);
+        return person ? `${person.ad} ${person.soyad}` : undefined;
+      },
+      period: (id) => policyDataset.periods.find((item) => item.id === id)?.donemAdi,
+    });
     return merged;
   };
 
@@ -376,8 +382,11 @@ export function usePayrollMutationController({
       return;
     }
     const existing = donemler.find((period) => period.id === newDonem.id);
+    // A brand-new period is empty; it can only affect later periods of the
+    // same tax year (PERIOD_INSERT). Editing an existing period keeps the
+    // broader positional policy.
     const positionMutations: PayrollMutation[] = [{
-      kind: 'PERIOD_FROM_POSITION',
+      kind: existing ? 'PERIOD_FROM_POSITION' : 'PERIOD_INSERT',
       startDate: newDonem.baslangicTarihi,
       taxYear: newDonem.taxYear,
       taxMonth: newDonem.taxMonth,

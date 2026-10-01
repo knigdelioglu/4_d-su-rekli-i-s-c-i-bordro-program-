@@ -67,6 +67,21 @@ if [ ! -d "node_modules" ]; then
     echo
 fi
 
+# 2b. Rust bordro çekirdeği değiştiyse tarayıcı (WASM) paketini yeniden üret.
+# 'bun run build' WASM tazelik kontrolü yapar; eski paket derlemeyi durdurur.
+if command -v wasm-pack >/dev/null 2>&1; then
+    echo "🦀 WASM bordro motoru yeniden derleniyor..."
+    if command -v bun >/dev/null 2>&1; then
+        bun run wasm:build || { echo "❌ HATA: WASM derlemesi başarısız."; read -p "Kapatmak için Enter'a basın..."; exit 1; }
+    else
+        node scripts/build-wasm.mjs || { echo "❌ HATA: WASM derlemesi başarısız."; read -p "Kapatmak için Enter'a basın..."; exit 1; }
+    fi
+    echo
+else
+    echo "⚠️  wasm-pack bulunamadı; mevcut WASM paketi kullanılacak (tazelik kontrolü başarısız olursa 'cargo install wasm-pack' kurun)."
+    echo
+fi
+
 # 3. Derleme ve paketleme işlemi (Release / Production)
 echo "🔨 Uygulama derleniyor ve paketleniyor (Tauri Build)..."
 echo "Bu işlem biraz zaman alabilir, lütfen bekleyin..."

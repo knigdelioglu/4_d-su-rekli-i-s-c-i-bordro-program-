@@ -23,9 +23,11 @@ import { formatTL } from '../../utils/payrollPresentation';
 import { exportToExcel, printElement } from '../../utils/excelExport';
 import {
   filterAccrualRowsByPaymentDate,
+  describeExcludedAccruals,
   getAuthoritativeAccrualRows,
   getPaymentDateOptions,
 } from './accrualListData';
+import { matchesPersonSearch } from '../../utils/personSearch';
 
 interface KesintiListesiProps {
   aktifDonem: BordroDonemi;
@@ -57,6 +59,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
     digerKesinti: row.bordro.kesintiler.digerKesinti ?? 0,
   }));
   const paymentDateOptions = getPaymentDateOptions(entries);
+  const excludedAccrualsNotice = describeExcludedAccruals(aktifDonem, personeller, bordrolar);
 
   const getActiveTypeConfig = () => {
     switch (activeType) {
@@ -144,14 +147,7 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
       return amount > 0;
     })
     .filter((e) => {
-      const term = search.toLowerCase();
-      return (
-        (
-          e.personel.ad.toLowerCase().includes(term) ||
-          e.personel.soyad.toLowerCase().includes(term) ||
-          e.personel.tcNo.includes(term)
-        )
-      );
+      return matchesPersonSearch(e.personel, search);
     });
 
   const toplamTutar = filteredList.reduce(
@@ -208,6 +204,14 @@ export const KesintiListesi: React.FC<KesintiListesiProps> = ({
       data-testid="deduction-screen"
       data-deduction-type={activeType}
     >
+      {excludedAccrualsNotice && (
+        <div
+          data-testid="excluded-accruals-notice"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-900"
+        >
+          {excludedAccrualsNotice}
+        </div>
+      )}
       {/* Top Action Banner */}
       <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

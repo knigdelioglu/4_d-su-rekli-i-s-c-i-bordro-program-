@@ -103,3 +103,26 @@ export function countAuthoritativeNormalPersonnel(
       .map((payroll) => payroll.personelId)
   ).size;
 }
+
+/**
+ * Period accruals that are excluded from official lists because they are not
+ * authoritative (STALE/DRAFT). Lists show this so a missing row is explained.
+ */
+export function describeExcludedAccruals(
+  period: BordroDonemi,
+  personnel: Personel[],
+  payrolls: BordroKaydi[]
+): string | null {
+  const personnelById = new Map(personnel.map((person) => [person.id, person]));
+  const excluded = payrolls.filter(
+    (payroll) => payroll.donemId === period.id && !isAuthoritativePayroll(payroll)
+  );
+  if (excluded.length === 0) return null;
+  const examples = excluded.slice(0, 4).map((payroll) => {
+    const person = personnelById.get(payroll.personelId);
+    const name = person ? `${person.ad} ${person.soyad}` : payroll.personelId;
+    return `${name} – ${ACCRUAL_TYPE_LABELS[payroll.accrualType]} (${PAYROLL_STATUS_LABELS[payroll.status]})`;
+  });
+  const more = excluded.length > examples.length ? ` ve ${excluded.length - examples.length} kayıt daha` : '';
+  return `${excluded.length} tahakkuk yeniden hesaplanması gerektiği için bu listede yer almıyor: ${examples.join(', ')}${more}. Bordro Hesaplama ekranından yeniden hesaplayın.`;
+}

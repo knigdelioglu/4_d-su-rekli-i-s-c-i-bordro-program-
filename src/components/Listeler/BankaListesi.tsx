@@ -10,9 +10,11 @@ import { exportToExcel, printElement } from '../../utils/excelExport';
 import {
   AuthoritativeAccrualRow,
   filterAccrualRowsByPaymentDate,
+  describeExcludedAccruals,
   getAuthoritativeAccrualRows,
   getPaymentDateOptions,
 } from './accrualListData';
+import { matchesPersonSearch } from '../../utils/personSearch';
 
 interface BankaListesiProps {
   aktifDonem: BordroDonemi;
@@ -32,18 +34,11 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   // Resmî ödeme listesine yalnız authoritative bordrolar girer. STALE/DRAFT
   // snapshot'lar yeniden hesaplanmadan banka çıktısına taşınamaz.
   const bankEntries = getAuthoritativeAccrualRows(aktifDonem, personeller, bordrolar);
+  const excludedAccrualsNotice = describeExcludedAccruals(aktifDonem, personeller, bordrolar);
   const paymentDateOptions = getPaymentDateOptions(bankEntries);
 
   const filteredEntries = filterAccrualRowsByPaymentDate(bankEntries, paymentDateFilter).filter((e: AuthoritativeAccrualRow) => {
-    const term = search.toLowerCase();
-    return (
-      (
-        e.personel.ad.toLowerCase().includes(term) ||
-        e.personel.soyad.toLowerCase().includes(term) ||
-        e.personel.tcNo.includes(term) ||
-        e.personel.iban.toLowerCase().includes(term)
-      )
-    );
+    return matchesPersonSearch(e.personel, search);
   });
 
   const toplamBankaOdemesi = filteredEntries.reduce(
@@ -112,6 +107,14 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
 
   return (
     <div className="space-y-6">
+      {excludedAccrualsNotice && (
+        <div
+          data-testid="excluded-accruals-notice"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-medium text-amber-900"
+        >
+          {excludedAccrualsNotice}
+        </div>
+      )}
       {/* Top Banner */}
       <div className="bg-white rounded-2xl p-5 border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

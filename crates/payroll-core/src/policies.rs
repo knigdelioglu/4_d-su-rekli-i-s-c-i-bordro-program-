@@ -49,6 +49,16 @@ pub enum PayrollMutation {
         taxYear: i32,
         taxMonth: i32,
     },
+    /// A brand-new (empty) period inserted at a calendar position. It has no
+    /// payment events of its own, so it can only change later calculations
+    /// through the per-tax-year chains (cumulative GV, minimum-wage GV
+    /// reference). Periods of other tax years are therefore not affected.
+    #[serde(rename = "PERIOD_INSERT")]
+    PeriodInsert {
+        startDate: String,
+        taxYear: i32,
+        taxMonth: i32,
+    },
     #[serde(rename = "PERSON_FROM_DATE")]
     PersonFromDate {
         personnelId: String,
@@ -140,6 +150,33 @@ fn is_from_position(
 ) -> bool {
     candidate.baslangicTarihi.as_str() >= start_date
         || (candidate.taxYear == tax_year && candidate.taxMonth >= tax_month)
+}
+
+fn is_same_tax_year_from_position(
+    candidate: &BordroDonemi,
+    start_date: &str,
+    tax_year: i32,
+    tax_month: i32,
+) -> bool {
+    candidate.taxYear == tax_year && is_from_position(candidate, start_date, tax_year, tax_month)
+}
+
+/// Settings of a period that has no payment events yet only reach later
+/// periods through the per-tax-year chains; a period with events can also
+/// reach the next tax year through its outgoing PEK carry.
+fn is_period_settings_dependent(
+    dataset: &PayrollDatasetSnapshot,
+    candidate: &BordroDonemi,
+    source: &BordroDonemi,
+) -> bool {
+    if !is_period_dependent(candidate, source) {
+        return false;
+    }
+    let source_has_events = dataset
+        .payrolls
+        .iter()
+        .any(|payroll| payroll.donemId == source.id);
+    source_has_events || candidate.id == source.id || candidate.taxYear == source.taxYear
 }
 
 fn is_person_from_date(candidate: &BordroDonemi, effective_from: &str) -> Result<bool> {
@@ -330,8 +367,16 @@ fn affected_by_mutation(
         }
         PayrollMutation::Period { periodId } => {
             let source = require_period(index, dataset, periodId)?;
-            Ok(candidate.is_some_and(|candidate| is_period_dependent(candidate, source)))
+            Ok(candidate
+                .is_some_and(|candidate| is_period_settings_dependent(dataset, candidate, source)))
         }
+        PayrollMutation::PeriodInsert {
+            startDate,
+            taxYear,
+            taxMonth,
+        } => Ok(candidate.is_some_and(|candidate| {
+            is_same_tax_year_from_position(candidate, startDate, *taxYear, *taxMonth)
+        })),
         PayrollMutation::PeriodFromPosition {
             startDate,
             taxYear,
@@ -509,6 +554,15 @@ fn retro_batch_affected_by_mutation(
             taxMonth,
         } => retro_batch_source_period_matches(index, dataset, batch, |period| {
             Ok(is_from_position(period, startDate, *taxYear, *taxMonth))
+        }),
+        PayrollMutation::PeriodInsert {
+            startDate,
+            taxYear,
+            taxMonth,
+        } => retro_batch_source_period_matches(index, dataset, batch, |period| {
+            Ok(is_same_tax_year_from_position(
+                period, startDate, *taxYear, *taxMonth,
+            ))
         }),
         PayrollMutation::PersonFromDate {
             personnelId,
@@ -1024,6 +1078,60 @@ mod tests {
         )
         .expect("retro payment date must parse");
         assert_eq!(impact.blockedByFinalizedRetroBatches, vec!["retro-batch"]);
+    }
+
+    #[test]
+    fn period_insert_does_not_reach_finalized_history_of_a_later_tax_year() {
+        let mut later = payroll("2028-01", BordroStatus::FINALIZED);
+        later.paymentDate = "2028-02-14".into();
+        let mut same_year = payroll("2027-07", BordroStatus::CALCULATED);
+        same_year.paymentDate = "2027-08-14".into();
+        let data = PayrollDatasetSnapshot {
+            periods: vec![
+                period_for_year("2027-07", 2027, 7, 2027, 8),
+                period_for_year("2028-01", 2028, 1, 2028, 2),
+            ],
+            payrolls: vec![later, same_year],
+            ..PayrollDatasetSnapshot::default()
+        };
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::PeriodInsert {
+                startDate: "2027-05-15".into(),
+                taxYear: 2027,
+                taxMonth: 6,
+            },
+        )
+        .expect("insert policy must evaluate");
+
+        assert!(impact.blockedByFinalized.is_empty());
+        assert_eq!(impact.affectedPayrolls.len(), 1);
+        assert_eq!(impact.affectedPayrolls[0].periodId, "2027-07");
+    }
+
+    #[test]
+    fn settings_of_an_empty_period_stay_within_its_tax_year() {
+        let mut later = payroll("2028-01", BordroStatus::FINALIZED);
+        later.paymentDate = "2028-02-14".into();
+        let data = PayrollDatasetSnapshot {
+            periods: vec![
+                period_for_year("2027-05", 2027, 5, 2027, 6),
+                period_for_year("2028-01", 2028, 1, 2028, 2),
+            ],
+            payrolls: vec![later],
+            ..PayrollDatasetSnapshot::default()
+        };
+
+        let impact = evaluate_payroll_invalidation(
+            &data,
+            &PayrollMutation::Period {
+                periodId: "2027-05".into(),
+            },
+        )
+        .expect("period must exist");
+
+        assert!(impact.blockedByFinalized.is_empty());
     }
 
     #[test]

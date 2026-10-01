@@ -18,6 +18,7 @@ import { IsPrimiGrupItem, Personel } from '../types/payroll';
 import { getGrupIsPrimiOrani, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 import { PersonelFormModal } from './PersonelFormModal';
 import { describeError } from '../utils/errorMessage';
+import { matchesPersonSearch } from '../utils/personSearch';
 
 interface PersonelListProps {
   personeller: Personel[];
@@ -40,17 +41,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
   const [personelToEdit, setPersonelToEdit] = useState<Personel | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const filteredPersoneller = personeller.filter((p) => {
-    const term = search.toLowerCase();
-    return (
-      p.ad.toLowerCase().includes(term) ||
-      p.soyad.toLowerCase().includes(term) ||
-      p.tcNo.includes(term) ||
-      (p.grup && p.grup.toLowerCase().includes(term)) ||
-      (p.unvan && p.unvan.toLowerCase().includes(term)) ||
-      (p.iban && p.iban.toLowerCase().includes(term))
-    );
-  });
+  const filteredPersoneller = personeller.filter((p) => matchesPersonSearch(p, search));
 
   const handleEdit = (p: Personel) => {
     setPersonelToEdit(p);

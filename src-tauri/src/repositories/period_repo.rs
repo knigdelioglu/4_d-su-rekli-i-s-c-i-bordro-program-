@@ -339,9 +339,11 @@ impl PeriodRepository {
         } else {
             // Yeni bir geçmiş/ara dönem, önceden hesaplanmış sonraki bordroların
             // vergi veya PEK zincirine yeni bir düğüm ekleyebilir.
+            // Yeni dönem boş olduğu için yalnız aynı vergi yılının zincirleri
+            // (kümülatif GV, asgari ücret GV referansı) etkilenir.
             impacts.push(PayrollInvalidationRepository::assert_mutation_allowed(
                 conn,
-                &payroll_core::PayrollMutation::PeriodFromPosition {
+                &payroll_core::PayrollMutation::PeriodInsert {
                     startDate: d.baslangicTarihi.clone(),
                     taxYear: d.taxYear,
                     taxMonth: d.taxMonth,

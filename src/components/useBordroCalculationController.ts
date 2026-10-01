@@ -93,6 +93,7 @@ export type BatchPayrollOutcome =
   | 'finalized-skipped'
   | 'attendance-missing'
   | 'attendance-incomplete'
+  | 'not-applicable'
   | 'calculation-error';
 
 export interface BatchPayrollOutcomeSummary {
@@ -101,6 +102,8 @@ export interface BatchPayrollOutcomeSummary {
   finalizedSkipped: number;
   attendanceMissing: number;
   attendanceIncomplete: number;
+  /** Bu dönem için yapısal olarak hesaplanamayan personel (ör. sonraki kesinleşmiş geçmiş, ileri tarihli GV devri). */
+  notApplicable: number;
   calculationErrors: number;
 }
 
@@ -132,6 +135,7 @@ export function summarizeBatchPayrollOutcomes(
     finalizedSkipped: 0,
     attendanceMissing: 0,
     attendanceIncomplete: 0,
+    notApplicable: 0,
     calculationErrors: 0,
   };
   for (const outcome of outcomes) {
@@ -147,6 +151,9 @@ export function summarizeBatchPayrollOutcomes(
         break;
       case 'attendance-incomplete':
         summary.attendanceIncomplete++;
+        break;
+      case 'not-applicable':
+        summary.notApplicable++;
         break;
       case 'calculation-error':
         summary.calculationErrors++;
@@ -228,6 +235,82 @@ export function findFirstStalePriorEvent(
     )
     .sort((left, right) => comparePaymentEvents(left.payroll, right.payroll, left.period, right.period));
   return prior.find((item) => item.payroll.status === 'STALE' || item.payroll.status === 'DRAFT') ?? null;
+}
+
+const TAX_OPENING_LATER_PATTERN = /opening başlangıç vergi ayı (\d+) aktif vergi ayı (\d+) sonrasında olamaz/i;
+
+export function isTaxOpeningAfterActiveMonthError(message: string): boolean {
+  return TAX_OPENING_LATER_PATTERN.test(message);
+}
+
+/** Engine errors that mean "no payroll can exist here", not a failed calculation. */
+export function structuralNotApplicableReason(message: string): string | null {
+  if (isTaxOpeningAfterActiveMonthError(message)) {
+    return 'kümülatif GV devri daha sonraki bir vergi ayından başlıyor';
+  }
+  if (/Kesinleştirilmiş bordro\/retro tarihçesini etkileyen/i.test(message)) {
+    return 'sonraki dönemlerde kesinleşmiş bordro/retro geçmişi var';
+  }
+  return null;
+}
+
+/**
+ * Explains why a person cannot have a NORMAL payroll in the active period at
+ * all (as opposed to a calculation error). Pure; exported for tests.
+ */
+export function getBatchNotApplicableReason(
+  dataset: {
+    payrolls: BordroKaydi[];
+    periods: BordroDonemi[];
+    taxOpenings?: Array<{
+      personnelId: string;
+      year: number;
+      gvCumulativeOpening?: unknown;
+      effectiveFromPeriodId?: string;
+      asgariGvCumulativeOpening?: unknown;
+      asgariGvEffectiveFromPeriodId?: string;
+    }>;
+  },
+  person: Pick<Personel, 'id' | 'devirKumulatifGvMatrahi' | 'devirKumulatifGvMatrahiYili' | 'devirKumulatifGvMatrahiBaslangicAyi'>,
+  activePeriod: BordroDonemi,
+  target: PaymentEventKey
+): string | null {
+  const periodsById = new Map(dataset.periods.map((period) => [period.id, period]));
+  const targetId = target.accrualId || target.id;
+  const laterFinalized = dataset.payrolls.find((payroll) => {
+    if (payroll.personelId !== person.id || payroll.status !== 'FINALIZED') return false;
+    if ((payroll.accrualId || payroll.id) === targetId) return false;
+    const period = periodsById.get(payroll.donemId);
+    return period !== undefined && comparePaymentEvents(payroll, target, period, activePeriod) > 0;
+  });
+  if (laterFinalized) {
+    const period = periodsById.get(laterFinalized.donemId);
+    return `sonraki ${period?.donemAdi || laterFinalized.donemId} döneminde kesinleşmiş bordrosu var; bu döneme yeni bordro eklenemez`;
+  }
+
+  const opening = dataset.taxOpenings?.find(
+    (item) => item.personnelId === person.id && item.year === activePeriod.taxYear
+  );
+  const openingStarts = [
+    opening?.gvCumulativeOpening != null ? opening.effectiveFromPeriodId : undefined,
+    opening?.asgariGvCumulativeOpening != null ? opening.asgariGvEffectiveFromPeriodId : undefined,
+  ]
+    .filter((id): id is string => Boolean(id))
+    .map((id) => periodsById.get(id))
+    .filter((period): period is BordroDonemi => period !== undefined && period.taxYear === activePeriod.taxYear);
+  const laterOpening = openingStarts.find((period) => period.taxMonth > activePeriod.taxMonth);
+  if (laterOpening) {
+    return `kümülatif GV devri ${laterOpening.donemAdi || laterOpening.id} döneminden başlıyor; daha önceki dönem bordrosu hesaplanamaz`;
+  }
+  if (
+    !opening &&
+    (person.devirKumulatifGvMatrahi ?? 0) > 0 &&
+    person.devirKumulatifGvMatrahiYili === activePeriod.taxYear &&
+    (person.devirKumulatifGvMatrahiBaslangicAyi ?? 1) > activePeriod.taxMonth
+  ) {
+    return `kümülatif GV devri ${person.devirKumulatifGvMatrahiBaslangicAyi}. vergi ayından başlıyor; daha önceki dönem bordrosu hesaplanamaz`;
+  }
+  return null;
 }
 
 function storedManualIncome(event: BordroKaydi): PayrollCalculationRequest['manualIncome'] {
@@ -567,6 +650,59 @@ export function useBordroCalculationController({
     };
   };
 
+  /**
+   * After the active NORMAL payroll is (re)calculated, the same period's later
+   * supplementary events (tediye, TİS, ek ödeme) are invalidated by the shared
+   * mutation policy. Recalculate them with their stored gross amounts so they
+   * do not silently drop out of official lists.
+   */
+  const replayStaleSamePeriodFollowers = async (person: Personel): Promise<ChainReplayResult> => {
+    let replayed = 0;
+    const attempted = new Set<string>();
+    for (let step = 0; step < MAX_CHAIN_REPLAY_STEPS; step++) {
+      const dataset = buildDataset();
+      const next = (dataset.payrolls as unknown as BordroKaydi[])
+        .filter(
+          (payroll) =>
+            payroll.personelId === person.id &&
+            payroll.donemId === aktifDonem.id &&
+            payroll.accrualType !== 'NORMAL' &&
+            payroll.accrualType !== 'RETRO_ADJUSTMENT' &&
+            (payroll.status === 'STALE' || payroll.status === 'DRAFT') &&
+            !attempted.has(payroll.accrualId || payroll.id)
+        )
+        .sort((left, right) => comparePaymentEvents(left, right, aktifDonem))[0];
+      if (!next) return { ok: true, replayed };
+      const eventId = next.accrualId || next.id;
+      attempted.add(eventId);
+      try {
+        const calculated = await payrollEngine.calculatePayroll({
+          personnelId: person.id,
+          periodId: aktifDonem.id,
+          calculatedAt: new Date().toISOString(),
+          manualIncome: null,
+          accrual: storedAccrualInput(next, aktifDonem),
+          dataset,
+        });
+        assertPayrollCalculationSnapshotCurrentForEngine(
+          payrollEngine.kind,
+          dataset,
+          authoritativeDatasetRef.current
+        );
+        await onSaveBordro(calculated, dataset);
+        await waitForDatasetCommit(dataset);
+        replayed++;
+      } catch (err) {
+        return {
+          ok: false,
+          replayed,
+          error: `${ACCRUAL_TYPE_LABELS[next.accrualType] ?? next.accrualType} (${eventId}) yeniden hesaplanamadı: ${formatPayrollError(err)}`,
+        };
+      }
+    }
+    return { ok: true, replayed };
+  };
+
   const handleCalculateAll = async () => {
     firstBatchCalculationErrorRef.current = null;
     batchCalculationErrorsRef.current = [];
@@ -575,7 +711,10 @@ export function useBordroCalculationController({
     const successPersons: Personel[] = [];
     const missingPuantajPersons: string[] = [];
     const incompletePuantajPersons: string[] = [];
+    const notApplicablePersons: string[] = [];
     let replayedChainEvents = 0;
+    let replayedFollowerEvents = 0;
+    let followerFailures = 0;
     try {
       for (const person of personeller) {
         const currentDataset = buildDataset();
@@ -584,6 +723,25 @@ export function useBordroCalculationController({
         );
         if (existing?.status === 'FINALIZED') {
           outcomes.push('finalized-skipped');
+          continue;
+        }
+        const notApplicableReason = getBatchNotApplicableReason(
+          currentDataset as unknown as Parameters<typeof getBatchNotApplicableReason>[0],
+          person,
+          aktifDonem,
+          (() => {
+            const target = getNormalAccrualInput(person.id, currentDataset);
+            return {
+              paymentDate: target.paymentDate,
+              sequence: target.sequence,
+              accrualId: target.accrualId,
+              id: target.accrualId,
+            };
+          })()
+        );
+        if (notApplicableReason) {
+          notApplicablePersons.push(`${person.ad} ${person.soyad} (${notApplicableReason})`);
+          outcomes.push('not-applicable');
           continue;
         }
         const attendance = currentDataset.attendances.find(
@@ -607,9 +765,33 @@ export function useBordroCalculationController({
           outcomes.push('calculation-error');
           continue;
         }
+        const errorCountBefore = batchCalculationErrorsRef.current.length;
         const res = await calculateAndSaveForPerson(person);
-        outcomes.push(res ? 'success' : 'calculation-error');
-        if (res) successPersons.push(person);
+        if (res) {
+          outcomes.push('success');
+          successPersons.push(person);
+          const followers = await replayStaleSamePeriodFollowers(person);
+          replayedFollowerEvents += followers.replayed;
+          if (!followers.ok) {
+            recordBatchError(person, `Ek tahakkuk: ${followers.error ?? 'yeniden hesaplanamadı.'}`);
+            followerFailures++;
+          }
+        } else if (
+          batchCalculationErrorsRef.current.length > errorCountBefore &&
+          structuralNotApplicableReason(batchCalculationErrorsRef.current[batchCalculationErrorsRef.current.length - 1])
+        ) {
+          // Engine-confirmed structural case not caught by the pre-check
+          // (e.g. legacy opening): report as not applicable, not as an error.
+          const reason = structuralNotApplicableReason(
+            batchCalculationErrorsRef.current[batchCalculationErrorsRef.current.length - 1]
+          );
+          batchCalculationErrorsRef.current.pop();
+          if (batchCalculationErrorsRef.current.length === 0) firstBatchCalculationErrorRef.current = null;
+          notApplicablePersons.push(`${person.ad} ${person.soyad} (${reason})`);
+          outcomes.push('not-applicable');
+        } else {
+          outcomes.push('calculation-error');
+        }
       }
     } finally {
       setIsBatchProcessing(false);
@@ -634,22 +816,26 @@ export function useBordroCalculationController({
         );
       }
     }
-    const replayNote = replayedChainEvents > 0
-      ? ` Önceki dönemlerden güncelliğini yitirmiş ${replayedChainEvents} tahakkuk otomatik yeniden hesaplandı.`
-      : '';
+    const replayNote =
+      `${replayedChainEvents > 0 ? ` Önceki dönemlerden güncelliğini yitirmiş ${replayedChainEvents} tahakkuk otomatik yeniden hesaplandı.` : ''}` +
+      `${replayedFollowerEvents > 0 ? ` Bu dönemin ${replayedFollowerEvents} ek tahakkuku (tediye/TİS/ek ödeme) yeniden hesaplandı.` : ''}`;
     const summary = summarizeBatchPayrollOutcomes(outcomes);
-    const outcomeSummary = `Hesaplanan bordro: ${summary.success}/${summary.total}.`;
+    const calculableTotal = summary.total - summary.finalizedSkipped - summary.notApplicable;
+    const skippedNote =
+      `${summary.finalizedSkipped > 0 ? ` Bu dönemi zaten kesinleşmiş ${summary.finalizedSkipped} bordro atlandı.` : ''}` +
+      `${summary.notApplicable > 0 ? ` Bu dönem için hesaplanamayan ${summary.notApplicable} personel: ${notApplicablePersons.slice(0, 3).join('; ')}${notApplicablePersons.length > 3 ? '…' : ''}.` : ''}`;
+    const outcomeSummary = `Hesaplanan bordro: ${summary.success}/${calculableTotal} (toplam personel ${summary.total}).`;
     const attendanceIssueCount = summary.attendanceMissing + summary.attendanceIncomplete;
-    if (summary.calculationErrors === 0 && attendanceIssueCount === 0) {
+    if (summary.calculationErrors === 0 && attendanceIssueCount === 0 && followerFailures === 0) {
       setErrorMessage(null);
       setSuccessMessage(
-        `${summary.success} personelin bordrosu başarıyla güncellendi.${summary.finalizedSkipped > 0 ? ` ${summary.finalizedSkipped} kesinleşmiş bordro atlandı.` : ''}${replayNote}`
+        `Hesaplanabilir ${calculableTotal} personelin ${summary.success} bordrosu başarıyla güncellendi.${skippedNote}${replayNote}`
       );
-      setTimeout(() => setSuccessMessage(null), 3500);
+      setTimeout(() => setSuccessMessage(null), summary.notApplicable > 0 ? 12000 : 3500);
     } else {
       setSuccessMessage(
         summary.success > 0
-          ? `${outcomeSummary}${summary.finalizedSkipped > 0 ? ` Kesinleşmiş bordro atlandı: ${summary.finalizedSkipped}.` : ''}${replayNote}`
+          ? `${outcomeSummary}${skippedNote}${replayNote}`
           : null
       );
       const problems: string[] = [];
@@ -659,10 +845,10 @@ export function useBordroCalculationController({
       if (incompletePuantajPersons.length > 0) {
         problems.push(`Puantaj eksik/tamamlanmamış (${incompletePuantajPersons.length}): ${incompletePuantajPersons.slice(0, 3).join(', ')}${incompletePuantajPersons.length > 3 ? '…' : ''}.`);
       }
-      if (summary.calculationErrors > 0) {
+      if (summary.calculationErrors > 0 || followerFailures > 0) {
         const failures = batchCalculationErrorsRef.current.slice(0, 3).join(' | ');
         problems.push(
-          `${summary.calculationErrors} hesaplama hatası${failures ? `: ${failures}` : firstBatchCalculationErrorRef.current ? `: ${firstBatchCalculationErrorRef.current}` : '.'}`
+          `${summary.calculationErrors + followerFailures} hesaplama hatası${failures ? `: ${failures}` : firstBatchCalculationErrorRef.current ? `: ${firstBatchCalculationErrorRef.current}` : '.'}`
         );
       }
       setErrorMessage(`${outcomeSummary} ${problems.join(' ')}`);
@@ -859,6 +1045,24 @@ export function useBordroCalculationController({
       setErrorMessage(`HATA: ${person.ad} ${person.soyad} için bu dönemde (${aktifDonem.donemAdi}) kayıtlı puantaj bulunamadı! Puantajsız bordro hesaplanamaz. Lütfen önce Puantaj Cetvelinden puantaj girişi yapın.`);
       return;
     }
+    const singleDataset = buildDataset();
+    const singleTarget = getNormalAccrualInput(person.id, singleDataset);
+    const singleNotApplicable = getBatchNotApplicableReason(
+      singleDataset as unknown as Parameters<typeof getBatchNotApplicableReason>[0],
+      person,
+      aktifDonem,
+      {
+        paymentDate: singleTarget.paymentDate,
+        sequence: singleTarget.sequence,
+        accrualId: singleTarget.accrualId,
+        id: singleTarget.accrualId,
+      }
+    );
+    if (singleNotApplicable) {
+      setSuccessMessage(null);
+      setErrorMessage(`${person.ad} ${person.soyad} için ${aktifDonem.donemAdi} bordrosu hesaplanamaz: ${singleNotApplicable}.`);
+      return;
+    }
     const chain = await replayStalePriorChain(person);
     if (!chain.ok) {
       setSuccessMessage(null);
@@ -867,9 +1071,15 @@ export function useBordroCalculationController({
     }
     const res = await calculateAndSaveForPerson(person);
     if (res) {
+      const followers = await replayStaleSamePeriodFollowers(person);
+      if (!followers.ok) {
+        setSuccessMessage(null);
+        setErrorMessage(`${person.ad} ${person.soyad} normal bordrosu hesaplandı ancak ek tahakkuk yeniden hesaplanamadı: ${followers.error}`);
+        return;
+      }
       setErrorMessage(null);
       setSuccessMessage(
-        `${person.ad} ${person.soyad} bordrosu başarıyla hesaplandı.${chain.replayed > 0 ? ` Önceki dönemlerden ${chain.replayed} güncelliğini yitirmiş tahakkuk da yeniden hesaplandı.` : ''}`
+        `${person.ad} ${person.soyad} bordrosu başarıyla hesaplandı.${chain.replayed > 0 ? ` Önceki dönemlerden ${chain.replayed} güncelliğini yitirmiş tahakkuk da yeniden hesaplandı.` : ''}${followers.replayed > 0 ? ` Bu dönemin ${followers.replayed} ek tahakkuku da yeniden hesaplandı.` : ''}`
       );
       setTimeout(() => setSuccessMessage(null), 3000);
     }

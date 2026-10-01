@@ -56,15 +56,17 @@ describe('batch payroll input classification', () => {
       'finalized-skipped',
       'attendance-missing',
       'attendance-incomplete',
+      'not-applicable',
       'calculation-error',
     ]);
 
     expect(summary).toEqual({
-      total: 6,
+      total: 7,
       success: 2,
       finalizedSkipped: 1,
       attendanceMissing: 1,
       attendanceIncomplete: 1,
+      notApplicable: 1,
       calculationErrors: 1,
     });
     expect(
@@ -72,6 +74,7 @@ describe('batch payroll input classification', () => {
         summary.finalizedSkipped +
         summary.attendanceMissing +
         summary.attendanceIncomplete +
+        summary.notApplicable +
         summary.calculationErrors
     ).toBe(summary.total);
   });

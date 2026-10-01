@@ -494,6 +494,19 @@ export function formatPeriodSelectorLabel(
   return period.donemAdi;
 }
 
+/**
+ * The 15–14 working period is named after its start month (e.g. "Ağustos
+ * 2026 Dönemi"), while payment/tax month is usually the following month.
+ * Every screen that shows the payment month must say so explicitly.
+ * E.g.: "Ödeme/vergi ayı: Eylül 2026"
+ */
+export function formatPeriodPaymentMonthLabel(
+  period: Pick<BordroDonemi, 'taxYear' | 'taxMonth'>
+): string {
+  const monthName = AY_ISIMLERI[period.taxMonth - 1];
+  return monthName ? `Ödeme/vergi ayı: ${monthName} ${period.taxYear}` : '';
+}
+
 /** Default accrual date that remains inside the period's authoritative tax month. */
 export function getDefaultAccrualPaymentDate(period: BordroDonemi): string {
   const taxPrefix = `${String(period.taxYear).padStart(4, '0')}-${String(period.taxMonth).padStart(2, '0')}-`;

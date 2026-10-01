@@ -14,7 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { BordroDonemi } from '../types/payroll';
-import { formatPeriodSelectorLabel } from '../utils/payrollPresentation';
+import { formatPeriodPaymentMonthLabel, formatPeriodSelectorLabel } from '../utils/payrollPresentation';
 
 interface TopBarProps {
   donemler: BordroDonemi[];
@@ -91,7 +91,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 )}
                 {donemler.map((d) => (
                   <option key={d.id} value={d.id} className="bg-slate-900 text-white">
-                    {formatPeriodSelectorLabel(d)}
+                    {formatPeriodSelectorLabel(d)} · {formatPeriodPaymentMonthLabel(d)}
                   </option>
                 ))}
               </select>
