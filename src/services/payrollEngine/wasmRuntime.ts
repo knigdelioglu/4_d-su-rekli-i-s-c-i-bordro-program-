@@ -1,3 +1,5 @@
+import { describeError } from '../../utils/errorMessage';
+
 type WasmExports = {
   default: () => Promise<unknown>;
   calculate_payroll_json: (requestJson: string) => string;
@@ -23,7 +25,7 @@ export function getWasmRuntime(): Promise<WasmExports> {
   runtimePromise ??= loadRuntime().catch((error) => {
     runtimePromise = null;
     throw new Error(
-      `Tarayıcı bordro motoru yüklenemedi. WASM paketini yeniden oluşturun: ${String(error)}`
+      `Tarayıcı bordro motoru yüklenemedi. WASM paketini yeniden oluşturun: ${describeError(error)}`
     );
   });
   return runtimePromise;

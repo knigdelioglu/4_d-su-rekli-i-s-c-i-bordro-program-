@@ -17,6 +17,7 @@ import {
   parseImportedBackup,
   verifyCurrentPayrollBackupReplay,
 } from './payrollPayload';
+import { describeError } from '../../utils/errorMessage';
 
 interface UseBrowserPayrollPersistenceOptions {
   authoritativePayload: PayrollStorageDto | null;
@@ -37,7 +38,7 @@ export const BROWSER_EXTERNAL_CONFLICT_MESSAGE =
   'Veriler başka bir sekmede değiştirildi. Bu sekmedeki kaydedilmemiş değişiklikler korunuyor.';
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return describeError(error);
 }
 
 function formatBrowserStorageSaveError(error: unknown): UserFacingStorageError {

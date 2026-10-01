@@ -135,6 +135,30 @@ function payroll(status: BordroKaydi['status'], personId = 'p1'): BordroKaydi {
 }
 
 describe('payroll export contracts', () => {
+  test('keeps nafaka as its own deduction line in the payslip export model', () => {
+    const calculated = payroll('CALCULATED');
+    const amount = 125.5;
+    const model = buildPayrollExportModel({
+      person: { ...person, kesintiler: { nafakaTutar: amount } },
+      payroll: {
+        ...calculated,
+        kesintiler: { ...calculated.kesintiler, nafaka: amount },
+        kesintiToplam: calculated.kesintiToplam + amount,
+        netOdeme: calculated.netOdeme - amount,
+      },
+      period,
+      attendance,
+    });
+
+    expect(model.deductions.find((line) => line.key === 'nafaka')).toEqual({
+      key: 'nafaka',
+      label: 'Nafaka Kesintisi',
+      amount,
+    });
+    expect(model.totals.deductions).toBe(calculated.kesintiToplam + amount);
+    expect(model.totals.net).toBe(calculated.netOdeme - amount);
+  });
+
   test('STALE payroll cannot become an official export model', () => {
     expect(() => buildPayrollExportModel({ person, payroll: payroll('STALE'), period })).toThrow(
       /CALCULATED veya FINALIZED/

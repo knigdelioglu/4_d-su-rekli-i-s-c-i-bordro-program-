@@ -17,6 +17,7 @@ import {
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
 import { getGrupIsPrimiOrani, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 import { PersonelFormModal } from './PersonelFormModal';
+import { describeError } from '../utils/errorMessage';
 
 interface PersonelListProps {
   personeller: Personel[];
@@ -66,7 +67,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
       await onDeletePersonel(id);
       setConfirmDeleteId(null);
     } catch (err) {
-      alert(`Personel silinemedi: ${String(err)}`);
+      alert(`Personel silinemedi: ${describeError(err)}`);
     }
   };
 

@@ -15,6 +15,7 @@ import {
   parseAndValidatePayrollPayload,
 } from './payrollPayloadSchema';
 import { getDefaultAnnualPayrollParameters } from './payrollDefaults';
+import { describeError } from '../../utils/errorMessage';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -1061,7 +1062,7 @@ export async function verifyCurrentPayrollBackupReplay(
     try {
       replayed = await engine.calculatePayroll(request);
     } catch (error) {
-      throw new Error(`V5 backup replay: ${imported.id} canonical Rust replay ile doğrulanamadı: ${String(error)}`);
+      throw new Error(`V5 backup replay: ${imported.id} canonical Rust replay ile doğrulanamadı: ${describeError(error)}`);
     }
     assertCurrentReplayMatches(imported, replayed);
   }

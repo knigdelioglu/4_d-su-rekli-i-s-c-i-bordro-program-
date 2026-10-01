@@ -585,6 +585,24 @@ describe('BrowserPayrollStore', () => {
     expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
   });
 
+  test('persists a separate nafaka amount through the current browser backup contract', () => {
+    const snapshot = parseTestSnapshot(makeV2Snapshot('3000.00'));
+    const deductions = firstRecord(snapshot, 'personeller').kesintiler as TestRecord;
+    deductions.nafakaTutar = '125.50';
+    const payroll = firstRecord(snapshot, 'bordrolar');
+    const payrollDeductions = payroll.kesintiler as TestRecord;
+    payrollDeductions.nafaka = '125.50';
+    payroll.kesintiToplam = '125.50';
+    payroll.netOdeme = '2874.50';
+
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(snapshot));
+    const restored = parseCurrentBrowserSnapshot(serializePayrollStorage(parsed));
+    expect(restored.personeller[0].kesintiler?.nafakaTutar).toBe('125.50');
+    expect(restored.bordrolar[0].kesintiler.nafaka).toBe('125.50');
+    expect(restored.bordrolar[0].kesintiToplam).toBe('125.50');
+    expect(restored.bordrolar[0].netOdeme).toBe('2874.50');
+  });
+
   test('rejects semantically invalid annual parameters at the current storage boundary', () => {
     const invalid = parseTestSnapshot(makeV2Snapshot());
     const annual = firstRecord(invalid, 'annualPayrollParameters');
@@ -1863,6 +1881,32 @@ describe('SQLite persistence invariant parity', () => {
 });
 
 describe('Legacy native Serde compatibility parity', () => {
+  test('imports an older backup without nafaka and does not add nulls to its canonical output', () => {
+    const legacy = makeLegacyV1Snapshot();
+    const personDeductions = firstRecord(legacy, 'personeller').kesintiler as TestRecord;
+    const payrollDeductions = firstRecord(legacy, 'bordrolar').kesintiler as TestRecord;
+    delete personDeductions.nafakaTutar;
+    delete payrollDeductions.nafaka;
+
+    const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    expect(parsed.personeller[0].kesintiler?.nafakaTutar).toBeUndefined();
+    expect(parsed.bordrolar[0].kesintiler.nafaka).toBeUndefined();
+
+    const canonical = JSON.parse(serializePayrollStorage(parsed)) as TestRecord;
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        firstRecord(canonical, 'personeller').kesintiler as TestRecord,
+        'nafakaTutar'
+      )
+    ).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        firstRecord(canonical, 'bordrolar').kesintiler as TestRecord,
+        'nafaka'
+      )
+    ).toBe(false);
+  });
+
   test('defaults legacy V1 partial PuantajOzeti values to zero only in the legacy path', () => {
     const legacy = makeLegacyV1Snapshot();
     const summary = firstRecord(legacy, 'bordrolar').puantajOzeti as TestRecord;

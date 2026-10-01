@@ -42,6 +42,7 @@ import {
 } from '../services/payrollEngine/decimalBoundary';
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import { assertPayrollCalculationSnapshotCurrent } from '../services/payrollEngine/calculationSnapshot';
+import { sameSettingsValue } from '../components/Settings/periodSettingsSave';
 import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 import {
@@ -436,6 +437,18 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
+    const persistedSettings = authoritativePayload?.kurumDegerleriMap?.[settings.donemId];
+    if (persistedSettings) {
+      const unchanged = sameSettingsValue(
+        reconcileStatutorySnapshot(
+          persistedSettings,
+          mergePayrollUiIntoBoundary(persistedSettings, settings)
+        ),
+        persistedSettings
+      );
+      // A no-op save must not invalidate the period and every later period.
+      if (unchanged) return;
+    }
     const impact = await evaluateBrowserMutations({ kind: 'PERIOD', periodId: settings.donemId });
     updateAuthoritativePayload((current) => ({
       ...current,
@@ -609,6 +622,15 @@ export function usePayrollMutationController({
     if (isNative) {
       await tauriBridge.setAppSetting(ZAM_AYLARI_SETTING_KEY, JSON.stringify(normalized));
       await loadData();
+      return;
+    }
+    const persistedZamAylari = normalizeZamAylari(authoritativePayload?.zamAylari ?? []);
+    if (
+      persistedZamAylari.length === normalized.length &&
+      persistedZamAylari.every((month, index) => month === normalized[index])
+    ) {
+      // Unchanged schedule: an ALL mutation here would mark every payroll in
+      // every period STALE (or be rejected by unrelated FINALIZED history).
       return;
     }
     const impact = await evaluateBrowserMutations({ kind: 'ALL' });

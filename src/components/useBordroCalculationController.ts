@@ -14,7 +14,7 @@ import {
   Personel,
   PersonelPuantaj,
 } from '../types/payroll';
-import { formatTL, getDefaultAccrualPaymentDate } from '../utils/payrollPresentation';
+import { formatTL, getDefaultAccrualPaymentDate, getPeriodDaysList } from '../utils/payrollPresentation';
 import {
   getPayrollEngine,
   PayrollBoundaryAccrualInput,
@@ -48,7 +48,17 @@ function formatActionableParameterError(message: string): string {
   if (/(günlük taban ücret|iş primi grupları)/i.test(message) && /(eksik|geçerli)/i.test(message)) {
     return 'Dönem kurum ücretleri henüz tamamlanmamış. Ücretler bölümünde kurum değerlerini tamamlayın.';
   }
+  if (isStaleChainError(message)) {
+    return `${message} ${STALE_CHAIN_HINT}`;
+  }
   return message;
+}
+
+export const STALE_CHAIN_HINT =
+  'Çözüm: Bordro Hesaplama ekranında ilgili kişinin bordrosunu "Hesapla" ile veya "Tüm Hesaplanabilir Bordroları Hesapla" ile yeniden hesaplayın; önceki güncelliğini yitirmiş tahakkuklar sırasıyla otomatik yeniden hesaplanır.';
+
+export function isStaleChainError(message: string): boolean {
+  return /(DRAFT\/STALE|tahakkuku (STALE|DRAFT) durumda)/.test(message);
 }
 
 export function isPayrollTaxOpeningConfigurationError(message: string): boolean {
@@ -76,6 +86,74 @@ export function formatPayrollError(err: unknown): string {
 
 export function formatStalePayrollMessage(personName: string): string {
   return `${personName} bordrosu kaynak verilerindeki değişiklik nedeniyle güncelliğini yitirdi. Bordro zarfını açmadan/yazdırmadan önce yeniden hesaplayın.`;
+}
+
+export type BatchPayrollOutcome =
+  | 'success'
+  | 'finalized-skipped'
+  | 'attendance-missing'
+  | 'attendance-incomplete'
+  | 'calculation-error';
+
+export interface BatchPayrollOutcomeSummary {
+  total: number;
+  success: number;
+  finalizedSkipped: number;
+  attendanceMissing: number;
+  attendanceIncomplete: number;
+  calculationErrors: number;
+}
+
+export function classifyBatchAttendance(
+  attendance: PersonelPuantaj | undefined,
+  period: Pick<BordroDonemi, 'baslangicTarihi' | 'bitisTarihi'>
+): 'missing' | 'incomplete' | 'complete' {
+  if (!attendance) return 'missing';
+
+  const recordedDates = Object.keys(attendance.gunler ?? {});
+  const periodDates = getPeriodDaysList(period.baslangicTarihi, period.bitisTarihi).map(
+    (day) => day.dateStr
+  );
+  if (periodDates.length === 0) return 'complete';
+
+  const recordedDateSet = new Set(recordedDates);
+  const hasExactCoverage =
+    recordedDates.length === periodDates.length &&
+    periodDates.every((date) => recordedDateSet.has(date));
+  return hasExactCoverage ? 'complete' : 'incomplete';
+}
+
+export function summarizeBatchPayrollOutcomes(
+  outcomes: BatchPayrollOutcome[]
+): BatchPayrollOutcomeSummary {
+  const summary: BatchPayrollOutcomeSummary = {
+    total: outcomes.length,
+    success: 0,
+    finalizedSkipped: 0,
+    attendanceMissing: 0,
+    attendanceIncomplete: 0,
+    calculationErrors: 0,
+  };
+  for (const outcome of outcomes) {
+    switch (outcome) {
+      case 'success':
+        summary.success++;
+        break;
+      case 'finalized-skipped':
+        summary.finalizedSkipped++;
+        break;
+      case 'attendance-missing':
+        summary.attendanceMissing++;
+        break;
+      case 'attendance-incomplete':
+        summary.attendanceIncomplete++;
+        break;
+      case 'calculation-error':
+        summary.calculationErrors++;
+        break;
+    }
+  }
+  return summary;
 }
 
 export const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
@@ -118,6 +196,65 @@ interface UseBordroCalculationControllerOptions {
   ) => Promise<void> | void;
 }
 
+const DATASET_COMMIT_TIMEOUT_MS = 5000;
+const MAX_CHAIN_REPLAY_STEPS = 240;
+
+export interface ChainReplayResult {
+  ok: boolean;
+  replayed: number;
+  error?: string;
+}
+
+type PaymentEventKey = { paymentDate: string; sequence: number; accrualId: string; id: string };
+
+/**
+ * Returns the person's first (canonical payment-event order) DRAFT/STALE event
+ * that precedes the target event. Pure; exported for regression tests.
+ */
+export function findFirstStalePriorEvent(
+  payrolls: BordroKaydi[],
+  periodsById: Map<string, BordroDonemi>,
+  personId: string,
+  target: PaymentEventKey,
+  targetPeriod: BordroDonemi
+): { payroll: BordroKaydi; period: BordroDonemi } | null {
+  const targetId = target.accrualId || target.id;
+  const prior = payrolls
+    .filter((payroll) => payroll.personelId === personId && (payroll.accrualId || payroll.id) !== targetId)
+    .map((payroll) => ({ payroll, period: periodsById.get(payroll.donemId) }))
+    .filter((item): item is { payroll: BordroKaydi; period: BordroDonemi } =>
+      item.period !== undefined &&
+      comparePaymentEvents(item.payroll, target, item.period, targetPeriod) < 0
+    )
+    .sort((left, right) => comparePaymentEvents(left.payroll, right.payroll, left.period, right.period));
+  return prior.find((item) => item.payroll.status === 'STALE' || item.payroll.status === 'DRAFT') ?? null;
+}
+
+function storedManualIncome(event: BordroKaydi): PayrollCalculationRequest['manualIncome'] {
+  if (event.accrualType !== 'NORMAL') return null;
+  const tediye = event.gelirler?.tediye ?? null;
+  const tisIkramiyesi = event.gelirler?.tisIkramiyesi ?? null;
+  if (tediye === null && tisIkramiyesi === null) return null;
+  return { tediye, tisIkramiyesi } as unknown as PayrollCalculationRequest['manualIncome'];
+}
+
+function storedAccrualInput(event: BordroKaydi, period: BordroDonemi): PayrollBoundaryAccrualInput {
+  const gross =
+    event.accrualType === 'TEDIYE'
+      ? event.gelirler?.tediye
+      : event.accrualType === 'TIS_IKRAMIYE'
+        ? event.gelirler?.tisIkramiyesi
+        : event.gelirler?.ekOdeme;
+  return {
+    accrualId: event.accrualId || event.id,
+    accrualType: event.accrualType,
+    paymentDate: event.paymentDate || getDefaultAccrualPaymentDate(period),
+    sequence: event.sequence,
+    grossAmount: event.accrualType === 'NORMAL' ? null : String(gross ?? 0),
+    description: event.accrualDescription ?? null,
+  } as PayrollBoundaryAccrualInput;
+}
+
 export function tryAcquireSupplementaryPaymentScope(
   pendingScopes: Set<string>,
   scope: string
@@ -145,9 +282,32 @@ export function useBordroCalculationController({
 }: UseBordroCalculationControllerOptions) {
   const payrollEngine = getPayrollEngine();
   const authoritativeDatasetRef = useRef(authoritativeDataset);
+  const datasetCommitWaitersRef = useRef(new Set<() => void>());
   useLayoutEffect(() => {
     authoritativeDatasetRef.current = authoritativeDataset;
+    for (const notify of [...datasetCommitWaitersRef.current]) notify();
   }, [authoritativeDataset]);
+
+  /**
+   * A save only schedules a React state update; the next calculation must not
+   * start from the pre-save snapshot. Sequential flows (batch, chain replay)
+   * wait here until the saved dataset has been committed to the ref.
+   */
+  const waitForDatasetCommit = (previous: PayrollDatasetSnapshot): Promise<void> =>
+    new Promise((resolve) => {
+      if (authoritativeDatasetRef.current !== previous) {
+        resolve();
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const done = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        datasetCommitWaitersRef.current.delete(done);
+        resolve();
+      };
+      datasetCommitWaitersRef.current.add(done);
+      timer = setTimeout(done, DATASET_COMMIT_TIMEOUT_MS);
+    });
   const [searchTerm, setSearchTerm] = useState('');
   const [rowFilter, setRowFilter] = useState<PayrollRowFilter>('all');
   const [activePaySlip, setActivePaySlip] = useState<{
@@ -290,6 +450,7 @@ export function useBordroCalculationController({
         authoritativeDatasetRef.current
       );
       await onSaveBordro(calculated, calculationSnapshot);
+      await waitForDatasetCommit(calculationSnapshot);
       return toPayrollUiModel(calculated) as unknown as BordroKaydi;
     } catch (err) {
       console.error('Payroll engine calculation failed:', err);
@@ -303,56 +464,205 @@ export function useBordroCalculationController({
     }
   };
 
+  const recordBatchError = (person: Personel, message: string) => {
+    if (firstBatchCalculationErrorRef.current === null) {
+      firstBatchCalculationErrorRef.current = message;
+    }
+    batchCalculationErrorsRef.current.push(`${person.ad} ${person.soyad}: ${message}`);
+  };
+
+  /**
+   * Brings the person's earlier payment-event chain back to an authoritative
+   * state before the active period is calculated. Any earlier DRAFT/STALE
+   * event (typically left behind by a personnel-card or settings change) is
+   * recalculated in canonical payment-event order with its own stored inputs.
+   * FINALIZED history is never touched; the shared mutation policy still
+   * rejects a replay that would affect FINALIZED records.
+   */
+  const replayStalePriorChain = async (person: Personel): Promise<ChainReplayResult> => {
+    let replayed = 0;
+    let lastAttempt: string | null = null;
+    for (let step = 0; step < MAX_CHAIN_REPLAY_STEPS; step++) {
+      const dataset = buildDataset();
+      const periodsById = new Map(
+        dataset.periods.map((period) => [period.id, period as unknown as BordroDonemi])
+      );
+      const target = getNormalAccrualInput(person.id, dataset);
+      const targetEvent = {
+        paymentDate: target.paymentDate,
+        sequence: target.sequence,
+        accrualId: target.accrualId,
+        id: target.accrualId,
+      };
+      const nextStale = findFirstStalePriorEvent(
+        dataset.payrolls as unknown as BordroKaydi[],
+        periodsById,
+        person.id,
+        targetEvent,
+        aktifDonem
+      );
+      if (!nextStale) return { ok: true, replayed };
+
+      const { payroll: event, period } = nextStale;
+      const eventId = event.accrualId || event.id;
+      const eventLabel = `${period.donemAdi || period.id} ${ACCRUAL_TYPE_LABELS[event.accrualType] ?? event.accrualType} (${eventId})`;
+      if (lastAttempt === eventId) {
+        return {
+          ok: false,
+          replayed,
+          error: `${eventLabel} yeniden hesaplandı ancak güncel duruma geçmedi; sayfayı yenileyip tekrar deneyin.`,
+        };
+      }
+      lastAttempt = eventId;
+
+      if (event.accrualType === 'RETRO_ADJUSTMENT') {
+        return {
+          ok: false,
+          replayed,
+          error: `Önceki ${eventLabel} güncelliğini yitirmiş bir geriye dönük fark ödemesi. Önce Geriye Dönük Farklar ekranından yeniden hesaplayın.`,
+        };
+      }
+      if (event.accrualType === 'NORMAL') {
+        const attendance = dataset.attendances.find(
+          (item) => item.personelId === person.id && item.donemId === event.donemId
+        );
+        if (!attendance || !attendance.gunler || Object.keys(attendance.gunler).length === 0) {
+          return {
+            ok: false,
+            replayed,
+            error: `Önceki ${eventLabel} güncelliğini yitirmiş ancak o dönemin puantajı yok; zincir yeniden hesaplanamıyor.`,
+          };
+        }
+      }
+
+      try {
+        const calculated = await payrollEngine.calculatePayroll({
+          personnelId: person.id,
+          periodId: event.donemId,
+          calculatedAt: new Date().toISOString(),
+          manualIncome: storedManualIncome(event),
+          accrual: storedAccrualInput(event, period),
+          dataset,
+        });
+        assertPayrollCalculationSnapshotCurrentForEngine(
+          payrollEngine.kind,
+          dataset,
+          authoritativeDatasetRef.current
+        );
+        await onSaveBordro(calculated, dataset);
+        await waitForDatasetCommit(dataset);
+        replayed++;
+      } catch (err) {
+        return {
+          ok: false,
+          replayed,
+          error: `Önceki ${eventLabel} yeniden hesaplanamadı: ${formatPayrollError(err)}`,
+        };
+      }
+    }
+    return {
+      ok: false,
+      replayed,
+      error: 'Önceki tahakkuk zinciri çok uzun; yeniden hesaplama güvenli sınırda durduruldu.',
+    };
+  };
+
   const handleCalculateAll = async () => {
     firstBatchCalculationErrorRef.current = null;
     batchCalculationErrorsRef.current = [];
     setIsBatchProcessing(true);
-    let successCount = 0;
-    let calculationFailureCount = 0;
-    let finalizedCount = 0;
+    const outcomes: BatchPayrollOutcome[] = [];
+    const successPersons: Personel[] = [];
     const missingPuantajPersons: string[] = [];
-    for (const person of personeller) {
-      const currentDataset = buildDataset();
-      const attendance = currentDataset.attendances.find(
-        (item) => item.personelId === person.id && item.donemId === aktifDonem.id
-      );
-      if (!attendance || !attendance.gunler || Object.keys(attendance.gunler).length === 0) {
-        missingPuantajPersons.push(`${person.ad} ${person.soyad}`);
-        continue;
+    const incompletePuantajPersons: string[] = [];
+    let replayedChainEvents = 0;
+    try {
+      for (const person of personeller) {
+        const currentDataset = buildDataset();
+        const existing = currentDataset.payrolls.find(
+          (item) => item.personelId === person.id && item.donemId === aktifDonem.id && item.accrualType === 'NORMAL'
+        );
+        if (existing?.status === 'FINALIZED') {
+          outcomes.push('finalized-skipped');
+          continue;
+        }
+        const attendance = currentDataset.attendances.find(
+          (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+        );
+        const attendanceCoverage = classifyBatchAttendance(attendance, aktifDonem);
+        if (attendanceCoverage === 'missing') {
+          missingPuantajPersons.push(`${person.ad} ${person.soyad}`);
+          outcomes.push('attendance-missing');
+          continue;
+        }
+        if (attendanceCoverage === 'incomplete') {
+          incompletePuantajPersons.push(`${person.ad} ${person.soyad}`);
+          outcomes.push('attendance-incomplete');
+          continue;
+        }
+        const chain = await replayStalePriorChain(person);
+        replayedChainEvents += chain.replayed;
+        if (!chain.ok) {
+          recordBatchError(person, `Hesaplama hatası: ${chain.error ?? 'önceki tahakkuk zinciri yeniden hesaplanamadı.'}`);
+          outcomes.push('calculation-error');
+          continue;
+        }
+        const res = await calculateAndSaveForPerson(person);
+        outcomes.push(res ? 'success' : 'calculation-error');
+        if (res) successPersons.push(person);
       }
-      const existing = currentDataset.payrolls.find(
-        (item) => item.personelId === person.id && item.donemId === aktifDonem.id && item.accrualType === 'NORMAL'
-      );
-      if (existing?.status === 'FINALIZED') {
-        finalizedCount++;
-        continue;
-      }
-      const res = await calculateAndSaveForPerson(person);
-      if (res) successCount++;
-      else calculationFailureCount++;
+    } finally {
+      setIsBatchProcessing(false);
     }
-    setIsBatchProcessing(false);
-    const outcomeSummary = `Hesaplanan bordro: ${successCount}/${personeller.length}.`;
-    if (calculationFailureCount === 0 && missingPuantajPersons.length === 0) {
+    // The summary must describe what is actually persisted, not what the loop
+    // believed it saved: re-check every counted success against the final
+    // committed dataset so the counter can never disagree with the rows.
+    const finalPayrolls = buildDataset().payrolls;
+    for (const person of successPersons) {
+      const saved = finalPayrolls.find(
+        (item) =>
+          item.personelId === person.id &&
+          item.donemId === aktifDonem.id &&
+          item.accrualType === 'NORMAL'
+      );
+      if (saved?.status !== 'CALCULATED' && saved?.status !== 'FINALIZED') {
+        const index = outcomes.indexOf('success');
+        if (index >= 0) outcomes[index] = 'calculation-error';
+        recordBatchError(
+          person,
+          `Hesaplama hatası: bordro kaydedildi ancak son durumda ${saved?.status ?? 'kayıt yok'}; yeniden hesaplayın.`
+        );
+      }
+    }
+    const replayNote = replayedChainEvents > 0
+      ? ` Önceki dönemlerden güncelliğini yitirmiş ${replayedChainEvents} tahakkuk otomatik yeniden hesaplandı.`
+      : '';
+    const summary = summarizeBatchPayrollOutcomes(outcomes);
+    const outcomeSummary = `Hesaplanan bordro: ${summary.success}/${summary.total}.`;
+    const attendanceIssueCount = summary.attendanceMissing + summary.attendanceIncomplete;
+    if (summary.calculationErrors === 0 && attendanceIssueCount === 0) {
       setErrorMessage(null);
       setSuccessMessage(
-        `${successCount} personelin bordrosu başarıyla güncellendi.${finalizedCount > 0 ? ` ${finalizedCount} kesinleşmiş bordro atlandı.` : ''}`
+        `${summary.success} personelin bordrosu başarıyla güncellendi.${summary.finalizedSkipped > 0 ? ` ${summary.finalizedSkipped} kesinleşmiş bordro atlandı.` : ''}${replayNote}`
       );
       setTimeout(() => setSuccessMessage(null), 3500);
     } else {
       setSuccessMessage(
-        successCount > 0
-          ? `${outcomeSummary}${finalizedCount > 0 ? ` Kesinleşmiş bordro atlandı: ${finalizedCount}.` : ''}`
+        summary.success > 0
+          ? `${outcomeSummary}${summary.finalizedSkipped > 0 ? ` Kesinleşmiş bordro atlandı: ${summary.finalizedSkipped}.` : ''}${replayNote}`
           : null
       );
       const problems: string[] = [];
       if (missingPuantajPersons.length > 0) {
-        problems.push(`Puantaj eksik (${missingPuantajPersons.length}): ${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '…' : ''}.`);
+        problems.push(`Puantaj yok (${missingPuantajPersons.length}): ${missingPuantajPersons.slice(0, 3).join(', ')}${missingPuantajPersons.length > 3 ? '…' : ''}.`);
       }
-      if (calculationFailureCount > 0) {
+      if (incompletePuantajPersons.length > 0) {
+        problems.push(`Puantaj eksik/tamamlanmamış (${incompletePuantajPersons.length}): ${incompletePuantajPersons.slice(0, 3).join(', ')}${incompletePuantajPersons.length > 3 ? '…' : ''}.`);
+      }
+      if (summary.calculationErrors > 0) {
         const failures = batchCalculationErrorsRef.current.slice(0, 3).join(' | ');
         problems.push(
-          `${calculationFailureCount} hesaplama hatası${failures ? `: ${failures}` : firstBatchCalculationErrorRef.current ? `: ${firstBatchCalculationErrorRef.current}` : '.'}`
+          `${summary.calculationErrors} hesaplama hatası${failures ? `: ${failures}` : firstBatchCalculationErrorRef.current ? `: ${firstBatchCalculationErrorRef.current}` : '.'}`
         );
       }
       setErrorMessage(`${outcomeSummary} ${problems.join(' ')}`);
@@ -549,10 +859,18 @@ export function useBordroCalculationController({
       setErrorMessage(`HATA: ${person.ad} ${person.soyad} için bu dönemde (${aktifDonem.donemAdi}) kayıtlı puantaj bulunamadı! Puantajsız bordro hesaplanamaz. Lütfen önce Puantaj Cetvelinden puantaj girişi yapın.`);
       return;
     }
+    const chain = await replayStalePriorChain(person);
+    if (!chain.ok) {
+      setSuccessMessage(null);
+      setErrorMessage(`Hesaplama hatası: ${chain.error ?? 'önceki tahakkuk zinciri yeniden hesaplanamadı.'}`);
+      return;
+    }
     const res = await calculateAndSaveForPerson(person);
     if (res) {
       setErrorMessage(null);
-      setSuccessMessage(`${person.ad} ${person.soyad} bordrosu başarıyla hesaplandı.`);
+      setSuccessMessage(
+        `${person.ad} ${person.soyad} bordrosu başarıyla hesaplandı.${chain.replayed > 0 ? ` Önceki dönemlerden ${chain.replayed} güncelliğini yitirmiş tahakkuk da yeniden hesaplandı.` : ''}`
+      );
       setTimeout(() => setSuccessMessage(null), 3000);
     }
   };

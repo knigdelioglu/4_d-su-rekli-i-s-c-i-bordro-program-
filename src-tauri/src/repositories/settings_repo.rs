@@ -142,13 +142,6 @@ impl SettingsRepository {
                 k.donemId
             ))
         })?;
-        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
-            conn,
-            &payroll_core::PayrollMutation::Period {
-                periodId: k.donemId.clone(),
-            },
-        )?;
-
         let existing_json = conn
             .query_row(
                 "SELECT settings_json FROM institution_settings WHERE period_id = ?1",
@@ -201,6 +194,18 @@ impl SettingsRepository {
         let json_str = serde_json::to_string(&normalized)
             .map_err(|e| crate::domain::DomainError::InvalidData(e.to_string()))?;
         let changed = existing_json.as_deref() != Some(json_str.as_str());
+        if !changed {
+            // A byte-identical save is not a payroll mutation. Asserting the
+            // PERIOD policy here would reject harmless re-saves whenever any
+            // later history is FINALIZED, and must not invalidate anything.
+            return Ok(());
+        }
+        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+            conn,
+            &payroll_core::PayrollMutation::Period {
+                periodId: k.donemId.clone(),
+            },
+        )?;
         let now = Utc::now().to_rfc3339();
         conn.execute(
             "INSERT INTO institution_settings (period_id, settings_json, updated_at)
@@ -211,9 +216,7 @@ impl SettingsRepository {
         )
         .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
-        if changed {
-            PayrollInvalidationRepository::apply_impact(conn, &impact)?;
-        }
+        PayrollInvalidationRepository::apply_impact(conn, &impact)?;
 
         Ok(())
     }

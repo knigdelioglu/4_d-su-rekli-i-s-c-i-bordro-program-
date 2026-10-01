@@ -54,7 +54,8 @@ impl PersonnelRepository {
                 oksOraniYuzde: oks_orani,
                 sabitBesTutar: opt_kurus_to_dec(sabit_bes),
                 icraTutar: opt_kurus_to_dec(icra),
-                nafakaTutar: opt_kurus_to_dec(nafaka),
+                nafakaTutar: opt_kurus_to_dec(nafaka)
+                    .filter(|amount| *amount != rust_decimal::Decimal::ZERO),
                 kisiBorcuTutar: opt_kurus_to_dec(kisi_borcu),
                 dogumAskerlikBorclanmasiTutar: opt_kurus_to_dec(dogum),
                 hayatSaglikSigortasiTutar: opt_kurus_to_dec(hayat),

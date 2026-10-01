@@ -516,6 +516,12 @@ fn native_legacy_serde_rejects_explicit_invalid_types() {
 }
 
 fn current_v5_fixture() -> Result<(rusqlite::Connection, String), Box<dyn std::error::Error>> {
+    current_v5_fixture_with_nafaka(None)
+}
+
+fn current_v5_fixture_with_nafaka(
+    nafaka_tutar: Option<Decimal>,
+) -> Result<(rusqlite::Connection, String), Box<dyn std::error::Error>> {
     let conn = create_in_memory_connection()?;
     let period = BordroDonemi {
         id: "2026-01".into(),
@@ -553,7 +559,10 @@ fn current_v5_fixture() -> Result<(rusqlite::Connection, String), Box<dyn std::e
         devirKumulatifGvMatrahiBaslangicAyi: None,
         devirKumulatifAsgariGvMatrahi: None,
         devirKumulatifAsgariGvMatrahiYili: None,
-        kesintiler: Some(PersonelKesintileri::default()),
+        kesintiler: Some(PersonelKesintileri {
+            nafakaTutar: nafaka_tutar,
+            ..PersonelKesintileri::default()
+        }),
     };
     let settings = DonemselKurumDegerleri {
         donemId: period.id.clone(),
@@ -655,6 +664,71 @@ fn native_current_v5_backup_roundtrip_replays_authoritative_snapshot(
         financial_snapshot_without_timestamps(before),
         financial_snapshot_without_timestamps(after)
     );
+    Ok(())
+}
+
+#[test]
+fn native_previous_v5_backup_without_nafaka_restores_and_stays_canonical(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (_source, payload) = current_v5_fixture()?;
+    let backup: Value = serde_json::from_str(&payload)?;
+    assert!(backup["personeller"][0]["kesintiler"]
+        .get("nafakaTutar")
+        .is_none());
+    assert!(backup["bordrolar"][0]["kesintiler"].get("nafaka").is_none());
+
+    let mut clean_db = create_in_memory_connection()?;
+    MigrationService::replace_backup_data(&mut clean_db, &payload)?;
+
+    let personnel = PersonnelRepository::get_by_id(&clean_db, "v5-person")?
+        .expect("legacy backup personeli restore edilmeli");
+    let payroll = PayrollRepository::get_all(&clean_db)?
+        .into_iter()
+        .next()
+        .expect("legacy backup bordrosu restore edilmeli");
+    assert_eq!(
+        personnel
+            .kesintiler
+            .as_ref()
+            .and_then(|items| items.nafakaTutar),
+        None
+    );
+    assert_eq!(payroll.kesintiler.nafaka, None);
+    let canonical_person = serde_json::to_value(&personnel)?;
+    let canonical_payroll = serde_json::to_value(&payroll)?;
+    assert!(canonical_person["kesintiler"].get("nafakaTutar").is_none());
+    assert!(canonical_payroll["kesintiler"].get("nafaka").is_none());
+    Ok(())
+}
+
+#[test]
+fn native_v5_backup_restore_preserves_nafaka_to_the_kurus() -> Result<(), Box<dyn std::error::Error>>
+{
+    let (source, payload) = current_v5_fixture_with_nafaka(Some(dec!(125.50)))?;
+    let source_payroll = PayrollRepository::get_all(&source)?
+        .into_iter()
+        .next()
+        .expect("source nafaka bordrosu hesaplanmış olmalı");
+    let mut clean_db = create_in_memory_connection()?;
+
+    MigrationService::replace_backup_data(&mut clean_db, &payload)?;
+
+    let personnel = PersonnelRepository::get_by_id(&clean_db, "v5-person")?
+        .expect("nafaka tanımlı personel restore edilmeli");
+    let payroll = PayrollRepository::get_all(&clean_db)?
+        .into_iter()
+        .next()
+        .expect("nafaka kesintili bordro restore edilmeli");
+    assert_eq!(
+        personnel
+            .kesintiler
+            .as_ref()
+            .and_then(|items| items.nafakaTutar),
+        Some(dec!(125.50))
+    );
+    assert_eq!(payroll.kesintiler.nafaka, Some(dec!(125.50)));
+    assert_eq!(payroll.kesintiToplam, source_payroll.kesintiToplam);
+    assert_eq!(payroll.netOdeme, source_payroll.netOdeme);
     Ok(())
 }
 

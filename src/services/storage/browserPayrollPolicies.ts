@@ -11,12 +11,19 @@ export type BrowserPayrollMutation = PayrollMutation;
 
 export function assertBrowserMutationImpactAllowed(impact: MutationImpact): void {
   if (impact.blockedByFinalized.length === 0 && impact.blockedByFinalizedRetroBatches.length === 0) return;
-  const keys = impact.blockedByFinalized
-    .map((key) => `${key.personnelId} / ${key.periodId} / ${key.accrualId ?? ''}`)
-    .join(', ');
+  const listed = impact.blockedByFinalized
+    .slice(0, 3)
+    .map((key) => `${key.personnelId} / ${key.periodId} / ${key.accrualId ?? ''}`);
+  const remaining = impact.blockedByFinalized.length - listed.length;
+  const keys = `${listed.join(', ')}${remaining > 0 ? ` ve ${remaining} kayıt daha` : ''}`;
   const batches = impact.blockedByFinalizedRetroBatches.join(', ');
-  const detail = [keys, batches ? `retro batch: ${batches}` : ''].filter(Boolean).join(', ');
-  throw new Error(`Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez: ${detail}.`);
+  const detail = [listed.length ? keys : '', batches ? `retro batch: ${batches}` : '']
+    .filter(Boolean)
+    .join(', ');
+  throw new Error(
+    `Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez: ${detail}. ` +
+      'Değişikliği kesinleşmiş son dönemden sonraki bir döneme uygulayın; kesinleşmiş dönemler için ücret farkını Geriye Dönük Farklar (ücret revizyonu) ile hesaplayın.'
+  );
 }
 
 export function applyBrowserRetroBatchImpact<T extends { id: string; status?: string }>(

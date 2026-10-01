@@ -28,6 +28,7 @@ import {
 } from '../utils/payrollPresentation';
 import { exportToExcel } from '../utils/excelExport';
 import { formatPayrollError } from './useBordroCalculationController';
+import { describeError } from '../utils/errorMessage';
 
 interface PuantajGridProps {
   aktifDonem: BordroDonemi;
@@ -221,7 +222,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
         rows
       );
     } catch (err) {
-      const msg = `Excel aktarımı başarısız oldu: ${err instanceof Error ? err.message : String(err)}`;
+      const msg = `Excel aktarımı başarısız oldu: ${describeError(err)}`;
       console.error(msg, err);
       setExportError(msg);
       alert(msg);

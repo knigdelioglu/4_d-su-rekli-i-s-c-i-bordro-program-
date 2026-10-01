@@ -11,6 +11,31 @@ const persisted: DönemselKurumDegerleri = {
 const edited: DönemselKurumDegerleri = { ...persisted, gunlukTabanUcret: 2443.29 };
 
 describe('period settings save feedback', () => {
+  test('never renders object identity for supported error shapes', () => {
+    const messages = [
+      formatPeriodSettingsSaveError(new Error('Hata oluştu.')),
+      formatPeriodSettingsSaveError('Düz metin hata.'),
+      formatPeriodSettingsSaveError({ type: 'PayrollFinalized', message: 'Bordro kesinleşmiş.' }),
+      formatPeriodSettingsSaveError({ message: 'Mesaj alanı.' }),
+      formatPeriodSettingsSaveError({ message: { code: 'E_TEST' } }),
+      formatPeriodSettingsSaveError({ unexpected: true }),
+      formatPeriodSettingsSaveError(null),
+      formatPeriodSettingsSaveError(undefined),
+    ];
+
+    expect(messages).toEqual([
+      'Ücret ayarları kaydedilemedi: Hata oluştu.',
+      'Ücret ayarları kaydedilemedi: Düz metin hata.',
+      'Kesinleştirilmiş bordro nedeniyle ücret ayarları değiştirilemedi. Bordro kesinleşmiş.',
+      'Ücret ayarları kaydedilemedi: Mesaj alanı.',
+      'Ücret ayarları kaydedilemedi: {"code":"E_TEST"}',
+      'Ücret ayarları kaydedilemedi. Lütfen tekrar deneyin.',
+      'Ücret ayarları kaydedilemedi. Lütfen tekrar deneyin.',
+      'Ücret ayarları kaydedilemedi. Lütfen tekrar deneyin.',
+    ]);
+    expect(messages.every((message) => !message.includes('[object Object]'))).toBe(true);
+  });
+
   test('formats a structured finalized rejection in Turkish', () => {
     const message = formatPeriodSettingsSaveError({
       type: 'PayrollFinalized',
@@ -84,5 +109,48 @@ describe('period settings save feedback', () => {
       paramsForm: edited,
       zamAylariForm: [1, 7],
     });
+  });
+
+  test('does not re-save unchanged sections (no ALL/PERIOD invalidation on a no-op save)', async () => {
+    const saved: string[] = [];
+    const outcome = await savePeriodSettings(
+      { ...persisted },
+      [7, 1],
+      persisted,
+      [1, 7],
+      async () => { saved.push('params'); },
+      async () => { saved.push('months'); }
+    );
+
+    expect(saved).toEqual([]);
+    expect(outcome).toEqual({ kind: 'success' });
+  });
+
+  test('saves only the zam schedule when only the schedule changed', async () => {
+    const saved: string[] = [];
+    await savePeriodSettings(
+      persisted,
+      [1, 4, 7],
+      persisted,
+      [1, 7],
+      async () => { saved.push('params'); },
+      async () => { saved.push('months'); }
+    );
+
+    expect(saved).toEqual(['months']);
+  });
+
+  test('saves only period params when the zam schedule is unchanged', async () => {
+    const saved: string[] = [];
+    await savePeriodSettings(
+      edited,
+      [1, 7],
+      persisted,
+      [1, 7],
+      async () => { saved.push('params'); },
+      async () => { saved.push('months'); }
+    );
+
+    expect(saved).toEqual(['params']);
   });
 });

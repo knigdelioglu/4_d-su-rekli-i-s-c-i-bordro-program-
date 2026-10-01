@@ -41,6 +41,7 @@ import {
   exportSinglePayrollPdf,
 } from '../exports/payrollPdfExport';
 import { ACCRUAL_TYPE_LABELS, getPayrollStatusLabel } from './Listeler/accrualListData';
+import { describeError } from '../utils/errorMessage';
 
 interface PaySlipModalProps {
   isOpen: boolean;
@@ -117,7 +118,7 @@ export const PaySlipModal: React.FC<PaySlipModalProps> = ({
       await fn();
     } catch (error) {
       console.error('Payroll export failed:', error);
-      setExportError(error instanceof Error ? error.message : String(error));
+      setExportError(describeError(error));
     } finally {
       setBusyAction(null);
     }

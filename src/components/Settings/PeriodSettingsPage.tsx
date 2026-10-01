@@ -33,6 +33,7 @@ import { SickLeaveConflictModal } from './SickLeaveConflictModal';
 import { SickLeaveSection } from './SickLeaveSection';
 import { TediyeTisSection } from './TediyeTisSection';
 import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
+import { describeError } from '../../utils/errorMessage';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -305,9 +306,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       const reason =
         error instanceof Error
           ? error.message
-          : typeof error === 'string'
-            ? error
-            : JSON.stringify(error);
+          : describeError(error);
       setSickLeaveError(`Rapor kaydedilemedi: ${reason || 'Beklenmeyen bir hata oluştu.'}`);
     } finally {
       setIsSubmittingSickLeave(false);
@@ -362,7 +361,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     try {
       await onDeleteSickLeaveRecord(id);
     } catch (error) {
-      alert(`Rapor olayı silinemedi: ${String(error)}`);
+      alert(`Rapor olayı silinemedi: ${describeError(error)}`);
     }
   };
 
@@ -482,7 +481,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       setAnnualTaxSuccess(true);
       setTimeout(() => setAnnualTaxSuccess(false), 2500);
     } catch (error) {
-      alert(`Yıllık vergi parametreleri kaydedilemedi: ${String(error)}`);
+      alert(`Yıllık vergi parametreleri kaydedilemedi: ${describeError(error)}`);
     }
   };
 

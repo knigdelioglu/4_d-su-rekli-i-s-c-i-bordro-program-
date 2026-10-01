@@ -46,6 +46,7 @@ import { DataBackupPage } from './components/DataBackupPage';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
 import { formatPayrollError } from './components/useBordroCalculationController';
 import { importConfirmedBackupFile } from './services/storage/confirmedBackupImport';
+import { describeError } from './utils/errorMessage';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
@@ -101,7 +102,7 @@ function makeBackupPayload(data: DatasetFields): PayrollStorageDto {
 }
 
 function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return describeError(error);
 }
 
 interface UserFacingStorageError {
@@ -420,7 +421,7 @@ export default function App() {
       }
       updateAuthoritativePayload((current) => ({ ...current, aktifDonemId: id }));
     } catch (err) {
-      const message = `Aktif dönem kaydedilemedi: ${String(err)}`;
+      const message = `Aktif dönem kaydedilemedi: ${describeError(err)}`;
       console.error(message, err);
       setLoadError(message);
     }

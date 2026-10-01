@@ -65,6 +65,7 @@ import {
   type SupplementaryAccrualType,
   useBordroCalculationController,
 } from './useBordroCalculationController';
+import { describeError } from '../utils/errorMessage';
 
 interface BordroHesaplamaProps {
   aktifDonem: BordroDonemi;
@@ -1124,7 +1125,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                                 setErrorMessage(null);
                                                 setTimeout(() => setSuccessMessage(null), 3000);
                                               } catch (error) {
-                                                setErrorMessage(error instanceof Error ? error.message : String(error));
+                                                setErrorMessage(describeError(error));
                                               } finally {
                                                 setDeletingAccrualId(null);
                                               }
@@ -1653,7 +1654,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                           );
                         }
                       } catch (err) {
-                        setErrorMessage(`Kümülatif matrah kaydedilemedi: ${String(err)}`);
+                        setErrorMessage(`Kümülatif matrah kaydedilemedi: ${describeError(err)}`);
                       }
                     }}
                     className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold shadow-md transition-colors flex items-center gap-1.5 cursor-pointer"

@@ -3,9 +3,79 @@ import {
   formatPayrollError,
   formatStalePayrollMessage,
   isPayrollTaxOpeningConfigurationError,
+  classifyBatchAttendance,
+  findFirstStalePriorEvent,
+  isStaleChainError,
+  summarizeBatchPayrollOutcomes,
   tryAcquireSupplementaryPaymentScope,
 } from './useBordroCalculationController';
 import { paymentEventSequenceScopeKey } from '../services/payrollEngine/paymentEventOrder';
+import { getPeriodDaysList } from '../utils/payrollPresentation';
+import type { BordroDonemi, BordroKaydi, PersonelPuantaj, PuantajKodu } from '../types/payroll';
+
+const leapPeriod = {
+  baslangicTarihi: '2024-02-15',
+  bitisTarihi: '2024-03-14',
+};
+
+function fullPeriodAttendance(): PersonelPuantaj {
+  const gunler: Record<string, PuantajKodu> = Object.fromEntries(
+    getPeriodDaysList(leapPeriod.baslangicTarihi, leapPeriod.bitisTarihi).map((day) => [
+      day.dateStr,
+      'Ç' as PuantajKodu,
+    ])
+  );
+  return { id: 'person-1_2024-02', personelId: 'person-1', donemId: '2024-02', gunler };
+}
+
+describe('batch payroll input classification', () => {
+  test('distinguishes no attendance from a present but incomplete calendar', () => {
+    expect(classifyBatchAttendance(undefined, leapPeriod)).toBe('missing');
+    expect(
+      classifyBatchAttendance(
+        { id: 'person-1_2024-02', personelId: 'person-1', donemId: '2024-02', gunler: {} },
+        leapPeriod
+      )
+    ).toBe('incomplete');
+  });
+
+  test('uses the period calendar dates for full and partial leap-period coverage', () => {
+    const attendance = fullPeriodAttendance();
+    expect(Object.keys(attendance.gunler).length).toBe(29);
+    expect(attendance.gunler['2024-02-29']).toBe('Ç');
+    expect(classifyBatchAttendance(attendance, leapPeriod)).toBe('complete');
+
+    delete attendance.gunler['2024-02-29'];
+    expect(classifyBatchAttendance(attendance, leapPeriod)).toBe('incomplete');
+  });
+
+  test('batch outcome categories account for every personnel exactly once', () => {
+    const summary = summarizeBatchPayrollOutcomes([
+      'success',
+      'success',
+      'finalized-skipped',
+      'attendance-missing',
+      'attendance-incomplete',
+      'calculation-error',
+    ]);
+
+    expect(summary).toEqual({
+      total: 6,
+      success: 2,
+      finalizedSkipped: 1,
+      attendanceMissing: 1,
+      attendanceIncomplete: 1,
+      calculationErrors: 1,
+    });
+    expect(
+      summary.success +
+        summary.finalizedSkipped +
+        summary.attendanceMissing +
+        summary.attendanceIncomplete +
+        summary.calculationErrors
+    ).toBe(summary.total);
+  });
+});
 
 describe('payroll error messages', () => {
   test('explains that stale payroll source data changed without blaming a prior period', () => {
@@ -104,4 +174,60 @@ test('does not allocate one payment sequence scope to overlapping submissions', 
   const releaseAfterRetry = tryAcquireSupplementaryPaymentScope(pending, scope);
   expect(releaseAfterRetry !== null).toBe(true);
   releaseAfterRetry!();
+});
+
+describe('stale payment-event chain replay selection', () => {
+  const period = (id: string, taxYear: number, taxMonth: number): BordroDonemi =>
+    ({ id, donemAdi: id, yil: taxYear, ay: taxMonth, taxYear, taxMonth,
+      baslangicTarihi: `${id}-01`, bitisTarihi: `${id}-28` }) as unknown as BordroDonemi;
+  const periods = new Map<string, BordroDonemi>([
+    ['2026-01', period('2026-01', 2026, 1)],
+    ['2026-02', period('2026-02', 2026, 2)],
+    ['2026-03', period('2026-03', 2026, 3)],
+    ['2026-05', period('2026-05', 2026, 5)],
+  ]);
+  const payroll = (personelId: string, donemId: string, status: BordroKaydi['status']): BordroKaydi =>
+    ({ id: `${personelId}_${donemId}`, accrualId: `${personelId}_${donemId}`, personelId, donemId,
+      accrualType: 'NORMAL', paymentDate: `${donemId}-28`, sequence: 0, status }) as unknown as BordroKaydi;
+  const target = { paymentDate: '2026-05-28', sequence: 0, accrualId: 'p-1_2026-05', id: 'p-1_2026-05' };
+
+  test('returns the earliest prior STALE event of the same person (p-1_2026-01 before May)', () => {
+    const found = findFirstStalePriorEvent(
+      [
+        payroll('p-1', '2026-03', 'STALE'),
+        payroll('p-1', '2026-01', 'STALE'),
+        payroll('p-1', '2026-02', 'CALCULATED'),
+        payroll('p-2', '2025-12', 'STALE'),
+      ],
+      periods,
+      'p-1',
+      target,
+      periods.get('2026-05')!
+    );
+    expect(found?.payroll.accrualId).toBe('p-1_2026-01');
+  });
+
+  test('ignores the target itself, later events, FINALIZED and CALCULATED history', () => {
+    const found = findFirstStalePriorEvent(
+      [
+        payroll('p-1', '2026-01', 'FINALIZED'),
+        payroll('p-1', '2026-02', 'CALCULATED'),
+        payroll('p-1', '2026-05', 'STALE'),
+      ],
+      periods,
+      'p-1',
+      target,
+      periods.get('2026-05')!
+    );
+    expect(found).toBe(null);
+  });
+
+  test('stale-chain engine errors get an actionable hint', () => {
+    const message = formatPayrollError({
+      type: 'ValidationError',
+      message: 'Payment-event/PEK zinciri çözülemez: p-1_2026-01 tahakkuku STALE durumda; authoritative state belirlenemiyor.',
+    });
+    expect(isStaleChainError(message)).toBe(true);
+    expect(message.includes('otomatik yeniden hesaplanır')).toBe(true);
+  });
 });

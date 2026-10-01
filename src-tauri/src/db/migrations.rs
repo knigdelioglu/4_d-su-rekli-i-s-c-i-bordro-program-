@@ -511,20 +511,6 @@ pub fn get_migrations() -> Migrations<'static> {
             })?;
             Ok(())
         }),
-        M::up_with_hook("SELECT 1;", |tx| {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('personnel') WHERE name = 'nafaka_tutar'",
-                [],
-                |row| row.get(0),
-            )?;
-            if exists == 0 {
-                tx.execute(
-                    "ALTER TABLE personnel ADD COLUMN nafaka_tutar INTEGER DEFAULT 0",
-                    [],
-                )?;
-            }
-            Ok(())
-        }),
         M::up(
             r#"
             CREATE TABLE IF NOT EXISTS compensation_revisions (
@@ -904,6 +890,22 @@ pub fn get_migrations() -> Migrations<'static> {
             ensure_nullable_tax_opening_table(tx)?;
             Ok(())
         }),
+        // This is a new additive migration. Keep all previously released
+        // migration indices stable; user_version is the list index.
+        M::up_with_hook("SELECT 1;", |tx| {
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('personnel') WHERE name = 'nafaka_tutar'",
+                [],
+                |row| row.get(0),
+            )?;
+            if exists == 0 {
+                tx.execute(
+                    "ALTER TABLE personnel ADD COLUMN nafaka_tutar INTEGER DEFAULT 0",
+                    [],
+                )?;
+            }
+            Ok(())
+        }),
     ])
 }
 
@@ -1095,6 +1097,7 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
         ("dogum_askerlik_gv_indirim_tutar", "INTEGER"),
         ("hayat_sigortasi_gv_prim_tutar", "INTEGER"),
         ("saglik_sigortasi_gv_prim_tutar", "INTEGER"),
+        ("nafaka_tutar", "INTEGER DEFAULT 0"),
     ] {
         add_column_if_missing(&tx, "personnel", &mut personnel_columns, column, definition)?;
     }
