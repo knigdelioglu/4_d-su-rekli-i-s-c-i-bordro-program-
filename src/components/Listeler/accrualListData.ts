@@ -21,6 +21,22 @@ export function getPayrollStatusLabel(status: BordroKaydi['status']): string {
   return PAYROLL_STATUS_LABELS[status];
 }
 
+/** Discovery only: other periods' records never enter active-period totals. */
+export function getOtherPeriodAccruals(
+  payrolls: BordroKaydi[],
+  periods: BordroDonemi[],
+  personnelId: string,
+  accrualType: AccrualType,
+  activePeriodId: string
+): Array<{ payroll: BordroKaydi; periodLabel: string }> {
+  const periodsById = new Map(periods.map((period) => [period.id, period]));
+  return payrolls
+    .filter((payroll) => payroll.personelId === personnelId &&
+      payroll.accrualType === accrualType && payroll.donemId !== activePeriodId)
+    .sort((left, right) => right.paymentDate.localeCompare(left.paymentDate) || right.sequence - left.sequence)
+    .map((payroll) => ({ payroll, periodLabel: periodsById.get(payroll.donemId)?.donemAdi || payroll.donemId }));
+}
+
 export interface AuthoritativeAccrualRow {
   personel: Personel;
   bordro: BordroKaydi;

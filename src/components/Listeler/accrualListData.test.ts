@@ -4,6 +4,7 @@ import {
   countAuthoritativeNormalPersonnel,
   filterAccrualRowsByPaymentDate,
   getAuthoritativeAccrualRows,
+  getOtherPeriodAccruals,
 } from './accrualListData';
 
 const period = {
@@ -49,6 +50,18 @@ function payroll(
 }
 
 describe('authoritative accrual list dataset', () => {
+  test('locates supplementary accruals in another work period including stale records', () => {
+    const otherPeriod = { ...period, id: '2027-02', donemAdi: 'Şubat 2027', taxYear: 2027, taxMonth: 3 };
+    for (const [type, gross] of [['TEDIYE', 24500], ['TIS_IKRAMIYE', 18000], ['SUPPLEMENTAL', 12000]] as const) {
+      const saved = { ...payroll(type, type, '2027-03-14', 0, 0, 'STALE'), donemId: otherPeriod.id, gelirToplam: gross };
+      const unrelated = { ...saved, id: 'other-person', personelId: 'other' };
+      expect(getOtherPeriodAccruals([saved, unrelated], [period, otherPeriod], person.id, type, period.id))
+        .toEqual([{ payroll: saved, periodLabel: 'Şubat 2027' }]);
+      expect(getAuthoritativeAccrualRows(period, [person], [saved])).toEqual([]);
+      expect(getOtherPeriodAccruals([saved], [period, otherPeriod], person.id, type, otherPeriod.id)).toEqual([]);
+    }
+    expect(getOtherPeriodAccruals([], [period], person.id, 'TEDIYE', period.id)).toEqual([]);
+  });
   test('keeps every authoritative payment event and excludes DRAFT/STALE', () => {
     const rows = getAuthoritativeAccrualRows(period, [person], [
       payroll('TEDIYE', 'tediye-1', '2026-10-20', 1, 120),

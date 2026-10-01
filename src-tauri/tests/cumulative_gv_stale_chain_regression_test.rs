@@ -173,6 +173,66 @@ fn status_of(
 }
 
 #[test]
+fn distant_finalized_year_does_not_block_insert_update_or_delete(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = create_in_memory_connection()?;
+    let id = "p-distant-year";
+    PersonnelRepository::save(&conn, &person(id))?;
+    for p in [
+        period("2026-08", 2026, 8, 2026, 9),
+        period("2027-03", 2027, 3, 2027, 4),
+    ] {
+        PeriodRepository::save(&conn, &p)?;
+    }
+    let future = payroll(
+        id,
+        "2027-03",
+        dec!(50000),
+        dec!(0),
+        dec!(80000),
+        dec!(70000),
+        BordroStatus::FINALIZED,
+    );
+    PayrollRepository::save_in_transaction(&conn, &future)?;
+    let source = payroll(
+        id,
+        "2026-08",
+        dec!(50000),
+        dec!(0),
+        dec!(80000),
+        dec!(70000),
+        BordroStatus::CALCULATED,
+    );
+    PayrollRepository::save(&conn, &source)?;
+    let changed = payroll(
+        id,
+        "2026-08",
+        dec!(55000),
+        dec!(0),
+        dec!(82000),
+        dec!(69000),
+        BordroStatus::CALCULATED,
+    );
+    PayrollRepository::save(&conn, &changed)?;
+    assert_eq!(status_of(&conn, id, "2026-08")?, BordroStatus::CALCULATED);
+    assert_eq!(status_of(&conn, id, "2027-03")?, BordroStatus::FINALIZED);
+    // The immutable future snapshot remains byte-for-byte equivalent.
+    let stored_future = PayrollRepository::get_all(&conn)?
+        .into_iter()
+        .find(|p| p.donemId == "2027-03")
+        .unwrap();
+    assert_eq!(stored_future.netOdeme, future.netOdeme);
+    assert_eq!(
+        serde_json::to_value(&stored_future.gvDetay)?,
+        serde_json::to_value(&future.gvDetay)?
+    );
+    PayrollRepository::delete_accrual(&conn, id, "2026-08", &source.accrualId)?;
+    assert!(PayrollRepository::get_status_and_created_at(&conn, id, "2026-08")?.is_none());
+    assert_eq!(status_of(&conn, id, "2027-03")?, BordroStatus::FINALIZED);
+    Ok(())
+}
+
+#[test]
 fn onceki_bordro_degisince_sonraki_calculated_bordrolar_stale_olur(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (conn, personnel_id) = setup_three_periods()?;

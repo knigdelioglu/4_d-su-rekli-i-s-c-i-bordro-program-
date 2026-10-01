@@ -53,6 +53,7 @@ import {
 import {
   countAuthoritativeNormalPersonnel,
   getPayrollStatusLabel,
+  getOtherPeriodAccruals,
 } from './Listeler/accrualListData';
 import {
   isExactDecimalString,
@@ -585,6 +586,9 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                     ? viewAccruals[0]
                     : viewAccruals.find((item) => item.accrualType === activeAccrualType);
                   const additionalViewAccruals = isSupplementaryView ? viewAccruals.slice(1) : [];
+                  const otherPeriodAccruals = isSupplementaryView && allViewAccruals.length === 0
+                    ? getOtherPeriodAccruals(bordrolar, donemler, person.id, activeAccrualType, aktifDonem.id)
+                    : [];
 
                   const hasPayrollSnapshot = !!bordro;
                   const isFinalized = bordro?.status === 'FINALIZED';
@@ -741,10 +745,27 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                             <span>Hesaplandı</span>
                           </span>
                         ) : isSupplementaryView || hasPuantaj ? (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                            <Clock className="w-2.5 h-2.5 text-amber-600" />
-                            <span>{isSupplementaryView ? 'Tahakkuk Eklenmedi' : 'Hesaplanmadı'}</span>
-                          </span>
+                          <div>
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                              <Clock className="w-2.5 h-2.5 text-amber-600" />
+                              <span>{isSupplementaryView ? 'Tahakkuk Eklenmedi' : 'Hesaplanmadı'}</span>
+                            </span>
+                            {isSupplementaryView && allViewAccruals.length === 0 && (
+                              <div data-testid={`other-period-accruals-${person.id}`} className="mt-1 max-w-60 whitespace-normal text-left text-[10px] text-slate-600">
+                                {otherPeriodAccruals.length === 0 ? 'Diğer dönemlerde de bu tür tahakkuk yok.' : (
+                                  <details>
+                                    <summary className="cursor-pointer">Diğer dönemlerde {otherPeriodAccruals.length} kayıt</summary>
+                                    {otherPeriodAccruals.map(({ payroll, periodLabel }) => (
+                                      <div key={getAccrualId(payroll)} className="mt-1">
+                                        {periodLabel} · Ödeme tarihi: {payroll.paymentDate || (donemler.find((period) => period.id === payroll.donemId)?.bitisTarihi || 'Tarih kayıtlı değil')} · Brüt {formatTL(payroll.gelirToplam)} · {getPayrollStatusLabel(payroll.status)}
+                                      </div>
+                                    ))}
+                                    <div className="mt-1">İşlem için ilgili çalışma dönemini seçin.</div>
+                                  </details>
+                                )}
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-100 text-rose-800 border border-rose-200">
                             <AlertTriangle className="w-2.5 h-2.5 text-rose-600" />

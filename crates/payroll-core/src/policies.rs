@@ -252,6 +252,49 @@ fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
     }
 }
 
+/// GV resets each payment year; PEK can bridge at most two payment months.
+/// Keep the transitive chain (including same-year events after long gaps),
+/// but stop when a new year has neither a tax nor a possible carry dependency.
+fn affected_after_accrual(
+    index: &PayrollDatasetIndex,
+    dataset: &PayrollDatasetSnapshot,
+    payroll: &crate::models::BordroKaydi,
+    personnel_id: &str,
+    source_order: &crate::payroll_engine::AccrualOrder,
+    source_date: NaiveDate,
+) -> Result<bool> {
+    if payroll.personelId != personnel_id {
+        return Ok(false);
+    }
+    let candidate_order = payroll_order(dataset, index, payroll)?;
+    if candidate_order <= *source_order {
+        return Ok(false);
+    }
+    let mut events = Vec::new();
+    for event in index.payrolls_for_person(dataset, personnel_id) {
+        let order = payroll_order(dataset, index, event)?;
+        if order > *source_order && order <= candidate_order {
+            events.push((
+                order,
+                payroll_effective_payment_date(index, dataset, event)?,
+            ));
+        }
+    }
+    events.sort_by(|left, right| left.0.cmp(&right.0));
+    let ordinal = |date: NaiveDate| i64::from(date.year()) * 12 + i64::from(date.month());
+    let mut previous_date = source_date;
+    for (order, date) in events {
+        if date.year() != previous_date.year() && ordinal(date) - ordinal(previous_date) > 2 {
+            return Ok(false);
+        }
+        if order == candidate_order {
+            return Ok(true);
+        }
+        previous_date = date;
+    }
+    Ok(false)
+}
+
 fn input_order(
     index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
@@ -436,11 +479,16 @@ fn affected_by_mutation(
                         accrualId
                     ))
                 })?;
-            Ok(payroll_personnel_id == personnelId
-                && (payroll_order(dataset, index, payroll)?
-                    > payroll_order(dataset, index, source)?
-                    || (matches!(mutation, PayrollMutation::AccrualDelete { .. })
-                        && effective_accrual_id(payroll) == *accrualId)))
+            Ok(affected_after_accrual(
+                index,
+                dataset,
+                payroll,
+                personnelId,
+                &payroll_order(dataset, index, source)?,
+                payroll_effective_payment_date(index, dataset, source)?,
+            )? || (payroll_personnel_id == personnelId
+                && matches!(mutation, PayrollMutation::AccrualDelete { .. })
+                && effective_accrual_id(payroll) == *accrualId))
         }
         PayrollMutation::AccrualInsert {
             personnelId,
@@ -448,9 +496,16 @@ fn affected_by_mutation(
             accrualId,
             paymentDate,
             sequence,
-        } => Ok(payroll_personnel_id == personnelId
-            && payroll_order(dataset, index, payroll)?
-                > input_order(index, dataset, periodId, paymentDate, *sequence, accrualId)?),
+        } => affected_after_accrual(
+            index,
+            dataset,
+            payroll,
+            personnelId,
+            &input_order(index, dataset, periodId, paymentDate, *sequence, accrualId)?,
+            NaiveDate::parse_from_str(paymentDate, "%Y-%m-%d").map_err(|error| {
+                DomainError::ValidationError(format!("Tahakkuk ödeme tarihi geçersiz: {error}"))
+            })?,
+        ),
         PayrollMutation::RetroBatchSave {
             personnelId,
             batchId,
@@ -1132,6 +1187,86 @@ mod tests {
         .expect("period must exist");
 
         assert!(impact.blockedByFinalized.is_empty());
+    }
+
+    #[test]
+    fn accrual_changes_stop_after_year_reset_and_expired_carry_gap() {
+        let source_period = period_for_year("2026-08", 2026, 8, 2026, 9);
+        let future_period = period_for_year("2027-03", 2027, 3, 2027, 4);
+        let mut source = payroll(&source_period.id, BordroStatus::CALCULATED);
+        source.paymentDate = "2026-09-14".into();
+        let mut future = payroll(&future_period.id, BordroStatus::FINALIZED);
+        future.paymentDate = "2027-04-14".into();
+        let data = dataset_with_periods(
+            vec![source_period, future_period],
+            vec![source.clone(), future],
+        );
+        for mutation in [
+            PayrollMutation::AccrualCalculation {
+                personnelId: source.personelId.clone(),
+                periodId: source.donemId.clone(),
+                accrualId: source.accrualId.clone(),
+            },
+            PayrollMutation::AccrualDelete {
+                personnelId: source.personelId.clone(),
+                periodId: source.donemId.clone(),
+                accrualId: source.accrualId.clone(),
+            },
+            PayrollMutation::AccrualInsert {
+                personnelId: source.personelId.clone(),
+                periodId: source.donemId.clone(),
+                accrualId: "new".into(),
+                paymentDate: "2026-09-01".into(),
+                sequence: 0,
+            },
+        ] {
+            let impact = evaluate_payroll_invalidation(&data, &mutation).unwrap();
+            assert!(impact.blockedByFinalized.is_empty());
+            assert!(!impact
+                .affectedPayrolls
+                .iter()
+                .any(|key| key.periodId == "2027-03"));
+        }
+    }
+
+    #[test]
+    fn same_year_and_transitive_cross_year_carry_dependencies_still_block() {
+        for dates in [
+            vec![(2026, 8), (2026, 12)],
+            vec![(2026, 12), (2027, 1)],
+            vec![(2026, 8), (2026, 12), (2027, 1), (2027, 4)],
+        ] {
+            let mut periods = Vec::new();
+            let mut payrolls = Vec::new();
+            for (i, &(year, month)) in dates.iter().enumerate() {
+                let id = format!("{year}-{month:02}");
+                periods.push(period_for_year(&id, year, month, year, month));
+                let mut event = payroll(
+                    &id,
+                    if i == dates.len() - 1 {
+                        BordroStatus::FINALIZED
+                    } else {
+                        BordroStatus::CALCULATED
+                    },
+                );
+                event.paymentDate = format!("{year}-{month:02}-28");
+                payrolls.push(event);
+            }
+            let source = payrolls[0].clone();
+            // Unsorted storage must not change the transitive decision.
+            payrolls.reverse();
+            let data = dataset_with_periods(periods, payrolls);
+            let impact = evaluate_payroll_invalidation(
+                &data,
+                &PayrollMutation::AccrualCalculation {
+                    personnelId: source.personelId,
+                    periodId: source.donemId,
+                    accrualId: source.accrualId,
+                },
+            )
+            .unwrap();
+            assert_eq!(impact.blockedByFinalized.len(), 1);
+        }
     }
 
     #[test]

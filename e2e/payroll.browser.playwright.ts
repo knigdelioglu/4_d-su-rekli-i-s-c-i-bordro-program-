@@ -549,6 +549,50 @@ test('stale payment in the accrual timeline asks for confirmation before deletio
   expect(persisted?.bordrolar.some((item) => item.personelId === 'p-1')).toBe(false);
 });
 
+test('missing supplementary rows reveal the actual work period, gross and stale status of saved accruals', async ({ page }) => {
+  await seedCalculatedSnapshot(page);
+  const sourceId = (await page.getByTestId('payroll-screen').getAttribute('data-period-id'))!;
+  await page.getByTestId('nav-bordro-tediye').click();
+  await page.getByTestId('timeline-toggle-p-1').click();
+  for (const [type, gross, label] of [
+    ['TEDIYE', '24500', 'Tediye'],
+    ['TIS_IKRAMIYE', '18000', 'TİS İkramiyesi'],
+    ['SUPPLEMENTAL', '12000', 'Ek Ödeme'],
+  ]) {
+    await page.getByTestId('add-accrual-p-1').click();
+    await page.getByRole('combobox', { name: 'Tür', exact: true }).selectOption(type);
+    await page.getByRole('textbox', { name: 'Brüt tutar', exact: true }).fill(gross);
+    await page.getByRole('button', { name: 'Hesapla ve Kaydet' }).click();
+    await expect(page.getByText(`Ahmet Yılmaz için ${label} tahakkuku hesaplandı.`)).toBeVisible();
+  }
+  const saved = JSON.parse((await readStoredPayload(page))!) as {
+    donemler: Array<{ id: string; donemAdi: string }>;
+    bordrolar: Array<{ personelId: string; accrualType: string; status: string }>;
+  };
+  const sourceLabel = saved.donemler.find((p) => p.id === sourceId)!.donemAdi;
+  const otherId = saved.donemler.find((p) => p.id !== sourceId)!.id;
+  // A stale predecessor also makes its later same-month events stale.
+  for (const payroll of saved.bordrolar) {
+    if (payroll.personelId === 'p-1' && payroll.accrualType !== 'NORMAL') payroll.status = 'STALE';
+  }
+  await writeStoredPayload(page, JSON.stringify(saved));
+  await page.reload();
+  await expect(page.getByTestId('payroll-screen')).toBeVisible();
+  if (await page.getByTestId('nav-bordro').getAttribute('aria-expanded') !== 'true') {
+    await page.getByTestId('nav-bordro').click();
+  }
+  await selectPeriod(page, otherId);
+  for (const [view, gross] of [['tediye', '24.500'], ['tis', '18.000'], ['ek-odeme', '12.000']]) {
+    await page.getByTestId(`nav-bordro-${view}`).click();
+    const discovery = page.getByTestId('other-period-accruals-p-1');
+    await discovery.locator('summary').click();
+    await expect(discovery).toContainText(sourceLabel);
+    await expect(discovery).toContainText(gross);
+    if (view === 'tediye') await expect(discovery).toContainText('Yeniden Hesaplanmalı');
+    await expect(page.getByTestId('payroll-row-p-1')).toContainText('Tahakkuk Eklenmedi');
+  }
+});
+
 test('normal payroll screen keeps summary cards compact and desktop table rows visible without excessive scrolling', async ({ page }) => {
   // Use Tauri desktop application default window size (1280x800)
   await page.setViewportSize({ width: 1280, height: 800 });

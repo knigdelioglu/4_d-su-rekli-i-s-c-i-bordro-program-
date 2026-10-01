@@ -272,21 +272,11 @@ export function getBatchNotApplicableReason(
     }>;
   },
   person: Pick<Personel, 'id' | 'devirKumulatifGvMatrahi' | 'devirKumulatifGvMatrahiYili' | 'devirKumulatifGvMatrahiBaslangicAyi'>,
-  activePeriod: BordroDonemi,
-  target: PaymentEventKey
+  activePeriod: BordroDonemi
 ): string | null {
   const periodsById = new Map(dataset.periods.map((period) => [period.id, period]));
-  const targetId = target.accrualId || target.id;
-  const laterFinalized = dataset.payrolls.find((payroll) => {
-    if (payroll.personelId !== person.id || payroll.status !== 'FINALIZED') return false;
-    if ((payroll.accrualId || payroll.id) === targetId) return false;
-    const period = periodsById.get(payroll.donemId);
-    return period !== undefined && comparePaymentEvents(payroll, target, period, activePeriod) > 0;
-  });
-  if (laterFinalized) {
-    const period = periodsById.get(laterFinalized.donemId);
-    return `sonraki ${period?.donemAdi || laterFinalized.donemId} döneminde kesinleşmiş bordrosu var; bu döneme yeni bordro eklenemez`;
-  }
+  // FINALIZED dependency decisions belong to the shared Rust policy. A later
+  // event can be independent after a tax-year reset and expired PEK carry.
 
   const opening = dataset.taxOpenings?.find(
     (item) => item.personnelId === person.id && item.year === activePeriod.taxYear
@@ -725,20 +715,38 @@ export function useBordroCalculationController({
           outcomes.push('finalized-skipped');
           continue;
         }
-        const notApplicableReason = getBatchNotApplicableReason(
+        let notApplicableReason = getBatchNotApplicableReason(
           currentDataset as unknown as Parameters<typeof getBatchNotApplicableReason>[0],
           person,
-          aktifDonem,
-          (() => {
-            const target = getNormalAccrualInput(person.id, currentDataset);
-            return {
-              paymentDate: target.paymentDate,
-              sequence: target.sequence,
-              accrualId: target.accrualId,
-              id: target.accrualId,
-            };
-          })()
+          aktifDonem
         );
+        if (!notApplicableReason) {
+          const target = getNormalAccrualInput(person.id, currentDataset);
+          try {
+            const impact = await payrollEngine.evaluateMutationPolicy(
+              existing
+                ? { kind: 'ACCRUAL_CALCULATION', personnelId: person.id,
+                    periodId: aktifDonem.id, accrualId: target.accrualId }
+                : { kind: 'ACCRUAL_INSERT', personnelId: person.id,
+                    periodId: aktifDonem.id, accrualId: target.accrualId,
+                    paymentDate: target.paymentDate, sequence: target.sequence },
+              currentDataset
+            );
+            if (impact.blockedByFinalized.length || impact.blockedByFinalizedRetroBatches.length) {
+              const periodsById = new Map(currentDataset.periods.map((period) => [period.id, period]));
+              const periods = [...new Set(impact.blockedByFinalized.map(
+                (key) => periodsById.get(key.periodId)?.donemAdi || key.periodId
+              ))];
+              notApplicableReason = `kesinleşmiş bağımlı bordro/retro geçmişi var: ${periods.join(', ')}${
+                impact.blockedByFinalizedRetroBatches.length ? ' (kesinleşmiş geriye dönük fark)' : ''
+              }`;
+            }
+          } catch (err) {
+            recordBatchError(person, `Bağımlılık kontrolü başarısız: ${formatPayrollError(err)}`);
+            outcomes.push('calculation-error');
+            continue;
+          }
+        }
         if (notApplicableReason) {
           notApplicablePersons.push(`${person.ad} ${person.soyad} (${notApplicableReason})`);
           outcomes.push('not-applicable');
@@ -1046,17 +1054,10 @@ export function useBordroCalculationController({
       return;
     }
     const singleDataset = buildDataset();
-    const singleTarget = getNormalAccrualInput(person.id, singleDataset);
     const singleNotApplicable = getBatchNotApplicableReason(
       singleDataset as unknown as Parameters<typeof getBatchNotApplicableReason>[0],
       person,
-      aktifDonem,
-      {
-        paymentDate: singleTarget.paymentDate,
-        sequence: singleTarget.sequence,
-        accrualId: singleTarget.accrualId,
-        id: singleTarget.accrualId,
-      }
+      aktifDonem
     );
     if (singleNotApplicable) {
       setSuccessMessage(null);

@@ -8,6 +8,7 @@ import {
   isStaleChainError,
   summarizeBatchPayrollOutcomes,
   tryAcquireSupplementaryPaymentScope,
+  STALE_CHAIN_HINT,
 } from './useBordroCalculationController';
 import { paymentEventSequenceScopeKey } from '../services/payrollEngine/paymentEventOrder';
 import { getPeriodDaysList } from '../utils/payrollPresentation';
@@ -109,7 +110,7 @@ describe('payroll error messages', () => {
         type: 'ValidationError',
         message: 'p-1_2026-09 tahakkuku STALE durumda; önceki zincir çözümlenemiyor.',
       })
-    ).toBe('p-1_2026-09 tahakkuku STALE durumda; önceki zincir çözümlenemiyor.');
+    ).toBe(`p-1_2026-09 tahakkuku STALE durumda; önceki zincir çözümlenemiyor. ${STALE_CHAIN_HINT}`);
   });
 
   test('formats attendance save errors safely across native, Error, and string variants', () => {
