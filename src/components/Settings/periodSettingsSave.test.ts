@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { DönemselKurumDegerleri } from '../../types/payroll';
 import { DEFAULT_PRODUCTION_KURUM_DEGERLERI } from '../../utils/payrollPresentation';
-import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
+import { formatPeriodSettingsSaveError, hasValidInitialWorkBonusGroups, isPositiveDailyBaseWage, savePeriodSettings } from './periodSettingsSave';
 
 const persisted: DönemselKurumDegerleri = {
   ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
@@ -11,6 +11,20 @@ const persisted: DönemselKurumDegerleri = {
 const edited: DönemselKurumDegerleri = { ...persisted, gunlukTabanUcret: 2443.29 };
 
 describe('period settings save feedback', () => {
+  test('requires a positive daily base wage for first-period creation', () => {
+    expect(isPositiveDailyBaseWage('')).toBe(false);
+    expect(isPositiveDailyBaseWage('0')).toBe(false);
+    expect(isPositiveDailyBaseWage('-0.01')).toBe(false);
+    expect(isPositiveDailyBaseWage('2443.28')).toBe(true);
+  });
+
+  test('requires institution work-bonus group names and rates without supplying invented defaults', () => {
+    expect(hasValidInitialWorkBonusGroups([])).toBe(false);
+    expect(hasValidInitialWorkBonusGroups([{ id: 'g1', ad: '', oran: 5 }])).toBe(false);
+    expect(hasValidInitialWorkBonusGroups([{ id: 'g1', ad: 'Temizlik', oran: Number.NaN }])).toBe(false);
+    expect(hasValidInitialWorkBonusGroups([{ id: 'g1', ad: 'Temizlik', oran: 5 }])).toBe(true);
+  });
+
   test('never renders object identity for supported error shapes', () => {
     const messages = [
       formatPeriodSettingsSaveError(new Error('Hata oluştu.')),

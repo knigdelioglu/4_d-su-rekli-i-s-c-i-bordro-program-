@@ -474,6 +474,128 @@ fn native_retro_payment_replay_refreshes_stale_event_without_duplicate() {
 }
 
 #[test]
+fn native_stale_batch_and_payment_recover_in_place_and_remain_idempotent() {
+    let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
+    let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");
+    let initial =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
+            batchId: "batch-stale-pair-recovery".into(),
+            revision: revision.clone(),
+            overrides: dataset
+                .compensationRevisionOverrides
+                .iter()
+                .filter(|item| item.revisionId == revision.id)
+                .cloned()
+                .collect(),
+            personnelId: "retro-atomic-person".into(),
+            paymentDate: "2026-06-20".into(),
+            calculatedAt: "2026-06-20T00:00:00Z".into(),
+            description: Some("Stale pair replay".into()),
+            dataset,
+        })
+        .expect("initial preview");
+    PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("initial payment");
+
+    conn.execute(
+        "UPDATE retro_adjustment_batches SET status = 'STALE' WHERE id = ?1",
+        [&initial.batch.id],
+    )
+    .expect("batch stale");
+    PayrollService::set_payroll_status_for_accrual(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&initial.batch.id),
+        BordroStatus::STALE,
+    )
+    .expect("payment stale");
+
+    let fresh_dataset = PayrollService::build_dataset_snapshot(&conn).expect("fresh dataset");
+    let recovered =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
+            batchId: initial.batch.id.clone(),
+            revision,
+            overrides: fresh_dataset
+                .compensationRevisionOverrides
+                .iter()
+                .filter(|item| item.revisionId == "revision-native-canonical")
+                .cloned()
+                .collect(),
+            personnelId: "retro-atomic-person".into(),
+            paymentDate: "2026-06-20".into(),
+            calculatedAt: "2026-06-20T00:00:00Z".into(),
+            description: Some("Stale pair replay".into()),
+            dataset: fresh_dataset,
+        })
+        .expect("stale pair recalculation");
+    assert!(recovered.batch.payableSettlementAmount > Decimal::ZERO);
+    for _ in 0..2 {
+        let replayed = PayrollService::create_retro_payment(
+            &conn,
+            &recovered.batch,
+            &recovered.allocations,
+            &payment_period.id,
+            0,
+        )
+        .expect("stale batch/payment same-ID replay");
+        assert_eq!(replayed.status, BordroStatus::CALCULATED);
+    }
+    let persisted = PayrollService::build_dataset_snapshot(&conn).expect("persisted state");
+    assert_eq!(
+        persisted
+            .retroBatches
+            .iter()
+            .filter(|item| item.id == initial.batch.id)
+            .count(),
+        1,
+        "same logical batch retains its identity"
+    );
+    assert_eq!(
+        persisted
+            .payrolls
+            .iter()
+            .filter(|item| item.accrualId == initial.batch.id)
+            .count(),
+        1,
+        "recovery never creates a duplicate payment event"
+    );
+    assert_eq!(
+        persisted.retroBatches[0].status,
+        CompensationRevisionStatus::CALCULATED
+    );
+
+    let next_period = retro_period("2026-07", 7);
+    PeriodRepository::save(&conn, &next_period).expect("sonraki dönem kaydedilmeli");
+    SettingsRepository::save_institution_settings(
+        &conn,
+        &DonemselKurumDegerleri {
+            donemId: next_period.id.clone(),
+            ..DonemselKurumDegerleri::default()
+        },
+    )
+    .expect("sonraki dönem ayarı kaydedilmeli");
+    AttendanceRepository::save(
+        &conn,
+        &complete_attendance(&next_period, "retro-atomic-person"),
+    )
+    .expect("sonraki dönem puantajı kaydedilmeli");
+    let next_payroll = PayrollService::calculate_payroll_for_personnel(
+        &conn,
+        "retro-atomic-person",
+        &next_period.id,
+    )
+    .expect("recovery sonrası sonraki payment-event/PEK zinciri çözülmeli");
+    assert_eq!(next_payroll.status, BordroStatus::CALCULATED);
+}
+
+#[test]
 fn native_retro_payment_rejects_forged_preview_before_any_write() {
     let (conn, source_period, payment_period, revision) = setup_full_retro_database();
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");

@@ -1,7 +1,7 @@
 import React from 'react';
 import { AlertCircle, ArrowRight, CheckCircle2, Info, Loader2, Plus } from 'lucide-react';
 import { AY_ISIMLERI } from '../../utils/payrollPresentation';
-import type { BordroDonemi } from '../../types/payroll';
+import type { BordroDonemi, IsPrimiGrupItem } from '../../types/payroll';
 
 interface NewPeriodSectionProps {
   newYear: number;
@@ -19,6 +19,10 @@ interface NewPeriodSectionProps {
   previewTaxChanged: boolean;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
   isSubmitting?: boolean;
+  dailyBaseWage?: string;
+  onDailyBaseWageChange?: (value: string) => void;
+  workBonusGroups?: IsPrimiGrupItem[];
+  onWorkBonusGroupsChange?: (groups: IsPrimiGrupItem[]) => void;
   errorMessage?: string | null;
   successMessage?: string | null;
 }
@@ -39,6 +43,10 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
   previewTaxChanged,
   onSubmit,
   isSubmitting = false,
+  dailyBaseWage = '',
+  onDailyBaseWageChange,
+  workBonusGroups = [],
+  onWorkBonusGroupsChange,
   errorMessage,
   successMessage,
 }) => (
@@ -109,6 +117,67 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
         <div className="text-xs text-indigo-800 font-mono">
           Ödeme/Tahakkuk Ayı: {AY_ISIMLERI[previewDonem.taxMonth - 1]} {previewDonem.taxYear}
         </div>
+      </div>
+
+      <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <label htmlFor="initial-daily-base-wage" className="block text-xs font-bold text-amber-950">
+            Günlük Taban Ücret (TL) <span className="text-rose-700">*</span>
+          </label>
+          <p className="mt-1 text-[11px] leading-relaxed text-amber-900">
+            Yeni dönem için kurumunuzun geçerli günlük taban ücretini kullanın. Mevcut dönem varsa tutar devralınır ve burada düzenlenebilir; temiz kurulumda tutarı siz girin.
+          </p>
+          <input
+            id="initial-daily-base-wage"
+            data-testid="initial-daily-base-wage"
+            type="number"
+            inputMode="decimal"
+            min={previewExists ? undefined : '0.01'}
+            step="0.01"
+            required={!previewExists}
+            value={dailyBaseWage}
+            onChange={(event) => onDailyBaseWageChange?.(event.target.value)}
+            className="mt-2 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono text-sm text-slate-900 focus:ring-2 focus:ring-indigo-500"
+          />
+      </div>
+
+      <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 space-y-3">
+        <div>
+          <div className="text-xs font-bold text-amber-950">İş Primi Grupları <span className="text-rose-700">*</span></div>
+          <p className="mt-1 text-[11px] leading-relaxed text-amber-900">
+            Kurumunuzun kullandığı grup adlarını ve oranlarını girin. Mevcut dönem varsa değerler devralınır.
+          </p>
+        </div>
+        {workBonusGroups.map((group, index) => (
+          <div key={group.id || index} className="grid grid-cols-1 sm:grid-cols-[1fr_9rem_auto] gap-2 items-end">
+            <div>
+              <label className="block text-[10px] font-semibold text-slate-600 mb-1">Grup Adı</label>
+              <input
+                aria-label={`İş primi grup ${index + 1} adı`}
+                value={group.ad}
+                onChange={(event) => onWorkBonusGroupsChange?.(workBonusGroups.map((item, itemIndex) => itemIndex === index ? { ...item, ad: event.target.value } : item))}
+                className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-semibold text-slate-600 mb-1">İş Primi Oranı (%)</label>
+              <input
+                aria-label={`İş primi grup ${index + 1} oranı`}
+                type="number" inputMode="decimal" min="0" max="100" step="0.1"
+                value={Number.isFinite(group.oran) ? group.oran : ''}
+                onChange={(event) => onWorkBonusGroupsChange?.(workBonusGroups.map((item, itemIndex) => itemIndex === index ? { ...item, oran: event.target.value === '' ? Number.NaN : Number(event.target.value) } : item))}
+                className="w-full rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono text-sm"
+              />
+            </div>
+            {workBonusGroups.length > 1 && (
+              <button type="button" onClick={() => onWorkBonusGroupsChange?.(workBonusGroups.filter((_, itemIndex) => itemIndex !== index))} className="rounded-lg px-3 py-2 text-xs text-rose-700 hover:bg-rose-100">Kaldır</button>
+            )}
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => onWorkBonusGroupsChange?.([...workBonusGroups, { id: `group-${Date.now()}`, ad: '', oran: Number.NaN, aktif: true }])}
+          className="text-xs font-semibold text-indigo-700 hover:text-indigo-900"
+        >+ Grup ekle</button>
       </div>
 
       {previewExists && (

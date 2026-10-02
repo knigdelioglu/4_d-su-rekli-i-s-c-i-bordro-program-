@@ -22,7 +22,18 @@ Kaynak SQLite salt okunur açılıp `/private/tmp/bordro-live-probe.sqlite` kopy
 - Alp'in Şubat 2027 üç ek tahakkuku kayıtlı tutarlarıyla sırayla yeniden hesaplandı: üç işlem başarılı.
 - Mayıs–Temmuzdaki tek kalan personel `Zincir Bir`: asgari GV açılışı 9. vergi ayından başlıyor; bu aylarda açılış başlangıcı aktif ayın ilerisinde. Aynı yıl kesinleşmiş geçmişi de mevcut. 60/60 elde etmek için geçmiş açılışı veya kesinleşmiş bordroları sessizce değiştirmek doğru değildir.
 
-Mevcut kurulu uygulama ayrıca güncellenmelidir. Yerel kaynak değişikliği, asıl veritabanındaki STALE kayıtları kendiliğinden yeniden hesaplamaz; Alp için Şubat 2027 çalışma dönemi seçilmelidir. `Hesaplandı` ödeme/banka aktarımı anlamına gelmez.
+Yerel kaynak değişikliği, asıl veritabanındaki STALE kayıtları kendiliğinden yeniden hesaplamaz. `Hesaplandı` ödeme/banka aktarımı anlamına gelmez.
+
+## Açık uygulamada takip doğrulaması
+
+Kullanıcının 57/60 ve Alp için STALE bildiriminden sonra açık yerel uygulamada gerçek yeniden hesaplama akışı çalıştırıldı. Öncesinde SQLite yedeği `/private/tmp/bordro-before-live-repair.sqlite` olarak alındı.
+
+- Mayıs, Haziran ve Temmuz 2026 toplu hesapları ayrı ayrı çalıştırıldı: her ay **59/60 Hesaplandı**. Oturum Kontrol ve Zincir İki artık hesaplanabiliyor; önceki 57/60 bu ayların eski kayıt durumuydu.
+- Üç ayın tek engeli Zincir Bir: hem normal GV hem asgari GV devri **2026-08 çalışma döneminden** başlıyor. Daha eski ayların doğru başlangıç matrahı tanımlı değil. Ayrıca Ağustos'tan itibaren aynı yıl kesinleşmiş bordroları bulunduğundan bağımlı geçmişi hesaplamak bu kesinleşmiş kayıtların korunmasıyla da değerlendirilmelidir. 60/60 için doğrulanmış geçmiş matrah bilgisi ve kesinleşmiş zincirin kontrollü düzeltilmesi gerekir; test sayısını tamamlamak için açılışlar uydurulmadı.
+- Mayıs–Temmuz hesabı sonraki Ağustos'taki iki bağımlı kaydı STALE yaptı. Ağustos toplu hesabı tekrar çalıştırılarak zincir yenilendi: arayüz **60/60**, SQLite **59 CALCULATED + 1 FINALIZED**.
+- Alp'in **Şubat 2027** tediyesi, TİS ikramiyesi ve ek ödemesi bu sırayla arayüzden yeniden hesaplandı. Üçünün de SQLite'a kaydedilen durumu **CALCULATED / Hesaplandı**; brütleri **24.500 / 18.000 / 12.000 TL**, ödeme tarihi **14.03.2027** olarak korundu.
+- Bu üç tahakkukun satır durumu için beklenen sonuç `Hesaplandı`dır. Tediye/TİS ekranındaki “Referans takvimde ödeme bekliyor” kurum takviminin `aktifDonemdeOdensin` işaretidir; tahakkukun ödeme durumu değildir. Geriye dönük farklar ekranındaki “Ödeme bekliyor” ise ayrı bir mahsuplaşma durumudur.
+- Mevcut **8 FINALIZED** kaydın tüm alanları yedekle karşılaştırıldığında değişmedi. Banka aktarımı veya kesinleştirme yapılmadı. Kalıcı dönem sayıları, Alp'in üç CALCULATED kaydı ve kesinleşmiş kayıtların değişmediği SQLite assertion kontrolleriyle doğrulandı; `git diff --check` geçti. Bu takipte uygulama kodu değiştirilmedi.
 
 ## Doğrulama komutları
 

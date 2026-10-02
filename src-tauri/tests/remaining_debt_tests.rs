@@ -285,6 +285,67 @@ fn period_and_settings_are_atomic_when_settings_write_fails() -> Result<()> {
 }
 
 #[test]
+fn clean_database_first_period_requires_a_positive_daily_base_wage() -> Result<()> {
+    let mut conn =
+        create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let periods_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM payroll_periods", [], |row| row.get(0))
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let settings_before: i64 = conn
+        .query_row("SELECT COUNT(*) FROM institution_settings", [], |row| {
+            row.get(0)
+        })
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    assert_eq!((periods_before, settings_before), (0, 0));
+
+    let first = period("2027-01", 2027);
+    let mut first_settings = settings(&first.id);
+    first_settings.gunlukTabanUcret = dec!(2443.28);
+    PeriodService::save_period_with_settings(&mut conn, &first, &first_settings)?;
+
+    let periods_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM payroll_periods WHERE id = ?1",
+            [&first.id],
+            |row| row.get(0),
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let settings_after: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM institution_settings WHERE period_id = ?1",
+            [&first.id],
+            |row| row.get(0),
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    assert_eq!((periods_after, settings_after), (1, 1));
+
+    let invalid = BordroDonemi {
+        id: "2027-02".into(),
+        ..period("2027-02", 2027)
+    };
+    let invalid_settings = settings(&invalid.id);
+    assert!(
+        PeriodService::save_period_with_settings(&mut conn, &invalid, &invalid_settings).is_err()
+    );
+    let invalid_period_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM payroll_periods WHERE id = '2027-02'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let invalid_settings_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM institution_settings WHERE period_id = '2027-02'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    assert_eq!((invalid_period_count, invalid_settings_count), (0, 0));
+    Ok(())
+}
+
+#[test]
 fn common_raise_month_splits_15_14_daily_income() -> Result<()> {
     let conn =
         create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;

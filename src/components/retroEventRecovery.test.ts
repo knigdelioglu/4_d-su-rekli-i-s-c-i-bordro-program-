@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { BordroKaydi, RetroAdjustmentBatch } from '../types/payroll';
+import type { BordroKaydi, RetroAdjustmentBatch, RetroAllocation } from '../types/payroll';
 import { retroPaymentEventNeedsReplay } from './retroEventRecovery';
 
 const batch = {
@@ -18,15 +18,26 @@ const payroll = {
   status: 'STALE',
 } as BordroKaydi;
 
+const allocations = [{ batchId: 'retro-1', sourcePeriodId: 'period-1' }] as RetroAllocation[];
+const sourcePayroll = {
+  personelId: 'person-1', donemId: 'period-1', accrualType: 'NORMAL', status: 'CALCULATED',
+} as BordroKaydi;
+
 describe('retro payment event recovery', () => {
-  test('offers replay only when a payable calculated ledger has a stale matching event', () => {
-    expect(retroPaymentEventNeedsReplay(batch, payroll)).toBe(true);
-    expect(retroPaymentEventNeedsReplay(batch, undefined)).toBe(false);
-    expect(retroPaymentEventNeedsReplay({ ...batch, status: 'STALE' } as RetroAdjustmentBatch, payroll)).toBe(false);
-    expect(retroPaymentEventNeedsReplay(batch, { ...payroll, status: 'CALCULATED' } as BordroKaydi)).toBe(false);
-    expect(retroPaymentEventNeedsReplay(batch, { ...payroll, accrualId: 'other' } as BordroKaydi)).toBe(false);
-    expect(retroPaymentEventNeedsReplay(batch, { ...payroll, personelId: 'other' } as BordroKaydi)).toBe(false);
-    expect(retroPaymentEventNeedsReplay(batch, { ...payroll, paymentDate: '2027-03-15' } as BordroKaydi)).toBe(false);
-    expect(retroPaymentEventNeedsReplay({ ...batch, payableSettlementAmount: 0 } as RetroAdjustmentBatch, payroll)).toBe(false);
+  test('recovers calculated/stale batches only with a stale matching event and authoritative source payroll', () => {
+    expect(retroPaymentEventNeedsReplay(batch, payroll, allocations, [sourcePayroll]).eligible).toBe(true);
+    expect(retroPaymentEventNeedsReplay({ ...batch, status: 'STALE' } as RetroAdjustmentBatch, payroll, allocations, [sourcePayroll]).eligible).toBe(true);
+    expect(retroPaymentEventNeedsReplay(batch, undefined, allocations, [sourcePayroll]).eligible).toBe(false);
+    expect(retroPaymentEventNeedsReplay(batch, { ...payroll, status: 'CALCULATED' } as BordroKaydi, allocations, [sourcePayroll]).eligible).toBe(false);
+    expect(retroPaymentEventNeedsReplay({ ...batch, payableSettlementAmount: 0 } as RetroAdjustmentBatch, payroll, allocations, [sourcePayroll]).eligible).toBe(false);
+    expect(retroPaymentEventNeedsReplay({ ...batch, settlementStatus: 'PAID' } as RetroAdjustmentBatch, payroll, allocations, [sourcePayroll]).eligible).toBe(false);
+  });
+
+  test('reports source periods that must be recalculated and hides finalized records', () => {
+    const staleSource = { ...sourcePayroll, status: 'STALE' } as BordroKaydi;
+    expect(retroPaymentEventNeedsReplay({ ...batch, status: 'STALE' } as RetroAdjustmentBatch, payroll, allocations, [staleSource]))
+      .toEqual({ eligible: false, blockedSourcePeriods: ['period-1'] });
+    expect(retroPaymentEventNeedsReplay({ ...batch, status: 'FINALIZED' } as RetroAdjustmentBatch, payroll, allocations, [sourcePayroll]).eligible).toBe(false);
+    expect(retroPaymentEventNeedsReplay(batch, { ...payroll, status: 'FINALIZED' } as BordroKaydi, allocations, [sourcePayroll]).eligible).toBe(false);
   });
 });

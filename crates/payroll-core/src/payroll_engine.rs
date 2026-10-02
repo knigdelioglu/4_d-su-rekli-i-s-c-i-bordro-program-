@@ -1201,9 +1201,32 @@ fn ordered_prior_payment_events<'a>(
             ))
         })
         .collect::<Result<Vec<_>>>()?;
-    events.retain(|(order, _)| order < current_order);
+    events.retain(|(order, payroll)| {
+        order < current_order && !is_superseded_zero_payable_retro(dataset, payroll)
+    });
     events.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(events)
+}
+
+/// A stale retro event remains in payroll_records as an audit record when its
+/// explicit recalculation resolves to no payment. The newly CALCULATED
+/// settlement ledger is authoritative evidence that this old event is retired;
+/// it must not enter PEK/GV ordering or be treated as an authoritative payment.
+fn is_superseded_zero_payable_retro(
+    dataset: &PayrollDatasetSnapshot,
+    payroll: &BordroKaydi,
+) -> bool {
+    payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
+        && payroll.status == BordroStatus::STALE
+        && dataset.retroBatches.iter().any(|batch| {
+            batch.id == effective_accrual_id(payroll)
+                && batch.personnelId == payroll.personelId
+                && batch.paymentDate == payroll.paymentDate
+                && batch.status == CompensationRevisionStatus::CALCULATED
+                && retro_payable_settlement_amount(batch) <= Decimal::ZERO
+                && (batch.totalGrossDelta <= Decimal::ZERO
+                    || batch.settlementStatus == RetroSettlementStatus::SETTLED_BY_OFFSET)
+        })
 }
 
 pub(crate) fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
@@ -1483,6 +1506,9 @@ fn validate_prior_accruals_finalized(
     for payroll in index.payrolls_for_person(dataset, personnel_id) {
         let order = accrual_order_for_payroll_with_index(dataset, index, payroll)?;
         if order >= current_order {
+            continue;
+        }
+        if is_superseded_zero_payable_retro(dataset, payroll) {
             continue;
         }
         if payroll.status == BordroStatus::FINALIZED {
@@ -3596,6 +3622,82 @@ mod tests {
             odenenRaporluGun: None,
             raporluGun: None,
         }
+    }
+
+    #[test]
+    fn stale_nonpayable_retro_is_retained_for_audit_but_excluded_from_payment_order() {
+        let current_period = tax_period("2026-07", 7);
+        let stale_event = event(
+            "2026-06",
+            6,
+            "retro-zero",
+            AccrualType::RETRO_ADJUSTMENT,
+            BordroStatus::STALE,
+            0,
+        );
+        let mut dataset = PayrollDatasetSnapshot {
+            periods: vec![tax_period("2026-06", 6), current_period.clone()],
+            payrolls: vec![stale_event.clone()],
+            retroBatches: vec![RetroAdjustmentBatch {
+                id: "retro-zero".into(),
+                revisionId: "revision-zero".into(),
+                personnelId: "person-1".into(),
+                paymentDate: stale_event.paymentDate.clone(),
+                status: CompensationRevisionStatus::CALCULATED,
+                settlementStatus: RetroSettlementStatus::OVERPAYMENT,
+                totalGrossDelta: dec!(-5),
+                payableSettlementAmount: Decimal::ZERO,
+                offsetSettlementAmount: Decimal::ZERO,
+                recoveredAmount: Decimal::ZERO,
+                recoverableAmount: dec!(5),
+                outstandingReceivable: dec!(5),
+                description: None,
+                createdAt: None,
+                calculatedAt: None,
+                finalizedAt: None,
+            }],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let index = PayrollDatasetIndex::build(&dataset);
+        let current = accrual_order_for_input(
+            &current_period,
+            &PayrollAccrualInput {
+                accrualId: "next-payment".into(),
+                accrualType: AccrualType::NORMAL,
+                paymentDate: "2026-07-31".into(),
+                sequence: 0,
+                grossAmount: None,
+                description: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            ordered_prior_payment_events(&dataset, &index, "person-1", &current)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(dataset.payrolls[0].status, BordroStatus::STALE);
+        assert!(ensure_authoritative_payment_event(&dataset.payrolls[0]).is_err());
+
+        dataset.retroBatches[0].totalGrossDelta = Decimal::ZERO;
+        dataset.retroBatches[0].settlementStatus = RetroSettlementStatus::UNSETTLED;
+        let zero_index = PayrollDatasetIndex::build(&dataset);
+        assert!(
+            ordered_prior_payment_events(&dataset, &zero_index, "person-1", &current)
+                .unwrap()
+                .is_empty(),
+            "an explicitly recalculated zero-payable settlement retires the stale cash event"
+        );
+
+        dataset.retroBatches[0].status = CompensationRevisionStatus::STALE;
+        let stale_index = PayrollDatasetIndex::build(&dataset);
+        assert_eq!(
+            ordered_prior_payment_events(&dataset, &stale_index, "person-1", &current)
+                .unwrap()
+                .len(),
+            1,
+            "unresolved stale retro remains fail-closed"
+        );
     }
 
     fn valid_tax_period(

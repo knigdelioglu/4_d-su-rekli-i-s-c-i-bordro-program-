@@ -1,4 +1,4 @@
-import type { DönemselKurumDegerleri } from '../../types/payroll';
+import type { DönemselKurumDegerleri, IsPrimiGrupItem } from '../../types/payroll';
 
 export type PeriodSettingsSaveOutcome =
   | { kind: 'success' }
@@ -100,4 +100,15 @@ export function sameZamAylari(left: number[], right: number[]): boolean {
   const a = normalize(left);
   const b = normalize(right);
   return a.length === b.length && a.every((month, index) => month === b[index]);
+}
+
+export function isPositiveDailyBaseWage(value: string): boolean {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+export function hasValidInitialWorkBonusGroups(groups: IsPrimiGrupItem[]): boolean {
+  return groups.length > 0 && groups.every((group) =>
+    group.ad.trim().length > 0 && Number.isFinite(group.oran) && group.oran >= 0 && group.oran <= 100
+  );
 }
