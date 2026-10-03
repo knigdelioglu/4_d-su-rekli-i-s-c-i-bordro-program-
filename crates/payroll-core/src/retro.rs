@@ -1212,45 +1212,19 @@ fn outstanding_receivable_before_current(
         .collect::<Vec<_>>();
     let batches = sort_retro_batches_chronologically(batches)?;
 
-    let mut outstanding = Decimal::ZERO;
+    let mut applicable_batches = Vec::new();
     for batch in batches {
         let batch_payment_date = parse_date(&batch.paymentDate, "önceki retro ödeme")?;
         if batch_payment_date > payment_date {
             continue;
         }
         validate_batch_ledger(index, dataset, &batch)?;
-        let legacy = has_legacy_settlement_flow(&batch);
-        let recoverable = if legacy {
-            negative_entitlement_amount(&batch)
-        } else {
-            batch.recoverableAmount
-        };
-        let offset = if legacy {
-            Decimal::ZERO
-        } else {
-            batch.offsetSettlementAmount
-        };
-        let recovered = if legacy {
-            Decimal::ZERO
-        } else {
-            batch.recoveredAmount
-        };
-        let available = outstanding + recoverable;
-        if offset + recovered > available {
-            return Err(DomainError::InvalidData(format!(
-                "{} settlement mahsup/tahsil akışı açık receivable bakiyesini aşıyor.",
-                batch.id
-            )));
-        }
-        outstanding = round2(available - offset - recovered);
-        if !legacy && round2(batch.outstandingReceivable) != round2(outstanding) {
-            return Err(DomainError::InvalidData(format!(
-                "{} outstanding receivable snapshot'ı kronolojik settlement replay ile eşleşmiyor.",
-                batch.id
-            )));
-        }
+        applicable_batches.push(batch);
     }
-    Ok(outstanding)
+    Ok(replay_retro_outstanding_receivables(&applicable_batches)?
+        .get(personnel_id)
+        .copied()
+        .unwrap_or(Decimal::ZERO))
 }
 
 /// Orders authoritative retro events by their payment date and then their
@@ -1284,6 +1258,78 @@ fn sort_retro_batches_chronologically(
             .then_with(|| left.2.id.cmp(&right.2.id))
     });
     Ok(keyed.into_iter().map(|(_, _, batch)| batch).collect())
+}
+
+/// Replays persisted receivable snapshots in the same chronological order
+/// used by runtime retro calculations. A zero-difference batch carries the
+/// prior balance forward, while an OVERPAYMENT batch adds its recoverable
+/// amount even when it has no payment event.
+pub fn replay_retro_outstanding_receivables(
+    batches: &[RetroAdjustmentBatch],
+) -> Result<HashMap<String, Decimal>> {
+    replay_retro_outstanding_receivables_with_legacy_flow(batches, true)
+}
+
+/// Validates a current V5 receivable snapshot. Unlike runtime reads of legacy
+/// rows, V5 explicitly persists every settlement-flow field, so an all-zero
+/// flow is a real zero-difference batch and its outstanding snapshot is still
+/// checked.
+pub fn validate_v5_retro_outstanding_receivables(batches: &[RetroAdjustmentBatch]) -> Result<()> {
+    replay_retro_outstanding_receivables_with_legacy_flow(batches, false).map(|_| ())
+}
+
+fn replay_retro_outstanding_receivables_with_legacy_flow(
+    batches: &[RetroAdjustmentBatch],
+    allow_legacy_flow: bool,
+) -> Result<HashMap<String, Decimal>> {
+    let batches = sort_retro_batches_chronologically(batches.to_vec())?;
+    let mut outstanding_by_personnel = HashMap::<String, Decimal>::new();
+
+    for batch in batches.into_iter().filter(|batch| {
+        matches!(
+            batch.status,
+            CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+        )
+    }) {
+        let personnel_id = batch.personnelId.clone();
+        let outstanding = outstanding_by_personnel
+            .get(&personnel_id)
+            .copied()
+            .unwrap_or(Decimal::ZERO);
+        let legacy = allow_legacy_flow && has_legacy_settlement_flow(&batch);
+        let recoverable = if legacy {
+            negative_entitlement_amount(&batch)
+        } else {
+            batch.recoverableAmount
+        };
+        let offset = if legacy {
+            Decimal::ZERO
+        } else {
+            batch.offsetSettlementAmount
+        };
+        let recovered = if legacy {
+            Decimal::ZERO
+        } else {
+            batch.recoveredAmount
+        };
+        let available = outstanding + recoverable;
+        if offset + recovered > available {
+            return Err(DomainError::InvalidData(format!(
+                "{} settlement mahsup/tahsil akışı açık receivable bakiyesini aşıyor.",
+                batch.id
+            )));
+        }
+        let replayed = round2(available - offset - recovered);
+        if !legacy && round2(batch.outstandingReceivable) != replayed {
+            return Err(DomainError::InvalidData(format!(
+                "{} outstanding receivable snapshot'ı kronolojik settlement replay ile eşleşmiyor.",
+                batch.id
+            )));
+        }
+        outstanding_by_personnel.insert(personnel_id, replayed);
+    }
+
+    Ok(outstanding_by_personnel)
 }
 
 fn assign_current_settlement_allocations(

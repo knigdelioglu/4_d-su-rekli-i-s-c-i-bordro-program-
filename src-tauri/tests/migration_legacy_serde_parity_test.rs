@@ -642,6 +642,78 @@ fn current_v5_fixture_with_nafaka(
     Ok((conn, payload))
 }
 
+fn current_v5_payload_from_database(
+    conn: &rusqlite::Connection,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let dataset = PayrollService::build_dataset_snapshot(conn)?;
+    let active_period_id =
+        SettingsRepository::get_app_setting(conn, "active_period_id")?.unwrap_or_default();
+    Ok(json!({
+        "backupVersion": 5,
+        "exportedAt": "2026-10-03T00:00:00.000Z",
+        "donemler": dataset.periods,
+        "aktifDonemId": active_period_id,
+        "personeller": dataset.personnel,
+        "kurumDegerleriMap": dataset.institutionSettings,
+        "puantajlar": dataset.attendances,
+        "bordrolar": dataset.payrolls,
+        "taxOpenings": dataset.taxOpenings,
+        "sickLeaveRecords": dataset.sickLeaveRecords,
+        "annualPayrollParameters": dataset.annualPayrollParameters,
+        "zamAylari": dataset.zamAylari,
+        "compensationRevisions": dataset.compensationRevisions,
+        "compensationRevisionOverrides": dataset.compensationRevisionOverrides,
+        "retroBatches": dataset.retroBatches,
+        "retroAllocations": dataset.retroAllocations
+    })
+    .to_string())
+}
+
+fn v5_backup_fingerprint(conn: &rusqlite::Connection) -> Result<Value, Box<dyn std::error::Error>> {
+    let dataset = PayrollService::build_dataset_snapshot(conn)?;
+    let mut batches = dataset
+        .retroBatches
+        .iter()
+        .map(|batch| {
+            json!({
+                "id": batch.id,
+                "status": batch.status,
+                "settlementStatus": batch.settlementStatus,
+                "totalGrossDelta": batch.totalGrossDelta,
+                "payableSettlementAmount": batch.payableSettlementAmount,
+                "recoverableAmount": batch.recoverableAmount,
+                "outstandingReceivable": batch.outstandingReceivable
+            })
+        })
+        .collect::<Vec<_>>();
+    batches.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    let mut payrolls = dataset
+        .payrolls
+        .iter()
+        .map(|payroll| {
+            json!({
+                "id": payroll.id,
+                "status": payroll.status,
+                "gelirToplam": payroll.gelirToplam,
+                "kesintiToplam": payroll.kesintiToplam,
+                "netOdeme": payroll.netOdeme
+            })
+        })
+        .collect::<Vec<_>>();
+    payrolls.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    Ok(json!({
+        "personnelCount": dataset.personnel.len(),
+        "periodCount": dataset.periods.len(),
+        "timesheetCount": dataset.attendances.len(),
+        "payrollCount": dataset.payrolls.len(),
+        "retroBatchCount": dataset.retroBatches.len(),
+        "allocationCount": dataset.retroAllocations.len(),
+        "paymentEventCount": dataset.payrolls.iter().filter(|item| item.accrualType == AccrualType::RETRO_ADJUSTMENT).count(),
+        "batches": batches,
+        "payrolls": payrolls
+    }))
+}
+
 #[test]
 fn native_current_v5_backup_roundtrip_replays_authoritative_snapshot(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -664,6 +736,228 @@ fn native_current_v5_backup_roundtrip_replays_authoritative_snapshot(
         financial_snapshot_without_timestamps(before),
         financial_snapshot_without_timestamps(after)
     );
+    Ok(())
+}
+
+#[test]
+fn native_v5_zero_recovery_and_overpayment_backup_roundtrips_and_rejects_tampering(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (mut source, base_payload) = current_v5_fixture()?;
+    let mut runtime_state: Value = serde_json::from_str(&base_payload)?;
+    runtime_state["compensationRevisions"] = json!([{
+        "id": "revision-receivable-replay",
+        "reason": "COLLECTIVE_AGREEMENT",
+        "title": "Receivable replay",
+        "effectiveFrom": "2026-01-15",
+        "status": "CALCULATED",
+        "scope": "SELECTED_PERSONNEL",
+        "personnelIds": ["v5-person"]
+    }]);
+    runtime_state["retroBatches"] = json!([
+        {
+            "id": "retro-0cbb12f3-4999-43d6-8215-9b710093c5d4",
+            "revisionId": "revision-receivable-replay",
+            "personnelId": "v5-person",
+            "paymentDate": "2027-03-14",
+            "status": "CALCULATED",
+            "settlementStatus": "UNSETTLED",
+            "totalGrossDelta": "0.00",
+            "payableSettlementAmount": "0.00",
+            "offsetSettlementAmount": "0.00",
+            "recoveredAmount": "0.00",
+            "recoverableAmount": "0.00",
+            "outstandingReceivable": "160872.98",
+            "createdAt": "2026-09-30T11:43:10.586Z",
+            "calculatedAt": "2026-09-30T11:43:10.586Z"
+        },
+        {
+            "id": "retro-43d8c24e-6c31-416b-b203-c334568697c1",
+            "revisionId": "revision-receivable-replay",
+            "personnelId": "v5-person",
+            "paymentDate": "2027-03-14",
+            "status": "CALCULATED",
+            "settlementStatus": "OVERPAYMENT",
+            "totalGrossDelta": "-160872.98",
+            "payableSettlementAmount": "0.00",
+            "offsetSettlementAmount": "0.00",
+            "recoveredAmount": "0.00",
+            "recoverableAmount": "160872.98",
+            "outstandingReceivable": "160872.98"
+        },
+        {
+            "id": "retro-f0000000-0000-4000-8000-000000000001",
+            "revisionId": "revision-receivable-replay",
+            "personnelId": "v5-person",
+            "paymentDate": "2027-03-14",
+            "status": "CALCULATED",
+            "settlementStatus": "OVERPAYMENT",
+            "totalGrossDelta": "-10.00",
+            "payableSettlementAmount": "0.00",
+            "offsetSettlementAmount": "0.00",
+            "recoveredAmount": "0.00",
+            "recoverableAmount": "10.00",
+            "outstandingReceivable": "160882.98",
+            "createdAt": "2026-10-01T11:43:10.586Z",
+            "calculatedAt": "2026-10-01T11:43:10.586Z"
+        }
+    ]);
+    runtime_state["retroAllocations"] = json!([
+        {
+            "id": "allocation-prior-overpayment",
+            "batchId": "retro-43d8c24e-6c31-416b-b203-c334568697c1",
+            "personnelId": "v5-person",
+            "sourcePeriodId": "2025-12",
+            "earningCode": "BASE_WAGE",
+            "originalRecognizedAmount": "160872.98",
+            "targetAmount": "0.00",
+            "deltaAmount": "-160872.98",
+            "sgkTreatment": "WAGE_SOURCE_MONTH",
+            "incomeTaxTreatment": "TAXABLE",
+            "stampTaxTreatment": "TAXABLE",
+            "originalEmployerLowerBound": "0.00",
+            "targetEmployerLowerBound": "0.00",
+            "employerLowerBoundDelta": "0.00",
+            "employerLowerBoundPremiumDelta": "0.00",
+            "payableSettlementAmount": "0.00",
+            "offsetSettlementAmount": "0.00",
+            "recoverableAmount": "160872.98"
+        },
+        {
+            "id": "allocation-zero-recovery",
+            "batchId": "retro-0cbb12f3-4999-43d6-8215-9b710093c5d4",
+            "personnelId": "v5-person",
+            "sourcePeriodId": "2025-12",
+            "earningCode": "BASE_WAGE",
+            "originalRecognizedAmount": "0.00",
+            "targetAmount": "0.00",
+            "deltaAmount": "0.00",
+            "sgkTreatment": "WAGE_SOURCE_MONTH",
+            "incomeTaxTreatment": "TAXABLE",
+            "stampTaxTreatment": "TAXABLE",
+            "originalEmployerLowerBound": "0.00",
+            "targetEmployerLowerBound": "0.00",
+            "employerLowerBoundDelta": "0.00",
+            "employerLowerBoundPremiumDelta": "0.00",
+            "payableSettlementAmount": "0.00",
+            "offsetSettlementAmount": "0.00",
+            "recoverableAmount": "0.00"
+        },
+        {
+            "id": "allocation-later-overpayment",
+            "batchId": "retro-f0000000-0000-4000-8000-000000000001",
+            "personnelId": "v5-person",
+            "sourcePeriodId": "2025-12",
+            "earningCode": "BASE_WAGE",
+            "originalRecognizedAmount": "10.00",
+            "targetAmount": "0.00",
+            "deltaAmount": "-10.00",
+            "sgkTreatment": "WAGE_SOURCE_MONTH",
+            "incomeTaxTreatment": "TAXABLE",
+            "stampTaxTreatment": "TAXABLE",
+            "originalEmployerLowerBound": "0.00",
+            "targetEmployerLowerBound": "0.00",
+            "employerLowerBoundDelta": "0.00",
+            "employerLowerBoundPremiumDelta": "0.00",
+            "payableSettlementAmount": "0.00",
+            "offsetSettlementAmount": "0.00",
+            "recoverableAmount": "10.00"
+        }
+    ]);
+    MigrationService::replace_backup_data(&mut source, &runtime_state.to_string())?;
+    let before_fingerprint = v5_backup_fingerprint(&source)?;
+    let backup_payload = current_v5_payload_from_database(&source)?;
+    let mut restored = create_in_memory_connection()?;
+    MigrationService::replace_backup_data(&mut restored, &backup_payload)?;
+    assert_eq!(v5_backup_fingerprint(&restored)?, before_fingerprint);
+
+    MigrationService::replace_backup_data(&mut restored, &base_payload)?;
+    assert_ne!(
+        v5_backup_fingerprint(&restored)?,
+        before_fingerprint,
+        "controlled database change must differ from the saved backup"
+    );
+    MigrationService::replace_backup_data(&mut restored, &backup_payload)?;
+    assert_eq!(
+        v5_backup_fingerprint(&restored)?,
+        before_fingerprint,
+        "restoring after a controlled change must recover the saved fingerprint"
+    );
+
+    let restored_dataset = PayrollService::build_dataset_snapshot(&restored)?;
+    let zero = restored_dataset
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id.starts_with("retro-0cbb"))
+        .expect("zero-difference recovery batch must restore");
+    let prior_overpayment = restored_dataset
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id.starts_with("retro-43d8"))
+        .expect("eventless overpayment batch must restore");
+    assert_eq!(zero.totalGrossDelta, Decimal::ZERO);
+    assert_eq!(zero.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(zero.outstandingReceivable, dec!(160872.98));
+    assert_eq!(
+        prior_overpayment.settlementStatus,
+        RetroSettlementStatus::OVERPAYMENT
+    );
+    assert_eq!(prior_overpayment.outstandingReceivable, dec!(160872.98));
+    let later_overpayment = restored_dataset
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id.starts_with("retro-f000"))
+        .expect("later eventless overpayment batch must restore");
+    assert_eq!(
+        later_overpayment.settlementStatus,
+        RetroSettlementStatus::OVERPAYMENT
+    );
+    assert_eq!(later_overpayment.recoverableAmount, dec!(10.00));
+    assert_eq!(later_overpayment.outstandingReceivable, dec!(160882.98));
+    let zero_allocation = restored_dataset
+        .retroAllocations
+        .iter()
+        .find(|allocation| allocation.batchId == zero.id)
+        .expect("zero-recovery allocation must restore");
+    assert_eq!(zero_allocation.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(
+        restored_dataset
+            .payrolls
+            .iter()
+            .filter(|item| item.accrualType == AccrualType::RETRO_ADJUSTMENT)
+            .count(),
+        0
+    );
+
+    let mut payroll_chain_check = create_in_memory_connection()?;
+    MigrationService::replace_backup_data(&mut payroll_chain_check, &backup_payload)?;
+    let recalculated = PayrollService::calculate_payroll_for_personnel(
+        &payroll_chain_check,
+        "v5-person",
+        "2026-01",
+    )?;
+    assert_eq!(recalculated.status, BordroStatus::CALCULATED);
+
+    let before_failure = v5_backup_fingerprint(&restored)?;
+    let mut corrupted: Value = serde_json::from_str(&backup_payload)?;
+    let zero_index = corrupted["retroBatches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|batch| batch["id"] == "retro-0cbb12f3-4999-43d6-8215-9b710093c5d4")
+        .expect("zero batch in exported backup");
+    corrupted["retroBatches"][zero_index]["outstandingReceivable"] = json!("0.00");
+    let error = MigrationService::replace_backup_data(&mut restored, &corrupted.to_string())
+        .expect_err("forged receivable snapshot must be rejected");
+    assert!(error
+        .to_string()
+        .contains("outstanding receivable snapshot"));
+    assert_eq!(
+        v5_backup_fingerprint(&restored)?,
+        before_failure,
+        "failed restore rolls back all data"
+    );
+    let integrity: String = restored.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    assert_eq!(integrity, "ok");
     Ok(())
 }
 

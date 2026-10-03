@@ -868,17 +868,17 @@ describe('BrowserPayrollStore', () => {
     const mixedBatches = mixedTimestamps.retroBatches as TestRecord[];
     const mixedPositive = mixedBatches.find((batch) => batch.id === positiveBatchId)!;
     const mixedRecovery = mixedBatches.find((batch) => batch.id === recoveryBatchId)!;
-    mixedPositive.id = 'retro-a-positive';
-    mixedRecovery.id = 'retro-z-recovery';
-    delete mixedRecovery.createdAt;
+    mixedPositive.id = 'retro-z-positive';
+    mixedRecovery.id = 'retro-a-recovery';
+    delete mixedPositive.createdAt;
     const mixedAllocations = mixedTimestamps.retroAllocations as TestRecord[];
     mixedAllocations.forEach((allocation) => {
       if (allocation.batchId === positiveBatchId) {
-        allocation.batchId = 'retro-a-positive';
-        allocation.id = 'retro-a-positive_2027-01_BASE_WAGE';
+        allocation.batchId = 'retro-z-positive';
+        allocation.id = 'retro-z-positive_2027-01_BASE_WAGE';
       } else {
-        allocation.batchId = 'retro-z-recovery';
-        allocation.id = 'retro-z-recovery_2027-01_BASE_WAGE';
+        allocation.batchId = 'retro-a-recovery';
+        allocation.id = 'retro-a-recovery_2027-01_BASE_WAGE';
       }
     });
     expect(() => parseImportedBackup(JSON.stringify(mixedTimestamps))).not.toThrow();
@@ -891,6 +891,141 @@ describe('BrowserPayrollStore', () => {
     expect(() => parseImportedBackup(JSON.stringify(inconsistent))).toThrow(
       'outstanding receivable replay sonucu ile eşleşmiyor'
     );
+  });
+
+  test('accepts runtime receivable replay with zero recovery and eventless overpayments', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const zeroRecoveryId = 'retro-0cbb12f3-4999-43d6-8215-9b710093c5d4';
+    const priorOverpaymentId = 'retro-43d8c24e-6c31-416b-b203-c334568697c1';
+    const laterOverpaymentId = 'retro-f0000000-0000-4000-8000-000000000001';
+    const revisionId = 'revision-receivable-replay';
+    payload.compensationRevisions = [{
+      id: revisionId,
+      reason: 'COLLECTIVE_AGREEMENT',
+      title: 'Receivable replay',
+      effectiveFrom: '2026-01-15',
+      status: 'CALCULATED',
+      scope: 'SELECTED_PERSONNEL',
+      personnelIds: ['person-1'],
+    }];
+    const priorOverpayment = {
+      id: priorOverpaymentId,
+      revisionId,
+      personnelId: 'person-1',
+      paymentDate: '2027-03-14',
+      status: 'CALCULATED',
+      settlementStatus: 'OVERPAYMENT',
+      totalGrossDelta: '-160872.98',
+      createdAt: undefined,
+      ...retroBatchSettlement('-160872.98'),
+    };
+    const zeroRecovery = {
+      id: zeroRecoveryId,
+      revisionId,
+      personnelId: 'person-1',
+      paymentDate: '2027-03-14',
+      status: 'CALCULATED',
+      settlementStatus: 'UNSETTLED',
+      totalGrossDelta: '0.00',
+      createdAt: '2026-09-30T11:43:10.586Z',
+      calculatedAt: '2026-09-30T11:43:10.586Z',
+      ...retroBatchSettlement('0.00'),
+      outstandingReceivable: '160872.98',
+    };
+    const laterOverpayment = {
+      id: laterOverpaymentId,
+      revisionId,
+      personnelId: 'person-1',
+      paymentDate: '2027-03-14',
+      status: 'CALCULATED',
+      settlementStatus: 'OVERPAYMENT',
+      totalGrossDelta: '-10.00',
+      createdAt: '2026-10-01T11:43:10.586Z',
+      calculatedAt: '2026-10-01T11:43:10.586Z',
+      ...retroBatchSettlement('-10.00'),
+      outstandingReceivable: '160882.98',
+    };
+    payload.retroBatches = [zeroRecovery, laterOverpayment, priorOverpayment];
+    payload.retroAllocations = [
+      {
+        id: `${priorOverpaymentId}_2026-01_BASE_WAGE`,
+        batchId: priorOverpaymentId,
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'BASE_WAGE',
+        originalRecognizedAmount: '160872.98',
+        targetAmount: '0.00',
+        deltaAmount: '-160872.98',
+        ...retroAllocationSettlement('-160872.98'),
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+      {
+        id: `${zeroRecoveryId}_2026-01_BASE_WAGE`,
+        batchId: zeroRecoveryId,
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'BASE_WAGE',
+        originalRecognizedAmount: '0.00',
+        targetAmount: '0.00',
+        deltaAmount: '0.00',
+        ...retroAllocationSettlement('0.00'),
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+      {
+        id: `${laterOverpaymentId}_2026-01_BASE_WAGE`,
+        batchId: laterOverpaymentId,
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'BASE_WAGE',
+        originalRecognizedAmount: '10.00',
+        targetAmount: '0.00',
+        deltaAmount: '-10.00',
+        ...retroAllocationSettlement('-10.00'),
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+    ];
+
+    const imported = parseImportedBackup(JSON.stringify(payload));
+    const roundTripped = parseCurrentBrowserSnapshot(serializePayrollStorage(imported));
+    const byId = (id: string) => roundTripped.retroBatches.find((batch) => batch.id === id)!;
+    expect(byId(zeroRecoveryId).status).toBe('CALCULATED');
+    expect(byId(zeroRecoveryId).settlementStatus).toBe('UNSETTLED');
+    expect(byId(zeroRecoveryId).totalGrossDelta).toBe('0.00');
+    expect(byId(zeroRecoveryId).payableSettlementAmount).toBe('0.00');
+    expect(byId(zeroRecoveryId).outstandingReceivable).toBe('160872.98');
+    expect(byId(priorOverpaymentId).settlementStatus).toBe('OVERPAYMENT');
+    expect(byId(priorOverpaymentId).recoverableAmount).toBe('160872.98');
+    expect(byId(priorOverpaymentId).outstandingReceivable).toBe('160872.98');
+    expect(byId(laterOverpaymentId).settlementStatus).toBe('OVERPAYMENT');
+    expect(byId(laterOverpaymentId).recoverableAmount).toBe('10.00');
+    expect(byId(laterOverpaymentId).outstandingReceivable).toBe('160882.98');
+    expect(roundTripped.retroAllocations.find((allocation) => allocation.batchId === zeroRecoveryId)?.payableSettlementAmount)
+      .toBe('0.00');
+    expect(roundTripped.bordrolar.filter((payroll) => payroll.accrualType === 'RETRO_ADJUSTMENT').length).toBe(0);
+
+    const corrupted = JSON.parse(JSON.stringify(payload)) as TestRecord;
+    const corruptedZero = (corrupted.retroBatches as TestRecord[]).find((batch) => batch.id === zeroRecoveryId)!;
+    corruptedZero.outstandingReceivable = '0.00';
+    expect(() => parseImportedBackup(JSON.stringify(corrupted))).toThrow(
+      'outstanding receivable replay sonucu ile eşleşmiyor'
+    );
+
+    const sameInstant = JSON.parse(JSON.stringify(payload)) as TestRecord;
+    const sameInstantBatches = sameInstant.retroBatches as TestRecord[];
+    const sameInstantZero = sameInstantBatches.find((batch) => batch.id === zeroRecoveryId)!;
+    const sameInstantPrior = sameInstantBatches.find((batch) => batch.id === priorOverpaymentId)!;
+    sameInstantZero.outstandingReceivable = '0.00';
+    sameInstantPrior.outstandingReceivable = '160872.98';
+    sameInstantPrior.createdAt = '2026-09-30T14:43:10.586+03:00';
+    expect(() => parseImportedBackup(JSON.stringify(sameInstant))).not.toThrow();
+    sameInstantBatches.reverse();
+    expect(() => parseImportedBackup(JSON.stringify(sameInstant))).not.toThrow();
   });
 
   test('keeps retro batch lifecycle and linked payment event status consistent', () => {

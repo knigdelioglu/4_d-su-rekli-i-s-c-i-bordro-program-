@@ -1,14 +1,15 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
-    calculate_payroll, canonical_sgk_earning_class, retro_earning_policy,
-    retro_payable_settlement_amount, retro_payment_income, round_sgk_amount, AccrualType,
-    AnnualPayrollParameters, BordroDonemi, BordroKaydi, BordroStatus, CanonicalSgkEarningClass,
-    CompensationRevision, CompensationRevisionOverride, CompensationRevisionReason,
-    CompensationRevisionScope, CompensationRevisionStatus, DonemselKurumDegerleri,
-    PayrollAccrualInput, PayrollCalculationRequest, PayrollDatasetSnapshot, Personel,
-    PersonelPuantaj, RetroAdjustmentBatch, RetroAllocation, RetroEarningCode,
-    RetroEntitlementEngine, RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment,
-    RetroTaxTreatment, SickLeaveRecord, StatutoryParameterSegment,
+    calculate_payroll, canonical_sgk_earning_class, replay_retro_outstanding_receivables,
+    retro_earning_policy, retro_payable_settlement_amount, retro_payment_income, round_sgk_amount,
+    validate_v5_retro_outstanding_receivables, AccrualType, AnnualPayrollParameters, BordroDonemi,
+    BordroKaydi, BordroStatus, CanonicalSgkEarningClass, CompensationRevision,
+    CompensationRevisionOverride, CompensationRevisionReason, CompensationRevisionScope,
+    CompensationRevisionStatus, DonemselKurumDegerleri, PayrollAccrualInput,
+    PayrollCalculationRequest, PayrollDatasetSnapshot, Personel, PersonelPuantaj,
+    RetroAdjustmentBatch, RetroAllocation, RetroEarningCode, RetroEntitlementEngine,
+    RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment, RetroTaxTreatment,
+    SickLeaveRecord, StatutoryParameterSegment,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -3053,4 +3054,80 @@ fn bug_retro_001_test_d_valid_daily_wage_retro_matches_normal_entitlement() {
     .expect("second calculation");
     assert_eq!(second.batch.totalGrossDelta, Decimal::ZERO);
     assert_eq!(second.batch.payableSettlementAmount, Decimal::ZERO);
+}
+
+#[test]
+fn receivable_replay_matches_runtime_order_for_zero_and_unpaid_overpayment_batches() {
+    fn batch(
+        id: &str,
+        total: Decimal,
+        recoverable: Decimal,
+        outstanding: Decimal,
+        settlement_status: RetroSettlementStatus,
+        created_at: Option<&str>,
+    ) -> RetroAdjustmentBatch {
+        RetroAdjustmentBatch {
+            id: id.into(),
+            revisionId: format!("revision-{id}"),
+            personnelId: "p1".into(),
+            paymentDate: "2027-03-14".into(),
+            status: CompensationRevisionStatus::CALCULATED,
+            settlementStatus: settlement_status,
+            totalGrossDelta: total,
+            payableSettlementAmount: Decimal::ZERO,
+            offsetSettlementAmount: Decimal::ZERO,
+            recoveredAmount: Decimal::ZERO,
+            recoverableAmount: recoverable,
+            outstandingReceivable: outstanding,
+            description: None,
+            createdAt: created_at.map(str::to_owned),
+            calculatedAt: created_at.map(str::to_owned),
+            finalizedAt: None,
+        }
+    }
+
+    let prior_overpayment = batch(
+        "retro-43d8c24e-6c31-416b-b203-c334568697c1",
+        dec!(-160872.98),
+        dec!(160872.98),
+        dec!(160872.98),
+        RetroSettlementStatus::OVERPAYMENT,
+        None,
+    );
+    let zero_recovery = batch(
+        "retro-0cbb12f3-4999-43d6-8215-9b710093c5d4",
+        Decimal::ZERO,
+        Decimal::ZERO,
+        dec!(160872.98),
+        RetroSettlementStatus::UNSETTLED,
+        Some("2026-09-30T11:43:10.586Z"),
+    );
+    let later_overpayment = batch(
+        "retro-f0000000-0000-4000-8000-000000000001",
+        dec!(-10.00),
+        dec!(10.00),
+        dec!(160882.98),
+        RetroSettlementStatus::OVERPAYMENT,
+        Some("2026-10-01T11:43:10.586Z"),
+    );
+
+    let replay = replay_retro_outstanding_receivables(&[
+        later_overpayment.clone(),
+        zero_recovery.clone(),
+        prior_overpayment.clone(),
+    ])
+    .expect("runtime-valid receivable chain should replay");
+    assert_eq!(replay.get("p1"), Some(&dec!(160882.98)));
+
+    let mut corrupted_zero_recovery = zero_recovery;
+    corrupted_zero_recovery.outstandingReceivable = Decimal::ZERO;
+    let error = validate_v5_retro_outstanding_receivables(&[
+        prior_overpayment,
+        corrupted_zero_recovery,
+        later_overpayment,
+    ])
+    .expect_err("an incorrect zero-difference receivable snapshot must remain invalid");
+    assert!(error
+        .to_string()
+        .contains("retro-0cbb12f3-4999-43d6-8215-9b710093c5d4"));
 }

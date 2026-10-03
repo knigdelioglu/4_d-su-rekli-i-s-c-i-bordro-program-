@@ -1000,6 +1000,7 @@ mod backup_replay_comparison_tests {
 
 fn validate_current_backup_replay(conn: &Connection) -> Result<()> {
     let dataset = PayrollService::build_dataset_snapshot(conn)?;
+    payroll_core::validate_v5_retro_outstanding_receivables(&dataset.retroBatches)?;
     let targets = dataset
         .payrolls
         .iter()

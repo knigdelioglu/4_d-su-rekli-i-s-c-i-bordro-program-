@@ -1185,23 +1185,45 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
     }
   });
 
-  const personnelPaymentKey = (batch: PayrollStorageDto['retroBatches'][number]) =>
-    `${batch.personnelId}\u0000${batch.paymentDate}`;
-  const groupsWithMissingCreatedAt = new Set(
-    payload.retroBatches
-      .filter((batch) => !batch.createdAt)
-      .map(personnelPaymentKey)
+  const createdAtKeys = new Map(
+    payload.retroBatches.map((batch, index) => {
+      if (batch.createdAt == null) return [batch, null] as const;
+      const timestamp = Date.parse(batch.createdAt);
+      const timestampParts = batch.createdAt.match(
+        /^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(?:Z|[+-](\d{2}):(\d{2}))$/u
+      );
+      const validTimestamp = timestampParts &&
+        isValidIsoDate(timestampParts[1]) &&
+        (timestampParts[5]?.length ?? 0) <= 9 &&
+        Number(timestampParts[2]) <= 23 &&
+        Number(timestampParts[3]) <= 59 &&
+        Number(timestampParts[4]) <= 59 &&
+        Number(timestampParts[6] ?? 0) <= 23 &&
+        Number(timestampParts[7] ?? 0) <= 59;
+      if (!Number.isFinite(timestamp) || !timestampParts || !validTimestamp) {
+        fail('$.retroBatches[' + index + '].createdAt', 'geçerli RFC3339 timestamp değil.');
+      }
+      // Date.parse resolves the zone to UTC and retains milliseconds; append
+      // sub-millisecond digits to match chrono's nanosecond ordering.
+      const fractionalSeconds = timestampParts[5] ?? '';
+      const subMillisecondNanos = BigInt(fractionalSeconds.slice(3, 9).padEnd(6, '0') || '0');
+      return [batch, BigInt(timestamp) * 1_000_000n + subMillisecondNanos] as const;
+    })
   );
   const orderedBatches = [...payload.retroBatches].sort((left, right) => {
-    const personnelOrder = left.personnelId.localeCompare(right.personnelId);
+    const personnelOrder = left.personnelId < right.personnelId ? -1 : left.personnelId > right.personnelId ? 1 : 0;
     if (personnelOrder !== 0) return personnelOrder;
-    const paymentDateOrder = left.paymentDate.localeCompare(right.paymentDate);
+    const paymentDateOrder = left.paymentDate < right.paymentDate ? -1 : left.paymentDate > right.paymentDate ? 1 : 0;
     if (paymentDateOrder !== 0) return paymentDateOrder;
-    const createdAtOrder = !groupsWithMissingCreatedAt.has(personnelPaymentKey(left)) &&
-      left.createdAt && right.createdAt
-      ? left.createdAt.localeCompare(right.createdAt)
-      : 0;
-    return createdAtOrder || left.id.localeCompare(right.id);
+    const leftCreatedAt = createdAtKeys.get(left) ?? null;
+    const rightCreatedAt = createdAtKeys.get(right) ?? null;
+    // Rust orders a missing Option<DateTime> before a present timestamp.
+    if (leftCreatedAt === null && rightCreatedAt !== null) return -1;
+    if (leftCreatedAt !== null && rightCreatedAt === null) return 1;
+    if (leftCreatedAt !== null && rightCreatedAt !== null && leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt < rightCreatedAt ? -1 : 1;
+    }
+    return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
   });
   const outstandingByPersonnel = new Map<string, bigint>();
   orderedBatches.forEach((batch) => {
