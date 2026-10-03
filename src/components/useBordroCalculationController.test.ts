@@ -12,7 +12,7 @@ import {
 } from './useBordroCalculationController';
 import { paymentEventSequenceScopeKey } from '../services/payrollEngine/paymentEventOrder';
 import { getPeriodDaysList } from '../utils/payrollPresentation';
-import type { BordroDonemi, BordroKaydi, PersonelPuantaj, PuantajKodu } from '../types/payroll';
+import type { BordroDonemi, BordroKaydi, PersonelPuantaj, PuantajKodu, RetroAdjustmentBatch } from '../types/payroll';
 
 const leapPeriod = {
   baslangicTarihi: '2024-02-15',
@@ -224,6 +224,21 @@ describe('stale payment-event chain replay selection', () => {
       periods.get('2026-05')!
     );
     expect(found).toBe(null);
+  });
+
+  test('BUG-RETRO-002: a stale retro event blocks the chain until its ledger is recovered', () => {
+    const staleRetro = {
+      ...payroll('p-1', '2026-03', 'STALE'),
+      id: 'retro-1', accrualId: 'retro-1', accrualType: 'RETRO_ADJUSTMENT', paymentDate: '2026-03-28', sequence: 1,
+    } as unknown as BordroKaydi;
+    const staleLedger = { id: 'retro-1', personnelId: 'p-1', paymentDate: '2026-03-28', status: 'STALE',
+      settlementStatus: 'UNSETTLED', totalGrossDelta: 100, payableSettlementAmount: 100 } as RetroAdjustmentBatch;
+    expect(findFirstStalePriorEvent([staleRetro], periods, 'p-1', target, periods.get('2026-05')!, [staleLedger])
+      ?.payroll.accrualId).toBe('retro-1');
+    // Recovery resolved to a zero-payable CALCULATED ledger: the old event is
+    // only an audit record (core engine skips it) and must not block.
+    const retired = { ...staleLedger, status: 'CALCULATED', totalGrossDelta: 0, payableSettlementAmount: 0 } as RetroAdjustmentBatch;
+    expect(findFirstStalePriorEvent([staleRetro], periods, 'p-1', target, periods.get('2026-05')!, [retired])).toBe(null);
   });
 
   test('stale-chain engine errors get an actionable hint', () => {

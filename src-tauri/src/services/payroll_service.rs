@@ -302,8 +302,18 @@ impl PayrollService {
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         let (canonical_batch, canonical_allocations) =
             Self::validate_retro_batch_input(&tx, batch, allocations)?;
+        // BUG-RETRO-002: a stale ledger whose canonical replay resolves to no
+        // difference at all (total and payable both zero) is retired as a
+        // settlement-only CALCULATED ledger; otherwise its recovery would be a
+        // dead end (no payment event allowed, no ledger save allowed).
+        let zero_difference = canonical_batch.totalGrossDelta == rust_decimal::Decimal::ZERO
+            && canonical_batch.payableSettlementAmount == rust_decimal::Decimal::ZERO
+            && canonical_batch.offsetSettlementAmount == rust_decimal::Decimal::ZERO
+            && canonical_batch.settlementStatus
+                == crate::domain::models::RetroSettlementStatus::UNSETTLED;
         if canonical_batch.payableSettlementAmount > rust_decimal::Decimal::ZERO
             || (canonical_batch.payableSettlementAmount == rust_decimal::Decimal::ZERO
+                && !zero_difference
                 && !matches!(
                     canonical_batch.settlementStatus,
                     crate::domain::models::RetroSettlementStatus::OVERPAYMENT

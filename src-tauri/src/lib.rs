@@ -444,7 +444,7 @@ mod ipc_tests {
             "calculate_retro_preview",
             json!({
                 "batchId": "ipc-preview",
-                "revision": revision,
+                "revision": revision.clone(),
                 "overrides": [],
                 "personnelId": "ipc-person",
                 "paymentDate": "2026-02-20",
@@ -452,9 +452,14 @@ mod ipc_tests {
                 "description": "IPC preview"
             }),
         );
+        // BUG-RETRO-001: 2026-01 has attendance but no NORMAL payroll yet, so
+        // the preview must fail closed with an explicit domain error instead
+        // of recognizing 0 TL and returning a full-month retro difference.
+        let preview_error = retro_preview
+            .expect_err("retro preview without a NORMAL baseline must be rejected");
         assert!(
-            retro_preview.is_ok(),
-            "calculate_retro_preview IPC command should succeed: {retro_preview:?}"
+            format!("{preview_error:?}").contains("NORMAL bordro yok"),
+            "unexpected retro preview error: {preview_error:?}"
         );
 
         let draft_batch = json!({
@@ -511,6 +516,23 @@ mod ipc_tests {
             "calculate_payroll IPC command should succeed: {calculated_payroll:?}"
         );
         let calculated_payroll = calculated_payroll.expect("checked above");
+        let retro_preview = invoke(
+            &webview,
+            "calculate_retro_preview",
+            json!({
+                "batchId": "ipc-preview",
+                "revision": revision,
+                "overrides": [],
+                "personnelId": "ipc-person",
+                "paymentDate": "2026-02-20",
+                "calculatedAt": "2026-02-20T00:00:00Z",
+                "description": "IPC preview"
+            }),
+        );
+        assert!(
+            retro_preview.is_ok(),
+            "calculate_retro_preview IPC command should succeed: {retro_preview:?}"
+        );
         assert_eq!(calculated_payroll["personelId"], "ipc-person");
         let accrual_id = calculated_payroll["accrualId"]
             .as_str()

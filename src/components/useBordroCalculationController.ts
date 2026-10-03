@@ -13,7 +13,9 @@ import {
   BordroKaydi,
   Personel,
   PersonelPuantaj,
+  RetroAdjustmentBatch,
 } from '../types/payroll';
+import { isSupersededZeroPayableRetroEvent } from './retroEventRecovery';
 import { formatTL, getDefaultAccrualPaymentDate, getPeriodDaysList } from '../utils/payrollPresentation';
 import {
   getPayrollEngine,
@@ -223,7 +225,8 @@ export function findFirstStalePriorEvent(
   periodsById: Map<string, BordroDonemi>,
   personId: string,
   target: PaymentEventKey,
-  targetPeriod: BordroDonemi
+  targetPeriod: BordroDonemi,
+  retroBatches: ReadonlyArray<RetroAdjustmentBatch> = []
 ): { payroll: BordroKaydi; period: BordroDonemi } | null {
   const targetId = target.accrualId || target.id;
   const prior = payrolls
@@ -234,7 +237,12 @@ export function findFirstStalePriorEvent(
       comparePaymentEvents(item.payroll, target, item.period, targetPeriod) < 0
     )
     .sort((left, right) => comparePaymentEvents(left.payroll, right.payroll, left.period, right.period));
-  return prior.find((item) => item.payroll.status === 'STALE' || item.payroll.status === 'DRAFT') ?? null;
+  return prior.find((item) =>
+    (item.payroll.status === 'STALE' || item.payroll.status === 'DRAFT') &&
+    // A stale retro event retired by a zero-payable recalculated ledger is an
+    // audit record; the core engine skips it, so it must not block the chain.
+    !isSupersededZeroPayableRetroEvent(item.payroll, retroBatches)
+  ) ?? null;
 }
 
 const TAX_OPENING_LATER_PATTERN = /opening başlangıç vergi ayı (\d+) aktif vergi ayı (\d+) sonrasında olamaz/i;
@@ -572,7 +580,8 @@ export function useBordroCalculationController({
         periodsById,
         person.id,
         targetEvent,
-        aktifDonem
+        aktifDonem,
+        (dataset.retroBatches ?? []) as unknown as RetroAdjustmentBatch[]
       );
       if (!nextStale) return { ok: true, replayed };
 

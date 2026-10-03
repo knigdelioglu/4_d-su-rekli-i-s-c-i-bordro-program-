@@ -147,6 +147,60 @@ struct TargetIncomeForPeriod {
     meal_exemption: MealExemptionTotals,
 }
 
+/// Boundary rule for retro source-period selection (BUG-RETRO-001).
+///
+/// A service period `[start, end]` can only be affected by a revision whose
+/// validity ends on `effective_to` when `start <= effective_to` (closed
+/// interval, both ends inclusive). The retro payment date never participates
+/// in this decision.
+pub(crate) fn source_period_intersects_revision_end(
+    period_start: NaiveDate,
+    effective_to: Option<NaiveDate>,
+) -> bool {
+    effective_to.is_none_or(|effective_to| period_start <= effective_to)
+}
+
+/// BUG-RETRO-001 second defence: a source period may only be replayed when it
+/// has an authoritative NORMAL payroll baseline. Without it the recognized
+/// ledger would silently be zero and the full monthly entitlement would be
+/// reported as a retro difference.
+fn ensure_authoritative_normal_baseline(
+    index: &PayrollDatasetIndex,
+    dataset: &PayrollDatasetSnapshot,
+    personnel_id: &str,
+    period: &BordroDonemi,
+) -> Result<()> {
+    let normals = index
+        .payrolls_for_person_period(dataset, personnel_id, &period.id)
+        .filter(|payroll| payroll.accrualType == AccrualType::NORMAL)
+        .collect::<Vec<_>>();
+    let name = if period.donemAdi.trim().is_empty() {
+        period.id.as_str()
+    } else {
+        period.donemAdi.as_str()
+    };
+    if normals.iter().any(|payroll| {
+        matches!(
+            payroll.status,
+            BordroStatus::CALCULATED | BordroStatus::FINALIZED
+        )
+    }) {
+        return Ok(());
+    }
+    if let Some(stale) = normals.first() {
+        return Err(DomainError::ValidationError(format!(
+            "{name} dönemindeki NORMAL bordro ({}) {:?} durumda; retro fark hesaplanmadan önce Bordro Hesaplama ekranında \
+             {name} normal bordrosunu yeniden hesaplayın.",
+            stale.accrualId, stale.status
+        )));
+    }
+    Err(DomainError::ValidationError(format!(
+        "{name} dönemi revizyonun geçerlilik aralığında ancak bu dönem için hesaplanmış (CALCULATED/FINALIZED) NORMAL bordro yok; \
+         önceden tanınmış hak belirlenemediği için retro fark hesaplanamaz. Önce Bordro Hesaplama ekranında {name} normal bordrosunu \
+         hesaplayın veya revizyonun geçerlilik tarihlerini kontrol edin."
+    )))
+}
+
 fn parse_date(value: &str, field: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|error| {
         DomainError::ValidationError(format!("{field} tarihi geçersiz: {value}: {error}"))
@@ -2151,12 +2205,16 @@ impl RetroEntitlementEngine {
                 "Revision yürürlük tarihi retro ödeme tarihinden sonra olamaz.".into(),
             ));
         }
-        if let Some(effective_to) = request.revision.effectiveTo.as_deref() {
-            if parse_date(effective_to, "revision bitiş")? < effective_from {
-                return Err(DomainError::ValidationError(
-                    "Revision bitiş tarihi yürürlük tarihinden önce olamaz.".into(),
-                ));
-            }
+        let current_effective_to = request
+            .revision
+            .effectiveTo
+            .as_deref()
+            .map(|value| parse_date(value, "revision bitiş"))
+            .transpose()?;
+        if current_effective_to.is_some_and(|effective_to| effective_to < effective_from) {
+            return Err(DomainError::ValidationError(
+                "Revision bitiş tarihi yürürlük tarihinden önce olamaz.".into(),
+            ));
         }
         let personnel = index
             .personnel(&request.dataset, &request.personnelId)
@@ -2229,6 +2287,17 @@ impl RetroEntitlementEngine {
                     end >= earliest_effective_from
                         && end <= payment_date
                         && start <= payment_date
+                        // BUG-RETRO-001: the payment date is only the event
+                        // (tax/payment) date. It must never widen the set of
+                        // service periods affected by this revision. A source
+                        // period is a candidate only while it intersects the
+                        // revision's closed [effectiveFrom, effectiveTo]
+                        // interval, i.e. it starts on or before effectiveTo.
+                        // A period that partially overlaps the end date stays
+                        // in scope; its day-level replay only changes the
+                        // covered days. Open-ended revisions keep the
+                        // closed-period-through-payment rule above.
+                        && source_period_intersects_revision_end(start, current_effective_to)
                         // Historical revisions can predate this person's
                         // payroll history. Only replay a period when this
                         // person has source attendance or a source payroll;
@@ -2259,6 +2328,12 @@ impl RetroEntitlementEngine {
         // retro ledger that will later use a different tax month.
         for period in &periods {
             validate_tax_month_overlap(period)?;
+            ensure_authoritative_normal_baseline(
+                &index,
+                &request.dataset,
+                &request.personnelId,
+                period,
+            )?;
         }
 
         let source_period_ids = periods

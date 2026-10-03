@@ -231,6 +231,11 @@ fn setup_full_retro_database() -> (
     .expect("revision kaydedilmeli");
     PayrollService::calculate_payroll_for_personnel(&conn, &person.id, &source_period.id)
         .expect("source normal bordro hesaplanmalı");
+    // BUG-RETRO-001: every closed source period inside the (open-ended)
+    // revision window needs an authoritative NORMAL baseline. 2026-04 used
+    // to have attendance only and was silently recognized as 0 TL.
+    PayrollService::calculate_payroll_for_personnel(&conn, &person.id, "2026-04")
+        .expect("2026-04 normal bordro hesaplanmalı");
     (conn, source_period, payment_period, revision)
 }
 
@@ -639,8 +644,8 @@ fn native_retro_payment_rejects_forged_preview_before_any_write() {
         bordro_programi_lib::repositories::payroll_repo::PayrollRepository::get_all(&conn)
             .expect("bordrolar okunmalı")
             .len(),
-        1,
-        "yalnız source normal payroll kalmalı"
+        2,
+        "yalnız source normal payroll kalmalı (2026-03 + 2026-04 NORMAL)"
     );
     let _ = source_period;
 }
@@ -737,8 +742,9 @@ fn native_payroll_save_cannot_reuse_another_record_primary_id() {
     assert!(error.to_string().contains("primary id"));
 
     let after = PayrollRepository::get_all(&conn).expect("bordrolar okunmalı");
-    assert_eq!(after.len(), 1);
-    assert_eq!(after[0].accrualId, source.accrualId);
+    assert_eq!(after.len(), 2, "2026-03 + 2026-04 NORMAL; forged kayıt yazılmamalı");
+    assert!(after.iter().any(|payroll| payroll.accrualId == source.accrualId));
+    assert!(after.iter().all(|payroll| payroll.accrualId != "forged-accrual-id"));
 }
 
 #[test]
@@ -764,8 +770,8 @@ fn native_retro_payment_totals_must_reconcile_with_income_and_deductions() {
         PayrollRepository::get_all(&conn)
             .expect("bordrolar okunmalı")
             .len(),
-        1,
-        "reddedilen retro event veritabanına yazılmamalı"
+        2,
+        "reddedilen retro event veritabanına yazılmamalı (2026-03 + 2026-04 NORMAL)"
     );
 
     forged.netOdeme = (forged.gelirToplam - forged.kesintiToplam).round_dp(2);
@@ -775,6 +781,279 @@ fn native_retro_payment_totals_must_reconcile_with_income_and_deductions() {
         PayrollRepository::get_all(&conn)
             .expect("bordrolar okunmalı")
             .len(),
-        2
+        3
     );
 }
+
+fn native_preview(
+    conn: &rusqlite::Connection,
+    batch_id: &str,
+    revision: &CompensationRevision,
+    payment_date: &str,
+) -> payroll_core::Result<payroll_core::RetroCalculationResult> {
+    let dataset = PayrollService::build_dataset_snapshot(conn).expect("dataset okunmalı");
+    payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
+        batchId: batch_id.into(),
+        revision: revision.clone(),
+        overrides: dataset
+            .compensationRevisionOverrides
+            .iter()
+            .filter(|item| item.revisionId == revision.id)
+            .cloned()
+            .collect(),
+        personnelId: "retro-atomic-person".into(),
+        paymentDate: payment_date.into(),
+        calculatedAt: "2026-06-20T00:00:00Z".into(),
+        description: Some("BUG-RETRO regression".into()),
+        dataset,
+    })
+}
+
+#[test]
+fn native_bug_retro_001_missing_normal_source_period_is_rejected_not_zero() {
+    let (conn, _source_period, _payment_period, revision) = setup_full_retro_database();
+    conn.execute(
+        "DELETE FROM payroll_records WHERE period_id = '2026-04'",
+        [],
+    )
+    .expect("2026-04 NORMAL silinmeli");
+    let error = native_preview(&conn, "batch-missing-normal", &revision, "2026-06-20")
+        .expect_err("NORMAL bordrosu olmayan dönem 0 TL tanınmış sayılmamalı");
+    assert!(error.to_string().contains("2026-04"), "{error}");
+    assert!(error.to_string().contains("NORMAL bordro yok"), "{error}");
+
+    // A bounded revision that ends before 2026-04 does not need that period.
+    let mut bounded = revision.clone();
+    bounded.effectiveTo = Some("2026-04-14".into());
+    save_revision_with_overrides(
+        &conn,
+        &bounded,
+        &[CompensationRevisionOverride {
+            id: "override-native-canonical".into(),
+            revisionId: bounded.id.clone(),
+            parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+            value: dec!(10000),
+            personnelId: None,
+        }],
+    )
+    .expect("bounded revision kaydedilmeli");
+    let result = native_preview(&conn, "batch-bounded", &bounded, "2026-06-20")
+        .expect("effectiveTo öncesi kaynak hesaplanmalı");
+    assert_eq!(
+        result
+            .periods
+            .iter()
+            .map(|period| period.sourcePeriodId.as_str())
+            .collect::<Vec<_>>(),
+        vec!["2026-03"]
+    );
+}
+
+/// BUG-RETRO-002 (Tests F/G/H/I + settlement regression): a real source
+/// mutation leaves batch STALE/UNSETTLED and the payment event STALE; the
+/// UI recovery path (canonical replay with the same batch id followed by
+/// create_retro_payment) must restore CALCULATED/UNSETTLED + CALCULATED in
+/// the database, unblock the next NORMAL payroll, create no duplicate and
+/// keep the amounts; the settlement flow must still finalize it once.
+#[test]
+fn native_bug_retro_002_stale_unsettled_recovery_restores_db_state_and_unblocks_normal() {
+    let (conn, source_period, payment_period, revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, "batch-bug-retro-002", &revision, "2026-06-20")
+        .expect("initial preview");
+    let initial_event = PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("initial retro payment");
+
+    // Real source mutation (same as an attendance change on the source).
+    let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+        &conn,
+        &PayrollMutation::PersonPeriod {
+            personnelId: "retro-atomic-person".into(),
+            periodId: source_period.id.clone(),
+        },
+    )
+    .expect("source mutation allowed");
+    PayrollInvalidationRepository::apply_impact(&conn, &impact).expect("impact applied");
+    let stale = PayrollService::build_dataset_snapshot(&conn).expect("dataset");
+    let stale_batch = stale
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == initial.batch.id)
+        .expect("batch");
+    assert_eq!(stale_batch.status, CompensationRevisionStatus::STALE);
+    assert_eq!(stale_batch.settlementStatus, RetroSettlementStatus::UNSETTLED);
+    let stale_event = stale
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == initial.batch.id)
+        .expect("event");
+    assert_eq!(stale_event.status, BordroStatus::STALE);
+
+    // While stale, the next NORMAL payroll is blocked by the stale event.
+    let next_period = retro_period("2026-07", 7);
+    PeriodRepository::save(&conn, &next_period).expect("sonraki dönem");
+    SettingsRepository::save_institution_settings(
+        &conn,
+        &DonemselKurumDegerleri {
+            donemId: next_period.id.clone(),
+            ..DonemselKurumDegerleri::default()
+        },
+    )
+    .expect("sonraki dönem ayarı");
+    AttendanceRepository::save(
+        &conn,
+        &complete_attendance(&next_period, "retro-atomic-person"),
+    )
+    .expect("sonraki dönem puantajı");
+
+    // Source NORMALs are recalculated first (UI: Bordro Hesaplama).
+    for period_id in [source_period.id.as_str(), "2026-04"] {
+        let status = PayrollService::build_dataset_snapshot(&conn)
+            .expect("dataset")
+            .payrolls
+            .iter()
+            .find(|payroll| payroll.donemId == period_id && payroll.accrualType == AccrualType::NORMAL)
+            .map(|payroll| payroll.status);
+        if status != Some(BordroStatus::CALCULATED) {
+            PayrollService::calculate_payroll_for_personnel(&conn, "retro-atomic-person", period_id)
+                .expect("source normal recalculated");
+        }
+    }
+
+    // Recovery: identical to GeriyeDonukFarklar.handleReplayPayment.
+    let recovered = native_preview(&conn, &initial.batch.id, &revision, "2026-06-20")
+        .expect("stale recovery preview");
+    assert_eq!(recovered.batch.totalGrossDelta, initial.batch.totalGrossDelta);
+    assert_eq!(
+        recovered.batch.payableSettlementAmount,
+        initial.batch.payableSettlementAmount
+    );
+    for _ in 0..2 {
+        let replayed = PayrollService::create_retro_payment(
+            &conn,
+            &recovered.batch,
+            &recovered.allocations,
+            &payment_period.id,
+            0,
+        )
+        .expect("recovery");
+        assert_eq!(replayed.status, BordroStatus::CALCULATED);
+        assert_eq!(replayed.netOdeme, initial_event.netOdeme, "net korunmalı");
+        assert_eq!(replayed.gelirToplam, initial_event.gelirToplam, "brüt korunmalı");
+    }
+
+    let persisted = PayrollService::build_dataset_snapshot(&conn).expect("persisted");
+    let batches = persisted
+        .retroBatches
+        .iter()
+        .filter(|batch| batch.revisionId == revision.id)
+        .collect::<Vec<_>>();
+    assert_eq!(batches.len(), 1, "duplicate batch yok");
+    assert_eq!(batches[0].status, CompensationRevisionStatus::CALCULATED);
+    assert_eq!(batches[0].settlementStatus, RetroSettlementStatus::UNSETTLED);
+    let events = persisted
+        .payrolls
+        .iter()
+        .filter(|payroll| payroll.accrualType == AccrualType::RETRO_ADJUSTMENT)
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 1, "duplicate payment event yok");
+    assert_eq!(events[0].status, BordroStatus::CALCULATED);
+    let allocation_count = persisted
+        .retroAllocations
+        .iter()
+        .filter(|allocation| allocation.batchId == initial.batch.id)
+        .count();
+    assert_eq!(allocation_count, initial.allocations.len(), "duplicate allocation yok");
+
+    // Test G: the next NORMAL payroll is no longer blocked.
+    let next = PayrollService::calculate_payroll_for_personnel(
+        &conn,
+        "retro-atomic-person",
+        &next_period.id,
+    )
+    .expect("recovery sonrası normal bordro hesaplanmalı");
+    assert_eq!(next.status, BordroStatus::CALCULATED);
+
+    // Settlement regression: CALCULATED/UNSETTLED -> FINALIZED/PAID once.
+    // Production rule: earlier payment events are finalized first.
+    // Finalizing a source NORMAL invalidates later CALCULATED events (existing
+    // production policy), so the chain is refreshed in order before the
+    // retro settlement - exactly the UI workflow.
+    for period_id in [source_period.id.as_str(), "2026-04"] {
+        let stale_normal = PayrollService::build_dataset_snapshot(&conn)
+            .expect("dataset")
+            .payrolls
+            .iter()
+            .any(|payroll| payroll.donemId == period_id && payroll.status == BordroStatus::STALE);
+        if stale_normal {
+            PayrollService::calculate_payroll_for_personnel(&conn, "retro-atomic-person", period_id)
+                .expect("source NORMAL refresh");
+        }
+        PayrollService::finalize_payroll_for_personnel(&conn, "retro-atomic-person", period_id)
+            .expect("source NORMAL finalize");
+    }
+    let retro_stale = PayrollService::build_dataset_snapshot(&conn)
+        .expect("dataset")
+        .payrolls
+        .iter()
+        .any(|payroll| payroll.accrualId == initial.batch.id && payroll.status == BordroStatus::STALE);
+    if retro_stale {
+        let again = native_preview(&conn, &initial.batch.id, &revision, "2026-06-20")
+            .expect("recovery after source finalize");
+        assert_eq!(again.batch.totalGrossDelta, initial.batch.totalGrossDelta);
+        PayrollService::create_retro_payment(&conn, &again.batch, &again.allocations, &payment_period.id, 0)
+            .expect("recovery after source finalize");
+    }
+    let before = PayrollService::build_dataset_snapshot(&conn).expect("before finalize");
+    let event_before = before
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == initial.batch.id)
+        .cloned()
+        .expect("event");
+    let finalized = PayrollService::finalize_payroll_for_accrual(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&initial.batch.id),
+    )
+    .expect("retro settlement finalize");
+    assert_eq!(finalized.status, BordroStatus::FINALIZED);
+    assert_eq!(finalized.netOdeme, event_before.netOdeme);
+    assert_eq!(finalized.gelirToplam, event_before.gelirToplam);
+    let after = PayrollService::build_dataset_snapshot(&conn).expect("after finalize");
+    let batch = after
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == initial.batch.id)
+        .expect("batch");
+    assert_eq!(batch.status, CompensationRevisionStatus::FINALIZED);
+    assert_eq!(batch.settlementStatus, RetroSettlementStatus::PAID);
+    assert!(batch.finalizedAt.is_some());
+    assert_eq!(
+        after
+            .retroAllocations
+            .iter()
+            .filter(|allocation| allocation.batchId == initial.batch.id)
+            .count(),
+        allocation_count,
+        "settlement allocation değiştirmemeli"
+    );
+    assert!(
+        PayrollService::create_retro_payment(
+            &conn,
+            &recovered.batch,
+            &recovered.allocations,
+            &payment_period.id,
+            0,
+        )
+        .is_err(),
+        "FINALIZED retro ikinci kez settle/rewrite edilemez"
+    );
+}
+

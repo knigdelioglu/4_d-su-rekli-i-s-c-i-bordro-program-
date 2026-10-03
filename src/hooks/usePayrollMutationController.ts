@@ -988,9 +988,13 @@ export function usePayrollMutationController({
   const handleSaveRetroBatch = async (result: RetroCalculationResultModel) => {
     const canonicalResult = await canonicalizeRetroResult(result);
     const batch = canonicalResult.batch;
+    const zeroDifference = batch.totalGrossDelta === 0 &&
+      batch.payableSettlementAmount === 0 &&
+      (batch.offsetSettlementAmount ?? 0) === 0 &&
+      (batch.settlementStatus ?? 'UNSETTLED') === 'UNSETTLED';
     if (
       batch.payableSettlementAmount !== 0 ||
-      !['OVERPAYMENT', 'SETTLED_BY_OFFSET'].includes(batch.settlementStatus ?? '')
+      (!zeroDifference && !['OVERPAYMENT', 'SETTLED_BY_OFFSET'].includes(batch.settlementStatus ?? ''))
     ) {
       throw new Error('Payment event olmadan yalnız açık fazla tahakkuk veya mahsupla kapanan settlement batch’i saklanabilir.');
     }

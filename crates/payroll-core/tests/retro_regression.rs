@@ -806,7 +806,10 @@ fn selected_person_retro_skips_historical_periods_without_person_source_data() {
 }
 
 #[test]
-fn retro_replays_source_periods_through_payment_even_after_revision_expires() {
+fn retro_source_periods_stop_at_revision_effective_to_even_when_paid_later() {
+    // BUG-RETRO-001: the payment date is only the payment/tax event date. A
+    // closed period that starts after effectiveTo is not affected by the
+    // revision and must not be replayed just because it ended before payment.
     let periods = vec![
         period("2026-09", "2026-09-15", "2026-10-14", 10),
         period("2026-10", "2026-10-15", "2026-11-14", 11),
@@ -835,7 +838,7 @@ fn retro_replays_source_periods_through_payment_even_after_revision_expires() {
         )],
         "2026-12-14",
     ))
-    .expect("source periods through payment date should replay");
+    .expect("source periods inside the revision window should replay");
 
     assert_eq!(
         result
@@ -843,11 +846,15 @@ fn retro_replays_source_periods_through_payment_even_after_revision_expires() {
             .iter()
             .map(|period| period.sourcePeriodId.as_str())
             .collect::<Vec<_>>(),
-        vec!["2026-09", "2026-10", "2026-11"]
+        vec!["2026-09", "2026-10"],
+        "2026-11 starts after effectiveTo and must not become a retro source"
     );
     assert!(result.periods[0].deltaAmount > Decimal::ZERO);
     assert!(result.periods[1].deltaAmount > Decimal::ZERO);
-    assert_eq!(result.periods[2].deltaAmount, Decimal::ZERO);
+    assert!(result
+        .allocations
+        .iter()
+        .all(|allocation| allocation.sourcePeriodId != "2026-11"));
 }
 
 #[test]
@@ -1763,23 +1770,21 @@ fn separate_authoritative_payment_event_consumes_source_month_pek_ceiling() {
 }
 
 #[test]
-fn missing_original_accrual_uses_historical_attendance_and_statutory_snapshot() {
+fn missing_original_accrual_fails_closed_instead_of_recognizing_zero() {
+    // BUG-RETRO-001: a source period with attendance but no NORMAL payroll
+    // used to be replayed as "recognized = 0", turning the whole month into
+    // a retro difference (3.360 TL here). It must now fail closed.
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let source = dataset(&[source_period], dec!(100), dec!(9));
-    let result = RetroEntitlementEngine::calculate(&retro_request(
+    let error = RetroEntitlementEngine::calculate(&retro_request(
         source,
         "retro-missing",
         revision("rev-missing", "2026-02-15"),
         vec![wage_override("ov-missing", "rev-missing", dec!(120))],
         "2026-06-20",
     ))
-    .expect("missing-accrual retro should use attendance-backed PEK ceiling");
-
-    assert_eq!(result.batch.totalGrossDelta, dec!(3360));
-    assert_eq!(
-        result.allocations[0].originalRecognizedAmount,
-        Decimal::ZERO
-    );
+    .expect_err("missing NORMAL baseline must not be recognized as zero");
+    assert!(error.to_string().contains("NORMAL bordro yok"), "{error}");
 }
 
 #[test]
@@ -1798,15 +1803,27 @@ fn missing_original_accrual_counts_paid_sick_r_day_in_source_statutory_snapshot(
         updatedAt: None,
     });
 
+    // An authoritative NORMAL baseline is required (BUG-RETRO-001); the
+    // target replay must still count the paid sick R day.
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    source.payrolls.push(normal);
     let result = wage_retro_result(
         source,
         "retro-missing-paid-sick",
         "rev-missing-paid-sick",
         dec!(120),
     );
-    let allocation = &result.allocations[0];
+    let allocation = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage allocation");
     assert_eq!(allocation.targetAmount, dec!(3360));
-    assert_eq!(allocation.retroPekDelta, dec!(3360));
+    assert_eq!(
+        allocation.deltaAmount,
+        allocation.targetAmount - allocation.originalRecognizedAmount
+    );
+    assert_eq!(allocation.retroPekDelta, allocation.deltaAmount);
 }
 
 #[test]
@@ -2783,6 +2800,8 @@ fn missing_original_accrual_adds_two_paid_sick_days_by_multiplication_not_divisi
         updatedAt: None,
     });
 
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    source.payrolls.push(normal);
     let result = wage_retro_result(
         source,
         "retro-missing-two-paid-sick",
@@ -2794,7 +2813,244 @@ fn missing_original_accrual_adds_two_paid_sick_days_by_multiplication_not_divisi
         .iter()
         .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
         .expect("base wage allocation");
-    assert_eq!(base.originalRecognizedAmount, Decimal::ZERO);
+    assert!(base.originalRecognizedAmount > Decimal::ZERO);
     assert_eq!(base.targetAmount, dec!(3360));
-    assert_eq!(base.deltaAmount, dec!(3360));
+    assert_eq!(base.deltaAmount, base.targetAmount - base.originalRecognizedAmount);
+}
+
+
+// ---------------------------------------------------------------------------
+// BUG-RETRO-001 regression: effective window, missing NORMAL baseline and
+// payment-date independence. Mirrors the live scenario (revision for one
+// 15-14 service period, payment three months later, the payment period has
+// attendance but no NORMAL payroll yet).
+// ---------------------------------------------------------------------------
+
+fn bug_retro_001_dataset(old_daily_wage: Decimal) -> PayrollDatasetSnapshot {
+    let periods = vec![
+        period("2026-03", "2026-03-15", "2026-04-14", 4),
+        period("2026-04", "2026-04-15", "2026-05-14", 5),
+        period("2026-05", "2026-05-15", "2026-06-14", 6),
+        period("2026-06", "2026-06-15", "2026-07-14", 7),
+    ];
+    let mut source = dataset(&periods, old_daily_wage, dec!(9));
+    // NORMAL payrolls exist for March-May; June (the payment period of a
+    // 2026-07-14 payment) has attendance only, exactly like Mart 2028 live.
+    for (period_id, payment_date) in [
+        ("2026-03", "2026-04-14"),
+        ("2026-04", "2026-05-14"),
+        ("2026-05", "2026-06-14"),
+    ] {
+        let payroll = normal_payroll(&source, period_id, payment_date, 0);
+        source.payrolls.push(payroll);
+    }
+    source
+}
+
+fn bug_retro_001_revision(effective_to: Option<&str>) -> CompensationRevision {
+    let mut value = revision("bug-retro-001", "2026-03-15");
+    value.effectiveTo = effective_to.map(Into::into);
+    value
+}
+
+fn source_ids(result: &payroll_core::RetroCalculationResult) -> Vec<String> {
+    result
+        .periods
+        .iter()
+        .map(|period| period.sourcePeriodId.clone())
+        .collect()
+}
+
+#[test]
+fn bug_retro_001_test_a_period_after_effective_to_is_never_a_candidate() {
+    let source = bug_retro_001_dataset(dec!(2443.28));
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "bug-retro-001-a",
+        bug_retro_001_revision(Some("2026-04-14")),
+        vec![wage_override("bug-retro-001-a-w", "bug-retro-001", dec!(2500))],
+        "2026-07-14",
+    ))
+    .expect("only the revision window must be replayed");
+
+    assert_eq!(source_ids(&result), vec!["2026-03".to_string()]);
+    assert!(result
+        .allocations
+        .iter()
+        .all(|allocation| allocation.sourcePeriodId == "2026-03"));
+    // No full-month fake difference: the delta is a daily-wage difference,
+    // not a whole month's entitlement.
+    assert!(result.batch.totalGrossDelta < dec!(5000));
+}
+
+#[test]
+fn bug_retro_001_effective_to_boundary_is_inclusive_on_period_start() {
+    let source = bug_retro_001_dataset(dec!(2443.28));
+    // effectiveTo on the day before 2026-04 starts: April is excluded.
+    let before = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "bug-retro-001-boundary-before",
+        bug_retro_001_revision(Some("2026-04-14")),
+        vec![wage_override("bug-retro-001-bb-w", "bug-retro-001", dec!(2500))],
+        "2026-06-14",
+    ))
+    .expect("boundary before");
+    assert_eq!(source_ids(&before), vec!["2026-03".to_string()]);
+
+    // effectiveTo exactly on the first day of 2026-04: the period intersects
+    // the revision for one day and is replayed for that day only.
+    let on_start = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "bug-retro-001-boundary-on",
+        bug_retro_001_revision(Some("2026-04-15")),
+        vec![wage_override("bug-retro-001-bo-w", "bug-retro-001", dec!(2500))],
+        "2026-06-14",
+    ))
+    .expect("boundary on period start");
+    assert_eq!(
+        source_ids(&on_start),
+        vec!["2026-03".to_string(), "2026-04".to_string()]
+    );
+    let april_base = on_start
+        .allocations
+        .iter()
+        .find(|allocation| {
+            allocation.sourcePeriodId == "2026-04"
+                && allocation.earningCode == RetroEarningCode::BASE_WAGE
+        })
+        .expect("one covered April day must produce a base-wage delta");
+    assert_eq!(april_base.deltaAmount, dec!(56.72));
+}
+
+#[test]
+fn bug_retro_001_test_b_missing_normal_inside_window_fails_closed() {
+    let mut source = bug_retro_001_dataset(dec!(2443.28));
+    // Open-ended revision: June (attendance, no NORMAL) is inside the window.
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "bug-retro-001-b-open",
+        bug_retro_001_revision(None),
+        vec![wage_override("bug-retro-001-b-w", "bug-retro-001", dec!(2500))],
+        "2026-07-14",
+    ))
+    .expect_err("a period without NORMAL must not be recognized as zero");
+    let message = error.to_string();
+    assert!(message.contains("2026-06"), "{message}");
+    assert!(message.contains("NORMAL bordro yok"), "{message}");
+
+    // Bounded revision whose window contains a period whose NORMAL is
+    // missing must fail the same way instead of returning a full month.
+    source
+        .payrolls
+        .retain(|payroll| payroll.donemId != "2026-04");
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "bug-retro-001-b-bounded",
+        bug_retro_001_revision(Some("2026-05-14")),
+        vec![wage_override("bug-retro-001-b2-w", "bug-retro-001", dec!(2500))],
+        "2026-07-14",
+    ))
+    .expect_err("missing NORMAL inside a bounded window fails closed");
+    assert!(error.to_string().contains("2026-04"), "{error}");
+}
+
+#[test]
+fn bug_retro_001_stale_normal_inside_window_names_the_period() {
+    let mut source = bug_retro_001_dataset(dec!(2443.28));
+    source
+        .payrolls
+        .iter_mut()
+        .filter(|payroll| payroll.donemId == "2026-03")
+        .for_each(|payroll| payroll.status = BordroStatus::STALE);
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "bug-retro-001-stale",
+        bug_retro_001_revision(Some("2026-04-14")),
+        vec![wage_override("bug-retro-001-s-w", "bug-retro-001", dec!(2500))],
+        "2026-07-14",
+    ))
+    .expect_err("stale NORMAL baseline is not authoritative");
+    let message = error.to_string();
+    assert!(message.contains("2026-03"), "{message}");
+    assert!(message.contains("STALE"), "{message}");
+}
+
+#[test]
+fn bug_retro_001_test_c_later_payment_date_never_widens_sources() {
+    let source = bug_retro_001_dataset(dec!(2443.28));
+    let mut seen = Vec::new();
+    for (index, payment_date) in ["2026-04-14", "2026-05-14", "2026-07-14"]
+        .into_iter()
+        .enumerate()
+    {
+        let result = RetroEntitlementEngine::calculate(&retro_request(
+            source.clone(),
+            &format!("bug-retro-001-c-{index}"),
+            bug_retro_001_revision(Some("2026-04-14")),
+            vec![wage_override(
+                &format!("bug-retro-001-c-{index}-w"),
+                "bug-retro-001",
+                dec!(2500),
+            )],
+            payment_date,
+        ))
+        .unwrap_or_else(|error| panic!("{payment_date}: {error}"));
+        seen.push((source_ids(&result), result.batch.totalGrossDelta));
+    }
+    assert!(seen
+        .iter()
+        .all(|(ids, total)| ids == &vec!["2026-03".to_string()] && *total == seen[0].1));
+}
+
+#[test]
+fn bug_retro_001_test_d_valid_daily_wage_retro_matches_normal_entitlement() {
+    // Live reference: 2.443,28 -> 2.500,00 TL daily, 31 service days.
+    let source = bug_retro_001_dataset(dec!(2443.28));
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source.clone(),
+        "bug-retro-001-d",
+        bug_retro_001_revision(Some("2026-04-14")),
+        vec![wage_override("bug-retro-001-d-w", "bug-retro-001", dec!(2500))],
+        "2026-07-14",
+    ))
+    .expect("valid retro");
+    let base = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("base wage delta");
+    assert_eq!(base.deltaAmount, dec!(1758.32), "56,72 TL x 31 gün");
+
+    // Independent oracle: a NORMAL payroll computed with the new wage must
+    // equal recognized + retro delta for every earning code
+    // (new entitlement - previously recognized - previous retro).
+    let mut new_wage = source.clone();
+    new_wage
+        .institutionSettings
+        .get_mut("2026-03")
+        .expect("settings")
+        .gunlukTabanUcret = dec!(2500);
+    let expected = normal_payroll(&new_wage, "2026-03", "2026-04-14", 0);
+    let original = source
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.donemId == "2026-03")
+        .expect("original NORMAL");
+    let expected_total = expected.gelirToplam - original.gelirToplam;
+    assert_eq!(result.batch.totalGrossDelta, expected_total);
+
+    // Recalculating the same revision after the first batch is authoritative
+    // yields 0,00 TL (previous retro adjustments are recognized).
+    let mut with_first = source;
+    append_retro_result(&mut with_first, result);
+    let second = RetroEntitlementEngine::calculate(&retro_request(
+        with_first,
+        "bug-retro-001-d-second",
+        bug_retro_001_revision(Some("2026-04-14")),
+        vec![wage_override("bug-retro-001-d2-w", "bug-retro-001", dec!(2500))],
+        "2026-07-14",
+    ))
+    .expect("second calculation");
+    assert_eq!(second.batch.totalGrossDelta, Decimal::ZERO);
+    assert_eq!(second.batch.payableSettlementAmount, Decimal::ZERO);
 }
