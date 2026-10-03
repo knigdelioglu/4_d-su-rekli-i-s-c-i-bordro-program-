@@ -1057,3 +1057,519 @@ fn native_bug_retro_002_stale_unsettled_recovery_restores_db_state_and_unblocks_
     );
 }
 
+
+// ---------------------------------------------------------------------------
+// P1 (BUG-RETRO-002 follow-up): zero-difference recovery must retire the
+// linked STALE payment event instead of leaving it behind with its old
+// gross/net, where it contradicted the 0 TL batch and blocked the next
+// NORMAL payroll's tax chain ("Önceki vergi zincirinde DRAFT/STALE bordro var").
+// ---------------------------------------------------------------------------
+
+const P1_PERSON: &str = "retro-atomic-person";
+
+fn p1_save_next_period(conn: &rusqlite::Connection) -> BordroDonemi {
+    let next_period = retro_period("2026-07", 7);
+    PeriodRepository::save(conn, &next_period).expect("sonraki dönem");
+    SettingsRepository::save_institution_settings(
+        conn,
+        &DonemselKurumDegerleri {
+            donemId: next_period.id.clone(),
+            ..DonemselKurumDegerleri::default()
+        },
+    )
+    .expect("sonraki dönem ayarı");
+    AttendanceRepository::save(conn, &complete_attendance(&next_period, P1_PERSON))
+        .expect("sonraki dönem puantajı");
+    next_period
+}
+
+fn p1_refresh_source_normals(conn: &rusqlite::Connection, source_period: &BordroDonemi) {
+    for period_id in [source_period.id.as_str(), "2026-04"] {
+        let status = PayrollService::build_dataset_snapshot(conn)
+            .expect("dataset")
+            .payrolls
+            .iter()
+            .find(|payroll| {
+                payroll.donemId == period_id && payroll.accrualType == AccrualType::NORMAL
+            })
+            .map(|payroll| payroll.status);
+        if status != Some(BordroStatus::CALCULATED) {
+            PayrollService::calculate_payroll_for_personnel(conn, P1_PERSON, period_id)
+                .expect("source normal recalculated");
+        }
+    }
+}
+
+/// Makes the persisted revision resolve to "no difference": the target
+/// entitlement equals what was already recognized.
+fn p1_neutralize_revision(conn: &rusqlite::Connection, revision: &CompensationRevision) {
+    save_revision_with_overrides(conn, revision, &[]).expect("revision farksız kaydedilmeli");
+}
+
+/// Live state reproduced: batch STALE/UNSETTLED, linked event STALE with a
+/// positive gross/net, allocations present, source NORMALs authoritative.
+fn p1_stale_positive_retro(
+    batch_id: &str,
+) -> (
+    rusqlite::Connection,
+    BordroDonemi,
+    BordroDonemi,
+    CompensationRevision,
+    BordroKaydi,
+    usize,
+) {
+    let (conn, source_period, payment_period, revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("preview");
+    assert!(initial.batch.payableSettlementAmount > Decimal::ZERO);
+    let event = PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("initial retro payment");
+    let impact = PayrollInvalidationRepository::assert_mutation_allowed(
+        &conn,
+        &PayrollMutation::PersonPeriod {
+            personnelId: P1_PERSON.into(),
+            periodId: source_period.id.clone(),
+        },
+    )
+    .expect("source mutation allowed");
+    PayrollInvalidationRepository::apply_impact(&conn, &impact).expect("impact applied");
+    p1_refresh_source_normals(&conn, &source_period);
+    let snapshot = PayrollService::build_dataset_snapshot(&conn).expect("dataset");
+    let batch = snapshot
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == batch_id)
+        .expect("batch");
+    assert_eq!(batch.status, CompensationRevisionStatus::STALE);
+    assert_eq!(batch.settlementStatus, RetroSettlementStatus::UNSETTLED);
+    let stale_event = snapshot
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == batch_id)
+        .expect("event");
+    assert_eq!(stale_event.status, BordroStatus::STALE);
+    assert!(stale_event.gelirToplam > Decimal::ZERO && stale_event.netOdeme > Decimal::ZERO);
+    let allocation_count = snapshot
+        .retroAllocations
+        .iter()
+        .filter(|allocation| allocation.batchId == batch_id)
+        .count();
+    assert!(allocation_count > 0, "başlangıçta allocation mevcut");
+    (conn, source_period, payment_period, revision, event, allocation_count)
+}
+
+/// Same branch as GeriyeDonukFarklar.handleReplayPayment for payable <= 0.
+fn p1_zero_recovery(
+    conn: &rusqlite::Connection,
+    batch_id: &str,
+    revision: &CompensationRevision,
+) -> payroll_core::Result<()> {
+    let replay = native_preview(conn, batch_id, revision, "2026-06-20").expect("replay");
+    assert_eq!(replay.batch.totalGrossDelta, Decimal::ZERO, "gerçek fark 0 TL");
+    assert_eq!(replay.batch.payableSettlementAmount, Decimal::ZERO);
+    PayrollService::save_retro_adjustment_batch(conn, &replay.batch, &replay.allocations)
+}
+
+fn p1_assert_zero_ledger_without_event(conn: &rusqlite::Connection, batch_id: &str) {
+    let snapshot = PayrollService::build_dataset_snapshot(conn).expect("dataset");
+    let batches = snapshot
+        .retroBatches
+        .iter()
+        .filter(|batch| batch.id == batch_id)
+        .collect::<Vec<_>>();
+    assert_eq!(batches.len(), 1, "duplicate batch yok");
+    assert_eq!(batches[0].status, CompensationRevisionStatus::CALCULATED);
+    assert_eq!(batches[0].settlementStatus, RetroSettlementStatus::UNSETTLED);
+    assert_eq!(batches[0].totalGrossDelta, Decimal::ZERO);
+    assert_eq!(batches[0].payableSettlementAmount, Decimal::ZERO);
+    assert!(
+        snapshot
+            .retroAllocations
+            .iter()
+            .filter(|allocation| allocation.batchId == batch_id)
+            .all(|allocation| allocation.deltaAmount == Decimal::ZERO
+                && allocation.payableSettlementAmount == Decimal::ZERO),
+        "allocation'lar eski pozitif farkı taşımamalı"
+    );
+    assert!(
+        snapshot
+            .payrolls
+            .iter()
+            .all(|payroll| payroll.accrualId != batch_id && payroll.id != batch_id),
+        "0 TL ledger'a bağlı payment event kalmamalı (STALE/CALCULATED/DRAFT)"
+    );
+    let raw_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM payroll_records WHERE accrual_id = ?1 OR id = ?1",
+            [batch_id],
+            |row| row.get(0),
+        )
+        .expect("raw count");
+    assert_eq!(raw_rows, 0, "DB'de eski event satırı yaşamamalı");
+    let stale_retro: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM payroll_records
+             WHERE accrual_type = 'RETRO_ADJUSTMENT' AND status IN ('DRAFT', 'STALE')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("stale retro count");
+    assert_eq!(stale_retro, 0, "aktif STALE retro payment event kalmamalı");
+}
+
+/// Test 1 + Test 2 + Test 4: the exact live scenario.
+#[test]
+fn native_p1_zero_difference_recovery_retires_stale_event_and_unblocks_normal() {
+    let batch_id = "retro-p1-zero-difference";
+    let (conn, _source_period, _payment_period, revision, _event, _allocations) =
+        p1_stale_positive_retro(batch_id);
+    let next_period = p1_save_next_period(&conn);
+
+    // Precondition (the live blocker): the stale retro event blocks NORMAL.
+    let blocked = PayrollService::calculate_payroll_for_personnel(&conn, P1_PERSON, &next_period.id)
+        .expect_err("stale retro event önceki vergi zincirini bloke etmeli");
+    assert!(blocked.to_string().contains("STALE"), "{blocked}");
+
+    p1_neutralize_revision(&conn, &revision);
+    p1_zero_recovery(&conn, batch_id, &revision).expect("zero-difference recovery");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+
+    // Test 4: the same recovery again is idempotent.
+    p1_zero_recovery(&conn, batch_id, &revision).expect("ikinci zero-difference recovery");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+    let allocations_after_second = PayrollService::build_dataset_snapshot(&conn)
+        .expect("dataset")
+        .retroAllocations
+        .iter()
+        .filter(|allocation| allocation.batchId == batch_id)
+        .count();
+    p1_zero_recovery(&conn, batch_id, &revision).expect("üçüncü zero-difference recovery");
+    assert_eq!(
+        PayrollService::build_dataset_snapshot(&conn)
+            .expect("dataset")
+            .retroAllocations
+            .iter()
+            .filter(|allocation| allocation.batchId == batch_id)
+            .count(),
+        allocations_after_second,
+        "allocation çoğalmamalı"
+    );
+
+    // Test 2 (critical): the next NORMAL payroll is no longer blocked.
+    let next = PayrollService::calculate_payroll_for_personnel(&conn, P1_PERSON, &next_period.id)
+        .expect("zero-difference recovery sonrası NORMAL bordro hesaplanmalı");
+    assert_eq!(next.status, BordroStatus::CALCULATED);
+    assert_eq!(next.accrualType, AccrualType::NORMAL);
+    // The production checked boundary agrees.
+    PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        P1_PERSON,
+        &next_period.id,
+        None,
+        None,
+    )
+    .expect("checked NORMAL hesaplama da bloke olmamalı");
+
+    // A repeated recovery after NORMAL exists still creates nothing.
+    p1_zero_recovery(&conn, batch_id, &revision).expect("NORMAL sonrası tekrar recovery");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+}
+
+/// Scenario C: the event was already deleted; zero recovery creates none.
+#[test]
+fn native_p1_zero_difference_recovery_after_deleted_event_creates_no_event() {
+    let batch_id = "retro-p1-deleted-event";
+    let (conn, _source_period, payment_period, revision, _event, _allocations) =
+        p1_stale_positive_retro(batch_id);
+    PayrollRepository::delete_accrual(&conn, P1_PERSON, &payment_period.id, batch_id)
+        .expect("stale retro event silinebilmeli");
+    p1_neutralize_revision(&conn, &revision);
+    p1_zero_recovery(&conn, batch_id, &revision).expect("zero-difference recovery");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+}
+
+/// Scenario D: a still-CALCULATED (unfinalized) event whose ledger now
+/// replays to zero is no longer a payable obligation and is retired too.
+#[test]
+fn native_p1_zero_difference_recovery_retires_unfinalized_calculated_event() {
+    let batch_id = "retro-p1-calculated-event";
+    let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("preview");
+    PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("initial retro payment");
+    p1_neutralize_revision(&conn, &revision);
+    // Revision edits stale the event; force the unfinalized CALCULATED state
+    // this scenario is about (e.g. a legacy/partially recovered database).
+    p1_force_event_status(&conn, batch_id, "CALCULATED");
+    p1_zero_recovery(&conn, batch_id, &revision).expect("zero-difference recovery");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+}
+
+fn p1_force_event_status(conn: &rusqlite::Connection, batch_id: &str, status: &str) {
+    let changed = conn
+        .execute(
+            "UPDATE payroll_records SET status = ?1 WHERE accrual_id = ?2",
+            [status, batch_id],
+        )
+        .expect("event status");
+    assert_eq!(changed, 1, "fixture: tek bağlı event");
+}
+
+/// Overpayment / offset ledgers keep the existing explicit-delete rule for a
+/// live (DRAFT/CALCULATED) event: only the zero-difference path retires it.
+#[test]
+fn native_p1_overpayment_save_still_requires_explicit_delete_of_calculated_event() {
+    let batch_id = "retro-p1-overpayment-guard";
+    let (conn, _source_period, payment_period, mut revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("preview");
+    PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("initial retro payment");
+    revision.title = "Native canonical retro (negative)".into();
+    save_revision_with_overrides(
+        &conn,
+        &revision,
+        &[CompensationRevisionOverride {
+            id: "override-native-canonical".into(),
+            revisionId: revision.id.clone(),
+            parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+            value: dec!(100),
+            personnelId: None,
+        }],
+    )
+    .expect("negatif revision");
+    let negative = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("preview");
+    assert!(negative.batch.totalGrossDelta < Decimal::ZERO);
+    // Revision edits stale the linked event; force the "still live" state
+    // this guard is about.
+    p1_force_event_status(&conn, batch_id, "CALCULATED");
+    let error = PayrollService::save_retro_adjustment_batch(
+        &conn,
+        &negative.batch,
+        &negative.allocations,
+    )
+    .expect_err("CALCULATED event overpayment save ile sessizce silinmemeli");
+    assert!(error.to_string().contains("payment event silinmeden"), "{error}");
+    let event = PayrollService::build_dataset_snapshot(&conn)
+        .expect("dataset")
+        .payrolls
+        .into_iter()
+        .find(|payroll| payroll.accrualId == batch_id)
+        .expect("event korunmalı");
+    assert_eq!(event.status, BordroStatus::CALCULATED);
+}
+
+/// Test 5: a FINALIZED/PAID retro is never retired or rewritten by the
+/// zero-difference recovery path, and the failure leaves no partial state.
+#[test]
+fn native_p1_zero_difference_recovery_never_retires_finalized_paid_retro() {
+    let batch_id = "retro-p1-finalized";
+    let (conn, source_period, payment_period, revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("preview");
+    PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .expect("initial retro payment");
+    for period_id in [source_period.id.as_str(), "2026-04"] {
+        let stale_normal = PayrollService::build_dataset_snapshot(&conn)
+            .expect("dataset")
+            .payrolls
+            .iter()
+            .any(|payroll| payroll.donemId == period_id && payroll.status == BordroStatus::STALE);
+        if stale_normal {
+            PayrollService::calculate_payroll_for_personnel(&conn, P1_PERSON, period_id)
+                .expect("source NORMAL refresh");
+        }
+        PayrollService::finalize_payroll_for_personnel(&conn, P1_PERSON, period_id)
+            .expect("source NORMAL finalize");
+    }
+    let retro_stale = PayrollService::build_dataset_snapshot(&conn)
+        .expect("dataset")
+        .payrolls
+        .iter()
+        .any(|payroll| payroll.accrualId == batch_id && payroll.status == BordroStatus::STALE);
+    if retro_stale {
+        let again = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("replay");
+        PayrollService::create_retro_payment(
+            &conn,
+            &again.batch,
+            &again.allocations,
+            &payment_period.id,
+            0,
+        )
+        .expect("retro refresh");
+    }
+    let finalized = PayrollService::finalize_payroll_for_accrual(
+        &conn,
+        P1_PERSON,
+        &payment_period.id,
+        Some(batch_id),
+    )
+    .expect("retro settlement finalize");
+    assert_eq!(finalized.status, BordroStatus::FINALIZED);
+    let before = PayrollService::build_dataset_snapshot(&conn).expect("before");
+    let batch_before = before
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == batch_id)
+        .cloned()
+        .expect("batch");
+    assert_eq!(batch_before.status, CompensationRevisionStatus::FINALIZED);
+    assert_eq!(batch_before.settlementStatus, RetroSettlementStatus::PAID);
+    let allocations_before = before
+        .retroAllocations
+        .iter()
+        .filter(|allocation| allocation.batchId == batch_id)
+        .cloned()
+        .collect::<Vec<_>>();
+
+    // A forged zero-difference ledger for the same batch id.
+    let mut forged = batch_before.clone();
+    forged.status = CompensationRevisionStatus::CALCULATED;
+    forged.settlementStatus = RetroSettlementStatus::UNSETTLED;
+    forged.totalGrossDelta = Decimal::ZERO;
+    forged.payableSettlementAmount = Decimal::ZERO;
+    forged.finalizedAt = None;
+    assert!(
+        PayrollService::save_retro_adjustment_batch(&conn, &forged, &[]).is_err(),
+        "FINALIZED/PAID retro zero-difference save ile değiştirilemez"
+    );
+
+    let after = PayrollService::build_dataset_snapshot(&conn).expect("after");
+    let event_after = after
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == batch_id)
+        .expect("FINALIZED event silinmemeli");
+    assert_eq!(event_after.status, BordroStatus::FINALIZED);
+    assert_eq!(event_after.netOdeme, finalized.netOdeme);
+    assert_eq!(event_after.gelirToplam, finalized.gelirToplam);
+    let batch_after = after
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == batch_id)
+        .expect("batch");
+    assert_eq!(batch_after.status, CompensationRevisionStatus::FINALIZED);
+    assert_eq!(batch_after.settlementStatus, RetroSettlementStatus::PAID);
+    assert_eq!(batch_after.totalGrossDelta, batch_before.totalGrossDelta);
+    assert_eq!(
+        after
+            .retroAllocations
+            .iter()
+            .filter(|allocation| allocation.batchId == batch_id)
+            .cloned()
+            .collect::<Vec<_>>(),
+        allocations_before
+    );
+}
+
+/// Atomicity: the event retirement and the batch/allocation rewrite are one
+/// transaction. A failure in the batch upsert (after the event row has
+/// already been deleted inside the transaction) must roll everything back.
+#[test]
+fn native_p1_zero_difference_recovery_is_atomic_when_batch_write_fails() {
+    let batch_id = "retro-p1-atomic";
+    let (conn, _source_period, _payment_period, revision, event, allocation_count) =
+        p1_stale_positive_retro(batch_id);
+    p1_neutralize_revision(&conn, &revision);
+    conn.execute_batch(
+        "CREATE TEMP TRIGGER p1_force_batch_write_failure
+         BEFORE UPDATE ON retro_adjustment_batches
+         BEGIN SELECT RAISE(ABORT, 'p1 forced batch write failure'); END;",
+    )
+    .expect("test trigger");
+    let error = p1_zero_recovery(&conn, batch_id, &revision)
+        .expect_err("batch yazımı başarısızsa recovery başarısız olmalı");
+    assert!(error.to_string().contains("p1 forced batch write failure"), "{error}");
+    conn.execute_batch("DROP TRIGGER p1_force_batch_write_failure;")
+        .expect("drop trigger");
+
+    let snapshot = PayrollService::build_dataset_snapshot(&conn).expect("dataset");
+    let batch = snapshot
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == batch_id)
+        .expect("batch");
+    assert_eq!(batch.status, CompensationRevisionStatus::STALE, "batch değişmemeli");
+    assert!(batch.totalGrossDelta > Decimal::ZERO);
+    assert_eq!(
+        snapshot
+            .retroAllocations
+            .iter()
+            .filter(|allocation| allocation.batchId == batch_id)
+            .count(),
+        allocation_count,
+        "allocation'lar değişmemeli"
+    );
+    let stale_event = snapshot
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == batch_id)
+        .expect("event rollback ile geri gelmeli");
+    assert_eq!(stale_event.status, BordroStatus::STALE);
+    assert_eq!(stale_event.netOdeme, event.netOdeme);
+
+    // After the transient failure the recovery itself succeeds.
+    p1_zero_recovery(&conn, batch_id, &revision).expect("recovery");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+}
+
+/// Databases already left in the inconsistent live state by the old code
+/// (batch CALCULATED/UNSETTLED 0 TL, linked event STALE with old gross/net,
+/// e.g. retro-9f210d2c-...) are repaired by running the same recovery again.
+#[test]
+fn native_p1_legacy_zero_ledger_with_stale_event_is_repaired_by_recovery() {
+    let batch_id = "retro-p1-legacy-split-brain";
+    let (conn, _source_period, _payment_period, revision, event, _allocations) =
+        p1_stale_positive_retro(batch_id);
+    let next_period = p1_save_next_period(&conn);
+    p1_neutralize_revision(&conn, &revision);
+    // Old behavior: ledger rewritten, event left untouched.
+    let replay = native_preview(&conn, batch_id, &revision, "2026-06-20").expect("replay");
+    save_batch(&conn, &replay.batch, &replay.allocations).expect("legacy ledger save");
+    let legacy = PayrollService::build_dataset_snapshot(&conn).expect("dataset");
+    let legacy_batch = legacy
+        .retroBatches
+        .iter()
+        .find(|batch| batch.id == batch_id)
+        .expect("batch");
+    assert_eq!(legacy_batch.status, CompensationRevisionStatus::CALCULATED);
+    assert_eq!(legacy_batch.payableSettlementAmount, Decimal::ZERO);
+    let legacy_event = legacy
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualId == batch_id)
+        .expect("legacy event");
+    assert_eq!(legacy_event.status, BordroStatus::STALE);
+    assert_eq!(legacy_event.netOdeme, event.netOdeme);
+    assert!(
+        PayrollService::calculate_payroll_for_personnel(&conn, P1_PERSON, &next_period.id)
+            .is_err(),
+        "legacy split-brain NORMAL'ı bloke ediyordu"
+    );
+
+    p1_zero_recovery(&conn, batch_id, &revision).expect("legacy repair");
+    p1_assert_zero_ledger_without_event(&conn, batch_id);
+    PayrollService::calculate_payroll_for_personnel(&conn, P1_PERSON, &next_period.id)
+        .expect("onarım sonrası NORMAL hesaplanmalı");
+}

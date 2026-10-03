@@ -998,12 +998,16 @@ export function usePayrollMutationController({
     ) {
       throw new Error('Payment event olmadan yalnız açık fazla tahakkuk veya mahsupla kapanan settlement batch’i saklanabilir.');
     }
-    const activePayment = payrollDataset.payrolls.find(
-      (payroll) => payroll.accrualId === batch.id &&
-        (payroll.status === 'DRAFT' || payroll.status === 'CALCULATED' || payroll.status === 'FINALIZED')
+    // Mirrors the native settlement-only save: a settlement ledger has no
+    // payment event, so a linked older event is retired atomically with the
+    // ledger rewrite. FINALIZED is never touched; a live DRAFT/CALCULATED
+    // event is retired only when the replay resolves to no difference.
+    const linkedPayments = payrollDataset.payrolls.filter((payroll) => payroll.accrualId === batch.id);
+    const blockingPayment = linkedPayments.find((payroll) =>
+      payroll.status === 'FINALIZED' || (payroll.status !== 'STALE' && !zeroDifference)
     );
-    if (activePayment) {
-      throw new Error(`${batch.id} retro payment event'i ${activePayment.status} durumunda; event silinmeden fazla tahakkuk batch'i saklanamaz.`);
+    if (blockingPayment) {
+      throw new Error(`${batch.id} retro payment event'i ${blockingPayment.status} durumunda; event silinmeden fazla tahakkuk batch'i saklanamaz.`);
     }
     if (isNative) {
       await tauriBridge.saveRetroAdjustmentBatch(batch, canonicalResult.allocations);
@@ -1011,10 +1015,21 @@ export function usePayrollMutationController({
       return;
     }
     if (!authoritativePayload) throw new Error('Yetkili veri snapshot’ı hazır değil.');
+    const retireImpact = linkedPayments.length
+      ? await evaluateBrowserMutations(linkedPayments.map((payroll) => ({
+          kind: 'ACCRUAL_DELETE' as const,
+          personnelId: payroll.personelId,
+          periodId: payroll.donemId,
+          accrualId: batch.id,
+        })))
+      : null;
+    const isRetiredPayment = (payroll: { accrualId?: string | null }) =>
+      linkedPayments.length > 0 && payroll.accrualId === batch.id;
     const exactBatch = toPayrollBoundaryDto(batch) as unknown as NonNullable<PayrollStorageDto['retroBatches']>[number];
     const exactAllocations = toPayrollBoundaryDto(canonicalResult.allocations) as unknown as NonNullable<PayrollStorageDto['retroAllocations']>;
     const datasetWithBatch: PayrollDatasetSnapshot = {
       ...payrollDataset,
+      payrolls: payrollDataset.payrolls.filter((payroll) => !isRetiredPayment(payroll)),
       retroBatches: [...payrollDataset.retroBatches.filter((item) => item.id !== batch.id), exactBatch],
       retroAllocations: [
         ...payrollDataset.retroAllocations.filter((item) => item.batchId !== batch.id),
@@ -1030,17 +1045,25 @@ export function usePayrollMutationController({
       },
       datasetWithBatch
     );
-    updateAuthoritativePayload((current) => ({
-      ...current,
-      compensationRevisions: current.compensationRevisions ?? [],
-      compensationRevisionOverrides: current.compensationRevisionOverrides ?? [],
-      retroBatches: [...(current.retroBatches ?? []).filter((item) => item.id !== batch.id), exactBatch],
-      retroAllocations: [
-        ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
-        ...exactAllocations,
-      ],
-      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
-    }));
+    updateAuthoritativePayload((current) => {
+      const retiredBordrolar = retireImpact
+        ? applyBrowserPayrollImpact(current.bordrolar, retireImpact).filter((item) => !isRetiredPayment(item))
+        : current.bordrolar;
+      const retiredBatches = retireImpact
+        ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], retireImpact)
+        : current.retroBatches ?? [];
+      return {
+        ...current,
+        compensationRevisions: current.compensationRevisions ?? [],
+        compensationRevisionOverrides: current.compensationRevisionOverrides ?? [],
+        retroBatches: [...retiredBatches.filter((item) => item.id !== batch.id), exactBatch],
+        retroAllocations: [
+          ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
+          ...exactAllocations,
+        ],
+        bordrolar: applyBrowserPayrollImpact(retiredBordrolar, impact),
+      };
+    });
   };
 
   const handleCreateRetroPayment = async (result: RetroCalculationResultModel) => {

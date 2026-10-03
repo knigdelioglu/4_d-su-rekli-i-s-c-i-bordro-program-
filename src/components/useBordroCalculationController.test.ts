@@ -241,6 +241,28 @@ describe('stale payment-event chain replay selection', () => {
     expect(findFirstStalePriorEvent([staleRetro], periods, 'p-1', target, periods.get('2026-05')!, [retired])).toBe(null);
   });
 
+  test('P1: NORMAL is unblocked once zero-difference recovery retired the retro event, but an active stale retro still blocks', () => {
+    const staleRetro = {
+      ...payroll('p-1', '2026-03', 'STALE'),
+      id: 'retro-1', accrualId: 'retro-1', accrualType: 'RETRO_ADJUSTMENT', paymentDate: '2026-03-28', sequence: 1,
+      gelirToplam: 1875.73, netOdeme: 1594.38,
+    } as unknown as BordroKaydi;
+    const zeroLedger = { id: 'retro-1', personnelId: 'p-1', paymentDate: '2026-03-28', status: 'CALCULATED',
+      settlementStatus: 'UNSETTLED', totalGrossDelta: 0, payableSettlementAmount: 0 } as RetroAdjustmentBatch;
+    const source = payroll('p-1', '2026-02', 'CALCULATED');
+    // Native state after the fix: the retired event row no longer exists.
+    expect(findFirstStalePriorEvent([source], periods, 'p-1', target, periods.get('2026-05')!, [zeroLedger])).toBe(null);
+    // Legacy split-brain row is not a blocker either.
+    expect(findFirstStalePriorEvent([source, staleRetro], periods, 'p-1', target, periods.get('2026-05')!, [zeroLedger])).toBe(null);
+    // Regression guard: a stale retro whose ledger still owes money blocks.
+    const owed = { ...zeroLedger, status: 'STALE', totalGrossDelta: 1875.73, payableSettlementAmount: 1875.73 } as RetroAdjustmentBatch;
+    expect(findFirstStalePriorEvent([source, staleRetro], periods, 'p-1', target, periods.get('2026-05')!, [owed])
+      ?.payroll.accrualId).toBe('retro-1');
+    // ...and so does one without any ledger evidence.
+    expect(findFirstStalePriorEvent([source, staleRetro], periods, 'p-1', target, periods.get('2026-05')!, [])
+      ?.payroll.accrualId).toBe('retro-1');
+  });
+
   test('stale-chain engine errors get an actionable hint', () => {
     const message = formatPayrollError({
       type: 'ValidationError',

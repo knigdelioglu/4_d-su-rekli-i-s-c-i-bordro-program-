@@ -13,7 +13,7 @@ use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use chrono::Utc;
 use payroll_core::{RetroCalculationRequest, RetroEntitlementEngine};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 pub use payroll_core::payroll_engine::{
     resolve_statutory_snapshot_for_period,
@@ -325,30 +325,87 @@ impl PayrollService {
                     .into(),
             ));
         }
-        let active_payment_event: Option<(String, String)> = tx
-            .query_row(
-                "SELECT id, status
-                 FROM payroll_records
-                 WHERE accrual_id = ?1
-                   AND status IN ('DRAFT', 'CALCULATED', 'FINALIZED')
-                 LIMIT 1",
-                params![canonical_batch.id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()
-            .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
-        if let Some((event_id, event_status)) = active_payment_event {
-            return Err(if event_status == "FINALIZED" {
-                DomainError::PayrollFinalized(format!(
-                    "{} retro payment event'i FINALIZED olduğu için fazla tahakkuk batch'i değiştirilemez.",
+        // A settlement-only ledger has, by definition, no payment event. Any
+        // event still linked to this batch id is the settlement node of an
+        // older, superseded replay. It is retired here with the same
+        // authoritative mechanism as an explicit unfinalized retro event
+        // delete (`PayrollRepository::delete_accrual`): FINALIZED blocker
+        // policy, row removal and downstream invalidation, all inside this
+        // transaction together with the batch/allocation rewrite.
+        //  - FINALIZED: settlement history, never touched (rejected).
+        //  - STALE: always superseded by the recalculated settlement ledger.
+        //  - DRAFT/CALCULATED: retired only when the replay resolves to no
+        //    difference at all; an OVERPAYMENT/offset ledger still requires
+        //    the explicit delete first (unchanged behavior).
+        let linked_payment_events: Vec<(String, String, String, String, String)> = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT id, personnel_id, period_id, accrual_type, status
+                     FROM payroll_records
+                     WHERE accrual_id = ?1
+                     ORDER BY id",
+                )
+                .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+            let rows = statement
+                .query_map(params![canonical_batch.id], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })
+                .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|error| DomainError::DatabaseError(error.to_string()))?
+        };
+        if let Some((event_id, _, _, _, _)) = linked_payment_events
+            .iter()
+            .find(|(_, _, _, _, status)| status == "FINALIZED")
+        {
+            return Err(DomainError::PayrollFinalized(format!(
+                "{} retro payment event'i FINALIZED olduğu için fazla tahakkuk batch'i değiştirilemez.",
+                event_id
+            )));
+        }
+        for (event_id, personnel_id, _, accrual_type, status) in &linked_payment_events {
+            if personnel_id != &canonical_batch.personnelId || accrual_type != "RETRO_ADJUSTMENT" {
+                return Err(DomainError::InvalidData(format!(
+                    "{} kaydı retro batch kimliğini kullanıyor ancak bu batch'in retro ödeme olayı değil; kayıt elle incelenmelidir.",
                     event_id
-                ))
-            } else {
-                DomainError::ValidationError(format!(
+                )));
+            }
+            if status != "STALE" && !zero_difference {
+                return Err(DomainError::ValidationError(format!(
                     "{} retro payment event'i hâlâ {} durumunda; payment event silinmeden fazla tahakkuk batch'i saklanamaz.",
-                    event_id, event_status
-                ))
-            });
+                    event_id, status
+                )));
+            }
+        }
+        for (_, personnel_id, period_id, _, _) in &linked_payment_events {
+            let retire_impact =
+                crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
+                    assert_mutation_allowed(
+                        &tx,
+                        &payroll_core::PayrollMutation::AccrualDelete {
+                            personnelId: personnel_id.clone(),
+                            periodId: period_id.clone(),
+                            accrualId: canonical_batch.id.clone(),
+                        },
+                    )?;
+            tx.execute(
+                "DELETE FROM payroll_records
+                 WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3
+                   AND accrual_type = 'RETRO_ADJUSTMENT' AND status <> 'FINALIZED'",
+                params![personnel_id, period_id, canonical_batch.id],
+            )
+            .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
+            // Downstream events that consumed the retired node are staled.
+            // The batch itself is also marked by this impact; it is rewritten
+            // as the new CALCULATED settlement ledger right below.
+            crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
+                apply_impact(&tx, &retire_impact)?;
         }
         crate::repositories::retro_repo::save_batch_in_transaction(
             &tx,

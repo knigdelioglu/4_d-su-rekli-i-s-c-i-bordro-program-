@@ -75,6 +75,14 @@ export function retroPaymentEventNeedsReplay(
     return { eligible: true, blockedSourcePeriods };
   }
 
+  if (payroll !== undefined && isSupersededZeroPayableRetroEvent(payroll, [batch])) {
+    // Legacy split-brain left by older builds: the ledger already says
+    // "0 TL / no payment" but the old STALE event row is still persisted.
+    // The same deterministic replay retires that row natively (atomic with
+    // the ledger rewrite), so the recovery must stay reachable.
+    return { eligible: true, blockedSourcePeriods };
+  }
+
   const eligible = batch.status === 'CALCULATED' &&
     (batch.payableSettlementAmount ?? 0) > 0 &&
     batch.settlementStatus !== 'OVERPAYMENT' &&
@@ -86,8 +94,10 @@ export function retroPaymentEventNeedsReplay(
 /**
  * Mirrors the core engine's `is_superseded_zero_payable_retro`: a STALE retro
  * event whose batch was recalculated to a CALCULATED ledger without any
- * payable amount is an audit record only. It must not block the NORMAL
- * payroll chain (BUG-RETRO-002).
+ * payable amount is not a payment obligation. The native settlement-only save
+ * now retires such an event in the same transaction as the ledger rewrite, so
+ * this only matches legacy rows written by older builds; those must neither
+ * block the NORMAL payroll chain nor be shown as a net payment (BUG-RETRO-002).
  */
 export function isSupersededZeroPayableRetroEvent(
   payroll: Pick<BordroKaydi, 'accrualType' | 'status' | 'accrualId' | 'id' | 'personelId' | 'paymentDate'>,

@@ -90,4 +90,42 @@ describe('retro payment event recovery', () => {
     expect(isSupersededZeroPayableRetroEvent(payroll, [{ ...zeroLedger, payableSettlementAmount: 10, totalGrossDelta: 10 } as RetroAdjustmentBatch])).toBe(false);
     expect(isSupersededZeroPayableRetroEvent({ ...payroll, status: 'CALCULATED' } as BordroKaydi, [zeroLedger])).toBe(false);
   });
+
+  // P1 — zero-difference recovery: live state retro-9f210d2c-… (batch
+  // CALCULATED/UNSETTLED 0 TL, event STALE 1.875,73 brüt / 1.594,38 net).
+  const liveZeroLedger = {
+    ...batch, status: 'CALCULATED', settlementStatus: 'UNSETTLED',
+    totalGrossDelta: 0, payableSettlementAmount: 0, offsetSettlementAmount: 0,
+  } as RetroAdjustmentBatch;
+  const liveStaleEvent = { ...payroll, gelirToplam: 1875.73, netOdeme: 1594.38 } as BordroKaydi;
+
+  test('P1: a legacy 0 TL ledger with a left-behind STALE event keeps recovery reachable (native retires the row)', () => {
+    const assessment = retroPaymentEventNeedsReplay(liveZeroLedger, liveStaleEvent, [], [sourcePayroll]);
+    expect(assessment.eligible).toBe(true);
+    expect(assessment.blockedSourcePeriods).toEqual([]);
+  });
+
+  test('P1: after native retirement (no linked event) a 0 TL ledger is consistent and offers nothing', () => {
+    const assessment = retroPaymentEventNeedsReplay(liveZeroLedger, undefined, [], [sourcePayroll]);
+    expect(assessment.eligible).toBe(false);
+    expect(assessment.reason).toBeUndefined();
+  });
+
+  test('P1: the superseded event is never a net-payment source for the 0 TL row', () => {
+    // GeriyeDonukFarklar renders "—" instead of payroll.netOdeme for it.
+    expect(isSupersededZeroPayableRetroEvent(liveStaleEvent, [liveZeroLedger])).toBe(true);
+  });
+
+  test('P1: a genuinely active stale event is not treated as superseded', () => {
+    const positiveStale = { ...liveZeroLedger, status: 'STALE', totalGrossDelta: 1875.73, payableSettlementAmount: 1875.73 } as RetroAdjustmentBatch;
+    const positiveCalculated = { ...liveZeroLedger, totalGrossDelta: 1875.73, payableSettlementAmount: 1875.73 } as RetroAdjustmentBatch;
+    expect(isSupersededZeroPayableRetroEvent(liveStaleEvent, [positiveStale])).toBe(false);
+    expect(isSupersededZeroPayableRetroEvent(liveStaleEvent, [positiveCalculated])).toBe(false);
+    expect(isSupersededZeroPayableRetroEvent(liveStaleEvent, [{ ...liveZeroLedger, id: 'other-batch' } as RetroAdjustmentBatch])).toBe(false);
+    expect(isSupersededZeroPayableRetroEvent({ ...liveStaleEvent, status: 'FINALIZED' } as BordroKaydi, [liveZeroLedger])).toBe(false);
+    // Positive CALCULATED ledger + STALE event is the normal replay path.
+    expect(retroPaymentEventNeedsReplay(positiveCalculated, liveStaleEvent, allocations, [sourcePayroll]).eligible).toBe(true);
+    // FINALIZED event is never offered for recovery even with a 0 TL ledger.
+    expect(retroPaymentEventNeedsReplay(liveZeroLedger, { ...liveStaleEvent, status: 'FINALIZED' } as BordroKaydi, [], [sourcePayroll]).eligible).toBe(false);
+  });
 });
