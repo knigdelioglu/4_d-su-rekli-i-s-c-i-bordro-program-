@@ -83,6 +83,10 @@ uygun biçimde tarama dışı bırakmayı değerlendirin.
 
 Tauri geliştirme akışı için `bun tauri dev` kullanılabilir. SQLite verisi kullanıcı uygulama dizinindeki `4d_bordro_data/bordro.sqlite` dosyasında tutulur.
 
+Linux x86_64 için `.deb` ve AppImage paketlerini üretme ve kurma adımları
+[`docs/linux-install.md`](docs/linux-install.md) içinde yer alır. Paket üretimi
+GitHub Actions'taki `Linux Packages` iş akışıyla Ubuntu 22.04 üzerinde yapılır.
+
 ## Tarayıcı çalışma zamanı
 
 Tauri dışı kullanımda gerçek zincir `React → PayrollEngine → Rust/WASM →

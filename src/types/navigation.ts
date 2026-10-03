@@ -79,7 +79,8 @@ export type ParametreSection =
   | 'tediyeTis'
   | 'sickLeave'
   | 'donemler'
-  | 'newPeriod';
+  | 'newPeriod'
+  | 'license';
 
 export const PARAMETRE_SECTIONS: readonly ParametreSection[] = [
   'gelir',
@@ -89,6 +90,7 @@ export const PARAMETRE_SECTIONS: readonly ParametreSection[] = [
   'sickLeave',
   'donemler',
   'newPeriod',
+  'license',
 ];
 
 export function isParametreSection(value: string | null): value is ParametreSection {

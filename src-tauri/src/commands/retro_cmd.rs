@@ -55,6 +55,7 @@ pub fn save_compensation_revision(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub fn calculate_retro_preview(
+    license: State<'_, crate::license::LicenseRuntime>,
     db: State<'_, DbState>,
     batch_id: String,
     revision: CompensationRevision,
@@ -64,6 +65,8 @@ pub fn calculate_retro_preview(
     calculated_at: String,
     description: Option<String>,
 ) -> Result<RetroCalculationResult> {
+    crate::license::require_allowed(license.data_dir(), "geriye dönük bordro hesaplama")
+        .map_err(DomainError::ValidationError)?;
     let conn = db.lock().map_err(|error| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {error}"))
     })?;
@@ -94,12 +97,15 @@ pub fn save_retro_adjustment_batch(
 
 #[tauri::command]
 pub fn create_retro_payment(
+    license: State<'_, crate::license::LicenseRuntime>,
     db: State<'_, DbState>,
     batch: RetroAdjustmentBatch,
     allocations: Vec<RetroAllocation>,
     payment_period_id: String,
     sequence: i32,
 ) -> Result<BordroKaydi> {
+    crate::license::require_allowed(license.data_dir(), "geriye dönük bordro kesinleştirme")
+        .map_err(DomainError::ValidationError)?;
     let conn = db.lock().map_err(|error| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {error}"))
     })?;

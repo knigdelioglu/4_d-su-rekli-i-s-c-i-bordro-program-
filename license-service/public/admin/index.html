@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>4/D Lisans Yönetimi</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css" />
+    <script src="/admin/assets/admin.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="page-heading">
+        <div>
+          <p class="eyebrow">4/D BORDRO · YÖNETİM</p>
+          <h1>Lisans yönetimi</h1>
+          <p class="intro">Kurum lisanslarını, cihaz onaylarını ve yedekleri yönetin.</p>
+        </div>
+        <button id="refresh-button" class="button secondary hidden" type="button">Yenile</button>
+      </header>
+
+      <div id="notice" class="notice hidden" role="status" aria-live="polite"></div>
+
+      <section id="login-panel" class="panel narrow" aria-labelledby="login-heading">
+        <h2 id="login-heading">Yönetici girişi</h2>
+        <form id="login-form" class="form-grid">
+          <label for="username">Kullanıcı adı</label>
+          <input id="username" name="username" autocomplete="username" required />
+          <label for="password">Parola</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+          <button class="button primary" type="submit">Giriş yap</button>
+        </form>
+      </section>
+
+      <div id="admin-panel" class="hidden">
+        <section class="panel" aria-labelledby="create-heading">
+          <div class="section-heading">
+            <div>
+              <h2 id="create-heading">Kurum lisansı oluştur</h2>
+              <p>Lisans anahtarı yalnızca oluşturulduğunda gösterilir. Kuruma güvenli yoldan iletin.</p>
+            </div>
+          </div>
+          <form id="create-form" class="license-form">
+            <label for="institution-name">Kurum adı</label>
+            <input id="institution-name" name="institutionName" maxlength="160" required />
+            <label for="license-name">Lisans adı</label>
+            <input id="license-name" name="licenseName" maxlength="100" value="4/D Bordro" required />
+            <label for="expires-at">Geçerlilik sonu</label>
+            <input id="expires-at" name="expiresAt" type="date" required />
+            <label for="max-devices">Cihaz hakkı</label>
+            <input id="max-devices" name="maxDevices" type="number" min="1" max="100" value="1" required />
+            <button class="button primary" type="submit">Lisans oluştur</button>
+          </form>
+          <div id="new-key" class="key-result hidden" role="status">
+            <h3>Yeni lisans anahtarı</h3>
+            <p>Bu değer tekrar gösterilemez. Güvenli biçimde kopyalayın ve saklayın.</p>
+            <div class="key-row"><code id="new-key-value"></code><button id="copy-key" class="button secondary" type="button">Kopyala</button></div>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="requests-heading">
+          <div class="section-heading">
+            <div><h2 id="requests-heading">Bekleyen cihaz talepleri</h2><p>Onay, lisansın cihaz hakkını atomik olarak ayırır.</p></div>
+          </div>
+          <div id="requests-list" class="empty-state">Bekleyen talep yok.</div>
+        </section>
+
+        <section class="panel" aria-labelledby="licenses-heading">
+          <div class="section-heading">
+            <div><h2 id="licenses-heading">Kurum lisansları</h2><p>Aktif cihaz hakları ve geçerlilik bilgileri.</p></div>
+          </div>
+          <div id="licenses-list" class="empty-state">Henüz lisans yok.</div>
+        </section>
+
+        <section class="panel backup-panel" aria-labelledby="backup-heading">
+          <div><h2 id="backup-heading">Kayıt yedeği</h2><p>Yedeği güvenli ve erişimi kısıtlı bir yerde saklayın. Yedek lisans kayıtlarını içerir, imzalama anahtarını içermez.</p></div>
+          <div class="backup-actions">
+            <button id="export-backup" class="button secondary" type="button">Yedeği indir</button>
+            <label class="button secondary file-button" for="restore-file">Yedekten geri yükle</label>
+            <input id="restore-file" class="visually-hidden" type="file" accept="application/json,.json" />
+          </div>
+        </section>
+
+        <div class="session-actions"><button id="logout-button" class="button text-button" type="button">Oturumu kapat</button></div>
+      </div>
+    </main>
+  </body>
+</html>

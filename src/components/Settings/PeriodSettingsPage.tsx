@@ -31,6 +31,7 @@ import { NewPeriodSection } from './NewPeriodSection';
 import { PeriodListSection } from './PeriodListSection';
 import { SickLeaveConflictModal } from './SickLeaveConflictModal';
 import { SickLeaveSection } from './SickLeaveSection';
+import { LicenseSettingsSection } from './LicenseSettingsSection';
 import { TediyeTisSection } from './TediyeTisSection';
 import { formatPeriodSettingsSaveError, hasValidInitialWorkBonusGroups, isPositiveDailyBaseWage, savePeriodSettings } from './periodSettingsSave';
 import { describeError } from '../../utils/errorMessage';
@@ -509,6 +510,8 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   const openNewPeriod = () => onSectionChange('newPeriod');
 
   const renderActiveSection = () => {
+    if (activeSection === 'license') return <LicenseSettingsSection />;
+
     if (activeSection === 'gelir') {
       return aktifDonem ? (
         <IncomeParametersSection
@@ -668,13 +671,16 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   return (
     <section data-testid="period-settings-page" className="space-y-6">
       <header className="border-b border-slate-200 pb-5">
-        <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">Dönem Parametreleri</h1>
+        <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+          {activeSection === 'license' ? 'Lisans' : 'Dönem Parametreleri'}
+        </h1>
         <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-600">
-          Bordro dönemlerini, dönemsel kurum değerlerini ve yasal hesaplama parametrelerini yönetin.
-          Bölümler arasında geçiş yapmak için sol menüyü kullanın.
+          {activeSection === 'license'
+            ? 'Bu cihazın lisans durumunu görüntüleyin veya lisans anahtarıyla aktivasyon talebi gönderin.'
+            : 'Bordro dönemlerini, dönemsel kurum değerlerini ve yasal hesaplama parametrelerini yönetin. Bölümler arasında geçiş yapmak için sol menüyü kullanın.'}
         </p>
       </header>
-      {periodGlobalSuccess && (
+      {periodGlobalSuccess && activeSection !== 'license' && (
         <div
           role="status"
           data-testid="period-settings-success-banner"
@@ -684,7 +690,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
           <span>{periodGlobalSuccess}</span>
         </div>
       )}
-      {periodGlobalError && activeSection !== 'newPeriod' && (
+      {periodGlobalError && activeSection !== 'newPeriod' && activeSection !== 'license' && (
         <div
           role="alert"
           data-testid="period-settings-error-banner"

@@ -1,11 +1,13 @@
 pub mod commands;
 pub mod db;
 pub mod domain;
+pub mod license;
 pub mod repositories;
 pub mod services;
 
 use db::{create_connection, DbState};
 use std::sync::{Arc, Mutex};
+use tauri::Manager;
 
 fn configure_builder<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
@@ -14,6 +16,12 @@ fn configure_builder<R: tauri::Runtime>(
     builder
         .manage(state)
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let runtime = license::initialize(app.handle()).map_err(std::io::Error::other)?;
+            app.manage(runtime.clone());
+            license::start_background_checker(runtime.data_dir().to_path_buf());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_personnel_list,
             commands::print_current_webview,
@@ -57,6 +65,9 @@ fn configure_builder<R: tauri::Runtime>(
             commands::calculate_retro_preview,
             commands::save_retro_adjustment_batch,
             commands::create_retro_payment,
+            commands::get_license_status,
+            commands::activate_license,
+            commands::refresh_license_status,
         ])
 }
 
@@ -120,6 +131,10 @@ mod ipc_tests {
         let app = configure_builder(mock_builder(), state)
             .build(mock_context(noop_assets()))
             .expect("mock Tauri app should build with the production command handler");
+        app.manage(
+            license::initialize(&app.handle())
+                .expect("mock app should resolve its local license state directory"),
+        );
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview should build");
@@ -627,6 +642,10 @@ mod ipc_tests {
         let backup_app = configure_builder(mock_builder(), backup_state)
             .build(mock_context(noop_assets()))
             .expect("isolated backup mock app should build");
+        backup_app.manage(
+            license::initialize(&backup_app.handle())
+                .expect("backup mock app should resolve its local license state directory"),
+        );
         let backup_webview =
             tauri::WebviewWindowBuilder::new(&backup_app, "backup-test", Default::default())
                 .build()

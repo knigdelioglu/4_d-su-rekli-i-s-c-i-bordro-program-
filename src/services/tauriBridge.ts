@@ -20,6 +20,19 @@ import { PayrollNotice } from '../types/payrollNotice';
 import { decodeDecimalValues, encodeDecimalValues } from './payrollEngine/decimalBoundary';
 import type { MutationImpact, PayrollMutation } from './payrollEngine/types';
 
+export interface LicenseStatus {
+  mode: 'optional' | 'required';
+  state: 'notActivated' | 'pending' | 'active' | 'expired' | 'denied' | 'invalid' | 'configurationError';
+  canCalculate: boolean;
+  canFinalize: boolean;
+  deviceId: string;
+  licenseId: string | null;
+  expiresAt: string | null;
+  lastOnlineAt: string | null;
+  offlineUntil: string | null;
+  reason: string | null;
+}
+
 // Type-safe IPC invoke helper with window fallback detection
 async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Promise<T> {
   const win = typeof window !== 'undefined' ? (window as any) : null;
@@ -51,6 +64,15 @@ async function mutateTauri<T>(cmd: string, args: Record<string, any> = {}): Prom
 }
 
 export const tauriBridge = {
+  async getLicenseStatus(): Promise<LicenseStatus> {
+    return invokeTauri<LicenseStatus>('get_license_status');
+  },
+  async activateLicense(licenseKey: string): Promise<LicenseStatus> {
+    return invokeTauri<LicenseStatus>('activate_license', { licenseKey });
+  },
+  async refreshLicenseStatus(): Promise<LicenseStatus> {
+    return invokeTauri<LicenseStatus>('refresh_license_status');
+  },
   async printCurrentWebview(): Promise<boolean> {
     return invokeTauri<boolean>('print_current_webview');
   },

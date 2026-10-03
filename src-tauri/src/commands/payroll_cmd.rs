@@ -16,12 +16,15 @@ pub fn get_payroll_list(db: State<'_, DbState>) -> Result<Vec<BordroKaydi>> {
 
 #[tauri::command]
 pub fn calculate_payroll(
+    license: State<'_, crate::license::LicenseRuntime>,
     db: State<'_, DbState>,
     personnel_id: String,
     period_id: String,
     manual_income: Option<ManualPayrollIncomeInput>,
     accrual: Option<PayrollAccrualInput>,
 ) -> Result<BordroKaydi> {
+    crate::license::require_allowed(license.data_dir(), "bordro hesaplama")
+        .map_err(DomainError::ValidationError)?;
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
@@ -36,11 +39,14 @@ pub fn calculate_payroll(
 
 #[tauri::command]
 pub fn finalize_payroll(
+    license: State<'_, crate::license::LicenseRuntime>,
     db: State<'_, DbState>,
     personnel_id: String,
     period_id: String,
     accrual_id: Option<String>,
 ) -> Result<BordroKaydi> {
+    crate::license::require_allowed(license.data_dir(), "bordro kesinleştirme")
+        .map_err(DomainError::ValidationError)?;
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;

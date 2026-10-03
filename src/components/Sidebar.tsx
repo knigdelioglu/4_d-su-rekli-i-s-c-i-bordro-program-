@@ -21,6 +21,7 @@ import {
   HardDrive,
   HeartPulse,
   Layers,
+  KeyRound,
   MoreHorizontal,
   Percent,
   Plus,
@@ -114,6 +115,7 @@ const PARAMETRE_NAVIGATION_ITEMS: readonly ParametreNavigationItem[] = [
   { id: 'sickLeave', label: 'Raporlar', testId: 'nav-parametre-rapor', icon: FileText },
   { id: 'donemler', label: 'Dönemler', testId: 'nav-parametre-donemler', icon: Calendar },
   { id: 'newPeriod', label: 'Yeni Dönem Aç', testId: 'nav-parametre-yeni-donem', icon: Plus },
+  { id: 'license', label: 'Lisans', testId: 'nav-parametre-lisans', icon: KeyRound },
 ];
 
 function groupButtonClass(isActive: boolean): string {
