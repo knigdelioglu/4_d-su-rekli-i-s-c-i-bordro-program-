@@ -1,11 +1,7 @@
 import React from 'react';
 import { Check, Info, Layers, Percent, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
 import type { DönemselKurumDegerleri, IsPrimiGrupItem } from '../../types/payroll';
-import {
-  AY_ISIMLERI,
-  DEFAULT_KURUM_DEGERLERI,
-  formatTL,
-} from '../../utils/payrollPresentation';
+import { AY_ISIMLERI } from '../../utils/payrollPresentation';
 
 interface IncomeParametersSectionProps {
   aktifDonemId: string;
@@ -132,9 +128,6 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               }
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
-            <span className="text-[11px] text-slate-500 mt-0.5 block">
-              Standart: {formatTL(DEFAULT_KURUM_DEGERLERI.gunlukTabanUcret)}
-            </span>
           </div>
 
           <div>
@@ -179,7 +172,6 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
             </p>
             <span className="text-[11px] text-slate-500 mt-0.5 block">
               Önceki dönemle aynı değerler bırakılırsa zam oranı yemek, birleştirilmiş sosyal yardım, giyim yardımı ve hizmet zammı birimine de uygulanır. Zamlı tutarlar sonraki dönemlerde de kullanılır. Bir kaleme farklı değer girilirse o değer kullanılır.
-              {' '}Standart: {formatTL(DEFAULT_KURUM_DEGERLERI.gunlukYemek)}
             </span>
           </div>
 
@@ -199,9 +191,6 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               }
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
-            <span className="text-[11px] text-slate-500 mt-0.5 block">
-              Standart: {formatTL(DEFAULT_KURUM_DEGERLERI.birlestirilmisSosyalYardim)}
-            </span>
           </div>
 
           <div>
@@ -220,9 +209,6 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               }
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
-            <span className="text-[11px] text-slate-500 mt-0.5 block">
-              Standart: {formatTL(DEFAULT_KURUM_DEGERLERI.gunlukVasitaYol)}
-            </span>
           </div>
 
           <div>
@@ -241,9 +227,6 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               }
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
-            <span className="text-[11px] text-slate-500 mt-0.5 block">
-              Standart: {formatTL(DEFAULT_KURUM_DEGERLERI.giyimYardimi)}
-            </span>
           </div>
 
           <div>
@@ -262,9 +245,6 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               }
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
-            <span className="text-[11px] text-slate-500 mt-0.5 block">
-              Standart: {formatTL(DEFAULT_KURUM_DEGERLERI.hizmetZammiBirimi)}
-            </span>
           </div>
 
           <div className="sm:col-span-2 pt-2 border-t border-slate-200">
