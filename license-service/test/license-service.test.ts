@@ -292,4 +292,25 @@ describe('Netlify Blobs license service', () => {
       await first.dispose();
     }
   });
+
+  test('admin can extend expiry and restore a revoked license without losing device assignments', async () => {
+    const store = new AtomicBlobEmulator();
+    const { deps } = dependencies(store);
+    const { admin } = await login(deps);
+    const created = await createLicense(admin, 1);
+    const activation = await requestActivation(deps, created.licenseKey, deviceOne);
+    await admin(`/api/license/admin/requests/${encodeURIComponent(activation.requestId)}/approve`, 'POST', {});
+    expect((await admin(`/api/license/admin/licenses/${created.license.id}/revoke`, 'POST', {})).status).toBe(200);
+    const denied = await admin(`/api/license/admin/licenses/${created.license.id}/extend`, 'POST', { expiresAt: '2027-06-01T23:59:59.999Z' });
+    expect(denied.status).toBe(200);
+    const restored = await admin(`/api/license/admin/licenses/${created.license.id}/restore`, 'POST', {});
+    expect(restored.status).toBe(200);
+    const check = await handleLicenseRequest(request('/api/license/check', 'POST', {
+      licenseId: created.license.id, deviceHash: deviceOne,
+    }), deps);
+    expect(check.status).toBe(200);
+    expect((await check.json()).decision).toBe('authorized');
+    const invalidExtension = await admin(`/api/license/admin/licenses/${created.license.id}/extend`, 'POST', { expiresAt: '2027-01-01T23:59:59.999Z' });
+    expect(invalidExtension.status).toBe(400);
+  });
 });

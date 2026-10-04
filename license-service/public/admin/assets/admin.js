@@ -124,7 +124,10 @@ function renderLicenses(items) {
     }
     if (license.status === 'active') {
       row.append(actionButton('Lisansı iptal et', 'danger', () => revokeLicense(license.id, license.institutionName)));
+    } else {
+      row.append(actionButton('İptali geri al', 'primary', () => restoreLicense(license.id, license.institutionName)));
     }
+    row.append(actionButton('Süreyi uzat', 'secondary', () => extendLicense(license.id, license.institutionName, license.expiresAt)));
     root.append(row);
   }
 }
@@ -153,6 +156,31 @@ async function revokeLicense(licenseId, institutionName) {
   try {
     await api(`/api/license/admin/licenses/${licenseId}/revoke`, { method: 'POST', body: {} });
     showNotice('Lisans iptal edildi.', 'success');
+    await loadDashboard();
+  } catch (error) { showNotice(error.message, 'error'); }
+}
+
+async function extendLicense(licenseId, institutionName, currentExpiry) {
+  const initial = new Date(currentExpiry).toISOString().slice(0, 10);
+  const value = window.prompt(`${institutionName} için yeni geçerlilik sonunu YYYY-AA-GG biçiminde girin.`, initial);
+  if (!value) return;
+  const expiresAt = new Date(`${value}T23:59:59.999Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(expiresAt.getTime()) || expiresAt.toISOString().slice(0, 10) !== value) {
+    showNotice('Tarih biçimi geçersiz.', 'error');
+    return;
+  }
+  try {
+    await api(`/api/license/admin/licenses/${licenseId}/extend`, { method: 'POST', body: { expiresAt: expiresAt.toISOString() } });
+    showNotice('Lisans süresi uzatıldı.', 'success');
+    await loadDashboard();
+  } catch (error) { showNotice(error.message, 'error'); }
+}
+
+async function restoreLicense(licenseId, institutionName) {
+  if (!window.confirm(`${institutionName} lisansını yeniden etkinleştirip kayıtlı cihaz haklarını geri açmak istiyor musunuz?`)) return;
+  try {
+    await api(`/api/license/admin/licenses/${licenseId}/restore`, { method: 'POST', body: {} });
+    showNotice('Lisans yeniden etkinleştirildi. Kayıtlı cihazlar sonraki çevrimiçi kontrolde yeni izin alabilir.', 'success');
     await loadDashboard();
   } catch (error) { showNotice(error.message, 'error'); }
 }

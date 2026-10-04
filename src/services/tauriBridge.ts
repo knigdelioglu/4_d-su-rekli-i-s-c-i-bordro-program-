@@ -22,7 +22,7 @@ import type { MutationImpact, PayrollMutation } from './payrollEngine/types';
 
 export interface LicenseStatus {
   mode: 'optional' | 'required';
-  state: 'notActivated' | 'pending' | 'active' | 'expired' | 'denied' | 'invalid' | 'configurationError';
+  state: 'notActivated' | 'pending' | 'approved' | 'active' | 'expired' | 'denied' | 'invalid' | 'configurationError';
   canCalculate: boolean;
   canFinalize: boolean;
   deviceId: string;

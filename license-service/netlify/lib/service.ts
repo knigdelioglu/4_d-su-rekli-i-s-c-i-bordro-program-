@@ -477,6 +477,30 @@ async function revokeLicense(store: BlobStore, licenseId: string, now: Date): Pr
   return revoked instanceof Response ? revoked : json({ status: 'revoked' });
 }
 
+async function updateExpiry(store: BlobStore, licenseId: string, expiresAt: unknown, now: Date): Promise<Response> {
+  if (!validDate(expiresAt) || Date.parse(expiresAt) <= now.getTime()) {
+    return error(400, 'invalid_expiry', 'Yeni geçerlilik tarihi gelecekte olmalıdır.');
+  }
+  const updated = await withLicenseCas(store, licenseId, (record) => {
+    if (Date.parse(expiresAt) <= Date.parse(record.expiresAt)) {
+      return { reject: error(400, 'expiry_not_extended', 'Yeni tarih mevcut geçerlilik tarihinden sonra olmalıdır.') };
+    }
+    return { next: { ...record, expiresAt: new Date(expiresAt).toISOString() }, value: true };
+  });
+  return updated instanceof Response ? updated : json({ status: 'updated' });
+}
+
+async function restoreLicense(store: BlobStore, licenseId: string, now: Date): Promise<Response> {
+  const restored = await withLicenseCas(store, licenseId, (record) => {
+    if (Date.parse(record.expiresAt) <= now.getTime()) {
+      return { reject: error(400, 'license_expired', 'Süresi dolmuş lisans önce uzatılmalıdır.') };
+    }
+    const { revokedAt: _revokedAt, ...active } = record;
+    return { next: { ...active, status: 'active' }, value: true };
+  });
+  return restored instanceof Response ? restored : json({ status: 'active' });
+}
+
 interface BackupDocument {
   schemaVersion: 1;
   generatedAt: string;
@@ -609,6 +633,13 @@ export async function handleLicenseRequest(request: Request, deps: ServiceDepend
     if (request.method === 'POST' && release) return releaseDevice(deps.store, release[1], release[2], now);
     const revoke = route.match(/^\/api\/license\/admin\/licenses\/([A-Za-z0-9_-]+)\/revoke$/);
     if (request.method === 'POST' && revoke) return revokeLicense(deps.store, revoke[1], now);
+    const extend = route.match(/^\/api\/license\/admin\/licenses\/([A-Za-z0-9_-]+)\/extend$/);
+    if (request.method === 'POST' && extend) {
+      const body = await readBody(request);
+      return body ? updateExpiry(deps.store, extend[1], body.expiresAt, now) : error(400, 'invalid_json', 'JSON gövdesi gerekli.');
+    }
+    const restore = route.match(/^\/api\/license\/admin\/licenses\/([A-Za-z0-9_-]+)\/restore$/);
+    if (request.method === 'POST' && restore) return restoreLicense(deps.store, restore[1], now);
     return error(404, 'not_found', 'Yönetim uç noktası bulunamadı.');
   }
 

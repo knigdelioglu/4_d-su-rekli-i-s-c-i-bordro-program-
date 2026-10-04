@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tauri::{AppHandle, Manager, Runtime};
 use uuid::Uuid;
 
@@ -17,6 +18,149 @@ const CHECK_LOOP_SECONDS: u64 = 60;
 const LICENSE_STATE_FILE: &str = "license-state.json";
 const DEVICE_ID_FILE: &str = "license-device-id";
 const PUBLIC_KEYS: &str = include_str!("../license-public-keys.json");
+const KEYRING_SERVICE: &str = "4d-bordro-license";
+
+fn secure_get(account: &str) -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    let output = Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            KEYRING_SERVICE,
+            "-a",
+            account,
+            "-w",
+        ])
+        .output()
+        .map_err(|_| "macOS Keychain erişilebilir değil.".to_string())?;
+    #[cfg(target_os = "linux")]
+    let output = Command::new("secret-tool")
+        .args(["lookup", "app", KEYRING_SERVICE, "account", account])
+        .output()
+        .map_err(|_| {
+            "Linux Secret Service erişilebilir değil (secret-tool bulunamadı).".to_string()
+        })?;
+    #[cfg(target_os = "windows")]
+    let output = windows_secure_get(account)?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return Err("Bu işletim sisteminde lisans güvenli deposu desteklenmiyor.".into());
+    if output.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    if String::from_utf8_lossy(&output.stderr).contains("could not be found") {
+        return Ok(None);
+    }
+    #[cfg(target_os = "linux")]
+    if output.status.code() == Some(1) && output.stderr.is_empty() {
+        return Ok(None);
+    }
+    #[cfg(target_os = "windows")]
+    if output.status.code() == Some(2) {
+        return Ok(None);
+    }
+    Err("İşletim sistemi güvenli deposundan kayıt okunamadı.".into())
+}
+
+fn secure_set(account: &str, value: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let result = Command::new("security")
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            KEYRING_SERVICE,
+            "-a",
+            account,
+            "-w",
+            value,
+        ])
+        .output()
+        .map_err(|_| "macOS Keychain erişilebilir değil.".to_string())?;
+    #[cfg(target_os = "linux")]
+    let result = {
+        use std::io::Write;
+        let mut child = Command::new("secret-tool")
+            .args([
+                "store",
+                "--label=4/D license protection",
+                "app",
+                KEYRING_SERVICE,
+                "account",
+                account,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|_| {
+                "Linux Secret Service erişilebilir değil (secret-tool bulunamadı).".to_string()
+            })?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "Linux Secret Service girdisi açılamadı.".to_string())?
+            .write_all(value.as_bytes())
+            .map_err(|_| "Linux Secret Service girdisi yazılamadı.".to_string())?;
+        child
+            .wait()
+            .map_err(|_| "Linux Secret Service yanıt vermedi.".to_string())?
+    };
+    #[cfg(target_os = "windows")]
+    let result = windows_secure_set(account, value)?;
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return Err("Bu işletim sisteminde lisans güvenli deposu desteklenmiyor.".into());
+    if result.status.success() {
+        Ok(())
+    } else {
+        Err("İşletim sistemi güvenli deposu güncellenemedi.".into())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_secure_path(account: &str) -> Result<PathBuf, String> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| "Windows yerel uygulama dizini bulunamadı.".to_string())?;
+    let directory = PathBuf::from(base).join("4d-bordro-license");
+    fs::create_dir_all(&directory)
+        .map_err(|_| "Windows lisans güvenli deposu oluşturulamadı.".to_string())?;
+    Ok(directory.join(format!(
+        "{}.protected",
+        hex(&Sha256::digest(account.as_bytes()))
+    )))
+}
+
+#[cfg(target_os = "windows")]
+fn windows_secure_command(
+    account: &str,
+    value: Option<&str>,
+) -> Result<std::process::Output, String> {
+    let path = windows_secure_path(account)?;
+    let path = path.to_string_lossy().replace('\'', "''");
+    let script = if let Some(value) = value {
+        let value = value.replace('\'', "''");
+        format!("& {{ Add-Type -AssemblyName System.Security;$b=[Text.Encoding]::UTF8.GetBytes('{value}');$e=[Security.Cryptography.ProtectedData]::Protect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);[IO.File]::WriteAllText('{path}',[Convert]::ToBase64String($e)) }}")
+    } else {
+        format!("& {{ if(!(Test-Path '{path}')){{exit 2}};Add-Type -AssemblyName System.Security;$e=[Convert]::FromBase64String([IO.File]::ReadAllText('{path}'));$b=[Security.Cryptography.ProtectedData]::Unprotect($e,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser);[Console]::Out.Write([Text.Encoding]::UTF8.GetString($b)) }}")
+    };
+    Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command"])
+        .arg(script)
+        .output()
+        .map_err(|_| "Windows DPAPI güvenli deposu başlatılamadı.".into())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_secure_get(account: &str) -> Result<std::process::Output, String> {
+    windows_secure_command(account, None)
+}
+
+#[cfg(target_os = "windows")]
+fn windows_secure_set(account: &str, value: &str) -> Result<std::process::Output, String> {
+    windows_secure_command(account, Some(value))
+}
 
 fn enforcement_required() -> bool {
     option_env!("BORDRO_LICENSE_MODE").unwrap_or("optional") == "required"
@@ -44,6 +188,8 @@ pub struct LicenseGrantClaims {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct StoredLicenseState {
+    #[serde(default)]
+    machine_binding: Option<String>,
     #[serde(default)]
     activation_request_id: Option<String>,
     #[serde(default)]
@@ -112,27 +258,204 @@ fn ensure_data_dir(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn read_device_id(dir: &Path) -> Result<String, String> {
-    let path = dir.join(DEVICE_ID_FILE);
-    match fs::read_to_string(&path) {
-        Ok(value) => {
-            let value = value.trim();
-            if Uuid::parse_str(value).is_ok() {
-                return Ok(value.to_string());
-            }
-            return Err("Cihaz kimliği dosyası bozuk. Lisans desteğine başvurun.".into());
+fn device_hash(dir: &Path) -> Result<String, String> {
+    // Keep the hash used by already-issued grants on upgraded installs. A secure
+    // OS-keystore hardware binding below prevents the copied legacy UUID from
+    // moving those grants to another machine.
+    let legacy_id = dir.join(DEVICE_ID_FILE);
+    if legacy_id.exists() {
+        let value = fs::read_to_string(&legacy_id)
+            .map_err(|_| "Cihaz kimliği dosyası okunamadı.".to_string())?;
+        let value = value.trim();
+        if Uuid::parse_str(value).is_ok() {
+            return Ok(hex(&Sha256::digest(value.as_bytes())));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err("Cihaz kimliği dosyası okunamadı.".into()),
+        return Err("Cihaz kimliği dosyası bozuk. Lisans desteğine başvurun.".into());
     }
-    let id = Uuid::new_v4().to_string();
-    write_private_file(&path, id.as_bytes())?;
-    Ok(id)
+    let id = machine_identity()?;
+    // Bind local secure-storage records to this OS installation and hardware identity.
+    Ok(hex(&Sha256::digest(
+        format!("4d-license-device-v2:{id}").as_bytes(),
+    )))
 }
 
-fn device_hash(dir: &Path) -> Result<String, String> {
-    let id = read_device_id(dir)?;
-    Ok(hex(&Sha256::digest(id.as_bytes())))
+fn secure_machine_binding() -> Result<Option<String>, String> {
+    secure_get("machine-binding")
+}
+
+fn set_secure_machine_binding(value: &str) -> Result<(), String> {
+    secure_set("machine-binding", value)
+}
+
+fn ensure_machine_binding(dir: &Path, state: &mut StoredLicenseState) -> Result<(), String> {
+    let machine = hex(&Sha256::digest(machine_identity()?.as_bytes()));
+    match secure_machine_binding()? {
+        Some(saved) if saved != machine => Err(
+            "Lisans kaydı başka bir cihaza kopyalanmış. Bu cihazda yeniden etkinleştirin.".into(),
+        ),
+        Some(_)
+            if state
+                .machine_binding
+                .as_deref()
+                .is_some_and(|saved| saved != machine) =>
+        {
+            Err(
+                "Lisans kaydı başka bir cihaza kopyalanmış. Bu cihazda yeniden etkinleştirin."
+                    .into(),
+            )
+        }
+        Some(_) => {
+            if state.server_denial.is_none() {
+                state.server_denial = secure_server_denial()?;
+            }
+            if let Some(saved) = secure_last_seen()? {
+                state.last_seen_at = Some(
+                    state
+                        .last_seen_at
+                        .map(|value| value.max(saved))
+                        .unwrap_or(saved),
+                );
+            }
+            Ok(())
+        }
+        None if state
+            .machine_binding
+            .as_deref()
+            .is_some_and(|saved| saved != machine) =>
+        {
+            Err(
+                "Lisans kaydı başka bir cihaza kopyalanmış. Bu cihazda yeniden etkinleştirin."
+                    .into(),
+            )
+        }
+        None => {
+            set_secure_machine_binding(&machine)?;
+            state.machine_binding = Some(machine);
+            if state.server_denial.is_none() {
+                state.server_denial = secure_server_denial()?;
+            } else if let Some(reason) = state.server_denial.as_deref() {
+                secure_set("server-denial", reason)?;
+            }
+            if secure_last_seen()?.is_none() {
+                if let Some(saved) = state.last_seen_at {
+                    set_secure_last_seen(saved)?;
+                }
+            }
+            if let Some(saved) = secure_last_seen()? {
+                state.last_seen_at = Some(
+                    state
+                        .last_seen_at
+                        .map(|value| value.max(saved))
+                        .unwrap_or(saved),
+                );
+            }
+            if secure_grant_issued_at()?.is_none() {
+                if let Some(claims) = read_claims(state, &device_hash(dir)?)? {
+                    set_secure_grant_issued_at(claims.issued_at)?;
+                }
+            }
+            write_state(dir, state)
+        }
+    }
+}
+
+fn secure_server_denial() -> Result<Option<String>, String> {
+    Ok(secure_get("server-denial")?.filter(|value| !value.is_empty()))
+}
+
+fn clear_secure_server_denial() -> Result<(), String> {
+    secure_set("server-denial", "")
+}
+
+fn machine_identity() -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("ioreg")
+            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+            .output()
+            .map_err(|_| "Bu Mac'in donanım kimliği okunamadı.".to_string())?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let value = text
+            .lines()
+            .find(|line| line.contains("IOPlatformUUID"))
+            .and_then(|line| line.split('"').nth(3))
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Bu Mac'in donanım kimliği bulunamadı.".to_string())?;
+        return Ok(value.to_ascii_lowercase());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("reg")
+            .args([
+                "query",
+                "HKLM\\SOFTWARE\\Microsoft\\Cryptography",
+                "/v",
+                "MachineGuid",
+            ])
+            .output()
+            .map_err(|_| "Windows cihaz kimliği okunamadı.".to_string())?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let value = text
+            .lines()
+            .find(|line| line.contains("MachineGuid"))
+            .and_then(|line| line.split_whitespace().last())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Windows cihaz kimliği bulunamadı.".to_string())?;
+        return Ok(value.to_ascii_lowercase());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(value) = fs::read_to_string("/sys/class/dmi/id/product_uuid") {
+            if !value.trim().is_empty() {
+                return Ok(value.trim().to_ascii_lowercase());
+            }
+        }
+        return fs::read_to_string("/etc/machine-id")
+            .or_else(|_| fs::read_to_string("/var/lib/dbus/machine-id"))
+            .map(|value| value.trim().to_ascii_lowercase())
+            .map_err(|_| "Linux cihaz kimliği okunamadı.".to_string());
+    }
+    #[allow(unreachable_code)]
+    Err("Bu işletim sistemi için cihaz kimliği desteklenmiyor.".into())
+}
+
+fn secure_last_seen() -> Result<Option<DateTime<Utc>>, String> {
+    match secure_get("last-seen")? {
+        Some(value) => DateTime::parse_from_rfc3339(&value)
+            .map(|date| Some(date.with_timezone(&Utc)))
+            .map_err(|_| "Lisans güvenli deposundaki zaman kaydı bozuk.".to_string()),
+        None => Ok(None),
+    }
+}
+
+fn set_secure_last_seen(value: DateTime<Utc>) -> Result<(), String> {
+    secure_set("last-seen", &value.to_rfc3339())
+}
+
+fn secure_grant_issued_at() -> Result<Option<DateTime<Utc>>, String> {
+    match secure_get("grant-issued-at")? {
+        Some(value) => DateTime::parse_from_rfc3339(&value)
+            .map(|date| Some(date.with_timezone(&Utc)))
+            .map_err(|_| "Lisans güvenli deposundaki izin kaydı bozuk.".to_string()),
+        None => Ok(None),
+    }
+}
+
+fn is_fresh_grant(issued_at: DateTime<Utc>, protected_issued_at: Option<DateTime<Utc>>) -> bool {
+    protected_issued_at.map_or(true, |previous| issued_at > previous)
+}
+
+fn grant_replay_error(
+    issued_at: DateTime<Utc>,
+    protected_issued_at: Option<DateTime<Utc>>,
+) -> Option<String> {
+    protected_issued_at
+        .filter(|previous| issued_at < *previous)
+        .map(|_| "Yerel kayıttaki lisans izni eski; çevrimiçi yenileme gerekli.".into())
+}
+
+fn set_secure_grant_issued_at(value: DateTime<Utc>) -> Result<(), String> {
+    secure_set("grant-issued-at", &value.to_rfc3339())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -245,11 +568,6 @@ fn claims_status(
     if claims.device_hash != device_hash {
         return Err("Lisans bu cihaz için düzenlenmemiş.".into());
     }
-    if claims.issued_at > now + Duration::minutes(5)
-        || claims.last_online_at > now + Duration::minutes(5)
-    {
-        return Err("Cihaz saati lisans doğrulamasıyla uyuşmuyor.".into());
-    }
     if let Some(last_seen) = last_seen_at {
         if now < last_seen {
             return Err(
@@ -305,17 +623,27 @@ fn status_from_parts(
         };
     }
     let claims = read_claims(state, device_hash);
+    let protected_issued_at = if state.grant.is_some() {
+        secure_grant_issued_at()
+    } else {
+        Ok(None)
+    };
     let (status, license_id, expires_at, last_online_at, offline_until, validation_reason) =
         match claims {
             Ok(Some(claims)) => {
-                let reason = claims_status(
-                    &claims,
-                    device_hash,
-                    now,
-                    state.last_seen_at,
-                    state.server_denial.as_deref(),
-                )
-                .err();
+                let reason = match protected_issued_at.as_ref() {
+                    Err(error) => Some(error.clone()),
+                    Ok(anchor) => grant_replay_error(claims.issued_at, *anchor).or_else(|| {
+                        claims_status(
+                            &claims,
+                            device_hash,
+                            now,
+                            state.last_seen_at,
+                            state.server_denial.as_deref(),
+                        )
+                        .err()
+                    }),
+                };
                 let state_name = if state.server_denial.is_some() {
                     "denied"
                 } else if reason
@@ -341,6 +669,7 @@ fn status_from_parts(
                 let state_name = match state.activation_status.as_deref() {
                     Some("pending") | Some("approving") => "pending",
                     Some("denied") | Some("released") => "denied",
+                    Some("approved") => "approved",
                     _ => "notActivated",
                 };
                 (state_name, None, None, None, None, None)
@@ -377,6 +706,21 @@ fn api_endpoint(path: &str) -> Result<String, String> {
     ))
 }
 
+fn server_error_message(status: u16, bytes: &[u8]) -> String {
+    let payload: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
+    let detail = payload
+        .get("message")
+        .or_else(|| payload.get("reason"))
+        .or_else(|| payload.get("error"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("Lisans isteği reddedildi.");
+    match detail {
+        "revoked" => "Lisans sunucu tarafından iptal edilmiş.".into(),
+        "expired" => "Lisansın geçerlilik süresi dolmuş.".into(),
+        _ => format!("Lisans sunucusu isteği reddetti ({status}): {detail}"),
+    }
+}
+
 async fn post_json<T: for<'de> Deserialize<'de>>(
     path: &str,
     value: &impl Serialize,
@@ -394,9 +738,17 @@ async fn post_json<T: for<'de> Deserialize<'de>>(
             "Lisans sunucusuna ulaşılamadı. Mevcut çevrimdışı izin korunuyor.".to_string()
         })?;
     let status = response.status().as_u16();
-    let body = response
-        .json::<T>()
+    let bytes = response
+        .bytes()
         .await
+        .map_err(|_| "Lisans sunucusunun yanıtı okunamadı.".to_string())?;
+    if !(200..300).contains(&status) {
+        if let Ok(body) = serde_json::from_slice::<T>(&bytes) {
+            return Ok((status, body));
+        }
+        return Err(server_error_message(status, &bytes));
+    }
+    let body = serde_json::from_slice::<T>(&bytes)
         .map_err(|_| "Lisans sunucusunun yanıtı okunamadı.".to_string())?;
     Ok((status, body))
 }
@@ -444,6 +796,7 @@ fn store_server_denial(
     reason: &str,
     now: DateTime<Utc>,
 ) -> Result<(), String> {
+    secure_set("server-denial", reason)?;
     state.server_denial = Some(reason.to_string());
     state.activation_status = Some("denied".into());
     state.last_attempt_at = Some(now);
@@ -458,24 +811,61 @@ fn apply_grant(
     now: DateTime<Utc>,
 ) -> Result<(), String> {
     let claims = verify_grant(&token, device_hash, &public_keys()?)?;
-    claims_status(&claims, device_hash, now, state.last_seen_at, None)?;
+    let already_installed = state.grant.as_deref() == Some(token.as_str());
+    if !already_installed && !is_fresh_grant(claims.issued_at, secure_grant_issued_at()?) {
+        return Err(
+            "Sunucudan gelen izin eski bir izin kaydıyla eşleşiyor. Yeni doğrulama isteyin.".into(),
+        );
+    }
+    // Signed server time is the recovery authority after a local clock jump.
+    let trusted_now = now.max(claims.last_online_at);
+    let last_seen = if already_installed {
+        secure_last_seen()?
+            .into_iter()
+            .chain(state.last_seen_at)
+            .max()
+    } else {
+        Some(claims.last_online_at)
+    };
+    claims_status(&claims, device_hash, trusted_now, last_seen, None)?;
+    if !already_installed {
+        set_secure_grant_issued_at(claims.issued_at)?;
+    }
     state.grant = Some(token);
     state.server_denial = None;
     state.activation_status = Some("active".into());
     state.activation_request_id = None;
-    state.last_seen_at = Some(now);
+    state.last_seen_at = Some(trusted_now);
+    set_secure_last_seen(trusted_now)?;
     state.last_attempt_at = Some(now);
-    write_state(dir, state)
+    write_state(dir, state)?;
+    clear_secure_server_denial()
 }
 
 pub fn get_status(dir: &Path) -> Result<LicenseStatus, String> {
     ensure_data_dir(dir)?;
     let device_hash = device_hash(dir)?;
-    let state = read_state(dir)?;
+    let mut state = read_state(dir)?;
+    ensure_machine_binding(dir, &mut state)?;
+    if let Some(secure_seen) = secure_last_seen()? {
+        state.last_seen_at = Some(
+            state
+                .last_seen_at
+                .map(|saved| saved.max(secure_seen))
+                .unwrap_or(secure_seen),
+        );
+    }
+    let claims = read_claims(&state, &device_hash).ok().flatten();
+    let now = Utc::now().max(
+        claims
+            .as_ref()
+            .map(|claims| claims.last_online_at)
+            .unwrap_or(DateTime::<Utc>::MIN_UTC),
+    );
     Ok(status_from_parts(
         &state,
         &device_hash,
-        Utc::now(),
+        now,
         enforcement_required(),
     ))
 }
@@ -483,6 +873,8 @@ pub fn get_status(dir: &Path) -> Result<LicenseStatus, String> {
 pub async fn activate(dir: &Path, license_key: &str) -> Result<LicenseStatus, String> {
     ensure_data_dir(dir)?;
     let device_hash = device_hash(dir)?;
+    let mut state = read_state(dir)?;
+    ensure_machine_binding(dir, &mut state)?;
     let key = license_key.trim();
     if key.is_empty() || key.len() > 160 {
         return Err("Lisans anahtarı geçerli biçimde değil.".into());
@@ -495,11 +887,28 @@ pub async fn activate(dir: &Path, license_key: &str) -> Result<LicenseStatus, St
     if status != 200 && status != 202 {
         return Err("Lisans anahtarı reddedildi veya lisans süresi doldu.".into());
     }
-    let mut state = read_state(dir)?;
-    state.grant = None;
-    state.server_denial = None;
+    let protected_issued_at = secure_grant_issued_at()?;
+    let existing_grant_is_usable = read_claims(&state, &device_hash)
+        .ok()
+        .flatten()
+        .is_some_and(|claims| {
+            grant_replay_error(claims.issued_at, protected_issued_at).is_none()
+                && claims_status(
+                    &claims,
+                    &device_hash,
+                    Utc::now().max(claims.last_online_at),
+                    state.last_seen_at,
+                    state.server_denial.as_deref(),
+                )
+                .is_ok()
+        });
+    let already_active = response.status == "approved" && existing_grant_is_usable;
     state.activation_status = Some(response.status);
-    state.activation_request_id = Some(response.request_id);
+    if already_active {
+        state.activation_request_id = None;
+    } else {
+        state.activation_request_id = Some(response.request_id);
+    }
     state.last_attempt_at = Some(Utc::now());
     write_state(dir, &state)?;
     Ok(status_from_parts(
@@ -595,17 +1004,28 @@ pub async fn refresh_status(dir: &Path) -> Result<LicenseStatus, String> {
     ensure_data_dir(dir)?;
     let device_hash = device_hash(dir)?;
     let mut state = read_state(dir)?;
+    ensure_machine_binding(dir, &mut state)?;
     if state.grant.is_some() && state.server_denial.is_none() {
+        remote_check(dir, &device_hash, &mut state).await?;
+    } else if state.grant.is_some() && state.server_denial.is_some() {
+        // A denied grant is checked online again so an administrator can restore access.
         remote_check(dir, &device_hash, &mut state).await?;
     } else if state.activation_request_id.is_some() {
         refresh_activation(dir, &device_hash, &mut state).await?;
     } else {
         return Err("Önce lisans anahtarınızı girip aktivasyon talebi oluşturun.".into());
     }
+    let claims = read_claims(&state, &device_hash).ok().flatten();
+    let now = Utc::now().max(
+        claims
+            .as_ref()
+            .map(|claims| claims.last_online_at)
+            .unwrap_or(DateTime::<Utc>::MIN_UTC),
+    );
     Ok(status_from_parts(
         &state,
         &device_hash,
-        Utc::now(),
+        now,
         enforcement_required(),
     ))
 }
@@ -617,23 +1037,37 @@ pub fn require_allowed(dir: &Path, operation: &str) -> Result<(), String> {
     ensure_data_dir(dir)?;
     let device_hash = device_hash(dir)?;
     let mut state = read_state(dir)?;
+    ensure_machine_binding(dir, &mut state).map_err(|reason| {
+        format!("Lisans uygun değil. Yeni {operation} işlemi durduruldu: {reason}")
+    })?;
     let token = state
         .grant
         .as_deref()
         .ok_or_else(|| format!("Lisans etkin değil. Yeni {operation} işlemi durduruldu."))?;
     let claims = verify_grant(token, &device_hash, &public_keys()?)?;
-    let now = Utc::now();
+    let protected_issued_at = secure_grant_issued_at()?;
+    if let Some(reason) = grant_replay_error(claims.issued_at, protected_issued_at) {
+        return Err(format!(
+            "Lisans uygun değil. Yeni {operation} işlemi durduruldu: {reason}"
+        ));
+    }
+    let now = Utc::now().max(claims.last_online_at);
+    let secure_seen = secure_last_seen()?;
+    let protected_seen = secure_seen.into_iter().chain(state.last_seen_at).max();
     claims_status(
         &claims,
         &device_hash,
         now,
-        state.last_seen_at,
+        protected_seen,
         state.server_denial.as_deref(),
     )
     .map_err(|reason| {
         format!("Lisans uygun değil. Yeni {operation} işlemi durduruldu: {reason}")
     })?;
     state.last_seen_at = Some(now);
+    set_secure_last_seen(now).map_err(|reason| {
+        format!("Lisans uygun değil. Yeni {operation} işlemi durduruldu: {reason}")
+    })?;
     write_state(dir, &state)
 }
 
@@ -837,6 +1271,78 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn a_new_signed_server_time_can_recover_a_forward_clock_jump() {
+        let mut claims = test_claims();
+        claims.issued_at += Duration::days(2);
+        claims.last_online_at = claims.issued_at;
+        claims.offline_until = claims.last_online_at + Duration::days(30);
+        let erroneous_local_now = claims.last_online_at + Duration::days(10);
+        assert!(claims_status(
+            &claims,
+            &claims.device_hash,
+            erroneous_local_now,
+            None,
+            None
+        )
+        .is_ok());
+        assert!(claims_status(
+            &claims,
+            &claims.device_hash,
+            claims.last_online_at,
+            None,
+            None
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn protected_server_issue_time_rejects_replayed_grants() {
+        let claims = test_claims();
+        assert!(!is_fresh_grant(claims.issued_at, Some(claims.issued_at)));
+        assert!(is_fresh_grant(
+            claims.issued_at + Duration::seconds(1),
+            Some(claims.issued_at)
+        ));
+        assert!(is_fresh_grant(claims.issued_at, None));
+        assert!(grant_replay_error(
+            claims.issued_at - Duration::seconds(1),
+            Some(claims.issued_at)
+        )
+        .is_some());
+        assert!(grant_replay_error(claims.issued_at, Some(claims.issued_at)).is_none());
+    }
+
+    #[test]
+    fn http_error_messages_preserve_server_decisions_and_explain_status() {
+        assert_eq!(
+            server_error_message(
+                404,
+                r#"{"error":"invalid_license_key","message":"Lisans anahtarı geçersiz."}"#
+                    .as_bytes()
+            ),
+            "Lisans sunucusu isteği reddetti (404): Lisans anahtarı geçersiz."
+        );
+        assert!(
+            server_error_message(403, br#"{"decision":"denied","reason":"revoked"}"#)
+                .contains("iptal")
+        );
+        assert!(
+            server_error_message(403, br#"{"decision":"denied","reason":"expired"}"#)
+                .contains("dolmuş")
+        );
+    }
+
+    #[test]
+    fn approved_activation_has_an_explicit_refreshable_local_state() {
+        let state = StoredLicenseState {
+            activation_status: Some("approved".into()),
+            ..StoredLicenseState::default()
+        };
+        let status = status_from_parts(&state, &"a".repeat(64), Utc::now(), false);
+        assert_eq!(status.state, "approved");
     }
 
     #[test]

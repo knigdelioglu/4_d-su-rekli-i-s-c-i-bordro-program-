@@ -85,10 +85,13 @@ pub fn calculate_retro_preview(
 
 #[tauri::command]
 pub fn save_retro_adjustment_batch(
+    license: State<'_, crate::license::LicenseRuntime>,
     db: State<'_, DbState>,
     batch: RetroAdjustmentBatch,
     allocations: Vec<RetroAllocation>,
 ) -> Result<()> {
+    crate::license::require_allowed(license.data_dir(), "geriye dönük bordro kaydı")
+        .map_err(DomainError::ValidationError)?;
     let conn = db.lock().map_err(|error| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {error}"))
     })?;

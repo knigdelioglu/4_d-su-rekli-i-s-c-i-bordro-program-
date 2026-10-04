@@ -7,6 +7,7 @@ function stateLabel(state: LicenseStatus['state']): string {
   switch (state) {
     case 'active': return 'Etkin';
     case 'pending': return 'Onay bekliyor';
+    case 'approved': return 'Onaylandı';
     case 'denied': return 'Reddedildi';
     case 'expired': return 'Süre doldu';
     case 'invalid': return 'Doğrulanamadı';
@@ -70,10 +71,18 @@ export const LicenseSettingsSection: React.FC = () => {
     setSuccessMessage(null);
     setIsSubmitting(true);
     try {
-      const next = await tauriBridge.activateLicense(licenseKey);
+      let next = await tauriBridge.activateLicense(licenseKey);
       setStatus(next);
+      if (next.state === 'approved') {
+        next = await tauriBridge.refreshLicenseStatus();
+        setStatus(next);
+      }
       setLicenseKey('');
-      setSuccessMessage('Aktivasyon talebi oluşturuldu. Yönetici onayından sonra durumu burada yenileyin.');
+      setSuccessMessage(next.state === 'active'
+        ? 'Bu cihazın lisansı etkin.'
+        : next.state === 'pending'
+          ? 'Aktivasyon talebi oluşturuldu. Yönetici onayından sonra durumu burada yenileyin.'
+          : 'Lisans sunucusu yanıtı alındı. Durumu yenileyerek tekrar kontrol edin.');
     } catch (error) {
       setErrorMessage(describeError(error));
     } finally {
@@ -110,7 +119,7 @@ export const LicenseSettingsSection: React.FC = () => {
                     </p>
                   </div>
                 </div>
-                {(status.state === 'pending' || status.licenseId) && (
+                {(status.state === 'pending' || status.state === 'approved' || status.licenseId) && (
                   <button
                     type="button"
                     onClick={runExplicitCheck}
