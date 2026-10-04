@@ -3131,3 +3131,49 @@ fn receivable_replay_matches_runtime_order_for_zero_and_unpaid_overpayment_batch
         .to_string()
         .contains("retro-0cbb12f3-4999-43d6-8215-9b710093c5d4"));
 }
+
+#[test]
+fn dated_transport_replay_preserves_historical_schedule_and_applies_transport_override() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let settings = source.institutionSettings.get_mut("2026-02").unwrap();
+    settings.gunlukVasitaYol = dec!(10);
+    settings.transportRateChanges = Some(vec![payroll_core::TransportRateChange {
+        effectiveFrom: "2026-03-05".into(),
+        gunlukVasitaYol: dec!(20),
+    }]);
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    assert_eq!(normal.gelirler.vasitaYol, Some(dec!(380)));
+    source.payrolls.push(normal);
+    let wage_only = wage_retro_result(
+        source.clone(),
+        "transport-replay-wage",
+        "rev-wage",
+        dec!(110),
+    );
+    assert!(!wage_only
+        .allocations
+        .iter()
+        .any(|allocation| allocation.earningCode == RetroEarningCode::TRANSPORT));
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "transport-retro",
+        revision("rev-transport", "2026-02-15"),
+        vec![CompensationRevisionOverride {
+            id: "transport-override".into(),
+            revisionId: "rev-transport".into(),
+            parameter: RetroParameterKey::GUNLUK_VASITA_YOL,
+            value: dec!(30),
+            personnelId: None,
+        }],
+        "2026-06-20",
+    ))
+    .unwrap();
+    let transport = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::TRANSPORT)
+        .unwrap();
+    // 28 working days × 30 minus 18×10 + 10×20 already paid.
+    assert_eq!(transport.deltaAmount, dec!(460));
+}

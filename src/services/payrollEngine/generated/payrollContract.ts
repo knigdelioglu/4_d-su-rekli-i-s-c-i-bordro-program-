@@ -3264,6 +3264,30 @@ export const RUST_STRUCT_CONTRACT = {
       }
     }
   },
+  "TransportRateChange": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "effectiveFrom": {
+        "rustName": "effectiveFrom",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "gunlukVasitaYol": {
+        "rustName": "gunlukVasitaYol",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
   "DonemselKurumDegerleri": {
     "renameAll": "camelCase",
     "default": false,
@@ -3321,6 +3345,17 @@ export const RUST_STRUCT_CONTRACT = {
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
+      },
+      "transportRateChanges": {
+        "rustName": "transportRateChanges",
+        "rustType": "Option<Vec<TransportRateChange>>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "TransportRateChange"
+        ]
       },
       "giyimYardimi": {
         "rustName": "giyimYardimi",

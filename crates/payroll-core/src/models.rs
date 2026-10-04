@@ -879,6 +879,14 @@ pub struct StatutoryParameterSnapshot {
     pub statutoryParameterSegments: Vec<StatutoryParameterSegment>,
 }
 
+/// Dönem içindeki bağımsız yol yardımı değişikliği; tarih dahil uygulanır.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportRateChange {
+    pub effectiveFrom: String,
+    pub gunlukVasitaYol: Decimal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DonemselKurumDegerleri {
@@ -891,6 +899,10 @@ pub struct DonemselKurumDegerleri {
     pub yemekTamGvIstisnaDamgaTabi: bool,
     pub birlestirilmisSosyalYardim: Decimal,
     pub gunlukVasitaYol: Decimal,
+    /// None yalnız eski kayıtların zam takvimi hesabını korur. Some([]),
+    /// dönem boyunca bağımsız başlangıç tutarı; tarihler bu tutarı değiştirir.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transportRateChanges: Option<Vec<TransportRateChange>>,
     pub giyimYardimi: Decimal,
     pub hizmetZammiBirimi: Decimal,
     pub isPrimiYuzde: Option<Decimal>,
@@ -952,6 +964,7 @@ impl Default for DonemselKurumDegerleri {
             yemekTamGvIstisnaDamgaTabi: true,
             birlestirilmisSosyalYardim: dec!(5089.70),
             gunlukVasitaYol: dec!(128.93),
+            transportRateChanges: None,
             giyimYardimi: dec!(269.70),
             hizmetZammiBirimi: dec!(24.67),
             isPrimiYuzde: Some(dec!(0)),

@@ -32,3 +32,11 @@ pub fn save_period_with_settings(
     })?;
     PeriodService::save_period_with_settings(&mut conn, &period, &settings)
 }
+
+#[tauri::command]
+pub fn delete_period(db: State<'_, DbState>, period_id: String) -> Result<()> {
+    let mut conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
+    PeriodService::delete_period(&mut conn, &period_id)
+}

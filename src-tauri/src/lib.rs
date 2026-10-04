@@ -32,6 +32,7 @@ fn configure_builder<R: tauri::Runtime>(
             commands::save_tax_opening,
             commands::get_periods,
             commands::save_period,
+            commands::delete_period,
             commands::save_period_with_settings,
             commands::get_attendance_list,
             commands::save_attendance,

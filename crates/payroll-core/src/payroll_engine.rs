@@ -2733,6 +2733,7 @@ fn validate_payroll_request_with_index(
     let settings = effective_statutory_settings(raw_settings)?;
     validate_kurum_degerleri_for_payroll(&settings)?;
     validate_statutory_tax_month_reference(period, &settings)?;
+    crate::transport_rates::validate_transport_rates(period, &settings)?;
     validate_devreden_pek_gap(
         &request.dataset,
         index,
@@ -3057,6 +3058,7 @@ fn calculate_payroll_with_index(
     let settings = effective_statutory_settings(income_settings)?;
     validate_kurum_degerleri_for_payroll(&settings)?;
     validate_statutory_segments_for_period(&period, &settings)?;
+    crate::transport_rates::validate_transport_rates(&period, &settings)?;
 
     // Resolve prior payment-event state before calculating tax. This keeps a
     // DRAFT/STALE chain fail-closed with the generic payment-event error and
@@ -3221,6 +3223,12 @@ fn calculate_payroll_with_index(
                 settings.gunlukTabanUcret,
             );
         }
+    }
+
+    if is_normal_accrual && settings.transportRateChanges.is_some() {
+        income.vasitaYol = Some(crate::transport_rates::calculate_dated_transport(
+            &period, &settings, attendance.ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
+        )?);
     }
 
     let normal_meal_exemptions = if is_normal_accrual {

@@ -270,6 +270,11 @@ export interface StatutoryParameterSnapshot {
   statutoryParameterSegments: StatutoryParameterSegment[];
 }
 
+export interface TransportRateChange {
+  effectiveFrom: string;
+  gunlukVasitaYol: number;
+}
+
 export interface DönemselKurumDegerleri {
   donemId: string;
   gunlukTabanUcret: number;
@@ -278,6 +283,8 @@ export interface DönemselKurumDegerleri {
   yemekTamGvIstisnaDamgaTabi?: boolean;
   birlestirilmisSosyalYardim: number;
   gunlukVasitaYol: number;
+  /** Absent/null: legacy raise calendar; []: independent period-start rate. */
+  transportRateChanges?: TransportRateChange[] | null;
   giyimYardimi: number;
   hizmetZammiBirimi: number;
   isPrimiYuzde?: number;

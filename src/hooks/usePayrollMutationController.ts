@@ -43,6 +43,8 @@ import {
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import { assertPayrollCalculationSnapshotCurrent } from '../services/payrollEngine/calculationSnapshot';
 import { sameSettingsValue } from '../components/Settings/periodSettingsSave';
+import { validateTransportRatesForPeriod } from '../services/storage/transportRatesValidation';
+import { deletePeriodFromPayload } from '../services/storage/periodDeletion';
 import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 import {
@@ -372,15 +374,36 @@ export function usePayrollMutationController({
     }));
   };
 
-  const handleCreateDonem = async (
-    newDonem: BordroDonemi,
-    kurumDegerleri: DönemselKurumDegerleri
-  ) => {
+  const handleDeleteDonem = async (periodId: string) => {
     if (isNative) {
-      await tauriBridge.savePeriodWithSettings(newDonem, kurumDegerleri);
+      await tauriBridge.deletePeriod(periodId);
       await loadData();
       return;
     }
+    const period = latestPayrollDataset.current.periods.find((item) => item.id === periodId);
+    if (!period) throw new Error('Silinecek dönem bulunamadı.');
+    // Deletion explicitly permits discarding finalized history. Other mutation
+    // paths retain their existing finalized guards.
+    const impact = await payrollEngine.evaluateMutationPolicy({
+      kind: 'PERIOD_FROM_POSITION',
+      startDate: period.baslangicTarihi,
+      taxYear: period.taxYear,
+      taxMonth: period.taxMonth,
+    }, latestPayrollDataset.current);
+    updateAuthoritativePayload((current) => deletePeriodFromPayload(current, periodId, impact));
+  };
+
+  const handleCreateDonem = async (
+    newDonem: BordroDonemi,
+    kurumDegerleri?: DönemselKurumDegerleri
+  ) => {
+    if (isNative) {
+      if (kurumDegerleri) await tauriBridge.savePeriodWithSettings(newDonem, kurumDegerleri);
+      else await tauriBridge.savePeriod(newDonem);
+      await loadData();
+      return;
+    }
+    if (kurumDegerleri) validateTransportRatesForPeriod(newDonem, kurumDegerleri);
     const existing = donemler.find((period) => period.id === newDonem.id);
     // A brand-new period is empty; it can only affect later periods of the
     // same tax year (PERIOD_INSERT). Editing an existing period keeps the
@@ -421,15 +444,15 @@ export function usePayrollMutationController({
             period.id === newDonem.id ? exactPeriod : period
           )
         : [...current.donemler, exactPeriod];
-      const exactSettings = mergePayrollUiIntoBoundary(
-        previousSettings,
-        kurumDegerleri
-      );
-      const preservedSettings = reconcileStatutorySnapshot(previousSettings, exactSettings);
+      const preservedSettings = kurumDegerleri
+        ? reconcileStatutorySnapshot(previousSettings, mergePayrollUiIntoBoundary(previousSettings, kurumDegerleri))
+        : undefined;
       return {
         ...current,
         donemler,
-        kurumDegerleriMap: { ...current.kurumDegerleriMap, [newDonem.id]: preservedSettings },
+        kurumDegerleriMap: preservedSettings
+          ? { ...current.kurumDegerleriMap, [newDonem.id]: preservedSettings }
+          : current.kurumDegerleriMap,
         annualPayrollParameters: ensureBoundaryAnnualPayrollParameters(
           current.annualPayrollParameters,
           newDonem.taxYear
@@ -441,6 +464,9 @@ export function usePayrollMutationController({
   };
 
   const handleSaveKurumDegerleri = async (settings: DönemselKurumDegerleri) => {
+    const period = donemler.find((period) => period.id === settings.donemId);
+    if (!period) throw new Error('Yol ayarları için bordro dönemi bulunamadı.');
+    validateTransportRatesForPeriod(period, settings);
     if (isNative) {
       await tauriBridge.saveInstitutionSettings(settings);
       await loadData();
@@ -1180,6 +1206,7 @@ export function usePayrollMutationController({
     handleSavePersonelAndTaxOpening,
     handleDeletePersonel,
     handleCreateDonem,
+    handleDeleteDonem,
     handleSaveKurumDegerleri,
     handleSavePuantaj,
     handleSaveTaxOpening,

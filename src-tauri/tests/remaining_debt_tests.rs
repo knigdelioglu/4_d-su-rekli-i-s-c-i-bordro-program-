@@ -415,3 +415,90 @@ fn common_raise_month_splits_15_14_daily_income() -> Result<()> {
     assert_eq!(payroll.isPrimiDetay.unwrap().hakGunu, 31);
     Ok(())
 }
+
+#[test]
+fn dated_transport_native_save_roundtrip_invalidation_and_finalized_protection() -> Result<()> {
+    use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
+    use chrono::{Duration, NaiveDate};
+    let conn =
+        create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    let person = person("dated-road-worker");
+    PersonnelRepository::save(&conn, &person)?;
+    let period = BordroDonemi {
+        id: "2026-01".into(),
+        yil: 2026,
+        ay: 1,
+        baslangicTarihi: "2026-01-15".into(),
+        bitisTarihi: "2026-02-14".into(),
+        donemAdi: "Ocak".into(),
+        taxYear: 2026,
+        taxMonth: 1,
+    };
+    PeriodRepository::save(&conn, &period)?;
+    let mut settings = settings(&period.id);
+    settings.gunlukVasitaYol = dec!(100);
+    settings.transportRateChanges = Some(vec![]);
+    SettingsRepository::save_institution_settings(&conn, &settings)?;
+    let mut gunler = HashMap::new();
+    let mut date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+    while date <= NaiveDate::from_ymd_opt(2026, 2, 14).unwrap() {
+        gunler.insert(date.format("%Y-%m-%d").to_string(), "Ç".into());
+        date += Duration::days(1);
+    }
+    AttendanceRepository::save(
+        &conn,
+        &PersonelPuantaj {
+            id: "road-attendance".into(),
+            personelId: person.id.clone(),
+            donemId: period.id.clone(),
+            gunler,
+        },
+    )?;
+    let base = PayrollService::calculate_payroll_for_personnel(&conn, &person.id, &period.id)?;
+    assert_eq!(base.gelirler.vasitaYol, Some(dec!(3100)));
+    settings.transportRateChanges = Some(vec![
+        TransportRateChange {
+            effectiveFrom: "2026-01-20".into(),
+            gunlukVasitaYol: dec!(120),
+        },
+        TransportRateChange {
+            effectiveFrom: "2026-02-05".into(),
+            gunlukVasitaYol: dec!(140),
+        },
+    ]);
+    SettingsRepository::save_institution_settings(&conn, &settings)?;
+    let loaded = SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap();
+    assert_eq!(
+        serde_json::to_value(&loaded.transportRateChanges).unwrap(),
+        serde_json::to_value(&settings.transportRateChanges).unwrap()
+    );
+    assert_eq!(
+        PayrollRepository::get_for_personnel(&conn, &person.id)?[0].status,
+        BordroStatus::STALE
+    );
+    let recalculated =
+        PayrollService::calculate_payroll_for_personnel(&conn, &person.id, &period.id)?;
+    assert_eq!(recalculated.gelirler.vasitaYol, Some(dec!(3820)));
+    let before = serde_json::to_value(&loaded).unwrap();
+    let mut bad = settings.clone();
+    bad.transportRateChanges.as_mut().unwrap()[0].effectiveFrom = "2026-02-30".into();
+    assert!(SettingsRepository::save_institution_settings(&conn, &bad).is_err());
+    assert_eq!(
+        serde_json::to_value(
+            SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap()
+        )
+        .unwrap(),
+        before
+    );
+    PayrollService::finalize_payroll_for_personnel(&conn, &person.id, &period.id)?;
+    settings.transportRateChanges.as_mut().unwrap()[0].gunlukVasitaYol = dec!(130);
+    assert!(SettingsRepository::save_institution_settings(&conn, &settings).is_err());
+    assert_eq!(
+        serde_json::to_value(
+            SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap()
+        )
+        .unwrap(),
+        before
+    );
+    Ok(())
+}

@@ -704,6 +704,7 @@ fn target_income_for_period(
 
     let transition = crate::raise_transition::resolve_raise_transition(dataset, period)?;
     let historical_settings = transition.current;
+    crate::transport_rates::validate_transport_rates(period, &historical_settings)?;
     crate::calculations::validate_kurum_degerleri_for_payroll(&historical_settings)?;
     let statutory_snapshot = source_statutory_snapshot(index, dataset, &personnel.id, period)?;
     let raise_date = transition.cutoff;
@@ -719,7 +720,9 @@ fn target_income_for_period(
         baseline.gunlukTabanUcret = previous.gunlukTabanUcret;
         baseline.gunlukYemek = previous.gunlukYemek;
         baseline.birlestirilmisSosyalYardim = previous.birlestirilmisSosyalYardim;
-        baseline.gunlukVasitaYol = previous.gunlukVasitaYol;
+        if historical_settings.transportRateChanges.is_none() {
+            baseline.gunlukVasitaYol = previous.gunlukVasitaYol;
+        }
         baseline.giyimYardimi = previous.giyimYardimi;
         baseline.hizmetZammiBirimi = previous.hizmetZammiBirimi;
         baseline.isPrimiGruplari = previous.isPrimiGruplari.clone();
@@ -764,7 +767,8 @@ fn target_income_for_period(
                     period.id, date_text
                 ))
             })?;
-        let segment_key = format!("{before_raise}:{active_revision_ids}:{statutory_segment_index}");
+        let transport_rate = crate::transport_rates::transport_rate_on(&historical_settings, &date_text);
+        let segment_key = format!("{before_raise}:{active_revision_ids}:{statutory_segment_index}:{transport_rate}");
         let baseline = if before_raise {
             before_raise_settings
                 .as_ref()
@@ -778,7 +782,11 @@ fn target_income_for_period(
         {
             index
         } else {
-            let settings = settings_for_replay_date(baseline, personnel, current, applications)?;
+            let mut baseline = baseline.clone();
+            if historical_settings.transportRateChanges.is_some() {
+                baseline.gunlukVasitaYol = transport_rate;
+            }
+            let settings = settings_for_replay_date(&baseline, personnel, current, applications)?;
             segments.push(ReplaySegment {
                 key: segment_key,
                 statutory_segment_index,

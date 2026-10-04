@@ -45,6 +45,22 @@ export function isValidIsoDate(dateString: string): boolean {
   return day <= daysInMonth;
 }
 
+/** Shared form/persistence boundary validation; calculation stays in Rust. */
+export function validateTransportRatesForPeriod(
+  period: { baslangicTarihi: string; bitisTarihi: string },
+  settings: { transportRateChanges?: readonly { effectiveFrom: string; gunlukVasitaYol: number | string }[] | null }
+): void {
+  let previous = '';
+  for (const change of settings.transportRateChanges ?? []) {
+    if (!isValidIsoDate(change.effectiveFrom) || change.effectiveFrom < period.baslangicTarihi ||
+        change.effectiveFrom > period.bitisTarihi || change.effectiveFrom <= previous ||
+        !Number.isFinite(Number(change.gunlukVasitaYol)) || Number(change.gunlukVasitaYol) < 0) {
+      throw new Error('Yol yardımı tarihleri dönem içinde, tekrarsız ve artan sırada; günlük tutarlar sıfır veya pozitif olmalıdır.');
+    }
+    previous = change.effectiveFrom;
+  }
+}
+
 export const VALID_ATTENDANCE_CODES = new Set(['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R']);
 
 const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
@@ -554,6 +570,14 @@ function validateIsPrimiGrupItem(value: unknown, path: string): void {
   optionalBoolean(value, 'aktif', path);
 }
 
+function validateTransportRateChange(value: unknown, path: string): void {
+  assertRecord(value, path);
+  requiredString(value, 'effectiveFrom', path);
+  if (!isValidIsoDate(value.effectiveFrom as string)) fail(path, 'geçerli yürürlük tarihi içermelidir.');
+  requiredDecimal(value, 'gunlukVasitaYol', path);
+  if (Number(value.gunlukVasitaYol) < 0) fail(path, 'yol tutarı negatif olamaz.');
+}
+
 export function validateInstitutionSettings(
   value: unknown,
   path = '$'
@@ -561,6 +585,7 @@ export function validateInstitutionSettings(
   assertRecord(value, path);
   requiredString(value, 'donemId', path);
   optionalBoolean(value, 'yemekTamGvIstisnaDamgaTabi', path);
+  optionalNullableArray(value, 'transportRateChanges', path, validateTransportRateChange);
   [
     'gunlukTabanUcret',
     'gunlukYemek',
@@ -1265,6 +1290,10 @@ function assertCrossRecordIntegrity(
 ): void {
   const personnelIds = new Set(payload.personeller.map((person) => person.id));
   const periodIds = new Set(payload.donemler.map((period) => period.id));
+  for (const [periodId, settings] of Object.entries(payload.kurumDegerleriMap)) {
+    const period = payload.donemler.find((period) => period.id === periodId);
+    if (period) validateTransportRatesForPeriod(period, settings);
+  }
 
   if (payload.aktifDonemId !== '' && !periodIds.has(payload.aktifDonemId)) {
     fail(

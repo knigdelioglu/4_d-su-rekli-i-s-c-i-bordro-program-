@@ -122,6 +122,10 @@ export const tauriBridge = {
     return invokeTauri<BordroDonemi[]>('get_periods');
   },
 
+  async deletePeriod(periodId: string): Promise<void> {
+    return mutateTauri<void>('delete_period', { periodId });
+  },
+
   async savePeriod(period: BordroDonemi): Promise<void> {
     return mutateTauri<void>('save_period', { period });
   },

@@ -1558,3 +1558,69 @@ fn normal_payroll_uses_explicit_raised_social_clothing_and_service_rates_after_c
     assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(278.33)));
     assert_eq!(payroll.gelirler.hizmetZammi, Some(dec!(127.30)));
 }
+
+#[test]
+fn dated_transport_is_independent_of_wage_raise_and_affects_taxable_income() {
+    for raised in [false, true] {
+        let mut request = explicit_normal_request("2026-02-14");
+        if raised {
+            request.dataset.zamAylari = vec![2];
+            let previous_period = BordroDonemi {
+                id: "2025-12".into(),
+                yil: 2025,
+                ay: 12,
+                baslangicTarihi: "2025-12-15".into(),
+                bitisTarihi: "2026-01-14".into(),
+                donemAdi: "Aralık".into(),
+                taxYear: 2025,
+                taxMonth: 12,
+            };
+            let mut previous = request.dataset.institutionSettings["2026-01"].clone();
+            previous.donemId = previous_period.id.clone();
+            previous.gunlukVasitaYol = dec!(5);
+            request
+                .dataset
+                .institutionSettings
+                .insert(previous_period.id.clone(), previous);
+            request.dataset.periods.push(previous_period);
+        }
+        let current = request
+            .dataset
+            .institutionSettings
+            .get_mut("2026-01")
+            .unwrap();
+        current.gunlukVasitaYol = dec!(100);
+        current.transportRateChanges = Some(vec![]);
+        let baseline = calculate_payroll(&request).unwrap();
+        assert_eq!(baseline.gelirler.vasitaYol, Some(dec!(3100)));
+        request
+            .dataset
+            .institutionSettings
+            .get_mut("2026-01")
+            .unwrap()
+            .transportRateChanges = Some(vec![
+            payroll_core::TransportRateChange {
+                effectiveFrom: "2026-01-20".into(),
+                gunlukVasitaYol: dec!(120),
+            },
+            payroll_core::TransportRateChange {
+                effectiveFrom: "2026-02-05".into(),
+                gunlukVasitaYol: dec!(150),
+            },
+        ]);
+        let dated = calculate_payroll(&request).unwrap();
+        // 5 days at 100 + 16 at 120 + 10 at 150. Wage cutoff is February 1.
+        assert_eq!(dated.gelirler.vasitaYol, Some(dec!(3920)));
+        assert_eq!(dated.gelirToplam - baseline.gelirToplam, dec!(820));
+        assert_eq!(
+            dated.pekDetay.as_ref().unwrap().primMatrahi
+                - baseline.pekDetay.as_ref().unwrap().primMatrahi,
+            dec!(820)
+        );
+        assert_eq!(dated.gelirler.yemek, baseline.gelirler.yemek);
+        assert_eq!(
+            dated.gelirler.tabanBrutAylik,
+            baseline.gelirler.tabanBrutAylik
+        );
+    }
+}

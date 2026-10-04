@@ -1,11 +1,26 @@
 import React from 'react';
-import { Check, Info, Layers, Percent, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
-import type { DönemselKurumDegerleri, IsPrimiGrupItem } from '../../types/payroll';
+import { AlertTriangle, Check, Info, Layers, Percent, Plus, Save, Settings2, Trash2, X } from 'lucide-react';
+import type { BordroDonemi, DönemselKurumDegerleri, IsPrimiGrupItem } from '../../types/payroll';
 import { AY_ISIMLERI } from '../../utils/payrollPresentation';
 
+const incomeRateSignature = (settings: DönemselKurumDegerleri): string => {
+  const fields = [
+    'gunlukTabanUcret', 'gunlukYemek', 'birlestirilmisSosyalYardim',
+    'giyimYardimi', 'hizmetZammiBirimi',
+    'ekOdeme', 'digerGelirVarsayilan', 'geceCalismaPrimiYuzde',
+    'geceCalismaTatiliPrimiYuzde',
+  ] as const;
+  return JSON.stringify({
+    rates: fields.map((field) => Number(settings[field] ?? 0)),
+    groups: (settings.isPrimiGruplari ?? []).map((group) => ({ id: group.id, rate: Number(group.oran) })),
+  });
+};
+
 interface IncomeParametersSectionProps {
+  period: BordroDonemi;
   aktifDonemId: string;
   paramsForm: DönemselKurumDegerleri;
+  savedParams: DönemselKurumDegerleri;
   setParamsForm: React.Dispatch<React.SetStateAction<DönemselKurumDegerleri>>;
   zamAylariForm: number[];
   setZamAylariForm: React.Dispatch<React.SetStateAction<number[]>>;
@@ -15,8 +30,10 @@ interface IncomeParametersSectionProps {
 }
 
 export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = ({
+  period,
   aktifDonemId,
   paramsForm,
+  savedParams,
   setParamsForm,
   zamAylariForm,
   setZamAylariForm,
@@ -25,10 +42,60 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
   onSubmit,
 }) => {
   const [isGrupModalOpen, setIsGrupModalOpen] = React.useState(false);
+  const [showRaiseReminder, setShowRaiseReminder] = React.useState(false);
+  const calendarRef = React.useRef<HTMLDivElement>(null);
+  const lastRemindedRates = React.useRef<string | null>(null);
   const groups = paramsForm.isPrimiGruplari ?? [];
+  const transportChanges = paramsForm.transportRateChanges;
+  const savedRateSignature = incomeRateSignature(savedParams);
+
+  React.useEffect(() => {
+    setShowRaiseReminder(false);
+    lastRemindedRates.current = null;
+  }, [aktifDonemId, savedRateSignature]);
+
+  React.useEffect(() => {
+    if (savedSuccess) setShowRaiseReminder(false);
+  }, [savedSuccess]);
+
+  const handleWageBlur = () => {
+    const signature = incomeRateSignature(paramsForm);
+    if (signature === savedRateSignature) {
+      setShowRaiseReminder(false);
+      lastRemindedRates.current = null;
+      return;
+    }
+    if (signature !== lastRemindedRates.current) {
+      lastRemindedRates.current = signature;
+      setShowRaiseReminder(true);
+    }
+  };
+
+  const openRaiseCalendar = () => {
+    setShowRaiseReminder(false);
+    calendarRef.current?.scrollIntoView({ block: 'center' });
+    calendarRef.current?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
+  };
 
   return (
     <section data-testid="period-settings-gelir" className="space-y-5">
+      {showRaiseReminder && (
+        <div role="alert" data-testid="wage-change-raise-reminder" className="fixed bottom-4 right-4 z-50 w-[calc(100%-2rem)] max-w-md rounded-xl border-2 border-amber-500 bg-amber-50 p-4 text-amber-950 shadow-xl">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-5 w-5 shrink-0" aria-hidden="true" />
+            <div className="flex-1 text-sm">
+              <p className="font-bold">Ücret değişti — zam ayını kontrol edin</p>
+              <p className="mt-1">Bu değişiklik zam nedeniyleyse, Kurum Genelinde Zam Takvimi bölümünden zammın geçerli olduğu ayı seçin. Ay zaten seçiliyse doğru ay olduğunu kontrol edin.</p>
+            </div>
+            <button type="button" onClick={() => setShowRaiseReminder(false)} aria-label="Zam hatırlatmasını kapat" className="rounded p-1 focus-visible:outline-2 focus-visible:outline-amber-700">
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <button type="button" onClick={openRaiseCalendar} className="mt-3 rounded-lg bg-amber-900 px-3 py-2 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700">
+            Zam aylarını kontrol et
+          </button>
+        </div>
+      )}
       <header>
         <h2 className="text-xl font-bold text-slate-900">Ücretler</h2>
         <p className="mt-1 text-xs text-slate-500">
@@ -62,7 +129,14 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
           </div>
         )}
 
-        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+        <div ref={calendarRef} className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+          <div data-testid="raise-calendar-warning" className="flex items-start gap-3 rounded-lg border-2 border-amber-500 bg-amber-100 p-3 text-amber-950">
+            <AlertTriangle className="h-5 w-5 shrink-0" aria-hidden="true" />
+            <p className="text-sm font-semibold">
+              Zam döneminde, zammın geçerli olduğu ayı aşağıdaki takvimden mutlaka seçin.
+              Ücret tutarını değiştirmek tek başına zam geçişini etkinleştirmez.
+            </p>
+          </div>
           <div className="flex items-start gap-3">
             <Percent className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="text-xs text-amber-950 leading-relaxed">
@@ -89,13 +163,14 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                   <input
                     type="checkbox"
                     checked={selected}
-                    onChange={() =>
+                    onChange={() => {
+                      setShowRaiseReminder(false);
                       setZamAylariForm((current) =>
                         selected
                           ? current.filter((value) => value !== month)
                           : [...current, month].sort((a, b) => a - b)
-                      )
-                    }
+                      );
+                    }}
                     className="accent-amber-600"
                   />
                   {ay}
@@ -118,6 +193,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
             </label>
             <input
               type="number"
+              onBlur={handleWageBlur}
               step="0.01"
               value={paramsForm.gunlukTabanUcret ?? ''}
               onChange={(e) =>
@@ -138,6 +214,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               <div className="min-w-28 flex-1">
                 <input
                   id="daily-meal-amount"
+                  onBlur={handleWageBlur}
                   type="number"
                   step="0.01"
                   value={paramsForm.gunlukYemek ?? ''}
@@ -159,20 +236,11 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                     const checked = event.target.checked;
                     setParamsForm((current) => ({ ...current, yemekTamGvIstisnaDamgaTabi: checked }));
                   }}
-                  aria-describedby="meal-payroll-tax-policy-help"
                   className="mt-0.5 shrink-0 accent-indigo-600"
                 />
                 <span>Yemek yardımının tamamını gelir vergisinden istisna, tamamını damga vergisine tabi tut</span>
               </label>
             </div>
-            <p id="meal-payroll-tax-policy-help" className="mt-1 text-[11px] text-slate-500">
-              {paramsForm.yemekTamGvIstisnaDamgaTabi ?? true
-                ? 'Kurum bordrosundaki yemek vergi hesabı uygulanır. SGK yemek istisnası değişmez.'
-                : 'Günlük GV yemek istisnası sınırı uygulanır; aynı tutar damga vergisinden de istisna edilir.'}
-            </p>
-            <span className="text-[11px] text-slate-500 mt-0.5 block">
-              Önceki dönemle aynı değerler bırakılırsa zam oranı yemek, birleştirilmiş sosyal yardım, giyim yardımı ve hizmet zammı birimine de uygulanır. Zamlı tutarlar sonraki dönemlerde de kullanılır. Bir kaleme farklı değer girilirse o değer kullanılır.
-            </span>
           </div>
 
           <div>
@@ -183,6 +251,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.01"
               value={paramsForm.birlestirilmisSosyalYardim ?? ''}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
@@ -193,22 +262,52 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
+          <div data-testid="transport-rate-settings">
+            <label htmlFor="daily-transport-rate" className="block text-xs font-semibold text-slate-700 mb-1">
               Günlük Vasıta / Yol Tutarı (TL)
             </label>
             <input
+              id="daily-transport-rate"
               type="number"
               step="0.01"
+              min="0"
               value={paramsForm.gunlukVasitaYol ?? ''}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
                   gunlukVasitaYol: parseFloat(e.target.value) || 0,
+                  transportRateChanges: transportChanges ?? [],
                 })
               }
               className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
+            <p className="mt-2 text-xs text-slate-600">Dönem başlangıcındaki günlük tutar. Dönem içi değişiklikleri yürürlük tarihleriyle ekleyin; yol yardımı için zam ayı seçmeniz gerekmez.</p>
+            {transportChanges == null ? (
+              <div className="mt-2 text-xs text-slate-600">
+                <p>Bu eski kayıt yol hesabında zam takvimini kullanıyor. Tarihli hesaba geçerken başlangıç tutarını kontrol edin.</p>
+                <button type="button" onClick={() => setParamsForm({ ...paramsForm, transportRateChanges: [] })} className="mt-2 rounded border border-indigo-300 px-3 py-2 font-semibold text-indigo-700">Yol hesabını zamdan ayır</button>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {transportChanges.map((change, index) => (
+                  <div key={index} data-testid="transport-rate-change" className="flex flex-wrap items-end gap-2 rounded-lg border border-slate-200 p-2">
+                    <label className="min-w-36 flex-1 text-xs font-semibold text-slate-700">Yürürlük tarihi
+                      <input aria-label={`Yol yürürlük tarihi ${index + 1}`} type="date" required min={period.baslangicTarihi} max={period.bitisTarihi} value={change.effectiveFrom}
+                        onChange={(event) => setParamsForm({ ...paramsForm, transportRateChanges: transportChanges.map((row, rowIndex) => rowIndex === index ? { ...row, effectiveFrom: event.target.value } : row) })}
+                        className="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-2 py-2 font-normal" />
+                    </label>
+                    <label className="min-w-28 flex-1 text-xs font-semibold text-slate-700">Yeni günlük tutar (TL)
+                      <input aria-label={`Yeni günlük yol tutarı ${index + 1}`} type="number" required min="0" step="0.01" value={change.gunlukVasitaYol}
+                        onChange={(event) => setParamsForm({ ...paramsForm, transportRateChanges: transportChanges.map((row, rowIndex) => rowIndex === index ? { ...row, gunlukVasitaYol: Number(event.target.value) } : row) })}
+                        className="mt-1 block w-full rounded-lg border border-slate-300 bg-slate-50 px-2 py-2 font-normal" />
+                    </label>
+                    <button type="button" aria-label={`Yol değişikliği ${index + 1} sil`} onClick={() => setParamsForm({ ...paramsForm, transportRateChanges: transportChanges.filter((_, rowIndex) => rowIndex !== index) })} className="rounded-lg p-2 text-rose-600 hover:bg-rose-50"><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                ))}
+                <button type="button" onClick={() => setParamsForm({ ...paramsForm, transportRateChanges: [...transportChanges, { effectiveFrom: '', gunlukVasitaYol: transportChanges.at(-1)?.gunlukVasitaYol ?? paramsForm.gunlukVasitaYol }] })} className="inline-flex items-center gap-1 rounded border border-indigo-300 px-3 py-2 text-xs font-semibold text-indigo-700"><Plus className="h-4 w-4" />Yol tutarı değişikliği ekle</button>
+                <p className="text-xs text-slate-500">Tarih dahil yeni tutar kullanılır. Satırları tarih sırasıyla girin. Yalnız fiilî çalışma günleri (Ç, GÇ) ödenir.</p>
+              </div>
+            )}
           </div>
 
           <div>
@@ -219,6 +318,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.01"
               value={paramsForm.giyimYardimi ?? ''}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
@@ -237,6 +337,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.01"
               value={paramsForm.hizmetZammiBirimi ?? ''}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
@@ -294,6 +395,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.01"
               value={paramsForm.ekOdeme ?? ''}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({ ...paramsForm, ekOdeme: parseFloat(e.target.value) || 0 })
               }
@@ -310,6 +412,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.01"
               value={paramsForm.digerGelirVarsayilan ?? ''}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
@@ -329,6 +432,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.1"
               value={paramsForm.geceCalismaPrimiYuzde ?? 0}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
@@ -351,6 +455,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
               type="number"
               step="0.1"
               value={paramsForm.geceCalismaTatiliPrimiYuzde ?? 0}
+              onBlur={handleWageBlur}
               onChange={(e) =>
                 setParamsForm({
                   ...paramsForm,
@@ -468,6 +573,7 @@ export const IncomeParametersSection: React.FC<IncomeParametersSectionProps> = (
                           min="0"
                           max="100"
                           value={groupItem.oran ?? ''}
+                          onBlur={handleWageBlur}
                           onChange={(e) =>
                             setParamsForm((current) => {
                               const next = [

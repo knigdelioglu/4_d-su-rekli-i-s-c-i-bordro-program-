@@ -157,6 +157,7 @@ impl SettingsRepository {
         }
         crate::domain::calculations::validate_kurum_degerleri_for_payroll(&normalized)?;
         Self::validate_statutory_segments_for_period(&period, &normalized)?;
+        payroll_core::transport_rates::validate_transport_rates(&period, &normalized)?;
 
         // A period snapshot is immutable only while it protects FINALIZED
         // history. CALCULATED/STALE records are invalidated by the same period

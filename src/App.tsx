@@ -479,6 +479,7 @@ export default function App() {
     handleSavePersonelAndTaxOpening,
     handleDeletePersonel,
     handleCreateDonem,
+    handleDeleteDonem,
     handleSaveKurumDegerleri,
     handleSavePuantaj,
     handleSaveSickLeaveRecord,
@@ -841,6 +842,7 @@ export default function App() {
                     aktifDonemId={aktifDonemId}
                     onSelectDonem={handleSelectDonem}
                     onCreateDonem={handleCreateDonem}
+                    onDeleteDonem={handleDeleteDonem}
                     kurumDegerleriMap={kurumDegerleriMap}
                     onSaveKurumDegerleri={handleSaveKurumDegerleri}
                     personeller={personeller}

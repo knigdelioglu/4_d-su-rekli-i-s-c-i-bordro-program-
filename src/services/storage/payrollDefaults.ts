@@ -60,6 +60,7 @@ export const DEFAULT_STATUTORY_PERIOD_PARAMETERS = {
   | 'yemekTamGvIstisnaDamgaTabi'
   | 'birlestirilmisSosyalYardim'
   | 'gunlukVasitaYol'
+  | 'transportRateChanges'
   | 'giyimYardimi'
   | 'hizmetZammiBirimi'
   | 'isPrimiYuzde'
@@ -110,6 +111,7 @@ export const DEFAULT_PRODUCTION_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, '
   yemekTamGvIstisnaDamgaTabi: true,
   birlestirilmisSosyalYardim: 0,
   gunlukVasitaYol: 0,
+  transportRateChanges: [],
   giyimYardimi: 0,
   hizmetZammiBirimi: 0,
   isPrimiYuzde: 0,

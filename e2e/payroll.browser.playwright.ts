@@ -824,7 +824,7 @@ test('selecting existing period in new period form switches safely without recre
   const banner = page.getByTestId('period-already-exists-banner');
   await expect(banner).toBeVisible();
   await expect(banner).toContainText('2026-01');
-  await expect(banner).toContainText('doğrudan bu döneme geçebilirsiniz');
+  await expect(banner).toContainText('dönemi zaten mevcut.');
 
   // Verify action button shows safe switch text instead of create
   const submitBtn = page.getByTestId('submit-period-action');
@@ -1438,6 +1438,69 @@ test('saving sick leave automatically marks puantaj as R across 15-14 boundary w
     });
 });
 
+test('wage changes remind users to review raise months without changing the schedule automatically', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  await page.getByTestId('nav-parametrelar').click();
+  const section = page.getByTestId('period-settings-gelir');
+  const reminder = page.getByTestId('wage-change-raise-reminder');
+  await expect(page.getByTestId('raise-calendar-warning')).toBeVisible();
+  await expect(section.getByText('Kurum bordrosundaki yemek vergi hesabı uygulanır.', { exact: false })).toHaveCount(0);
+  await expect(section.getByText('Önceki dönemle aynı değerler bırakılırsa', { exact: false })).toHaveCount(0);
+  const mealPolicy = page.getByTestId('meal-payroll-tax-policy');
+  await mealPolicy.uncheck();
+  await mealPolicy.blur();
+  await expect(reminder).toHaveCount(0);
+  await mealPolicy.check();
+
+  const selectionBefore = await section.locator('input[type="checkbox"]').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).checked));
+  const rates = section.getByRole('spinbutton');
+  for (let index = 0; index < 10; index++) {
+    const field = rates.nth(index);
+    const original = await field.inputValue();
+    await field.focus();
+    await field.blur();
+    await expect(reminder).toHaveCount(0);
+    await field.fill(String(Number(original || '0') + 1));
+    await field.blur();
+    if (index === 3) {
+      // Transport changes use their own effective dates, never the wage schedule.
+      await expect(reminder).toHaveCount(0);
+      await field.fill(original);
+      continue;
+    }
+    await expect(reminder).toBeVisible();
+    await page.getByRole('button', { name: 'Zam aylarını kontrol et', exact: true }).click();
+    await expect(reminder).toHaveCount(0);
+    await expect(section.locator('input[type="checkbox"]').first()).toBeFocused();
+    await expect(section.locator('input[type="checkbox"]')).toHaveCount(selectionBefore.length);
+    expect(await section.locator('input[type="checkbox"]').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).checked))).toEqual(selectionBefore);
+    await field.focus();
+    await field.blur();
+    await expect(reminder).toHaveCount(0);
+    await field.fill(original);
+    await field.blur();
+    await expect(reminder).toHaveCount(0);
+  }
+  await rates.first().fill(String(Number(await rates.first().inputValue()) + 1));
+  await rates.first().blur();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(reminder).toBeVisible();
+  const box = await reminder.boundingBox();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: '/private/tmp/wage-change-raise-reminder-mobile.png', fullPage: true });
+  await page.getByRole('button', { name: 'Zam hatırlatmasını kapat' }).click();
+  await expect(reminder).toHaveCount(0);
+  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
+  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  await rates.first().focus();
+  await rates.first().blur();
+  await expect(reminder).toHaveCount(0);
+  await page.reload();
+  await expect(reminder).toHaveCount(0);
+});
+
 test('meal payroll tax policy defaults checked and persists both selections through reload and recalculation', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
@@ -1476,4 +1539,151 @@ test('meal payroll tax policy defaults checked and persists both selections thro
   const box = await checkbox.boundingBox();
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
   await page.screenshot({ path: '/private/tmp/meal-payroll-tax-policy-mobile.png', fullPage: true });
+});
+
+test('dated transport rates persist and calculate independently through WASM', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  await page.getByTestId('nav-parametrelar').click();
+  const panel = page.getByTestId('transport-rate-settings');
+  const base = panel.getByLabel('Günlük Vasıta / Yol Tutarı (TL)', { exact: true });
+  await base.fill('100');
+  await base.blur();
+  await expect(page.getByTestId('wage-change-raise-reminder')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
+  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  const periodId = await openPayrollScreen(page);
+  const before = await calculateP1(page, periodId);
+  const readPayload = async () => JSON.parse((await readStoredPayload(page))!) as {
+    donemler: Array<{ id: string; baslangicTarihi: string; bitisTarihi: string }>;
+    puantajlar: Array<{ personelId: string; donemId: string; gunler: Record<string, string> }>;
+    kurumDegerleriMap: Record<string, { gunlukVasitaYol: string; transportRateChanges?: Array<{ effectiveFrom: string; gunlukVasitaYol: string }> }>;
+    zamAylari: number[];
+    bordrolar: Array<StoredPayroll & { gelirler: { vasitaYol: string } }>;
+  };
+  const original = await readPayload();
+  const period = original.donemler.find((row) => row.id === periodId)!;
+  const atDay = (offset: number) => new Date(Date.parse(period.baslangicTarihi) + offset * 86400000).toISOString().slice(0, 10);
+  const firstDate = atDay(4);
+  const secondDate = atDay(20);
+  await page.getByTestId('nav-parametrelar').click();
+  await panel.getByRole('button', { name: 'Yol tutarı değişikliği ekle' }).click();
+  await panel.getByLabel('Yol yürürlük tarihi 1', { exact: true }).fill(firstDate);
+  await panel.getByLabel('Yeni günlük yol tutarı 1', { exact: true }).fill('120');
+  await panel.getByRole('button', { name: 'Yol tutarı değişikliği ekle' }).click();
+  // Duplicate dates must fail without losing edits or the saved payroll.
+  await panel.getByLabel('Yol yürürlük tarihi 2', { exact: true }).fill(firstDate);
+  await panel.getByLabel('Yeni günlük yol tutarı 2', { exact: true }).fill('150');
+  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
+  await expect(page.getByTestId('period-settings-save-error')).toContainText('tekrarsız');
+  expect((await readPayload()).bordrolar.find((payroll) => payroll.id === before.id)?.status).toBe('CALCULATED');
+  await panel.getByLabel('Yol yürürlük tarihi 2', { exact: true }).fill(secondDate);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await panel.scrollIntoViewIfNeeded();
+  const box = await panel.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: '/private/tmp/dated-transport-mobile.png', fullPage: true });
+  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
+  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  const saved = await readPayload();
+  expect(saved.zamAylari).toEqual(original.zamAylari);
+  expect(saved.bordrolar.find((payroll) => payroll.id === before.id)?.status).toBe('STALE');
+  expect(saved.kurumDegerleriMap[periodId].transportRateChanges).toEqual([
+    { effectiveFrom: firstDate, gunlukVasitaYol: '120' }, { effectiveFrom: secondDate, gunlukVasitaYol: '150' },
+  ]);
+  await page.reload();
+  await expect(panel.getByLabel('Yol yürürlük tarihi 2', { exact: true })).toHaveValue(secondDate);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openPayrollScreen(page);
+  await calculateP1(page, periodId);
+  const payroll = (await readPayload()).bordrolar.find((payroll) => payroll.id === before.id)!;
+  const days = original.puantajlar.find((row) => row.personelId === 'p-1' && row.donemId === periodId)!.gunler;
+  const workDays = Object.entries(days).filter(([, code]) => code === 'Ç' || code === 'GÇ');
+  const expected = workDays.reduce((sum, [date]) => sum + (date >= secondDate ? 150 : date >= firstDate ? 120 : 100), 0);
+  expect(Number(payroll.gelirler.vasitaYol)).toBe(expected);
+  expect(Number(payroll.gelirToplam) - Number(before.gelirToplam)).toBeCloseTo(expected - workDays.length * 100, 2);
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-yeni-donem').click();
+  const newPeriod = page.getByTestId('period-settings-yeni-donem');
+  await newPeriod.locator('select').nth(0).selectOption('2026');
+  await newPeriod.locator('select').nth(1).selectOption('11');
+  await page.getByTestId('submit-period-action').click();
+  await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-11');
+  const inherited = (await readPayload()).kurumDegerleriMap['2026-11'];
+  expect(inherited.gunlukVasitaYol).toBe('150');
+  expect(inherited.transportRateChanges).toEqual([]);
+
+});
+
+
+test('period deletion confirms, removes finalized history, persists and supports an empty period list', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  const periodId = await openPayrollScreen(page);
+  await calculateP1(page, periodId);
+  const row = page.locator('tbody tr').filter({ hasText: 'Ahmet Yılmaz' }).first();
+  await row.getByRole('button', { name: /Diğer işlemler/i }).click();
+  await page.getByRole('menuitem', { name: /Kesinleştir/i }).click();
+  await page.getByRole('button', { name: 'Kesinleştir ve Kilitle' }).click();
+  await waitForPayrollStatus(page, periodId, 'FINALIZED');
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-donemler').click();
+  await page.getByTestId(`delete-period-${periodId}`).click();
+  const confirmation = page.getByRole('region', { name: 'Dönem silme onayı' });
+  await expect(confirmation).toContainText('kesinleşmiş olanlar dahil');
+  await confirmation.getByRole('button', { name: 'Vazgeç' }).click();
+  await expect(page.getByTestId(`period-row-${periodId}`)).toBeVisible();
+  await waitForPayrollStatus(page, periodId, 'FINALIZED');
+  await page.getByTestId(`delete-period-${periodId}`).click();
+  await confirmation.getByRole('button', { name: 'Evet, Dönemi Sil' }).click();
+  await expect(page.getByTestId(`period-row-${periodId}`)).toHaveCount(0);
+  await expect.poll(async () => {
+    const data = JSON.parse((await readStoredPayload(page))!);
+    return !data.donemler.some((p: { id: string }) => p.id === periodId) &&
+      !data.bordrolar.some((p: { donemId: string }) => p.donemId === periodId) &&
+      !data.puantajlar.some((p: { donemId: string }) => p.donemId === periodId) &&
+      !data.kurumDegerleriMap[periodId] && data.aktifDonemId !== periodId;
+  }).toBe(true);
+  await page.reload();
+  await expect(page.getByTestId(`period-row-${periodId}`)).toHaveCount(0);
+  const data = JSON.parse((await readStoredPayload(page))!);
+  for (const period of data.donemler) {
+    await page.getByTestId(`delete-period-${period.id}`).click();
+    await page.getByRole('button', { name: 'Evet, Dönemi Sil' }).click();
+    await expect(page.getByTestId(`period-row-${period.id}`)).toHaveCount(0);
+  }
+  await expect(page.getByText('Henüz bordro dönemi bulunmuyor.')).toBeVisible();
+  await expect.poll(async () => JSON.parse((await readStoredPayload(page))!).aktifDonemId).toBe('');
+  await page.reload();
+  await expect(page.getByText('Henüz bordro dönemi bulunmuyor.')).toBeVisible();
+  await page.getByTestId('period-settings-donemler').getByRole('button', { name: 'Yeni Dönem Aç', exact: true }).click();
+  await expect(page.getByTestId('period-settings-yeni-donem')).toBeVisible();
+});
+
+
+test('simplified new period form creates the first period without wage or bonus input', async ({ page }) => {
+  await page.goto('/');
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-yeni-donem').click();
+  const form = page.getByTestId('period-settings-yeni-donem');
+  await expect(form.locator('input')).toHaveCount(0);
+  await expect(form).not.toContainText('İş Primi Grupları');
+  await expect(form).not.toContainText('Günlük Taban Ücret');
+  await expect(form).not.toContainText('Otomatik 15–14 Dönem Kuralı');
+  await expect(form).not.toContainText('GİB');
+  await form.getByLabel('Yıl', { exact: true }).selectOption('2026');
+  await form.getByLabel('Ay', { exact: true }).selectOption('1');
+  await expect(form.getByLabel('Vergi Yılı')).toHaveValue('2026');
+  await expect(form.getByLabel('Vergi Ayı')).toHaveValue('2');
+  await page.screenshot({ path: '/tmp/new-period-simplified.png', fullPage: true });
+  await page.getByTestId('submit-period-action').click();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-01');
+  await expect.poll(async () => {
+    const data = JSON.parse((await readStoredPayload(page))!);
+    return data.aktifDonemId === '2026-01' && data.donemler.length === 1 && !data.kurumDegerleriMap['2026-01'];
+  }).toBe(true);
+  await page.reload();
+  await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
+  await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-01');
 });

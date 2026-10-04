@@ -33,8 +33,9 @@ import { SickLeaveConflictModal } from './SickLeaveConflictModal';
 import { SickLeaveSection } from './SickLeaveSection';
 import { LicenseSettingsSection } from './LicenseSettingsSection';
 import { TediyeTisSection } from './TediyeTisSection';
-import { formatPeriodSettingsSaveError, hasValidInitialWorkBonusGroups, isPositiveDailyBaseWage, savePeriodSettings } from './periodSettingsSave';
+import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
 import { describeError } from '../../utils/errorMessage';
+import { transportRateForNewPeriod, validateTransportRatesForPeriod } from '../../services/storage/transportRatesValidation';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -42,10 +43,11 @@ export interface PeriodSettingsPageProps {
   donemler: BordroDonemi[];
   aktifDonem?: BordroDonemi;
   aktifDonemId: string;
+  onDeleteDonem: (donemId: string) => Promise<void> | void;
   onSelectDonem: (donemId: string) => Promise<void> | void;
   onCreateDonem: (
     donem: BordroDonemi,
-    kurumDegerleri: DönemselKurumDegerleri
+    kurumDegerleri?: DönemselKurumDegerleri
   ) => Promise<void> | void;
   kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
   onSaveKurumDegerleri: (kurumDegerleri: DönemselKurumDegerleri) => Promise<void> | void;
@@ -119,6 +121,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   aktifDonem,
   aktifDonemId,
   onSelectDonem,
+  onDeleteDonem,
   onCreateDonem,
   kurumDegerleriMap,
   onSaveKurumDegerleri,
@@ -151,13 +154,6 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   const [periodGlobalSuccess, setPeriodGlobalSuccess] = useState<string | null>(null);
   const [periodGlobalError, setPeriodGlobalError] = useState<string | null>(null);
   const [isSubmittingPeriod, setIsSubmittingPeriod] = useState(false);
-  const [initialDailyBaseWage, setInitialDailyBaseWage] = useState(() => {
-    const latestPeriod = [...donemler].sort((left, right) => right.baslangicTarihi.localeCompare(left.baslangicTarihi))[0];
-    const inherited = kurumDegerleriMap[aktifDonemId]?.gunlukTabanUcret ??
-      (latestPeriod ? kurumDegerleriMap[latestPeriod.id]?.gunlukTabanUcret : undefined);
-    return inherited && inherited > 0 ? String(inherited) : '';
-  });
-
   const resetTaxDefaults = (year: number, month: number) => {
     setPeriodGlobalError(null);
     const taxMonth = month === 12 ? 1 : month + 1;
@@ -231,14 +227,6 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     setParamsForm(createParamsForm(active, aktifDonemId));
   }, [aktifDonemId, kurumDegerleriMap]);
 
-  useEffect(() => {
-    if (initialDailyBaseWage !== '') return;
-    const latestPeriod = [...donemler].sort((left, right) => right.baslangicTarihi.localeCompare(left.baslangicTarihi))[0];
-    const inherited = kurumDegerleriMap[aktifDonemId]?.gunlukTabanUcret ??
-      (latestPeriod ? kurumDegerleriMap[latestPeriod.id]?.gunlukTabanUcret : undefined);
-    if (inherited && inherited > 0) setInitialDailyBaseWage(String(inherited));
-  }, [aktifDonemId, donemler, kurumDegerleriMap, initialDailyBaseWage]);
-
   const activePeriodForTaxYear = donemler.find((period) => period.id === aktifDonemId);
   const activeTaxYear = activePeriodForTaxYear?.taxYear || newTaxYear;
 
@@ -276,11 +264,6 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   const previewDonem = createBordroDonemi(newYear, newMonth, newTaxYear, newTaxMonth);
   const existingPreview = donemler.find((period) => period.id === previewDonem.id);
   const previewExists = existingPreview !== undefined;
-  const previewTaxChanged =
-    previewExists &&
-    (existingPreview.taxYear !== previewDonem.taxYear ||
-      existingPreview.taxMonth !== previewDonem.taxMonth);
-
   const [editingSickRecord, setEditingSickRecord] = useState<SickLeaveRecord | null>(null);
   const [pendingSickLeave, setPendingSickLeave] = useState<SickLeaveRecord | null>(null);
   const [pendingConflicts, setPendingConflicts] = useState<SickLeaveConflict[]>([]);
@@ -401,42 +384,42 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         return;
       }
 
-      if (!isPositiveDailyBaseWage(initialDailyBaseWage)) {
-        throw new Error('Dönemi oluşturmak için sıfırdan büyük Günlük Taban Ücret girin.');
+      const sourcePeriod = donemler.find((period) => period.id === aktifDonemId && kurumDegerleriMap[period.id]) ??
+        [...donemler].filter((period) => kurumDegerleriMap[period.id])
+          .sort((left, right) => right.baslangicTarihi.localeCompare(left.baslangicTarihi))[0];
+      let initialKurum: DönemselKurumDegerleri | undefined;
+      if (sourcePeriod) {
+        const inherited = createParamsForm(kurumDegerleriMap[sourcePeriod.id], sourcePeriod.id);
+        validateTransportRatesForPeriod(sourcePeriod, inherited);
+        initialKurum = withVisiblePeriodLegalDefaults(
+          {
+            ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+            ...inherited,
+            donemId: newDonem.id,
+            gunlukTabanUcret: inherited.gunlukTabanUcret,
+            gunlukYemek: inherited.gunlukYemek ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemek,
+            birlestirilmisSosyalYardim:
+              inherited.birlestirilmisSosyalYardim ??
+              DEFAULT_PRODUCTION_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
+            gunlukVasitaYol:
+              transportRateForNewPeriod(inherited, newDonem.baslangicTarihi),
+            transportRateChanges: [],
+            giyimYardimi: inherited.giyimYardimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.giyimYardimi,
+            hizmetZammiBirimi:
+              inherited.hizmetZammiBirimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.hizmetZammiBirimi,
+            isPrimiYuzde: inherited.isPrimiYuzde || 0,
+            isPrimiGruplari: inherited.isPrimiGruplari ?? [],
+            ekOdeme: inherited.ekOdeme || 0,
+            tediyeListesi: sanitizeTediyeList(inherited.tediyeListesi),
+            tisIkramiyeListesi:
+              inherited.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
+            tediyeTisNotu: inherited.tediyeTisNotu || DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeTisNotu,
+            statutoryParameterSegments: inherited.statutoryParameterSegments ?? [],
+            statutoryParameterSnapshot: undefined,
+          },
+          newDonem.id
+        );
       }
-      const workBonusGroups = paramsForm.isPrimiGruplari ?? [];
-      if (!hasValidInitialWorkBonusGroups(workBonusGroups)) {
-        throw new Error('Dönemi oluşturmak için kurumunuzun İş Primi grup adlarını ve 0–100 arasındaki oranlarını girin.');
-      }
-
-      const initialKurum: DönemselKurumDegerleri = withVisiblePeriodLegalDefaults(
-        {
-          ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
-          ...paramsForm,
-          donemId: newDonem.id,
-          gunlukTabanUcret:
-            Number(initialDailyBaseWage),
-          gunlukYemek: paramsForm.gunlukYemek ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemek,
-          birlestirilmisSosyalYardim:
-            paramsForm.birlestirilmisSosyalYardim ??
-            DEFAULT_PRODUCTION_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
-          gunlukVasitaYol:
-            paramsForm.gunlukVasitaYol ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukVasitaYol,
-          giyimYardimi: paramsForm.giyimYardimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.giyimYardimi,
-          hizmetZammiBirimi:
-            paramsForm.hizmetZammiBirimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.hizmetZammiBirimi,
-          isPrimiYuzde: paramsForm.isPrimiYuzde || 0,
-          isPrimiGruplari: workBonusGroups,
-          ekOdeme: paramsForm.ekOdeme || 0,
-          tediyeListesi: sanitizeTediyeList(paramsForm.tediyeListesi),
-          tisIkramiyeListesi:
-            paramsForm.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
-          tediyeTisNotu: paramsForm.tediyeTisNotu || DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeTisNotu,
-          statutoryParameterSegments: paramsForm.statutoryParameterSegments ?? [],
-          statutoryParameterSnapshot: undefined,
-        },
-        newDonem.id
-      );
 
       await onCreateDonem(newDonem, initialKurum);
       await onSelectDonem(newDonem.id);
@@ -454,6 +437,12 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     event.preventDefault();
     setParamsSaveError(null);
     setSavedSuccess(false);
+    try {
+      if (aktifDonem) validateTransportRatesForPeriod(aktifDonem, paramsForm);
+    } catch (error) {
+      setParamsSaveError(describeError(error));
+      return;
+    }
     const outcome = await savePeriodSettings(
       { ...paramsForm, donemId: aktifDonemId },
       zamAylariForm,
@@ -516,8 +505,10 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     if (activeSection === 'gelir') {
       return aktifDonem ? (
         <IncomeParametersSection
+          period={aktifDonem}
           aktifDonemId={aktifDonem.id}
           paramsForm={paramsForm}
+          savedParams={createParamsForm(activeKurumDegerleri, aktifDonemId)}
           setParamsForm={setParamsForm}
           zamAylariForm={zamAylariForm}
           setZamAylariForm={setZamAylariForm}
@@ -631,6 +622,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
           donemler={donemler}
           aktifDonemId={aktifDonemId}
           onSelectDonem={onSelectDonem}
+          onDeleteDonem={onDeleteDonem}
           onOpenNewPeriod={openNewPeriod}
         />
       );
@@ -647,22 +639,10 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         newTaxMonth={newTaxMonth}
         setNewTaxMonth={handleTaxMonthChange}
         yearOptions={yearOptions}
-        resetTaxDefaults={resetTaxDefaults}
         previewDonem={previewDonem}
         previewExists={previewExists}
-        previewTaxChanged={previewTaxChanged}
         onSubmit={handleCreateNewPeriod}
         isSubmitting={isSubmittingPeriod}
-        dailyBaseWage={initialDailyBaseWage}
-        onDailyBaseWageChange={(value) => {
-          setInitialDailyBaseWage(value);
-          setPeriodGlobalError(null);
-        }}
-        workBonusGroups={paramsForm.isPrimiGruplari ?? []}
-        onWorkBonusGroupsChange={(groups) => {
-          setParamsForm((current) => ({ ...current, isPrimiGruplari: groups }));
-          setPeriodGlobalError(null);
-        }}
         errorMessage={periodGlobalError}
         successMessage={periodGlobalSuccess}
       />
@@ -675,11 +655,11 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
           {activeSection === 'license' ? 'Lisans' : 'Dönem Parametreleri'}
         </h1>
-        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-600">
+        {activeSection !== 'newPeriod' && <p className="mt-1 max-w-3xl text-sm leading-relaxed text-slate-600">
           {activeSection === 'license'
             ? 'Bu cihazın lisans durumunu görüntüleyin veya lisans anahtarıyla aktivasyon talebi gönderin.'
             : 'Bordro dönemlerini, dönemsel kurum değerlerini ve yasal hesaplama parametrelerini yönetin. Bölümler arasında geçiş yapmak için sol menüyü kullanın.'}
-        </p>
+        </p>}
       </header>
       {periodGlobalSuccess && activeSection !== 'license' && (
         <div

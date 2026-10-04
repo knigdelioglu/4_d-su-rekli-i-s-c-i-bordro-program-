@@ -22,6 +22,7 @@ pub mod payroll_engine;
 pub mod policies;
 pub(crate) mod raise_transition;
 pub mod retro;
+pub mod transport_rates;
 
 pub use calculations::*;
 pub use index::*;
