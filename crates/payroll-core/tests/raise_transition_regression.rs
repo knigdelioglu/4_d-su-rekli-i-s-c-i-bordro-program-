@@ -1,0 +1,606 @@
+use chrono::{Duration, NaiveDate};
+use payroll_core::*;
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec;
+use std::collections::HashMap;
+
+fn period(year: i32, month: u32) -> BordroDonemi {
+    let start = NaiveDate::from_ymd_opt(year, month, 15).unwrap();
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    BordroDonemi {
+        id: format!("{year}-{month:02}"),
+        yil: year,
+        ay: month as i32,
+        baslangicTarihi: start.to_string(),
+        bitisTarihi: NaiveDate::from_ymd_opt(next_year, next_month, 14)
+            .unwrap()
+            .to_string(),
+        donemAdi: format!("{year}-{month:02}"),
+        taxYear: year,
+        taxMonth: month as i32,
+    }
+}
+
+fn attendance(person_id: &str, period: &BordroDonemi) -> PersonelPuantaj {
+    let mut days = HashMap::new();
+    let mut date = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").unwrap();
+    while date <= end {
+        days.insert(date.to_string(), "Ç".into());
+        date += Duration::days(1);
+    }
+    PersonelPuantaj {
+        id: format!("{person_id}_{}", period.id),
+        personelId: person_id.into(),
+        donemId: period.id.clone(),
+        gunler: days,
+    }
+}
+
+fn request(year: i32, month: u32) -> PayrollCalculationRequest {
+    // Reuse a valid structural DTO; all tested compensation inputs and
+    // expected amounts below are set independently of the golden result.
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("golden/2026/G020-social-aid.json")).unwrap();
+    let mut request: PayrollCalculationRequest =
+        serde_json::from_value(fixture["request"].clone()).unwrap();
+    let current = period(year, month);
+    let previous = if month == 1 {
+        period(year - 1, 12)
+    } else {
+        period(year, month - 1)
+    };
+    let mut settings = request
+        .dataset
+        .institutionSettings
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    settings.donemId = current.id.clone();
+    settings.gunlukTabanUcret = dec!(110);
+    settings.gunlukYemek = dec!(10);
+    settings.birlestirilmisSosyalYardim = dec!(1000);
+    settings.giyimYardimi = dec!(100);
+    settings.hizmetZammiBirimi = dec!(1);
+    let mut old = settings.clone();
+    old.donemId = previous.id.clone();
+    old.gunlukTabanUcret = dec!(100);
+    request.periodId = current.id.clone();
+    let accrual = request.accrual.as_mut().unwrap();
+    accrual.accrualId = format!("{}_{}", request.personnelId, current.id);
+    accrual.paymentDate = format!("{year}-{month:02}-25");
+    request.dataset.attendances = vec![attendance(&request.personnelId, &current)];
+    request.dataset.institutionSettings =
+        HashMap::from([(previous.id.clone(), old), (current.id.clone(), settings)]);
+    request.dataset.periods = vec![previous, current];
+    request.dataset.zamAylari = vec![if month == 12 { 1 } else { month as i32 + 1 }];
+    request.dataset.annualPayrollParameters[0].year = year;
+    request
+}
+
+fn advance(request: &mut PayrollCalculationRequest) {
+    let previous_period = request
+        .dataset
+        .periods
+        .iter()
+        .find(|p| p.id == request.periodId)
+        .unwrap()
+        .clone();
+    let payroll = calculate_payroll(request).unwrap();
+    request.dataset.payrolls.push(payroll);
+    let month = previous_period.ay as u32;
+    let next = if month == 12 {
+        period(previous_period.yil + 1, 1)
+    } else {
+        period(previous_period.yil, month + 1)
+    };
+    let mut settings = request.dataset.institutionSettings[&previous_period.id].clone();
+    settings.donemId = next.id.clone();
+    request
+        .dataset
+        .institutionSettings
+        .insert(next.id.clone(), settings);
+    request
+        .dataset
+        .attendances
+        .push(attendance(&request.personnelId, &next));
+    request.periodId = next.id.clone();
+    let accrual = request.accrual.as_mut().unwrap();
+    accrual.accrualId = format!("{}_{}", request.personnelId, next.id);
+    accrual.paymentDate = format!("{}-25", next.id);
+    if !request
+        .dataset
+        .annualPayrollParameters
+        .iter()
+        .any(|annual| annual.year == next.taxYear)
+    {
+        let mut annual = AnnualPayrollParameters::default_for_2026();
+        annual.year = next.taxYear;
+        request.dataset.annualPayrollParameters.push(annual);
+    }
+    request.dataset.periods.push(next);
+}
+
+#[test]
+fn all_four_incomes_split_at_first_of_month_for_28_29_30_31_day_periods_and_new_year() {
+    for (year, month, before_days, expected_social, expected_clothing) in [
+        (2026, 1, 17, dec!(1045.16), dec!(104.52)),
+        (2026, 2, 14, dec!(1050), dec!(105)),
+        (2024, 2, 15, dec!(1048.28), dec!(104.83)),
+        (2026, 4, 16, dec!(1046.67), dec!(104.67)),
+        (2025, 12, 17, dec!(1045.16), dec!(104.52)),
+    ] {
+        let request = request(year, month);
+        let payroll = calculate_payroll(&request).unwrap();
+        assert_eq!(
+            payroll.gelirler.tabanBrutAylik,
+            Some(Decimal::from(before_days * 100 + 14 * 110))
+        );
+        assert_eq!(
+            payroll.gelirler.yemek,
+            Some(Decimal::from(before_days * 10 + 14 * 11))
+        );
+        assert_eq!(
+            payroll.gelirler.birlestirilmisSosyalYardim,
+            Some(expected_social)
+        );
+        assert_eq!(payroll.gelirler.giyimYardimi, Some(expected_clothing));
+        assert_eq!(
+            payroll.statutorySnapshot.unwrap().sgkPrimGunSayisi,
+            30,
+            "SGK normalization is separate from earned calendar days"
+        );
+    }
+}
+
+#[test]
+fn union_dues_use_the_new_daily_wage_without_weighting_paid_days() {
+    for (year, month) in [(2026, 2), (2024, 2), (2026, 4), (2026, 8), (2025, 12)] {
+        let mut request = request(year, month);
+        request
+            .dataset
+            .institutionSettings
+            .values_mut()
+            .for_each(|settings| {
+                settings.gunlukTabanUcret = if settings.donemId == request.periodId {
+                    dec!(2616.26)
+                } else {
+                    dec!(2443.28)
+                };
+                settings.sendikaAidatiYuzde = Some(dec!(65));
+                settings.sabitSendikaAidati = None;
+            });
+        request.dataset.personnel[0].kesintiler = Some(PersonelKesintileri {
+            sendikaUyesi: Some(true),
+            ..Default::default()
+        });
+        let payroll = calculate_payroll(&request).unwrap();
+        assert_eq!(payroll.kesintiler.sendikaAidati, Some(dec!(1700.57)));
+        if month == 8 {
+            assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(78163.40)));
+        }
+
+        // Even without paid days after the raise, membership dues use the
+        // current daily rate rather than an attendance-weighted salary rate.
+        let cutoff = format!("{}-01", &request.dataset.periods[1].bitisTarihi[..7]);
+        for (date, code) in &mut request.dataset.attendances[0].gunler {
+            if date >= &cutoff {
+                *code = "R".into();
+            }
+        }
+        assert_eq!(
+            calculate_payroll(&request)
+                .unwrap()
+                .kesintiler
+                .sendikaAidati,
+            Some(dec!(1700.57))
+        );
+
+        request.dataset.personnel[0]
+            .kesintiler
+            .as_mut()
+            .unwrap()
+            .sabitSendikaAidati = Some(dec!(123));
+        assert_eq!(
+            calculate_payroll(&request)
+                .unwrap()
+                .kesintiler
+                .sendikaAidati,
+            Some(dec!(123))
+        );
+        request.dataset.personnel[0]
+            .kesintiler
+            .as_mut()
+            .unwrap()
+            .sendikaUyesi = Some(false);
+        assert_eq!(
+            calculate_payroll(&request)
+                .unwrap()
+                .kesintiler
+                .sendikaAidati,
+            Some(dec!(0))
+        );
+    }
+}
+
+#[test]
+fn automatic_raised_rates_continue_into_two_copied_following_periods() {
+    let mut request = request(2026, 1);
+    advance(&mut request);
+    let payroll = calculate_payroll_checked(&request).unwrap();
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(308))); // 28 × 11
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1100))
+    );
+    assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(110)));
+    advance(&mut request);
+    let payroll = calculate_payroll_checked(&request).unwrap();
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(341))); // 31 × 11
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1100))
+    );
+    assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(110)));
+}
+
+#[test]
+fn consecutive_scheduled_raises_compound_the_effective_rates() {
+    let mut request = request(2026, 1);
+    request.dataset.zamAylari = vec![2, 3];
+    advance(&mut request);
+    request
+        .dataset
+        .institutionSettings
+        .get_mut(&request.periodId)
+        .unwrap()
+        .gunlukTabanUcret = dec!(121);
+    let payroll = calculate_payroll_checked(&request).unwrap();
+    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(3234))); // 14 × 110 + 14 × 121
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(323.4))); // 14 × 11 + 14 × 12.1
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1155))
+    );
+    assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(115.5)));
+}
+
+#[test]
+fn explicitly_entered_rates_take_precedence_without_being_raised_twice() {
+    let mut request = request(2026, 1);
+    let current = request
+        .dataset
+        .institutionSettings
+        .get_mut(&request.periodId)
+        .unwrap();
+    current.gunlukYemek = dec!(13);
+    current.birlestirilmisSosyalYardim = dec!(1200);
+    current.giyimYardimi = dec!(115);
+    let payroll = calculate_payroll(&request).unwrap();
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(352)));
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1090.32))
+    );
+    assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(106.77)));
+    advance(&mut request);
+    let payroll = calculate_payroll_checked(&request).unwrap();
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(364)));
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1200))
+    );
+    assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(115)));
+    request
+        .dataset
+        .institutionSettings
+        .get_mut(&request.periodId)
+        .unwrap()
+        .gunlukYemek = dec!(12);
+    assert_eq!(
+        calculate_payroll(&request).unwrap().gelirler.yemek,
+        Some(dec!(336))
+    );
+}
+
+#[test]
+fn only_worked_days_earn_meals_but_paid_sick_days_keep_their_correct_wage_rate() {
+    let mut request = request(2026, 1);
+    let attendance = &mut request.dataset.attendances[0];
+    for code in attendance.gunler.values_mut() {
+        *code = "T".into();
+    }
+    attendance.gunler.insert("2026-01-15".into(), "Ç".into());
+    attendance.gunler.insert("2026-02-02".into(), "GÇ".into());
+    attendance.gunler.insert("2026-01-31".into(), "R".into());
+    attendance.gunler.insert("2026-02-01".into(), "R".into());
+    request.dataset.sickLeaveRecords.push(SickLeaveRecord {
+        id: "report".into(),
+        personnelId: request.personnelId.clone(),
+        startDate: "2026-01-31".into(),
+        endDate: "2026-02-01".into(),
+        createdAt: None,
+        updatedAt: None,
+    });
+    let payroll = calculate_payroll(&request).unwrap();
+    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(3240)));
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(21)));
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1045.16))
+    );
+}
+
+#[test]
+fn missing_previous_period_missing_settings_gaps_and_invalid_raise_months_fail_closed() {
+    let original = request(2026, 1);
+    for case in 0..4 {
+        let mut request = original.clone();
+        match case {
+            0 => {
+                request.dataset.periods.remove(0);
+            }
+            1 => {
+                request.dataset.institutionSettings.remove("2025-12");
+            }
+            2 => {
+                request.dataset.periods[0] = period(2025, 11);
+            }
+            _ => {
+                request.dataset.zamAylari = vec![0, 13];
+            }
+        }
+        let error = calculate_payroll(&request)
+            .expect_err("invalid history must not silently use current rates");
+        assert!(matches!(
+            error,
+            DomainError::InvalidData(_) | DomainError::ValidationError(_)
+        ));
+    }
+}
+
+fn retro_request(
+    request: &PayrollCalculationRequest,
+    parameter: RetroParameterKey,
+    value: Decimal,
+) -> RetroCalculationRequest {
+    let mut dataset = request.dataset.clone();
+    dataset.payrolls.push(calculate_payroll(request).unwrap());
+    let period = dataset
+        .periods
+        .iter()
+        .find(|p| p.id == request.periodId)
+        .unwrap();
+    RetroCalculationRequest {
+        batchId: "batch".into(),
+        personnelId: request.personnelId.clone(),
+        paymentDate: period.bitisTarihi.clone(),
+        calculatedAt: request.calculatedAt.clone(),
+        description: None,
+        revision: CompensationRevision {
+            id: "revision".into(),
+            reason: CompensationRevisionReason::COLLECTIVE_AGREEMENT,
+            title: "Raise replay".into(),
+            effectiveFrom: period.baslangicTarihi.clone(),
+            effectiveTo: Some(period.bitisTarihi.clone()),
+            decisionDate: None,
+            signedAt: None,
+            description: None,
+            status: CompensationRevisionStatus::DRAFT,
+            scope: CompensationRevisionScope::ALL_PERSONNEL,
+            personnelIds: vec![],
+            personnelGroup: None,
+            createdAt: None,
+            updatedAt: None,
+        },
+        overrides: vec![CompensationRevisionOverride {
+            id: "override".into(),
+            revisionId: "revision".into(),
+            parameter,
+            value,
+            personnelId: None,
+        }],
+        dataset,
+    }
+}
+
+#[test]
+fn retro_replay_does_not_create_allowance_differences_from_segment_rounding() {
+    let mut request = request(2026, 1);
+    // 54.84419... + 49.68194... rounds to 104.53 as a total,
+    // but rounding the two segments separately incorrectly yields 104.52.
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2025-12")
+        .unwrap()
+        .giyimYardimi = dec!(100.01);
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap()
+        .giyimYardimi = dec!(110.01);
+    let retro = retro_request(&request, RetroParameterKey::GUNLUK_VASITA_YOL, dec!(0));
+    let result = RetroEntitlementEngine::calculate(&retro).unwrap();
+    assert_eq!(
+        calculate_payroll(&request).unwrap().gelirler.giyimYardimi,
+        Some(dec!(104.53))
+    );
+    assert!(
+        result.allocations.iter().all(|a| !matches!(
+            a.earningCode,
+            RetroEarningCode::CLOTHING
+                | RetroEarningCode::SOCIAL_AID
+                | RetroEarningCode::MEAL
+                | RetroEarningCode::SERVICE_INCREMENT
+        )),
+        "unexpected rounding delta: {:?}",
+        result.allocations
+    );
+}
+
+#[test]
+fn retro_absolute_base_wage_revision_does_not_implicitly_reindex_other_income() {
+    let request = request(2026, 1);
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        &request,
+        RetroParameterKey::GUNLUK_TABAN_UCRET,
+        dec!(120),
+    ))
+    .unwrap();
+    for code in [
+        RetroEarningCode::SERVICE_INCREMENT,
+        RetroEarningCode::MEAL,
+        RetroEarningCode::SOCIAL_AID,
+        RetroEarningCode::CLOTHING,
+    ] {
+        assert!(
+            result.allocations.iter().all(|a| a.earningCode != code),
+            "unexpected {code:?} delta: {:?}",
+            result.allocations
+        );
+    }
+    assert_eq!(
+        result
+            .allocations
+            .iter()
+            .find(|a| a.earningCode == RetroEarningCode::BASE_WAGE)
+            .unwrap()
+            .deltaAmount,
+        dec!(480)
+    );
+}
+
+#[test]
+fn retro_replay_after_transition_uses_full_raised_allowances() {
+    let mut request = request(2026, 1);
+    advance(&mut request);
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        &request,
+        RetroParameterKey::GUNLUK_VASITA_YOL,
+        dec!(1),
+    ))
+    .unwrap();
+    for code in [
+        RetroEarningCode::SERVICE_INCREMENT,
+        RetroEarningCode::MEAL,
+        RetroEarningCode::SOCIAL_AID,
+        RetroEarningCode::CLOTHING,
+    ] {
+        assert!(
+            result.allocations.iter().all(|a| a.earningCode != code),
+            "unexpected {code:?} delta: {:?}",
+            result.allocations
+        );
+    }
+}
+
+#[test]
+fn retro_meal_tax_treatment_uses_the_source_period_meal_policy() {
+    for selected in [true, false] {
+        let mut request = request(2026, 1);
+        request
+            .dataset
+            .institutionSettings
+            .get_mut(&request.periodId)
+            .unwrap()
+            .yemekTamGvIstisnaDamgaTabi = selected;
+        let result = RetroEntitlementEngine::calculate(&retro_request(
+            &request,
+            RetroParameterKey::GUNLUK_YEMEK,
+            dec!(350),
+        ))
+        .unwrap();
+        let meal = result
+            .allocations
+            .iter()
+            .find(|allocation| allocation.earningCode == RetroEarningCode::MEAL)
+            .unwrap();
+        assert_eq!(
+            meal.incomeTaxTreatment,
+            if selected {
+                RetroTaxTreatment::EXEMPT
+            } else {
+                RetroTaxTreatment::TAXABLE
+            }
+        );
+        assert_eq!(meal.stampTaxTreatment, RetroTaxTreatment::TAXABLE);
+        let mut dataset = request.dataset.clone();
+        dataset.retroBatches.push(result.batch.clone());
+        dataset.retroAllocations.extend(result.allocations.clone());
+        payroll_core::retro::retro_payment_income(&dataset, &result.batch.id).unwrap();
+    }
+}
+
+#[test]
+fn rate_history_changes_protect_cross_year_payrolls_and_retro_ledgers_without_source_payroll() {
+    let mut request = request(2025, 12);
+    advance(&mut request);
+    let later = calculate_payroll_checked(&request).unwrap();
+    let mut retro = retro_request(&request, RetroParameterKey::GUNLUK_VASITA_YOL, dec!(1));
+    let result = RetroEntitlementEngine::calculate(&retro).unwrap();
+    retro.dataset.payrolls.last_mut().unwrap().status = BordroStatus::FINALIZED;
+    let mut batch = result.batch;
+    batch.status = CompensationRevisionStatus::FINALIZED;
+    retro.dataset.retroBatches.push(batch);
+    retro.dataset.retroAllocations.extend(result.allocations);
+    assert_eq!(later.gelirler.birlestirilmisSosyalYardim, Some(dec!(1100)));
+    assert!(retro
+        .dataset
+        .payrolls
+        .iter()
+        .all(|p| p.donemId != "2025-11"));
+    let impact = evaluate_payroll_invalidation(
+        &retro.dataset,
+        &PayrollMutation::Period {
+            periodId: "2025-11".into(),
+        },
+    )
+    .unwrap();
+    assert!(impact
+        .blockedByFinalized
+        .iter()
+        .any(|p| p.periodId == "2026-01"));
+    assert!(impact
+        .blockedByFinalizedRetroBatches
+        .iter()
+        .any(|id| id == "batch"));
+    let impact = evaluate_payroll_invalidation(
+        &retro.dataset,
+        &PayrollMutation::PeriodInsert {
+            startDate: "2025-11-15".into(),
+            taxYear: 2025,
+            taxMonth: 11,
+        },
+    )
+    .unwrap();
+    assert!(impact
+        .blockedByFinalized
+        .iter()
+        .any(|p| p.periodId == "2026-01"));
+    assert!(impact
+        .blockedByFinalizedRetroBatches
+        .iter()
+        .any(|id| id == "batch"));
+    // Mutable records are invalidated by the same dependency rule.
+    retro.dataset.payrolls.last_mut().unwrap().status = BordroStatus::CALCULATED;
+    retro.dataset.retroBatches.last_mut().unwrap().status = CompensationRevisionStatus::CALCULATED;
+    let impact = evaluate_payroll_invalidation(
+        &retro.dataset,
+        &PayrollMutation::Period {
+            periodId: "2025-11".into(),
+        },
+    )
+    .unwrap();
+    assert!(impact
+        .affectedPayrolls
+        .iter()
+        .any(|p| p.periodId == "2026-01"));
+    assert!(impact.affectedRetroBatches.iter().any(|id| id == "batch"));
+}

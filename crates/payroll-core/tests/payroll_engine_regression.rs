@@ -181,7 +181,16 @@ fn canonical_tax_calculator_matches_the_payroll_engine_final_snapshot() {
         income_total: result.gelirToplam,
         retro_income_tax_exempt: Default::default(),
         retro_stamp_tax_exempt: Default::default(),
-        normal_meal_tax_exemption: meal_exemption,
+        normal_meal_tax_exemption: if settings.yemekTamGvIstisnaDamgaTabi {
+            result.gelirler.yemek.unwrap_or_default()
+        } else {
+            meal_exemption
+        },
+        normal_meal_stamp_tax_exemption: if settings.yemekTamGvIstisnaDamgaTabi {
+            Decimal::ZERO
+        } else {
+            meal_exemption
+        },
         worker_sgk,
         worker_unemployment,
         union_deduction: result.kesintiler.sendikaAidati.unwrap_or_default(),
@@ -1329,6 +1338,12 @@ fn segmented_meal_policy_applies_min_per_segment_and_keeps_sgk_gv_caps_separate(
 #[test]
 fn normal_payroll_uses_segmented_meal_exemptions_for_sgk_gv_and_stamp_tax() {
     let mut request = explicit_normal_request("2026-02-14");
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap()
+        .yemekTamGvIstisnaDamgaTabi = false;
     let stamp_rate = {
         let settings = request
             .dataset
@@ -1370,6 +1385,12 @@ fn normal_payroll_uses_segmented_meal_exemptions_for_sgk_gv_and_stamp_tax() {
 #[test]
 fn normal_payroll_splits_meal_earning_at_wage_raise_before_applying_segment_capacity() {
     let mut request = explicit_normal_request("2026-02-14");
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap()
+        .yemekTamGvIstisnaDamgaTabi = false;
     request.dataset.zamAylari = vec![2];
     let current_settings = request
         .dataset
@@ -1422,4 +1443,118 @@ fn normal_payroll_splits_meal_earning_at_wage_raise_before_applying_segment_capa
             - dec!(7600))
         .max(Decimal::ZERO)
     );
+}
+
+#[test]
+fn normal_payroll_indexes_unchanged_meal_rate_with_wage_raise_percentage() {
+    let previous_period = BordroDonemi {
+        id: "2025-12".into(),
+        yil: 2025,
+        ay: 12,
+        baslangicTarihi: "2025-12-15".into(),
+        bitisTarihi: "2026-01-14".into(),
+        donemAdi: "Aralık 2025".into(),
+        taxYear: 2025,
+        taxMonth: 12,
+    };
+
+    for (after_raise_days, current_meal, expected_meal) in [
+        (2, dec!(300.75), dec!(3952.34)),
+        (10, dec!(300.75), dec!(6528.68)),
+        // A different current-period meal rate is an explicit override.
+        (2, dec!(400), dec!(4108.25)),
+    ] {
+        let mut request = explicit_normal_request("2026-02-14");
+        request.dataset.zamAylari = vec![2];
+        let current_settings = request
+            .dataset
+            .institutionSettings
+            .get_mut("2026-01")
+            .unwrap();
+        current_settings.gunlukTabanUcret = dec!(2616.26);
+        current_settings.gunlukYemek = current_meal;
+
+        let mut previous_settings = current_settings.clone();
+        previous_settings.donemId = previous_period.id.clone();
+        previous_settings.gunlukTabanUcret = dec!(2443.28);
+        previous_settings.gunlukYemek = dec!(300.75);
+        request.dataset.periods.push(previous_period.clone());
+        request
+            .dataset
+            .institutionSettings
+            .insert(previous_period.id.clone(), previous_settings);
+
+        let attendance = request.dataset.attendances.first_mut().unwrap();
+        let mut dates = attendance.gunler.keys().cloned().collect::<Vec<_>>();
+        dates.sort();
+        let (mut before_count, mut after_count) = (0, 0);
+        for date in dates {
+            let should_work = if date.as_str() < "2026-02-01" {
+                let should_work = before_count < 11;
+                before_count += 1;
+                should_work
+            } else {
+                let should_work = after_count < after_raise_days;
+                after_count += 1;
+                should_work
+            };
+            attendance
+                .gunler
+                .insert(date, if should_work { "Ç" } else { "R" }.into());
+        }
+
+        let payroll = calculate_payroll(&request).expect("indexed meal payroll should calculate");
+        assert_eq!(payroll.gelirler.yemek, Some(expected_meal));
+        assert_eq!(
+            payroll.gelirler.birlestirilmisSosyalYardim,
+            Some(dec!(5252.44))
+        );
+        assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(278.32)));
+        assert_eq!(payroll.gelirler.hizmetZammi, Some(dec!(127.29)));
+    }
+}
+
+#[test]
+fn normal_payroll_uses_explicit_raised_social_clothing_and_service_rates_after_cutoff() {
+    let previous_period = BordroDonemi {
+        id: "2025-12".into(),
+        yil: 2025,
+        ay: 12,
+        baslangicTarihi: "2025-12-15".into(),
+        bitisTarihi: "2026-01-14".into(),
+        donemAdi: "Aralık 2025".into(),
+        taxYear: 2025,
+        taxMonth: 12,
+    };
+    let mut request = explicit_normal_request("2026-02-14");
+    request.dataset.zamAylari = vec![2];
+    let current_settings = request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap();
+    current_settings.gunlukTabanUcret = dec!(2616.26);
+    current_settings.birlestirilmisSosyalYardim = dec!(5450.05);
+    current_settings.giyimYardimi = dec!(288.80);
+    current_settings.hizmetZammiBirimi = dec!(26.42);
+
+    let mut previous_settings = current_settings.clone();
+    previous_settings.donemId = previous_period.id.clone();
+    previous_settings.gunlukTabanUcret = dec!(2443.28);
+    previous_settings.birlestirilmisSosyalYardim = dec!(5089.70);
+    previous_settings.giyimYardimi = dec!(269.70);
+    previous_settings.hizmetZammiBirimi = dec!(24.67);
+    request.dataset.periods.push(previous_period.clone());
+    request
+        .dataset
+        .institutionSettings
+        .insert(previous_period.id.clone(), previous_settings);
+
+    let payroll = calculate_payroll(&request).expect("explicit raised allowance payroll");
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(5252.44))
+    );
+    assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(278.33)));
+    assert_eq!(payroll.gelirler.hizmetZammi, Some(dec!(127.30)));
 }

@@ -389,6 +389,7 @@ pub struct CanonicalTaxCalculationInput<'a> {
     pub retro_income_tax_exempt: Decimal,
     pub retro_stamp_tax_exempt: Decimal,
     pub normal_meal_tax_exemption: Decimal,
+    pub normal_meal_stamp_tax_exemption: Decimal,
     pub worker_sgk: Decimal,
     pub worker_unemployment: Decimal,
     pub union_deduction: Decimal,
@@ -461,7 +462,7 @@ pub fn calculate_canonical_tax_state(
     gv.uygulanabilirSigortaGvIndirimi = gv_discount.uygulanabilir_sigorta_indirimi;
 
     let stamp = calculate_monthly_stamp_tax_state(
-        (input.income_total - input.retro_stamp_tax_exempt - input.normal_meal_tax_exemption)
+        (input.income_total - input.retro_stamp_tax_exempt - input.normal_meal_stamp_tax_exemption)
             .max(Decimal::ZERO),
         input.monthly_minimum_gross,
         input.stamp_rate,

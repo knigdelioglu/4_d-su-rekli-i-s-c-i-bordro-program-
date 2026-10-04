@@ -274,6 +274,8 @@ export interface DönemselKurumDegerleri {
   donemId: string;
   gunlukTabanUcret: number;
   gunlukYemek: number;
+  /** Eksik eski kayıtlarda true: yemek tamamen GV istisna, tamamen damgaya tabi. */
+  yemekTamGvIstisnaDamgaTabi?: boolean;
   birlestirilmisSosyalYardim: number;
   gunlukVasitaYol: number;
   giyimYardimi: number;

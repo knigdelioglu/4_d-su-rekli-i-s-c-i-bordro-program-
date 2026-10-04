@@ -26,6 +26,8 @@ interface PersonelListProps {
   onDeletePersonel: (personelId: string) => Promise<void> | void;
   onSelectPersonelForBordro?: (personelId: string) => void;
   isPrimiGruplari?: IsPrimiGrupItem[];
+  gunlukTabanUcret?: number;
+  sendikaAidatiYuzde?: number;
 }
 
 export const PersonelList: React.FC<PersonelListProps> = ({
@@ -34,6 +36,8 @@ export const PersonelList: React.FC<PersonelListProps> = ({
   onDeletePersonel,
   onSelectPersonelForBordro,
   isPrimiGruplari,
+  gunlukTabanUcret,
+  sendikaAidatiYuzde,
 }) => {
   const [search, setSearch] = useState<string>('');
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
@@ -360,6 +364,8 @@ export const PersonelList: React.FC<PersonelListProps> = ({
         personelToEdit={personelToEdit}
         onSave={onSavePersonel}
         isPrimiGruplari={isPrimiGruplari}
+        gunlukTabanUcret={gunlukTabanUcret}
+        sendikaAidatiYuzde={sendikaAidatiYuzde}
       />
     </div>
   );

@@ -901,10 +901,30 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   const raw = parseJsonObject(json);
   const version = getBackupVersion(raw);
 
+  // Compatibility for backups written before the meal-policy setting existed:
+  // preserve the previous tax method for periods with payroll/retro history.
+  // Fresh periods and ordinary settings still default to the checked option.
+  const historicalPeriods = new Set<string>();
+  for (const collection of [raw.bordrolar, raw.retroAllocations]) {
+    if (!Array.isArray(collection)) continue;
+    for (const item of collection) {
+      if (!isRecord(item)) continue;
+      const id = item.donemId ?? item.sourcePeriodId;
+      if (typeof id === 'string') historicalPeriods.add(id);
+    }
+  }
+  if (isRecord(raw.kurumDegerleriMap)) {
+    for (const [id, settings] of Object.entries(raw.kurumDegerleriMap)) {
+      if (historicalPeriods.has(id) && isRecord(settings) && !hasOwn(settings, 'yemekTamGvIstisnaDamgaTabi')) {
+        settings.yemekTamGvIstisnaDamgaTabi = false;
+      }
+    }
+  }
+
   if (version === BACKUP_FORMAT_VERSION) {
     // A versioned V5 backup is current data. It must never reach the legacy
     // repair path, even when its malformed values resemble an older backup.
-    return parseCurrentBrowserSnapshot(json);
+    return parseCurrentBrowserSnapshot(JSON.stringify(raw));
   }
 
   return parseLegacyBackupRecord(raw);

@@ -1035,7 +1035,38 @@ impl MigrationService {
     }
 
     fn parse_payload(payload_json: &str) -> Result<LegacyPayload> {
-        let payload: LegacyPayload = serde_json::from_str(payload_json)
+        let mut raw: serde_json::Value = serde_json::from_str(payload_json)
+            .map_err(|e| DomainError::InvalidData(format!("Geçersiz yedek payload: {}", e)))?;
+        // Explicit compatibility mapping for pre-policy historical backups.
+        // Do not replay recorded financial history with a new default policy.
+        let mut historical_periods = BTreeSet::new();
+        for (collection, field) in [
+            ("bordrolar", "donemId"),
+            ("retroAllocations", "sourcePeriodId"),
+        ] {
+            if let Some(items) = raw.get(collection).and_then(serde_json::Value::as_array) {
+                for item in items {
+                    if let Some(id) = item.get(field).and_then(serde_json::Value::as_str) {
+                        historical_periods.insert(id.to_owned());
+                    }
+                }
+            }
+        }
+        if let Some(settings_map) = raw
+            .get_mut("kurumDegerleriMap")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for (id, settings) in settings_map {
+                if historical_periods.contains(id) {
+                    if let Some(settings) = settings.as_object_mut() {
+                        settings
+                            .entry("yemekTamGvIstisnaDamgaTabi")
+                            .or_insert(serde_json::Value::Bool(false));
+                    }
+                }
+            }
+        }
+        let payload: LegacyPayload = serde_json::from_value(raw)
             .map_err(|e| DomainError::InvalidData(format!("Geçersiz yedek payload: {}", e)))?;
 
         if let Some(version) = payload.backupVersion {

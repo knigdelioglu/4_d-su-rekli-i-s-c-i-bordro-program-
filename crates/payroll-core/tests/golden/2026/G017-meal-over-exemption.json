@@ -245,6 +245,7 @@
           "gunlukTabanUcret": "2000",
           "gunlukVasitaYol": "0",
           "gunlukYemek": "500",
+          "yemekTamGvIstisnaDamgaTabi": false,
           "gunlukYemekIstisnasiGV": "300",
           "gunlukYemekIstisnasiSGK": "300",
           "hizmetZammiBirimi": "0",

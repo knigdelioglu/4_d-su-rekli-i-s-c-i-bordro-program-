@@ -53,12 +53,15 @@ proptest! {
     #[test]
     fn generated_normal_payroll_matches_independent_oracle(
         parameters in simple_normal_parameters(),
+        selected in any::<bool>(),
     ) {
-        let request = simple_normal_request(parameters);
+        let mut request = simple_normal_request(parameters);
+        request.dataset.institutionSettings.get_mut(&request.periodId).unwrap().yemekTamGvIstisnaDamgaTabi = selected;
         let result = calculate_payroll_checked(&request)
             .unwrap_or_else(|error| panic!("generated valid normal request rejected: {error}"));
         let brackets = &request.dataset.annualPayrollParameters[0].gelirVergisiDilimleri;
         let expected = normal_payroll_oracle::calculate(NormalPayrollInput {
+            full_meal_gv_exempt_stamp_taxable: selected,
             hakedis_days: 31,
             worked_days: 31,
             statutory_days: 30,

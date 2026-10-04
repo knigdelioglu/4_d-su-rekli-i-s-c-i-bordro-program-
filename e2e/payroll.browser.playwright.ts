@@ -1437,3 +1437,43 @@ test('saving sick leave automatically marks puantaj as R across 15-14 boundary w
       jul16: 'Ç',
     });
 });
+
+test('meal payroll tax policy defaults checked and persists both selections through reload and recalculation', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  await page.getByTestId('nav-parametrelar').click();
+  const checkbox = page.getByTestId('meal-payroll-tax-policy');
+  await expect(checkbox).toBeChecked();
+  await checkbox.focus();
+  await page.keyboard.press('Space');
+  await expect(checkbox).not.toBeChecked();
+  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
+  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  await page.reload();
+  await expect(checkbox).not.toBeChecked();
+  const periodId = await openPayrollScreen(page);
+  const off = await calculateP1(page, periodId);
+  await page.getByTestId('nav-parametrelar').click();
+  await checkbox.check();
+  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
+  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  await page.reload();
+  await expect(checkbox).toBeChecked();
+  const stored = JSON.parse((await readStoredPayload(page))!) as {
+    kurumDegerleriMap: Record<string, { yemekTamGvIstisnaDamgaTabi: boolean }>;
+    bordrolar: StoredPayroll[];
+  };
+  expect(stored.kurumDegerleriMap[periodId].yemekTamGvIstisnaDamgaTabi).toBe(true);
+  expect(stored.bordrolar.find((payroll) => payroll.id === off.id)?.status).toBe('STALE');
+  await openPayrollScreen(page);
+  const on = await calculateP1(page, periodId);
+  expect(on.gelirToplam).toBe(off.gelirToplam);
+  expect(on.netOdeme).not.toBe(off.netOdeme);
+  await page.screenshot({ path: '/private/tmp/meal-payroll-tax-policy-desktop.png', fullPage: true });
+  await page.getByTestId('nav-parametrelar').click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(checkbox).toBeVisible();
+  const box = await checkbox.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: '/private/tmp/meal-payroll-tax-policy-mobile.png', fullPage: true });
+});

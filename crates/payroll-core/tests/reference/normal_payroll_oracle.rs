@@ -9,6 +9,7 @@ use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Copy)]
 pub struct NormalPayrollInput<'a> {
+    pub full_meal_gv_exempt_stamp_taxable: bool,
     pub hakedis_days: i32,
     pub worked_days: i32,
     pub statutory_days: i32,
@@ -82,9 +83,19 @@ pub fn calculate(input: NormalPayrollInput<'_>) -> NormalPayrollOracle {
         employer_unemployment_rate,
     );
 
+    let gv_meal_exemption = if input.full_meal_gv_exempt_stamp_taxable {
+        meal_income
+    } else {
+        meal_exemptions.gv
+    };
+    let stamp_meal_exemption = if input.full_meal_gv_exempt_stamp_taxable {
+        Decimal::ZERO
+    } else {
+        meal_exemptions.gv
+    };
     let gv_base = round_money(
         (income_total
-            - meal_exemptions.gv
+            - gv_meal_exemption
             - contributions.worker_sgk
             - contributions.worker_unemployment)
             .max(Decimal::ZERO),
@@ -99,7 +110,7 @@ pub fn calculate(input: NormalPayrollInput<'_>) -> NormalPayrollOracle {
         current_progressive_tax(monthly_asgari_gv_base, Decimal::ZERO, input.tax_brackets);
     let gv_exemption = income_tax_exemption(gross_gv, asgari_gv_entitlement, Decimal::ZERO);
     let stamp = stamp_tax(
-        (income_total - meal_exemptions.gv).max(Decimal::ZERO),
+        (income_total - stamp_meal_exemption).max(Decimal::ZERO),
         round_money(input.daily_minimum.max(Decimal::ZERO) * Decimal::from(30)),
         input.stamp_rate_binde / Decimal::from(1000),
         Decimal::ZERO,

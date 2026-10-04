@@ -62,6 +62,7 @@ export const GUN_ISIMLERI_UZUN = [
 export const DEFAULT_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> = {
   gunlukTabanUcret: 2443.28,
   gunlukYemek: 300.75,
+  yemekTamGvIstisnaDamgaTabi: true,
   birlestirilmisSosyalYardim: 5089.70,
   gunlukVasitaYol: 128.93,
   giyimYardimi: 269.70,

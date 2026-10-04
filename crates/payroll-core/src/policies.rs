@@ -161,9 +161,8 @@ fn is_same_tax_year_from_position(
     candidate.taxYear == tax_year && is_from_position(candidate, start_date, tax_year, tax_month)
 }
 
-/// Settings of a period that has no payment events yet only reach later
-/// periods through the per-tax-year chains; a period with events can also
-/// reach the next tax year through its outgoing PEK carry.
+/// Scheduled income history survives a tax-year boundary even without a
+/// source payroll. Existing tax and payment-event dependencies remain intact.
 fn is_period_settings_dependent(
     dataset: &PayrollDatasetSnapshot,
     candidate: &BordroDonemi,
@@ -176,7 +175,22 @@ fn is_period_settings_dependent(
         .payrolls
         .iter()
         .any(|payroll| payroll.donemId == source.id);
-    source_has_events || candidate.id == source.id || candidate.taxYear == source.taxYear
+    source_has_events
+        || candidate.id == source.id
+        || candidate.taxYear == source.taxYear
+        || is_scheduled_income_history_dependent(dataset, candidate, &source.baslangicTarihi)
+}
+
+/// Stored rate equality determines whether an amount is explicit or inferred.
+/// An earlier edit can change that decision as well as the inferred amount,
+/// so scheduled compensation invalidation conservatively follows service
+/// chronology across tax years, independent of payment events.
+fn is_scheduled_income_history_dependent(
+    dataset: &PayrollDatasetSnapshot,
+    candidate: &BordroDonemi,
+    start_date: &str,
+) -> bool {
+    !dataset.zamAylari.is_empty() && candidate.baslangicTarihi.as_str() >= start_date
 }
 
 fn is_person_from_date(candidate: &BordroDonemi, effective_from: &str) -> Result<bool> {
@@ -419,6 +433,7 @@ fn affected_by_mutation(
             taxMonth,
         } => Ok(candidate.is_some_and(|candidate| {
             is_same_tax_year_from_position(candidate, startDate, *taxYear, *taxMonth)
+                || is_scheduled_income_history_dependent(dataset, candidate, startDate)
         })),
         PayrollMutation::PeriodFromPosition {
             startDate,
@@ -602,7 +617,19 @@ fn retro_batch_affected_by_mutation(
         PayrollMutation::TaxYear { taxYear } => {
             retro_batch_payment_tax_year_matches(batch, *taxYear)
         }
-        PayrollMutation::Period { periodId } => Ok(same_source_period(periodId)),
+        PayrollMutation::Period { periodId } => {
+            let source = require_period(index, dataset, periodId)?;
+            if same_source_period(periodId) {
+                return Ok(true);
+            }
+            retro_batch_source_period_matches(index, dataset, batch, |period| {
+                Ok(is_scheduled_income_history_dependent(
+                    dataset,
+                    period,
+                    &source.baslangicTarihi,
+                ))
+            })
+        }
         PayrollMutation::PeriodFromPosition {
             startDate,
             taxYear,
@@ -615,9 +642,10 @@ fn retro_batch_affected_by_mutation(
             taxYear,
             taxMonth,
         } => retro_batch_source_period_matches(index, dataset, batch, |period| {
-            Ok(is_same_tax_year_from_position(
-                period, startDate, *taxYear, *taxMonth,
-            ))
+            Ok(
+                is_same_tax_year_from_position(period, startDate, *taxYear, *taxMonth)
+                    || is_scheduled_income_history_dependent(dataset, period, startDate),
+            )
         }),
         PayrollMutation::PersonFromDate {
             personnelId,

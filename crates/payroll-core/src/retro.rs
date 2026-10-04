@@ -100,6 +100,23 @@ pub fn retro_earning_policy(code: RetroEarningCode) -> RetroEarningPolicy {
     }
 }
 
+fn retro_period_earning_policy(
+    dataset: &PayrollDatasetSnapshot,
+    period_id: &str,
+    code: RetroEarningCode,
+) -> Result<RetroEarningPolicy> {
+    let mut policy = retro_earning_policy(code);
+    if code == RetroEarningCode::MEAL {
+        let settings = dataset.institutionSettings.get(period_id).ok_or_else(|| {
+            DomainError::InvalidData(format!("{period_id} source yemek vergi ayarı eksik."))
+        })?;
+        if settings.yemekTamGvIstisnaDamgaTabi {
+            policy.incomeTaxTreatment = RetroTaxTreatment::EXEMPT;
+        }
+    }
+    Ok(policy)
+}
+
 fn round2(value: Decimal) -> Decimal {
     value.round_dp(2)
 }
@@ -637,12 +654,6 @@ fn calculate_segment_income(
     let (mut income, _) =
         calculate_gunluk_gelirler_from_puantaj(summary, settings, Some(&personnel.grup))?;
     incrementally_add_paid_sick_wage(&mut income, paid_sick_days, settings.gunlukTabanUcret);
-    income.birlestirilmisSosyalYardim =
-        Some(round2(settings.birlestirilmisSosyalYardim * fixed_weight));
-    income.giyimYardimi = Some(round2(settings.giyimYardimi * fixed_weight));
-    income.hizmetZammi = Some(round2(
-        Decimal::from(personnel.hizmetYili) * settings.hizmetZammiBirimi * fixed_weight,
-    ));
     income.ekOdeme = settings.ekOdeme.map(|value| round2(value * fixed_weight));
     income.digerGelir = settings
         .digerGelirVarsayilan
@@ -691,40 +702,26 @@ fn target_income_for_period(
         .collect();
     let paid_sick_dates = calculate_paid_sick_dates_from_records(&sick_records, period)?;
 
-    let historical_settings = dataset
-        .institutionSettings
-        .get(&period.id)
-        .ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "{} dönemi tarihsel kurum ayarları bulunamadı.",
-                period.id
-            ))
-        })?
-        .clone();
+    let transition = crate::raise_transition::resolve_raise_transition(dataset, period)?;
+    let historical_settings = transition.current;
     crate::calculations::validate_kurum_degerleri_for_payroll(&historical_settings)?;
     let statutory_snapshot = source_statutory_snapshot(index, dataset, &personnel.id, period)?;
-    // Replay the same scheduled daily-rate split as the original NORMAL.
-    // Monthly allowances remain owned by this period's settings.
-    let raise_date = crate::payroll_engine::find_zam_tarihi(period, &dataset.zamAylari)?;
+    let raise_date = transition.cutoff;
     let before_raise_settings = if raise_date.is_some() {
-        let previous = crate::payroll_engine::find_previous_work_period(dataset, period)?
-            .ok_or_else(|| {
-                DomainError::InvalidData(format!("{} retro zam öncesi dönem eksik.", period.id))
-            })?;
-        let previous = dataset
-            .institutionSettings
-            .get(&previous.id)
-            .ok_or_else(|| {
-                DomainError::InvalidData(format!(
-                    "{} retro zam öncesi kurum ayarları eksik.",
-                    period.id
-                ))
-            })?;
-        crate::calculations::validate_kurum_degerleri_for_payroll(previous)?;
+        let previous = transition.previous.ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "{} retro zam öncesi kurum ayarları eksik.",
+                period.id
+            ))
+        })?;
+        crate::calculations::validate_kurum_degerleri_for_payroll(&previous)?;
         let mut baseline = historical_settings.clone();
         baseline.gunlukTabanUcret = previous.gunlukTabanUcret;
         baseline.gunlukYemek = previous.gunlukYemek;
+        baseline.birlestirilmisSosyalYardim = previous.birlestirilmisSosyalYardim;
         baseline.gunlukVasitaYol = previous.gunlukVasitaYol;
+        baseline.giyimYardimi = previous.giyimYardimi;
+        baseline.hizmetZammiBirimi = previous.hizmetZammiBirimi;
         baseline.isPrimiGruplari = previous.isPrimiGruplari.clone();
         baseline.geceCalismaPrimiYuzde = previous.geceCalismaPrimiYuzde;
         baseline.geceCalismaTatiliPrimiYuzde = previous.geceCalismaTatiliPrimiYuzde;
@@ -816,9 +813,17 @@ fn target_income_for_period(
     }
     let mut target = GelirKalemleri::default();
     let mut meal_segments = Vec::new();
+    let mut social_numerator = Decimal::ZERO;
+    let mut clothing_numerator = Decimal::ZERO;
+    let mut service_numerator = Decimal::ZERO;
     for segment in segments {
         if segment.days > 0 {
-            let weight = Decimal::from(segment.days) / Decimal::from(total_weight_days);
+            let days = Decimal::from(segment.days);
+            social_numerator += segment.settings.birlestirilmisSosyalYardim * days;
+            clothing_numerator += segment.settings.giyimYardimi * days;
+            service_numerator +=
+                Decimal::from(personnel.hizmetYili) * segment.settings.hizmetZammiBirimi * days;
+            let weight = days / Decimal::from(total_weight_days);
             let segment_income = calculate_segment_income(
                 &segment.summary,
                 segment.paid_sick_days,
@@ -847,6 +852,10 @@ fn target_income_for_period(
             }
         }
     }
+    let total_days = Decimal::from(total_weight_days);
+    target.birlestirilmisSosyalYardim = Some(round2(social_numerator / total_days));
+    target.giyimYardimi = Some(round2(clothing_numerator / total_days));
+    target.hizmetZammi = Some(round2(service_numerator / total_days));
     // Existing Tediye/TİS values are event-specific and are not generated by
     // the normal attendance formula. Their target is carried forward unless
     // this revision explicitly supplies a replacement value.
@@ -1056,7 +1065,11 @@ fn validate_batch_ledger(
                 allocation.id
             )));
         }
-        let policy = retro_earning_policy(allocation.earningCode);
+        let policy = retro_period_earning_policy(
+            dataset,
+            &allocation.sourcePeriodId,
+            allocation.earningCode,
+        )?;
         if allocation.sgkTreatment != policy.sgkTreatment
             || allocation.incomeTaxTreatment != policy.incomeTaxTreatment
             || allocation.stampTaxTreatment != policy.stampTaxTreatment
@@ -2503,7 +2516,7 @@ impl RetroEntitlementEngine {
                 if delta == Decimal::ZERO {
                     continue;
                 }
-                let policy = retro_earning_policy(code);
+                let policy = retro_period_earning_policy(&request.dataset, &period.id, code)?;
                 allocations.push(RetroAllocation {
                     id: format!("{}_{}_{code:?}", request.batchId, period.id),
                     batchId: request.batchId.clone(),

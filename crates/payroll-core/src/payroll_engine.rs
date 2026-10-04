@@ -9,6 +9,9 @@
 use crate::calculations::*;
 use crate::index::PayrollDatasetIndex;
 use crate::models::*;
+use crate::raise_transition::{
+    find_zam_tarihi, resolve_raise_transition, weighted_period_income_amount,
+};
 use crate::retro::{
     retro_payable_allocation_amount, retro_payable_settlement_amount,
     retro_payment_income_with_index,
@@ -79,10 +82,6 @@ fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> 
         }
     }
     Ok(())
-}
-
-fn hakedis_gun(summary: &PuantajOzeti) -> i32 {
-    summary.c + summary.t + summary.g + summary.i + summary.gc + summary.gct
 }
 
 #[derive(Clone)]
@@ -683,27 +682,6 @@ fn add_paid_sick_wage(field: &mut Option<Decimal>, paid_days: i32, daily_wage: D
     *field = Some(round2(
         current + round2(daily_wage * Decimal::from(paid_days)),
     ));
-}
-
-pub(crate) fn find_zam_tarihi(
-    period: &BordroDonemi,
-    zam_aylari: &[i32],
-) -> Result<Option<NaiveDate>> {
-    let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
-    let end = parse_period_date(&period.bitisTarihi, &period.id, "bitiş")?;
-    let mut result = None;
-    for year in (start.year() - 1)..=(end.year() + 1) {
-        for month in zam_aylari {
-            let Some(candidate) = NaiveDate::from_ymd_opt(year, *month as u32, 1) else {
-                continue;
-            };
-            if candidate >= start && candidate <= end {
-                result =
-                    Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
-            }
-        }
-    }
-    Ok(result)
 }
 
 fn split_puantaj_by_zam_tarihi(
@@ -3067,7 +3045,16 @@ fn calculate_payroll_with_index(
             ))
         })?
         .clone();
-    let settings = effective_statutory_settings(&raw_settings)?;
+    let raise_transition = if is_normal_accrual {
+        Some(resolve_raise_transition(dataset, &period)?)
+    } else {
+        None
+    };
+    let income_settings = raise_transition
+        .as_ref()
+        .map(|transition| &transition.current)
+        .unwrap_or(&raw_settings);
+    let settings = effective_statutory_settings(income_settings)?;
     validate_kurum_degerleri_for_payroll(&settings)?;
     validate_statutory_segments_for_period(&period, &settings)?;
 
@@ -3155,28 +3142,19 @@ fn calculate_payroll_with_index(
         // salary, meal, road, premium, allowance, or service-year income.
         (income, None)
     };
-    let mut effective_settings = settings.clone();
     let mut previous_settings_for_meal: Option<DonemselKurumDegerleri> = None;
 
     if is_normal_accrual {
         if let Some(cutoff) = raise_date {
-            let previous_period =
-                find_previous_work_period(dataset, &period)?.ok_or_else(|| {
-                    DomainError::InvalidData(format!(
-                        "{} dönemi zam öncesi dönem ayarı bulunamadı.",
-                        period.id
-                    ))
-                })?;
-            let previous_settings = dataset
-                .institutionSettings
-                .get(&previous_period.id)
-                .ok_or_else(|| {
-                    DomainError::InvalidData(format!(
-                        "{} dönemi zam öncesi kurum ayarları bulunamadı.",
-                        previous_period.id
-                    ))
-                })?
-                .clone();
+            let transition = raise_transition
+                .as_ref()
+                .ok_or_else(|| DomainError::InvalidData("Zam geçişi çözümlenemedi.".into()))?;
+            let previous_settings = transition.previous.clone().ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "{} dönemi zam öncesi kurum ayarları bulunamadı.",
+                    period.id
+                ))
+            })?;
             validate_kurum_degerleri_for_payroll(&previous_settings)?;
             let (before_income, before_is_primi) = calculate_gunluk_gelirler_from_puantaj(
                 &before_summary,
@@ -3193,6 +3171,7 @@ fn calculate_payroll_with_index(
                 .filter(|date| **date < cutoff)
                 .count() as i32;
             let paid_after = paid_sick_days - paid_before;
+            let (period_before_days, period_after_days) = transition.calendar_days()?;
 
             let mut base_wage =
                 sum_income_field(before_income.tabanBrutAylik, after_income.tabanBrutAylik);
@@ -3214,19 +3193,26 @@ fn calculate_payroll_with_index(
                 before_income.geceCalismasiTatiliUcreti,
                 after_income.geceCalismasiTatiliUcreti,
             );
+            income.birlestirilmisSosyalYardim = Some(weighted_period_income_amount(
+                previous_settings.birlestirilmisSosyalYardim,
+                settings.birlestirilmisSosyalYardim,
+                period_before_days,
+                period_after_days,
+            )?);
+            income.giyimYardimi = Some(weighted_period_income_amount(
+                previous_settings.giyimYardimi,
+                settings.giyimYardimi,
+                period_before_days,
+                period_after_days,
+            )?);
+            income.hizmetZammi = Some(weighted_period_income_amount(
+                Decimal::from(person.hizmetYili) * previous_settings.hizmetZammiBirimi,
+                Decimal::from(person.hizmetYili) * settings.hizmetZammiBirimi,
+                period_before_days,
+                period_after_days,
+            )?);
             is_primi_detail = Some(merge_is_primi_details(&before_is_primi, &after_is_primi));
 
-            let before_paid_days = hakedis_gun(&before_summary) + paid_before;
-            let after_paid_days = hakedis_gun(&after_summary) + paid_after;
-            let total_paid_days = before_paid_days + after_paid_days;
-            if total_paid_days > 0 {
-                effective_settings.gunlukTabanUcret = round2(
-                    (previous_settings.gunlukTabanUcret * Decimal::from(before_paid_days)
-                        + settings.gunlukTabanUcret * Decimal::from(after_paid_days))
-                    .checked_div(Decimal::from(total_paid_days))
-                    .unwrap_or(settings.gunlukTabanUcret),
-                );
-            }
             previous_settings_for_meal = Some(previous_settings);
         } else {
             add_paid_sick_wage(
@@ -3271,10 +3257,12 @@ fn calculate_payroll_with_index(
         previous_cumulative_asgari_gv,
         tax_brackets: &annual_parameters.gelirVergisiDilimleri,
     };
+    // Union dues use the current (raised) daily wage. Only earned income
+    // is split across old/new attendance dates; the deduction basis is not averaged.
     let (mut deductions, mut pek_detail, mut next_devreden) = if is_normal_accrual {
         calculate_statutory_contributions_with_month_to_date_and_devreden_state(
             &income,
-            Some(&effective_settings),
+            Some(&settings),
             Some(&person),
             Some(&summary),
             &tax_inputs,
@@ -3294,7 +3282,7 @@ fn calculate_payroll_with_index(
             calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
                 &retro_payment_pek_income,
                 None,
-                Some(&effective_settings),
+                Some(&settings),
                 incoming_devreden,
                 Some(&statutory_snapshot),
                 month_to_date_pek,
@@ -3311,11 +3299,11 @@ fn calculate_payroll_with_index(
             allocations.iter().fold(Decimal::ZERO, |sum, allocation| {
                 sum + allocation.workerUnemploymentDelta
             });
-        let sgk_rate = effective_settings
+        let sgk_rate = settings
             .sgkIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
             / dec!(100);
-        let unemployment_rate = effective_settings
+        let unemployment_rate = settings
             .issizlikIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("İşsizlik işçi oranı eksik.".into()))?
             / dec!(100);
@@ -3334,7 +3322,7 @@ fn calculate_payroll_with_index(
                             .iter()
                             .map(|allocation| allocation.retroPekDelta)
                             .sum::<Decimal>(),
-                    &effective_settings,
+                    &settings,
                     Some(&person),
                     false,
                 ),
@@ -3348,7 +3336,7 @@ fn calculate_payroll_with_index(
             calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
                 &income,
                 None,
-                Some(&effective_settings),
+                Some(&settings),
                 incoming_devreden,
                 Some(&statutory_snapshot),
                 month_to_date_pek,
@@ -3358,16 +3346,16 @@ fn calculate_payroll_with_index(
                     meal_exemption: None,
                 },
             )?;
-        let sgk_rate = effective_settings
+        let sgk_rate = settings
             .sgkIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("SGK işçi oranı eksik.".into()))?
             / dec!(100);
-        let unemployment_rate = effective_settings
+        let unemployment_rate = settings
             .issizlikIsciOraniYuzde
             .ok_or_else(|| DomainError::InvalidData("İşsizlik işçi oranı eksik.".into()))?
             / dec!(100);
         let worker_pek = pek_detail.primMatrahi;
-        let bes = calculate_oks_deduction(worker_pek, &effective_settings, Some(&person), false);
+        let bes = calculate_oks_deduction(worker_pek, &settings, Some(&person), false);
         (
             KesintiKalemleri {
                 isciSgkPrimi: Some(round_sgk_amount(worker_pek * sgk_rate)),
@@ -3393,21 +3381,29 @@ fn calculate_payroll_with_index(
     );
     let income_total = calculate_gelir_toplam(&income);
 
-    let stamp_rate = effective_settings
+    let stamp_rate = settings
         .damgaVergisiOraniBinde
         .ok_or_else(|| DomainError::InvalidData("Damga vergisi oranı eksik.".into()))?
         / dec!(1000);
     let monthly_minimum = round2(statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30));
     let same_month_stamp_used = same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?;
-    // GVK 23/8 meal exemption also excludes this amount from stamp tax
-    // (322 numbered Income Tax Communiqué, article 4/6). Keep it separate
-    // from the shared monthly minimum-wage exemption balance.
+    // The institution's selected payroll policy is separate from statutory
+    // daily caps and must not change the SGK meal exemption or frozen snapshot.
     let normal_meal_tax_exemption = if is_normal_accrual {
-        normal_meal_exemptions
-            .gv
-            .min(income.yemek.unwrap_or_default())
+        if settings.yemekTamGvIstisnaDamgaTabi {
+            income.yemek.unwrap_or_default()
+        } else {
+            normal_meal_exemptions
+                .gv
+                .min(income.yemek.unwrap_or_default())
+        }
     } else {
         Decimal::ZERO
+    };
+    let normal_meal_stamp_tax_exemption = if settings.yemekTamGvIstisnaDamgaTabi {
+        Decimal::ZERO
+    } else {
+        normal_meal_tax_exemption
     };
 
     let sgk_rate = settings
@@ -3463,6 +3459,7 @@ fn calculate_payroll_with_index(
         retro_income_tax_exempt,
         retro_stamp_tax_exempt,
         normal_meal_tax_exemption,
+        normal_meal_stamp_tax_exemption,
         worker_sgk: deductions.isciSgkPrimi.unwrap_or_default(),
         worker_unemployment: deductions.isciIssizlikPrimi.unwrap_or_default(),
         union_deduction: deductions.sendikaAidati.unwrap_or_default(),

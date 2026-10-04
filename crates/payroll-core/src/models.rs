@@ -885,6 +885,10 @@ pub struct DonemselKurumDegerleri {
     pub donemId: String,
     pub gunlukTabanUcret: Decimal,
     pub gunlukYemek: Decimal,
+    /// Kurum bordrosu tercihi: yemek tamamen GV istisna, tamamen DV'ye tabi.
+    /// Alanı içermeyen eski ayarlar da varsayılan olarak bu tercihi kullanır.
+    #[serde(default = "default_meal_payroll_tax_policy")]
+    pub yemekTamGvIstisnaDamgaTabi: bool,
     pub birlestirilmisSosyalYardim: Decimal,
     pub gunlukVasitaYol: Decimal,
     pub giyimYardimi: Decimal,
@@ -934,6 +938,10 @@ pub struct DonemselKurumDegerleri {
     pub issizlikIsverenOraniYuzde: Option<Decimal>,
 }
 
+fn default_meal_payroll_tax_policy() -> bool {
+    true
+}
+
 impl Default for DonemselKurumDegerleri {
     fn default() -> Self {
         use rust_decimal_macros::dec;
@@ -941,6 +949,7 @@ impl Default for DonemselKurumDegerleri {
             donemId: "".to_string(),
             gunlukTabanUcret: dec!(2443.28),
             gunlukYemek: dec!(300.75),
+            yemekTamGvIstisnaDamgaTabi: true,
             birlestirilmisSosyalYardim: dec!(5089.70),
             gunlukVasitaYol: dec!(128.93),
             giyimYardimi: dec!(269.70),

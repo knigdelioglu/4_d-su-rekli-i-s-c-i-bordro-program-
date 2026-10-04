@@ -20,6 +20,7 @@ pub mod index;
 pub mod notices;
 pub mod payroll_engine;
 pub mod policies;
+pub(crate) mod raise_transition;
 pub mod retro;
 
 pub use calculations::*;

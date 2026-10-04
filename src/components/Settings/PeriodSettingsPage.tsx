@@ -71,6 +71,7 @@ const createParamsForm = (
   donemId: string
 ): DönemselKurumDegerleri => ({
   ...withVisiblePeriodLegalDefaults(settings, donemId),
+  yemekTamGvIstisnaDamgaTabi: settings.yemekTamGvIstisnaDamgaTabi ?? true,
   isPrimiGruplari: settings.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
   tediyeListesi: sanitizeTediyeList(settings.tediyeListesi),
   tisIkramiyeListesi:

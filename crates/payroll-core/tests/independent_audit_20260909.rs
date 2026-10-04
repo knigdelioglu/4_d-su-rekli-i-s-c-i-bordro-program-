@@ -21,6 +21,11 @@ fn export_wasm_case(name: &str, request: &PayrollCalculationRequest, result: &Bo
 #[test]
 fn audit_retro_meal_must_not_reuse_payment_month_meal_exemption() {
     let mut req = request();
+    // This audit exercises the daily-limited meal policy.
+    req.dataset
+        .institutionSettings
+        .values_mut()
+        .for_each(|settings| settings.yemekTamGvIstisnaDamgaTabi = false);
     let original = calculate_payroll_checked(&req).unwrap();
     req.dataset.payrolls.push(original);
     req.periodId = "payment".into();
@@ -316,6 +321,11 @@ fn audit_serialized_calculation_is_exact_and_repeatable() {
 #[test]
 fn audit_mixed_income_personal_deductions_and_tax_discount_oracle() {
     let mut req = request();
+    // This audit exercises the daily-limited meal policy.
+    req.dataset
+        .institutionSettings
+        .values_mut()
+        .for_each(|settings| settings.yemekTamGvIstisnaDamgaTabi = false);
     req.dataset.personnel[0].hizmetYili = 3;
     req.dataset.personnel[0].kesintiler = Some(serde_json::from_value(json!({
         "sendikaUyesi":true, "sabitSendikaAidati":"1000", "besUyesi":true,

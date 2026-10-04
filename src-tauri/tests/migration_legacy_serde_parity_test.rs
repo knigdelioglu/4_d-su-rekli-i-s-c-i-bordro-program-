@@ -1053,6 +1053,28 @@ fn native_reference_backup_restores_calculated_entitlement_with_stale_payment_ex
 ) -> Result<(), Box<dyn std::error::Error>> {
     let payload = include_str!("../../tests/fixtures/session3-reference.json");
     let mut expected: Value = serde_json::from_str(payload)?;
+    // Pre-policy backups retain their recorded daily-limited method explicitly.
+    let historical_periods = expected["bordrolar"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|payroll| payroll["donemId"].as_str().map(str::to_owned))
+        .chain(
+            expected["retroAllocations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|allocation| allocation["sourcePeriodId"].as_str().map(str::to_owned)),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
+    for (id, settings) in expected["kurumDegerleriMap"].as_object_mut().unwrap() {
+        if historical_periods.contains(id) {
+            settings["yemekTamGvIstisnaDamgaTabi"] = false.into();
+        } else {
+            settings["yemekTamGvIstisnaDamgaTabi"] = true.into();
+        }
+    }
+
     let mut conn = create_in_memory_connection()?;
 
     MigrationService::replace_backup_data(&mut conn, payload)?;

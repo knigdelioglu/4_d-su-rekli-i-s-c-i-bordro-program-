@@ -3295,6 +3295,15 @@ export const RUST_STRUCT_CONTRACT = {
         "decimal": true,
         "nestedTypes": []
       },
+      "yemekTamGvIstisnaDamgaTabi": {
+        "rustName": "yemekTamGvIstisnaDamgaTabi",
+        "rustType": "bool",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
       "birlestirilmisSosyalYardim": {
         "rustName": "birlestirilmisSosyalYardim",
         "rustType": "Decimal",

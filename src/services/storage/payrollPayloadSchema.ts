@@ -560,6 +560,7 @@ export function validateInstitutionSettings(
 ): asserts value is PayrollStorageDto['kurumDegerleriMap'][string] {
   assertRecord(value, path);
   requiredString(value, 'donemId', path);
+  optionalBoolean(value, 'yemekTamGvIstisnaDamgaTabi', path);
   [
     'gunlukTabanUcret',
     'gunlukYemek',
@@ -1005,9 +1006,11 @@ function assertRetroLedgerAmounts(payload: PayrollStorageDto): void {
   const allocationsByBatch = new Map<string, Array<{ index: number; allocation: PayrollStorageDto['retroAllocations'][number] }>>();
   payload.retroAllocations.forEach((allocation, index) => {
     const policy = RETRO_POLICY_BY_EARNING_CODE[allocation.earningCode];
+    const fullMealExemption = allocation.earningCode === 'MEAL'
+      && (payload.kurumDegerleriMap[allocation.sourcePeriodId]?.yemekTamGvIstisnaDamgaTabi ?? true);
     if (
       allocation.sgkTreatment !== policy.sgkTreatment ||
-      allocation.incomeTaxTreatment !== policy.taxTreatment ||
+      allocation.incomeTaxTreatment !== (fullMealExemption ? 'EXEMPT' : policy.taxTreatment) ||
       allocation.stampTaxTreatment !== policy.taxTreatment
     ) {
       fail(

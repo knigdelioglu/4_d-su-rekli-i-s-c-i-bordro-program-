@@ -6,7 +6,14 @@ use rust_decimal_macros::dec;
 
 #[test]
 fn audit_meal_is_exempt_from_stamp_as_well_as_income_tax() {
-    let result = calculate_payroll_checked(&support::request()).unwrap();
+    let mut request = support::request();
+    request
+        .dataset
+        .institutionSettings
+        .get_mut(&request.periodId)
+        .unwrap()
+        .yemekTamGvIstisnaDamgaTabi = false;
+    let result = calculate_payroll_checked(&request).unwrap();
     assert_eq!(result.gelirToplam, dec!(68200));
     assert_eq!(result.pekDetay.as_ref().unwrap().primMatrahi, dec!(62000));
     assert_eq!(result.gvDetay.as_ref().unwrap().cariGvMatrahi, dec!(52700));
@@ -335,8 +342,12 @@ fn audit_retro_noop_after_split_raise_does_not_create_phantom_wages() {
     let original = calculate_payroll_checked(&source).unwrap();
     assert_eq!(original.gelirler.tabanBrutAylik, Some(dec!(45000)));
     source.dataset.payrolls.push(original);
+    // Meal is now indexed with the scheduled wage raise (200 -> 400).
+    // An absolute meal override of 200 would be a real reduction, so the
+    // no-op revision uses the unchanged road rate and still checks all income.
+    assert_eq!(source.dataset.payrolls[0].gelirler.yemek, Some(dec!(9000)));
     let revision: CompensationRevision = serde_json::from_value(serde_json::json!({
-        "id":"noop-revision","reason":"COLLECTIVE_AGREEMENT","title":"No change to meal",
+        "id":"noop-revision","reason":"COLLECTIVE_AGREEMENT","title":"No change to road",
         "effectiveFrom":"2026-01-15","effectiveTo":"2026-02-14","status":"DRAFT",
         "scope":"SELECTED_PERSONNEL","personnelIds":["audit"]
     }))
@@ -347,8 +358,8 @@ fn audit_retro_noop_after_split_raise_does_not_create_phantom_wages() {
         overrides: vec![CompensationRevisionOverride {
             id: "noop-override".into(),
             revisionId: "noop-revision".into(),
-            parameter: RetroParameterKey::GUNLUK_YEMEK,
-            value: dec!(200),
+            parameter: RetroParameterKey::GUNLUK_VASITA_YOL,
+            value: dec!(0),
             personnelId: None,
         }],
         personnelId: "audit".into(),

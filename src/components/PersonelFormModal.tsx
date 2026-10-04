@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from 'react';
 import { User, Save, X, CreditCard, Shield, Briefcase, Calendar, Layers } from 'lucide-react';
 import { IsPrimiGrupItem, Personel } from '../types/payroll';
-import { getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
+import { DEFAULT_PRODUCTION_KURUM_DEGERLERI, formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
 import { formatPersonnelSaveError } from '../utils/personnelError';
 
 interface PersonelFormModalProps {
@@ -14,6 +14,8 @@ interface PersonelFormModalProps {
   personelToEdit?: Personel | null;
   onSave: (personel: Personel) => Promise<void> | void;
   isPrimiGruplari?: IsPrimiGrupItem[];
+  gunlukTabanUcret?: number;
+  sendikaAidatiYuzde?: number;
 }
 
 type PersonelFormSection = 'basic' | 'deductions' | 'advanced';
@@ -24,10 +26,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   personelToEdit,
   onSave,
   isPrimiGruplari,
+  gunlukTabanUcret,
+  sendikaAidatiYuzde,
 }) => {
   // An explicit empty period group list is a real configuration state. Do not
   // replace it with demo groups; the institution must define its own groups.
   const groups = isPrimiGruplari ?? [];
+  const dailyWage = gunlukTabanUcret ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukTabanUcret;
+  const unionRate = sendikaAidatiYuzde ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.sendikaAidatiYuzde;
+  const calculatedUnionFee = Math.round((dailyWage * unionRate) / 100 * 100) / 100;
 
   const [formData, setFormData] = useState<Partial<Personel>>({
     tcNo: '',
@@ -416,7 +423,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     <div>
                       <span className="font-bold text-slate-900">Sendika Üyesi</span>
                       <p className="text-[10px] text-indigo-600 font-medium">
-                        Varsayılan: Dönem parametrelerinden çekilir (1.588,13 TL)
+                        Otomatik tutar: {formatTL(calculatedUnionFee)} / gün (günlük ücret × %{unionRate})
                       </p>
                     </div>
                   </label>
@@ -429,7 +436,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                       <input
                         type="number"
                         step="0.01"
-                        placeholder="Boş kalırsa dönem parametresini kullanır"
+                        placeholder="Boş bırakın: otomatik % hesabı"
                         value={formData.kesintiler?.sabitSendikaAidati ?? ''}
                         onChange={(e) =>
                           setFormData({
@@ -442,6 +449,11 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                         }
                         className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500"
                       />
+                      {(formData.kesintiler?.sabitSendikaAidati ?? 0) > 0 && (
+                        <p className="mt-1 text-[10px] text-amber-700">
+                          Kişiye özel sabit tutar otomatik hesabı geçersiz kılar. Otomatik % hesabı için alanı sıfırlayın.
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>

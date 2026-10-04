@@ -718,6 +718,8 @@ export default function App() {
                     onDeletePersonel={handleDeletePersonel}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}
                     isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
+                    gunlukTabanUcret={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.gunlukTabanUcret : undefined}
+                    sendikaAidatiYuzde={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.sendikaAidatiYuzde : undefined}
                   />
                 )}
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Award, Percent, Plus, Save, ShieldAlert, Trash2, Check } from 'lucide-react';
 import type { BordroDonemi, DönemselKurumDegerleri } from '../../types/payroll';
-import { formatDateTR } from '../../utils/payrollPresentation';
+import { formatDateTR, formatTL } from '../../utils/payrollPresentation';
 
 type StatutoryField =
   | 'effectiveFrom'
@@ -33,6 +33,11 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
   ) => {
     setParamsForm((current) => ({ ...current, [field]: value }));
   };
+
+  const sendikaOrani = paramsForm.sendikaAidatiYuzde ?? 65;
+  const otomatikSendikaAidati = Math.round(
+    (paramsForm.gunlukTabanUcret * sendikaOrani) / 100 * 100
+  ) / 100;
 
   const addStatutorySegment = () => {
     setParamsForm((current) => ({
@@ -214,7 +219,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Günlük çıplak ücret × %65 (2.443,28 × 0,65 = 1.588,13 TL)
+                Günlük çıplak ücret × %{sendikaOrani} = {formatTL(otomatikSendikaAidati)} / gün
               </span>
             </div>
 
@@ -231,8 +236,13 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                0 kalırsa günlük çıplak ücretin %65&apos;i uygulanır
+                0 kalırsa günlük çıplak ücretin %{sendikaOrani}&apos;i ({formatTL(otomatikSendikaAidati)} / gün) uygulanır
               </span>
+              {(paramsForm.sabitSendikaAidati ?? 0) > 0 && (
+                <span className="text-[11px] text-amber-700 mt-1 block">
+                  Sabit tutar {formatTL(paramsForm.sabitSendikaAidati ?? 0)} / gün olarak girilmiş; bu değer otomatik hesabı geçersiz kılar.
+                </span>
+              )}
             </div>
 
             <div>

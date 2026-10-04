@@ -57,6 +57,7 @@ export const DEFAULT_STATUTORY_PERIOD_PARAMETERS = {
   | 'donemId'
   | 'gunlukTabanUcret'
   | 'gunlukYemek'
+  | 'yemekTamGvIstisnaDamgaTabi'
   | 'birlestirilmisSosyalYardim'
   | 'gunlukVasitaYol'
   | 'giyimYardimi'
@@ -106,6 +107,7 @@ export function ensureAnnualPayrollParameters(
 export const DEFAULT_PRODUCTION_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> = {
   gunlukTabanUcret: 0,
   gunlukYemek: 0,
+  yemekTamGvIstisnaDamgaTabi: true,
   birlestirilmisSosyalYardim: 0,
   gunlukVasitaYol: 0,
   giyimYardimi: 0,

@@ -267,7 +267,9 @@ fn paid_sick_wage_uses_correct_rate_on_each_side_of_raise_date(
     // From 1 April: 1 institution-paid sick + 1 worked day = 2 x 2,000.
     assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(6000)));
     assert_eq!(payroll.odenenRaporluGun, Some(2));
-    assert_eq!(payroll.gelirler.yemek, Some(dec!(200)));
+    // Only the two worked days earn meals: 1 × 100 before the raise,
+    // 1 × 200 after the same 100% wage increase. Paid R days earn no meal.
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(300)));
     assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(100)));
     assert_eq!(payroll.gelirler.isPrimi, Some(dec!(270)));
 

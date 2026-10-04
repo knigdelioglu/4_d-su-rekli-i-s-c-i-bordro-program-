@@ -302,8 +302,8 @@ fn raise_split_merges_work_premium_details_with_exact_weighted_values() {
     assert_eq!(detail.gunlukIsPrimi, dec!(136.67));
     assert_eq!(
         payroll.kesintiler.sendikaAidati,
-        Some(dec!(1006.45)),
-        "weighted before/after daily wage must reach the public union deduction"
+        Some(dec!(650)),
+        "union deduction must use the current daily wage, independently of split income"
     );
 }
 
