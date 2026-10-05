@@ -5,7 +5,7 @@ use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::transaction::with_transaction;
 use chrono::{NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct AttendanceRepository;
 
@@ -183,6 +183,31 @@ impl AttendanceRepository {
 
     pub fn save(conn: &Connection, p: &PersonelPuantaj) -> Result<()> {
         with_transaction(conn, |tx| Self::save_in_transaction(tx, p))
+    }
+
+    pub fn save_many(conn: &Connection, attendances: &[PersonelPuantaj]) -> Result<()> {
+        if attendances.is_empty() {
+            return Err(DomainError::ValidationError(
+                "Toplu puantaj kaydı en az bir personel içermelidir.".into(),
+            ));
+        }
+
+        let mut seen = HashSet::with_capacity(attendances.len());
+        for attendance in attendances {
+            if !seen.insert((attendance.personelId.as_str(), attendance.donemId.as_str())) {
+                return Err(DomainError::ValidationError(
+                    "Toplu puantaj kaydında aynı personel ve dönem birden fazla kez bulunuyor."
+                        .into(),
+                ));
+            }
+        }
+
+        with_transaction(conn, |tx| {
+            for attendance in attendances {
+                Self::save_in_transaction(tx, attendance)?;
+            }
+            Ok(())
+        })
     }
 
     /// Caller-owned transaction variant used by backup restore and composite

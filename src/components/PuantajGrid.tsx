@@ -13,7 +13,7 @@ import {
   Download,
   RotateCcw,
   Sparkles,
-  User,
+  Users,
 } from 'lucide-react';
 import {
   BordroDonemi,
@@ -31,17 +31,16 @@ import { exportToExcel } from '../utils/excelExport';
 import { formatPayrollError } from './useBordroCalculationController';
 import { describeError } from '../utils/errorMessage';
 
-interface BulkApplyRequest {
-  scope: 'all' | 'range';
-  dates: string[];
-  code: PuantajKodu;
-}
+type BulkApplyRequest =
+  | { scope: 'all' | 'range'; dates: string[]; code: PuantajKodu }
+  | { scope: 'personnel'; dates: string[]; code: PuantajKodu; personnelCount: number };
 
 interface PuantajGridProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
   onSavePuantaj: (puantaj: PersonelPuantaj) => Promise<void> | void;
+  onSavePuantajBatch: (puantajlar: PersonelPuantaj[]) => Promise<void> | void;
   onSelectPersonelForBordro?: (personelId: string) => void;
 }
 
@@ -50,6 +49,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   personeller,
   puantajlar,
   onSavePuantaj,
+  onSavePuantajBatch,
   onSelectPersonelForBordro,
 }) => {
   const periodDays = getPeriodDaysList(
@@ -71,10 +71,13 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const [puantajError, setPuantajError] = useState<string | null>(null);
   const [bulkApplyRequest, setBulkApplyRequest] = useState<BulkApplyRequest | null>(null);
   const [isApplyingBulkCode, setIsApplyingBulkCode] = useState(false);
+  const [quickEntryDates, setQuickEntryDates] = useState<string[]>([]);
 
   useEffect(() => {
     setRangeStart(periodDays[0]?.dateStr || '');
     setRangeEnd(periodDays.at(-1)?.dateStr || '');
+    setQuickEntryDates([]);
+    setBulkApplyRequest(null);
   }, [aktifDonem.id, aktifDonem.baslangicTarihi, aktifDonem.bitisTarihi]);
 
   const activePersonel = personeller.find((p) => p.id === selectedPersonelId);
@@ -101,6 +104,17 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       await onSavePuantaj(updated);
     } catch (err) {
       setPuantajError(`Puantaj kaydedilemedi: ${formatPayrollError(err)}`);
+    }
+  };
+
+  const persistPuantajBatch = async (updated: PersonelPuantaj[]) => {
+    setPuantajError(null);
+    try {
+      await onSavePuantajBatch(updated);
+      return true;
+    } catch (err) {
+      setPuantajError(`Toplu puantaj kaydedilemedi: ${formatPayrollError(err)}`);
+      return false;
     }
   };
 
@@ -158,11 +172,56 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     });
   };
 
+  const handleApplyQuickEntryToPersonnel = () => {
+    if (personeller.length === 0 || quickEntryDates.length === 0) return;
+    setBulkApplyRequest({
+      scope: 'personnel',
+      dates: periodDays
+        .filter((day) => quickEntryDates.includes(day.dateStr))
+        .map((day) => day.dateStr),
+      code: activeBulkCode,
+      personnelCount: personeller.length,
+    });
+  };
+
   const handleConfirmBulkApply = async () => {
-    if (!bulkApplyRequest || !savedPuantaj || isApplyingBulkCode) return;
+    if (
+      !bulkApplyRequest ||
+      (bulkApplyRequest.scope !== 'personnel' && !savedPuantaj) ||
+      isApplyingBulkCode
+    ) return;
 
     setIsApplyingBulkCode(true);
     try {
+      if (bulkApplyRequest.scope === 'personnel') {
+        const defaultDays = generateDefaultPuantajGunler(
+          aktifDonem.baslangicTarihi,
+          aktifDonem.bitisTarihi
+        );
+        const updates = personeller.map((personel) => {
+          const existing = puantajlar.find(
+            (attendance) =>
+              attendance.personelId === personel.id && attendance.donemId === aktifDonem.id
+          );
+          const gunler = { ...(existing?.gunler ?? defaultDays) };
+          bulkApplyRequest.dates.forEach((dateStr) => {
+            gunler[dateStr] = bulkApplyRequest.code;
+          });
+          return {
+            id: existing?.id ?? `${personel.id}_${aktifDonem.id}`,
+            personelId: personel.id,
+            donemId: aktifDonem.id,
+            gunler,
+          };
+        });
+        const saved = await persistPuantajBatch(updates);
+        if (saved) {
+          setQuickEntryDates([]);
+        }
+        setBulkApplyRequest(null);
+        return;
+      }
+
       const newGunler: Record<string, PuantajKodu> =
         bulkApplyRequest.scope === 'all' ? {} : { ...activePuantaj.gunler };
       bulkApplyRequest.dates.forEach((dateStr) => {
@@ -314,6 +373,112 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           })}
         </div>
       </div>
+
+      <section
+        data-testid="quick-attendance-entry"
+        className="rounded-2xl border border-indigo-200 bg-white p-4 shadow-2xs"
+        aria-labelledby="quick-attendance-entry-title"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3
+              id="quick-attendance-entry-title"
+              className="flex items-center gap-2 text-sm font-bold text-slate-900"
+            >
+              <Calendar className="h-4 w-4 text-indigo-600" aria-hidden="true" />
+              Tüm Personele Hızlı Puantaj Girişi
+              <span className="font-medium text-slate-500">({aktifDonem.donemAdi})</span>
+            </h3>
+            <p className="mt-1 text-xs leading-relaxed text-slate-600">
+              Üstten kodu seçin, takvimde günleri işaretleyin. Seçtiğiniz kod bu tarihlerde tüm personellere uygulanır.
+            </p>
+          </div>
+          <div className="flex items-center gap-3 text-xs text-slate-600">
+            <span className="inline-flex items-center gap-1.5">
+              <Users className="h-3.5 w-3.5" aria-hidden="true" />
+              {personeller.length} personel
+            </span>
+            <button
+              type="button"
+              onClick={() => setQuickEntryDates([])}
+              disabled={quickEntryDates.length === 0 || isApplyingBulkCode}
+              className="font-semibold text-indigo-700 hover:text-indigo-900 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Seçimi Temizle
+            </button>
+          </div>
+        </div>
+
+        <div
+          role="group"
+          aria-label="Tüm personele uygulanacak puantaj tarihleri"
+          className="mt-4 grid grid-cols-7 gap-1.5 sm:gap-2"
+        >
+          {['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'].map((weekday) => (
+            <div key={weekday} className="pb-1 text-center text-[10px] font-bold text-slate-500">
+              {weekday}
+            </div>
+          ))}
+          {Array.from({ length: leadingWeekdaySlots }, (_, index) => (
+            <div key={`quick-empty-${index}`} aria-hidden="true" />
+          ))}
+          {periodDays.map((day) => {
+            const isSelected = quickEntryDates.includes(day.dateStr);
+            return (
+              <button
+                key={day.dateStr}
+                type="button"
+                data-testid={`quick-attendance-day-${day.dateStr}`}
+                aria-pressed={isSelected}
+                aria-label={`${day.dateStr}, ${day.dayNameShort}${isSelected ? ', seçili' : ''}`}
+                onClick={() =>
+                  setQuickEntryDates((current) =>
+                    isSelected
+                      ? current.filter((dateStr) => dateStr !== day.dateStr)
+                      : [...current, day.dateStr]
+                  )
+                }
+                disabled={isApplyingBulkCode}
+                className={`relative flex min-h-14 flex-col items-center justify-center rounded-xl border px-1 py-1.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-wait disabled:opacity-60 ${
+                  isSelected
+                    ? `${PUANTAJ_KODLARI[activeBulkCode].bgRenk} ring-2 ring-indigo-500 ring-offset-1`
+                    : day.isWeekend
+                      ? 'border-slate-200 bg-slate-50 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50'
+                }`}
+              >
+                <span className="text-[10px] font-semibold opacity-75">{day.dayNameShort}</span>
+                <span className="font-bold font-mono">{day.dayNumber}</span>
+                {isSelected && (
+                  <CheckCircle2 className="absolute right-1 top-1 h-3 w-3" aria-hidden="true" />
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-slate-600">
+            Seçili kod:{' '}
+            <strong className="font-mono text-slate-900">
+              {activeBulkCode} — {PUANTAJ_KODLARI[activeBulkCode].tanim}
+            </strong>
+            <span className="ml-2">· {quickEntryDates.length} gün seçildi</span>
+          </p>
+          <button
+            type="button"
+            data-testid="apply-quick-attendance-to-all"
+            onClick={handleApplyQuickEntryToPersonnel}
+            disabled={
+              personeller.length === 0 || quickEntryDates.length === 0 || isApplyingBulkCode
+            }
+            className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Users className="h-3.5 w-3.5" aria-hidden="true" />
+            Seçili Tarihleri Tüm Personele Uygula
+          </button>
+        </div>
+      </section>
 
       {/* Main Interactive Matrix Area */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
@@ -683,11 +848,23 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                   Puantaj kodları değiştirilsin mi?
                 </h3>
                 <p id="bulk-apply-confirm-description" className="mt-2 text-sm leading-relaxed text-slate-700">
-                  {bulkApplyRequest.scope === 'all'
-                    ? `Bu dönemdeki tüm ${bulkApplyRequest.dates.length} gün`
-                    : `Seçtiğiniz tarih aralığındaki tüm ${bulkApplyRequest.dates.length} gün`}{' '}
-                  (hafta sonları dahil) <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
-                  olarak işaretlenecek. Bu günlerdeki mevcut puantaj kodları değiştirilecek.
+                  {bulkApplyRequest.scope === 'personnel' ? (
+                    <>
+                      Takvimden seçtiğiniz {bulkApplyRequest.dates.length} tarih, hafta sonlarını seçtiyseniz onlar da dahil olmak üzere,{' '}
+                      {bulkApplyRequest.personnelCount} personelin puantajına{' '}
+                      <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
+                      olarak uygulanacak. Puantajı olmayan personeller için de kayıt oluşturulacak.
+                    </>
+                  ) : (
+                    <>
+                      {bulkApplyRequest.scope === 'all'
+                        ? `Bu dönemdeki tüm ${bulkApplyRequest.dates.length} gün`
+                        : `Seçtiğiniz tarih aralığındaki tüm ${bulkApplyRequest.dates.length} gün`}{' '}
+                      (hafta sonları dahil) <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
+                      olarak işaretlenecek.
+                    </>
+                  )}{' '}
+                  Seçilen günlerdeki mevcut puantaj kodları değiştirilecek.
                 </p>
               </div>
             </div>

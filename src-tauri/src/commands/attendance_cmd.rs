@@ -19,3 +19,11 @@ pub fn save_attendance(db: State<'_, DbState>, attendance: PersonelPuantaj) -> R
     })?;
     AttendanceRepository::save(&conn, &attendance)
 }
+
+#[tauri::command]
+pub fn save_attendances(db: State<'_, DbState>, attendances: Vec<PersonelPuantaj>) -> Result<()> {
+    let conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
+    AttendanceRepository::save_many(&conn, &attendances)
+}

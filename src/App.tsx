@@ -482,6 +482,7 @@ export default function App() {
     handleDeleteDonem,
     handleSaveKurumDegerleri,
     handleSavePuantaj,
+    handleSavePuantajBatch,
     handleSaveSickLeaveRecord,
     handleSaveAnnualPayrollParameters,
     handleSaveZamAylari,
@@ -784,6 +785,7 @@ export default function App() {
                     personeller={personeller}
                     puantajlar={puantajlar}
                     onSavePuantaj={handleSavePuantaj}
+                    onSavePuantajBatch={handleSavePuantajBatch}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}
                   />
                 )}

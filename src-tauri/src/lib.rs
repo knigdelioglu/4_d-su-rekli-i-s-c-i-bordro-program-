@@ -36,6 +36,7 @@ fn configure_builder<R: tauri::Runtime>(
             commands::save_period_with_settings,
             commands::get_attendance_list,
             commands::save_attendance,
+            commands::save_attendances,
             commands::get_annual_payroll_parameters,
             commands::save_annual_payroll_parameters,
             commands::get_payroll_list,

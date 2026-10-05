@@ -148,6 +148,10 @@ export const tauriBridge = {
     return mutateTauri<void>('save_attendance', { attendance });
   },
 
+  async saveAttendances(attendances: PersonelPuantaj[]): Promise<void> {
+    return mutateTauri<void>('save_attendances', { attendances });
+  },
+
   async getPayrollList(): Promise<BordroKaydi[]> {
     return invokeTauri<BordroKaydi[]>('get_payroll_list');
   },

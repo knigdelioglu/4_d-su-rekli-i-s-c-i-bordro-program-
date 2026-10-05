@@ -279,6 +279,33 @@ export function usePayrollMutationController({
     return merged;
   };
 
+  const validatePuantajForSave = (attendance: PersonelPuantaj) => {
+    validatePuantaj(attendance);
+    const period = donemler.find((item) => item.id === attendance.donemId);
+    if (!period) return;
+
+    if (isValidIsoDate(period.baslangicTarihi) && isValidIsoDate(period.bitisTarihi)) {
+      const [sy, sm, sd] = period.baslangicTarihi.split('-').map(Number);
+      const [ey, em, ed] = period.bitisTarihi.split('-').map(Number);
+      const startMs = Date.UTC(sy, sm - 1, sd);
+      const endMs = Date.UTC(ey, em - 1, ed);
+      const calendarDayCount = Math.round((endMs - startMs) / 86400000) + 1;
+      const keys = Object.keys(attendance.gunler);
+      if (keys.length > calendarDayCount) {
+        throw new Error(
+          `${period.id} dönemi ${calendarDayCount} takvim günü içeriyor ancak puantajda ${keys.length} kayıt var.`
+        );
+      }
+    }
+    for (const dateText of Object.keys(attendance.gunler)) {
+      if (dateText < period.baslangicTarihi || dateText > period.bitisTarihi) {
+        throw new Error(
+          `${dateText} puantaj tarihi ${period.id} döneminin ${period.baslangicTarihi}–${period.bitisTarihi} aralığı dışında.`
+        );
+      }
+    }
+  };
+
   const handleSavePersonel = async (newPersonel: Personel | PayrollBoundaryPersonel) => {
     if (isNative) {
       await tauriBridge.savePersonnel(toPayrollBoundaryDto(newPersonel) as unknown as Personel);
@@ -506,30 +533,7 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
-    validatePuantaj(updatedPuantaj);
-    const period = donemler.find((p) => p.id === updatedPuantaj.donemId);
-    if (period) {
-      if (isValidIsoDate(period.baslangicTarihi) && isValidIsoDate(period.bitisTarihi)) {
-        const [sy, sm, sd] = period.baslangicTarihi.split('-').map(Number);
-        const [ey, em, ed] = period.bitisTarihi.split('-').map(Number);
-        const startMs = Date.UTC(sy, sm - 1, sd);
-        const endMs = Date.UTC(ey, em - 1, ed);
-        const calendarDayCount = Math.round((endMs - startMs) / 86400000) + 1;
-        const keys = Object.keys(updatedPuantaj.gunler);
-        if (keys.length > calendarDayCount) {
-          throw new Error(
-            `${period.id} dönemi ${calendarDayCount} takvim günü içeriyor ancak puantajda ${keys.length} kayıt var.`
-          );
-        }
-      }
-      for (const dateText of Object.keys(updatedPuantaj.gunler)) {
-        if (dateText < period.baslangicTarihi || dateText > period.bitisTarihi) {
-          throw new Error(
-            `${dateText} puantaj tarihi ${period.id} döneminin ${period.baslangicTarihi}–${period.bitisTarihi} aralığı dışında.`
-          );
-        }
-      }
-    }
+    validatePuantajForSave(updatedPuantaj);
     const impact = await evaluateBrowserMutations({
       kind: 'PERSON_PERIOD',
       personnelId: updatedPuantaj.personelId,
@@ -547,6 +551,52 @@ export function usePayrollMutationController({
       return {
         ...current,
         puantajlar,
+        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
+      };
+    });
+  };
+
+  const handleSavePuantajBatch = async (updatedAttendances: PersonelPuantaj[]) => {
+    if (updatedAttendances.length === 0) return;
+
+    const seen = new Set<string>();
+    for (const attendance of updatedAttendances) {
+      validatePuantajForSave(attendance);
+      const key = `${attendance.personelId}\u0000${attendance.donemId}`;
+      if (seen.has(key)) {
+        throw new Error('Toplu puantaj kaydında aynı personel ve dönem birden fazla kez bulunuyor.');
+      }
+      seen.add(key);
+    }
+
+    if (isNative) {
+      await tauriBridge.saveAttendances(updatedAttendances);
+      await loadData();
+      return;
+    }
+
+    const impact = await evaluateBrowserMutations(
+      updatedAttendances.map((attendance) => ({
+        kind: 'PERSON_PERIOD' as const,
+        personnelId: attendance.personelId,
+        periodId: attendance.donemId,
+      }))
+    );
+    updateAuthoritativePayload((current) => {
+      const attendancesById = new Map(
+        current.puantajlar.map((attendance) => [attendance.id, attendance] as const)
+      );
+      for (const attendance of updatedAttendances) {
+        const exactAttendance = mergePayrollUiIntoBoundary(
+          attendancesById.get(attendance.id),
+          attendance
+        );
+        attendancesById.set(attendance.id, exactAttendance);
+      }
+      return {
+        ...current,
+        puantajlar: [...attendancesById.values()],
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
         retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
@@ -1209,6 +1259,7 @@ export function usePayrollMutationController({
     handleDeleteDonem,
     handleSaveKurumDegerleri,
     handleSavePuantaj,
+    handleSavePuantajBatch,
     handleSaveTaxOpening,
     handleSaveSickLeaveRecord,
     handleSaveAnnualPayrollParameters,
