@@ -4,6 +4,7 @@
 
 import React, { useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   Calendar,
   CheckCircle2,
   ChevronDown,
@@ -29,6 +30,12 @@ import {
 import { exportToExcel } from '../utils/excelExport';
 import { formatPayrollError } from './useBordroCalculationController';
 import { describeError } from '../utils/errorMessage';
+
+interface BulkApplyRequest {
+  scope: 'all' | 'range';
+  dates: string[];
+  code: PuantajKodu;
+}
 
 interface PuantajGridProps {
   aktifDonem: BordroDonemi;
@@ -62,6 +69,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [puantajError, setPuantajError] = useState<string | null>(null);
+  const [bulkApplyRequest, setBulkApplyRequest] = useState<BulkApplyRequest | null>(null);
+  const [isApplyingBulkCode, setIsApplyingBulkCode] = useState(false);
 
   useEffect(() => {
     setRangeStart(periodDays[0]?.dateStr || '');
@@ -121,19 +130,12 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     });
   };
 
-  const handleApplyBulkCodeToAll = async () => {
+  const handleApplyBulkCodeToAll = () => {
     if (!savedPuantaj) return;
-    const confirmed = window.confirm(
-      `${periodDays.length} günün tamamı "${activeBulkCode} — ${PUANTAJ_KODLARI[activeBulkCode].tanim}" olarak değiştirilecek. Devam etmek istiyor musunuz?`
-    );
-    if (!confirmed) return;
-    const newGunler: Record<string, PuantajKodu> = {};
-    periodDays.forEach((d) => {
-      newGunler[d.dateStr] = activeBulkCode;
-    });
-    await persistPuantaj({
-      ...activePuantaj,
-      gunler: newGunler,
+    setBulkApplyRequest({
+      scope: 'all',
+      dates: periodDays.map((day) => day.dateStr),
+      code: activeBulkCode,
     });
   };
 
@@ -149,15 +151,28 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       alert('Seçilen aralık bu dönemin içinde değil.');
       return;
     }
-    const confirmed = window.confirm(
-      `${selectedDays.length} gün "${activeBulkCode}" olarak değiştirilecek. Devam etmek istiyor musunuz?`
-    );
-    if (!confirmed) return;
-    const newGunler = { ...activePuantaj.gunler };
-    selectedDays.forEach((day) => {
-      newGunler[day.dateStr] = activeBulkCode;
+    setBulkApplyRequest({
+      scope: 'range',
+      dates: selectedDays.map((day) => day.dateStr),
+      code: activeBulkCode,
     });
-    await persistPuantaj({ ...activePuantaj, gunler: newGunler });
+  };
+
+  const handleConfirmBulkApply = async () => {
+    if (!bulkApplyRequest || !savedPuantaj || isApplyingBulkCode) return;
+
+    setIsApplyingBulkCode(true);
+    try {
+      const newGunler: Record<string, PuantajKodu> =
+        bulkApplyRequest.scope === 'all' ? {} : { ...activePuantaj.gunler };
+      bulkApplyRequest.dates.forEach((dateStr) => {
+        newGunler[dateStr] = bulkApplyRequest.code;
+      });
+      await persistPuantaj({ ...activePuantaj, gunler: newGunler });
+      setBulkApplyRequest(null);
+    } finally {
+      setIsApplyingBulkCode(false);
+    }
   };
 
   const currentSummary = calculatePuantajOzeti(activePuantaj.gunler);
@@ -622,6 +637,83 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           </table>
         </div>
       </div>
+
+      {bulkApplyRequest && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="bulk-apply-confirm-title"
+          aria-describedby="bulk-apply-confirm-description"
+          data-testid="bulk-apply-confirmation"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !isApplyingBulkCode) {
+              setBulkApplyRequest(null);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              if (!isApplyingBulkCode) setBulkApplyRequest(null);
+              return;
+            }
+            if (event.key === 'Tab') {
+              const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>(
+                'button:not([disabled])'
+              );
+              const firstButton = buttons[0];
+              const lastButton = buttons[buttons.length - 1];
+              if (event.shiftKey && document.activeElement === firstButton) {
+                event.preventDefault();
+                lastButton?.focus();
+              } else if (!event.shiftKey && document.activeElement === lastButton) {
+                event.preventDefault();
+                firstButton?.focus();
+              }
+            }
+          }}
+        >
+          <div className="w-full max-w-md overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-start gap-3 border-b border-amber-100 bg-amber-50/70 p-5">
+              <div className="mt-0.5 shrink-0 rounded-xl bg-amber-100 p-2 text-amber-700">
+                <AlertTriangle className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div>
+                <h3 id="bulk-apply-confirm-title" className="text-sm font-bold text-slate-900">
+                  Puantaj kodları değiştirilsin mi?
+                </h3>
+                <p id="bulk-apply-confirm-description" className="mt-2 text-sm leading-relaxed text-slate-700">
+                  {bulkApplyRequest.scope === 'all'
+                    ? `Bu dönemdeki tüm ${bulkApplyRequest.dates.length} gün`
+                    : `Seçtiğiniz tarih aralığındaki tüm ${bulkApplyRequest.dates.length} gün`}{' '}
+                  (hafta sonları dahil) <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
+                  olarak işaretlenecek. Bu günlerdeki mevcut puantaj kodları değiştirilecek.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 bg-slate-50 p-4">
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setBulkApplyRequest(null)}
+                disabled={isApplyingBulkCode}
+                className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-200/70 disabled:opacity-50"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                data-testid="bulk-apply-confirm"
+                onClick={() => void handleConfirmBulkApply()}
+                disabled={isApplyingBulkCode}
+                className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60"
+              >
+                {isApplyingBulkCode ? 'Uygulanıyor…' : 'Evet, Uygula'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
