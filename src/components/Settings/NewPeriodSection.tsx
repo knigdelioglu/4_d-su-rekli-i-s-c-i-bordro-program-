@@ -108,10 +108,13 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
         </div>
       )}
 
-      <div className="space-y-3">
-        <div className="text-xs font-semibold text-slate-700">
-          Ödeme / Tahakkuk Ayı
-        </div>
+      <details className="space-y-3">
+        <summary className="cursor-pointer text-xs font-semibold text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500">
+          Ödeme / Tahakkuk Ayını Değiştir
+        </summary>
+        <p className="text-xs text-slate-500">
+          Ödeme / tahakkuk ayı otomatik olarak dönemi izleyen ay seçilir. Farklı bir ayda ödeme yapılacaksa değiştirebilirsiniz.
+        </p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="new-period-tax-year" className="block text-xs font-semibold text-slate-700 mb-1.5">Vergi Yılı</label>
@@ -146,7 +149,7 @@ export const NewPeriodSection: React.FC<NewPeriodSectionProps> = ({
             </select>
           </div>
         </div>
-      </div>
+      </details>
 
       {errorMessage && (
         <div

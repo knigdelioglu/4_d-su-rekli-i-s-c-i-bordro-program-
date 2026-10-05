@@ -147,19 +147,22 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     (_, index) => firstSelectableYear + index
   );
 
-  const [newYear, setNewYear] = useState<number>(currentYear);
-  const [newMonth, setNewMonth] = useState<number>(1);
-  const [newTaxYear, setNewTaxYear] = useState<number>(currentYear);
-  const [newTaxMonth, setNewTaxMonth] = useState<number>(2);
+  const [initialNewPeriod] = useState(() => {
+    const today = new Date();
+    return createBordroDonemi(today.getFullYear(), today.getMonth() + 1);
+  });
+  const [newYear, setNewYear] = useState<number>(initialNewPeriod.yil);
+  const [newMonth, setNewMonth] = useState<number>(initialNewPeriod.ay);
+  const [newTaxYear, setNewTaxYear] = useState<number>(initialNewPeriod.taxYear);
+  const [newTaxMonth, setNewTaxMonth] = useState<number>(initialNewPeriod.taxMonth);
   const [periodGlobalSuccess, setPeriodGlobalSuccess] = useState<string | null>(null);
   const [periodGlobalError, setPeriodGlobalError] = useState<string | null>(null);
   const [isSubmittingPeriod, setIsSubmittingPeriod] = useState(false);
   const resetTaxDefaults = (year: number, month: number) => {
     setPeriodGlobalError(null);
-    const taxMonth = month === 12 ? 1 : month + 1;
-    const taxYear = month === 12 ? year + 1 : year;
-    setNewTaxMonth(taxMonth);
-    setNewTaxYear(taxYear);
+    const defaults = createBordroDonemi(year, month);
+    setNewTaxMonth(defaults.taxMonth);
+    setNewTaxYear(defaults.taxYear);
   };
 
   const handleYearChange = (year: number) => {

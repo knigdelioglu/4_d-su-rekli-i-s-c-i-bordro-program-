@@ -1661,6 +1661,54 @@ test('period deletion confirms, removes finalized history, persists and supports
 });
 
 
+for (const { date, year, month, taxYear, taxMonth } of [
+  { date: '2026-10-04T12:00:00', year: '2026', month: '10', taxYear: '2026', taxMonth: '11' },
+  { date: '2026-12-31T12:00:00', year: '2026', month: '12', taxYear: '2027', taxMonth: '1' },
+]) {
+  test(`new period follows the current month on ${date} and derives the payment month`, async ({ page }) => {
+    await page.clock.setFixedTime(new Date(date));
+    await page.goto('/');
+    await page.getByTestId('nav-parametrelar').click();
+    await page.getByTestId('nav-parametre-yeni-donem').click();
+    const form = page.getByTestId('period-settings-yeni-donem');
+    await expect(form.getByLabel('Yıl', { exact: true })).toHaveValue(year);
+    await expect(form.getByLabel('Ay', { exact: true })).toHaveValue(month);
+    await expect(form.locator('select:visible')).toHaveCount(2);
+    await expect(form.getByLabel('Vergi Yılı')).toHaveValue(taxYear);
+    await expect(form.getByLabel('Vergi Ayı')).toHaveValue(taxMonth);
+
+    // The optional payment controls remain keyboard accessible and save real values.
+    const summary = form.locator('summary');
+    await summary.focus();
+    await page.keyboard.press('Enter');
+    await expect(form.locator('select:visible')).toHaveCount(4);
+    await form.getByLabel('Vergi Ayı').selectOption('5');
+    await form.getByLabel('Ay', { exact: true }).selectOption('12');
+    await expect(form.getByLabel('Vergi Yılı')).toHaveValue('2027');
+    await expect(form.getByLabel('Vergi Ayı')).toHaveValue('1');
+    await form.getByLabel('Yıl', { exact: true }).selectOption('2027');
+    await expect(form.getByLabel('Vergi Yılı')).toHaveValue('2028');
+    await form.getByLabel('Vergi Yılı').selectOption('2027');
+    await form.getByLabel('Vergi Ayı').selectOption('12');
+    await page.getByTestId('submit-period-action').click();
+    await expect(page.getByTestId('active-period-selector')).toHaveValue('2027-12');
+    await expect.poll(async () => {
+      const data = JSON.parse((await readStoredPayload(page))!);
+      const period = data.donemler.find((item: StoredPeriod) => item.id === '2027-12');
+      return { year: period?.taxYear, month: period?.taxMonth };
+    }).toEqual({ year: 2027, month: 12 });
+
+    // A later launch follows the new calendar month even with an older active period.
+    await page.clock.setFixedTime(new Date('2027-01-02T12:00:00'));
+    await page.reload();
+    await page.getByTestId('nav-parametre-yeni-donem').click();
+    await expect(form.getByLabel('Yıl', { exact: true })).toHaveValue('2027');
+    await expect(form.getByLabel('Ay', { exact: true })).toHaveValue('1');
+    await expect(form.getByLabel('Vergi Ayı')).toHaveValue('2');
+    await expect(form.locator('select:visible')).toHaveCount(2);
+  });
+}
+
 test('simplified new period form creates the first period without wage or bonus input', async ({ page }) => {
   await page.goto('/');
   await page.getByTestId('nav-parametrelar').click();
