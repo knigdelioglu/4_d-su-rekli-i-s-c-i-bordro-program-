@@ -49,6 +49,9 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     aktifDonem.baslangicTarihi,
     aktifDonem.bitisTarihi
   );
+  const leadingWeekdaySlots = periodDays.length > 0
+    ? (new Date(`${periodDays[0].dateStr}T00:00:00Z`).getUTCDay() + 6) % 7
+    : 0;
 
   const [selectedPersonelId, setSelectedPersonelId] = useState<string>(
     personeller[0]?.id || ''
@@ -503,16 +506,19 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           </div>
         </div>
 
-        {/* Scrollable Day Grid */}
-        <div className="p-4 overflow-x-auto">
-          <div className="min-w-max space-y-3">
+        {/* Week-Row Day Grid */}
+        <div className="p-4">
+          <div className="space-y-3">
             <div className="text-xs text-slate-500 font-medium mb-1">
               {isAttendanceCreated
                 ? `Güne tıklayarak seçili ${activeBulkCode} kodunu uygulayabilirsiniz:`
                 : 'Bu günler yalnızca önerilen düzenin önizlemesidir; düzenlemek için puantajı oluşturun.'}
             </div>
 
-            <div className="grid grid-flow-col auto-cols-[68px] gap-1.5 pb-2">
+            <div className="grid grid-cols-7 gap-1.5 pb-2">
+              {Array.from({ length: leadingWeekdaySlots }, (_, index) => (
+                <div key={`empty-weekday-${index}`} aria-hidden="true" />
+              ))}
               {periodDays.map((day) => {
                 const code = activePuantaj.gunler[day.dateStr] || defaultGunler[day.dateStr] || 'Ç';
                 const info = PUANTAJ_KODLARI[code];
