@@ -906,6 +906,57 @@ pub fn get_migrations() -> Migrations<'static> {
             }
             Ok(())
         }),
+        // Preserve the pre-policy treatment for periods with recorded payroll
+        // history, matching backup import compatibility in MigrationService.
+        M::up_with_hook("SELECT 1;", |tx| {
+            let mut historical_periods = HashSet::new();
+            {
+                let mut stmt = tx.prepare(
+                    "SELECT period_id FROM payroll_records
+                     UNION SELECT source_period_id FROM retro_adjustment_allocations",
+                )?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                for row in rows {
+                    historical_periods.insert(row?);
+                }
+            }
+
+            let settings_rows = {
+                let mut stmt =
+                    tx.prepare("SELECT period_id, settings_json FROM institution_settings")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            for (period_id, settings_json) in settings_rows {
+                if !historical_periods.contains(&period_id) {
+                    continue;
+                }
+                let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(&settings_json)
+                else {
+                    continue;
+                };
+                let Some(settings) = settings.as_object_mut() else {
+                    continue;
+                };
+                if settings.contains_key("yemekTamGvIstisnaDamgaTabi") {
+                    continue;
+                }
+                settings.insert(
+                    "yemekTamGvIstisnaDamgaTabi".into(),
+                    serde_json::Value::Bool(false),
+                );
+                tx.execute(
+                    "UPDATE institution_settings SET settings_json = ?2 WHERE period_id = ?1",
+                    rusqlite::params![
+                        period_id,
+                        serde_json::Value::Object(settings.clone()).to_string()
+                    ],
+                )?;
+            }
+            Ok(())
+        }),
     ])
 }
 

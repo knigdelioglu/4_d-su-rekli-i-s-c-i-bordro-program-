@@ -283,6 +283,30 @@ fn native_retro_repo_allows_multiple_active_batches_for_same_revision_and_person
 }
 
 #[test]
+fn native_retro_repo_accepts_meal_policy_from_the_source_period_settings() {
+    let conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
+    let person = personnel();
+    let source_period = period();
+    PersonnelRepository::save(&conn, &person).expect("personel kaydedilmeli");
+    PeriodRepository::save(&conn, &source_period).expect("dönem kaydedilmeli");
+    let mut settings = DonemselKurumDegerleri {
+        donemId: source_period.id.clone(),
+        ..DonemselKurumDegerleri::default()
+    };
+    settings.yemekTamGvIstisnaDamgaTabi = true;
+    SettingsRepository::save_institution_settings(&conn, &settings)
+        .expect("dönem ayarları kaydedilmeli");
+    save_revision_with_overrides(&conn, &revision(), &[]).expect("revision kaydedilmeli");
+
+    let mut meal_allocation = allocation();
+    meal_allocation.earningCode = RetroEarningCode::MEAL;
+    meal_allocation.incomeTaxTreatment = RetroTaxTreatment::EXEMPT;
+    save_batch(&conn, &batch(), &[meal_allocation]).expect(
+        "native persistence core'un kaynak dönem yemek politikasını kabul etmeli",
+    );
+}
+
+#[test]
 fn native_retro_batch_save_cannot_rebind_an_existing_batch_id() {
     let conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
     let person = personnel();

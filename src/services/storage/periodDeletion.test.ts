@@ -12,14 +12,36 @@ const emptyImpact: MutationImpact = {
 
 test('active period deletion leaves a valid persisted snapshot and preserves personnel', () => {
   const original = fixture();
+  original.donemler.reverse();
   const result = deletePeriodFromPayload(original, original.aktifDonemId, emptyImpact);
   const restored = parseCurrentBrowserSnapshot(serializePayrollStorage(result));
   expect(restored.donemler.length).toBe(original.donemler.length - 1);
   expect(restored.bordrolar.length).toBe(0);
   expect(restored.personeller).toEqual(original.personeller);
   expect(restored.annualPayrollParameters).toEqual(original.annualPayrollParameters);
-  expect(restored.aktifDonemId).toBe(result.donemler[0].id);
+  expect(restored.aktifDonemId).toBe('2025-12');
   expect(original.donemler.length).toBe(9);
+});
+
+test('deleting one tax opening period clears only its independent opening component', () => {
+  const original = fixture();
+  original.taxOpenings = [{
+    id: 'opening-1',
+    personnelId: original.personeller[0].id,
+    year: 2026,
+    gvCumulativeOpening: '120000',
+    effectiveFromPeriodId: '2026-01',
+    asgariGvCumulativeOpening: '60000',
+    asgariGvEffectiveFromPeriodId: '2026-03',
+  }];
+
+  const result = deletePeriodFromPayload(original, '2026-01', emptyImpact);
+  expect(result.taxOpenings.length).toBe(1);
+  expect(result.taxOpenings[0].gvCumulativeOpening).toBe(null);
+  expect(result.taxOpenings[0].effectiveFromPeriodId).toBe(null);
+  expect(result.taxOpenings[0].asgariGvCumulativeOpening).toBe('60000');
+  expect(result.taxOpenings[0].asgariGvEffectiveFromPeriodId).toBe('2026-03');
+  parseCurrentBrowserSnapshot(serializePayrollStorage(result));
 });
 
 test('deleting an inactive prior period invalidates affected finalized history without changing selection', () => {

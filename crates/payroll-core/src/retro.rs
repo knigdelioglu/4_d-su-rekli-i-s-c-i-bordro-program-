@@ -85,19 +85,32 @@ pub struct RetroEarningPolicy {
 /// The registry is the only place where an earning code gets statutory
 /// treatment. Formula code does not branch on arbitrary UI labels.
 pub fn retro_earning_policy(code: RetroEarningCode) -> RetroEarningPolicy {
+    retro_earning_policy_with_meal_tax_policy(code, false)
+}
+
+/// Resolve the registry policy with the statutory meal income-tax treatment
+/// captured for the source period. Other earning codes ignore this setting.
+pub fn retro_earning_policy_with_meal_tax_policy(
+    code: RetroEarningCode,
+    meal_income_tax_exempt: bool,
+) -> RetroEarningPolicy {
     let wage_source = RetroEarningPolicy {
         incomeTaxTreatment: RetroTaxTreatment::TAXABLE,
         stampTaxTreatment: RetroTaxTreatment::TAXABLE,
         sgkTreatment: RetroSgkTreatment::WAGE_SOURCE_MONTH,
     };
-    match canonical_sgk_earning_class(code) {
+    let mut policy = match canonical_sgk_earning_class(code) {
         CanonicalSgkEarningClass::Wage => wage_source,
         CanonicalSgkEarningClass::NonWage => RetroEarningPolicy {
             incomeTaxTreatment: RetroTaxTreatment::TAXABLE,
             stampTaxTreatment: RetroTaxTreatment::TAXABLE,
             sgkTreatment: RetroSgkTreatment::NON_WAGE_PAYMENT_MONTH,
         },
+    };
+    if code == RetroEarningCode::MEAL && meal_income_tax_exempt {
+        policy.incomeTaxTreatment = RetroTaxTreatment::EXEMPT;
     }
+    policy
 }
 
 fn retro_period_earning_policy(
@@ -105,16 +118,18 @@ fn retro_period_earning_policy(
     period_id: &str,
     code: RetroEarningCode,
 ) -> Result<RetroEarningPolicy> {
-    let mut policy = retro_earning_policy(code);
-    if code == RetroEarningCode::MEAL {
+    let meal_income_tax_exempt = if code == RetroEarningCode::MEAL {
         let settings = dataset.institutionSettings.get(period_id).ok_or_else(|| {
             DomainError::InvalidData(format!("{period_id} source yemek vergi ayarı eksik."))
         })?;
-        if settings.yemekTamGvIstisnaDamgaTabi {
-            policy.incomeTaxTreatment = RetroTaxTreatment::EXEMPT;
-        }
-    }
-    Ok(policy)
+        settings.yemekTamGvIstisnaDamgaTabi
+    } else {
+        false
+    };
+    Ok(retro_earning_policy_with_meal_tax_policy(
+        code,
+        meal_income_tax_exempt,
+    ))
 }
 
 fn round2(value: Decimal) -> Decimal {

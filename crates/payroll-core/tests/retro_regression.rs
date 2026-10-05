@@ -1709,6 +1709,7 @@ fn meal_and_clothing_retro_use_source_month_statutory_pek_policy() {
         .expect("clothing allocation");
     assert_eq!(meal.deltaAmount, dec!(5600));
     assert_eq!(meal.retroPekDelta, dec!(2800));
+    assert_eq!(meal.incomeTaxTreatment, RetroTaxTreatment::EXEMPT);
     assert_eq!(clothing.deltaAmount, dec!(50));
     assert_eq!(clothing.retroPekDelta, dec!(50));
     assert_eq!(clothing.workerSgkDelta, dec!(7));

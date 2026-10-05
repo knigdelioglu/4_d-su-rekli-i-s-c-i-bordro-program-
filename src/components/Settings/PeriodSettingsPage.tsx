@@ -34,6 +34,7 @@ import { SickLeaveSection } from './SickLeaveSection';
 import { LicenseSettingsSection } from './LicenseSettingsSection';
 import { TediyeTisSection } from './TediyeTisSection';
 import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
+import { findPeriodSettingsInheritanceSource } from './periodInheritance';
 import { describeError } from '../../utils/errorMessage';
 import { transportRateForNewPeriod, validateTransportRatesForPeriod } from '../../services/storage/transportRatesValidation';
 
@@ -387,9 +388,11 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         return;
       }
 
-      const sourcePeriod = donemler.find((period) => period.id === aktifDonemId && kurumDegerleriMap[period.id]) ??
-        [...donemler].filter((period) => kurumDegerleriMap[period.id])
-          .sort((left, right) => right.baslangicTarihi.localeCompare(left.baslangicTarihi))[0];
+      const sourcePeriod = findPeriodSettingsInheritanceSource(
+        donemler,
+        kurumDegerleriMap,
+        newDonem.baslangicTarihi
+      );
       let initialKurum: DönemselKurumDegerleri | undefined;
       if (sourcePeriod) {
         const inherited = createParamsForm(kurumDegerleriMap[sourcePeriod.id], sourcePeriod.id);

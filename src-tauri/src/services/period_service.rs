@@ -11,7 +11,7 @@ pub struct PeriodService;
 
 impl PeriodService {
     /// Explicit destructive action; finalized history may be discarded here.
-    /// Foreign-key cascades remove attendance, settings, tax openings and items.
+    /// Foreign-key cascades remove period-owned data; unrelated tax-opening components survive.
     pub fn delete_period(conn: &mut Connection, period_id: &str) -> Result<()> {
         let tx = conn
             .transaction()
@@ -68,6 +68,46 @@ impl PeriodService {
             )
             .map_err(db_error)?;
         }
+        let tax_opening_ids = {
+            let mut stmt = tx
+                .prepare(
+                    "SELECT id FROM personnel_tax_opening
+                     WHERE effective_from_period_id = ?1
+                        OR asgari_gv_effective_from_period_id = ?1",
+                )
+                .map_err(db_error)?;
+            let rows = stmt
+                .query_map([period_id], |row| row.get::<_, String>(0))
+                .map_err(db_error)?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(db_error)?
+        };
+        let tax_opening_updated_at = chrono::Utc::now().to_rfc3339();
+        tx.execute(
+            "UPDATE personnel_tax_opening
+             SET gv_cumulative_opening = NULL, effective_from_period_id = NULL,
+                 updated_at = ?2
+             WHERE effective_from_period_id = ?1",
+            params![period_id, tax_opening_updated_at],
+        )
+        .map_err(db_error)?;
+        tx.execute(
+            "UPDATE personnel_tax_opening
+             SET asgari_gv_cumulative_opening = NULL,
+                 asgari_gv_effective_from_period_id = NULL, updated_at = ?2
+             WHERE asgari_gv_effective_from_period_id = ?1",
+            params![period_id, tax_opening_updated_at],
+        )
+        .map_err(db_error)?;
+        for id in tax_opening_ids {
+            tx.execute(
+                "DELETE FROM personnel_tax_opening
+                 WHERE id = ?1 AND gv_cumulative_opening IS NULL
+                   AND asgari_gv_cumulative_opening IS NULL",
+                [id],
+            )
+            .map_err(db_error)?;
+        }
         tx.execute("DELETE FROM payroll_periods WHERE id = ?1", [period_id])
             .map_err(db_error)?;
         let active: Option<String> = tx
@@ -81,7 +121,7 @@ impl PeriodService {
         if active.as_deref() == Some(period_id) {
             let next: Option<String> = tx
                 .query_row(
-                    "SELECT id FROM payroll_periods ORDER BY yil, ay LIMIT 1",
+                    "SELECT id FROM payroll_periods ORDER BY yil, ay, id LIMIT 1",
                     [],
                     |row| row.get(0),
                 )

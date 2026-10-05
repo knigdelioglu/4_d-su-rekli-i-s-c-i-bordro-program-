@@ -2,6 +2,7 @@ use super::{kurus_to_dec, money_to_kurus};
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::settings_repo::SettingsRepository;
 use payroll_core::PayrollMutation;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::DeserializeOwned;
@@ -862,7 +863,22 @@ fn save_batch_in_transaction_impl(
                             .into(),
                     ));
                 }
-                let policy = payroll_core::retro_earning_policy(allocation.earningCode);
+                let meal_income_tax_exempt = if allocation.earningCode == RetroEarningCode::MEAL {
+                    SettingsRepository::get_institution_settings(conn, &allocation.sourcePeriodId)?
+                        .ok_or_else(|| {
+                            DomainError::InvalidData(format!(
+                            "{} retro yemek allocation'ı için kaynak dönem kurum ayarı bulunamadı.",
+                            allocation.sourcePeriodId
+                        ))
+                        })?
+                        .yemekTamGvIstisnaDamgaTabi
+                } else {
+                    false
+                };
+                let policy = payroll_core::retro_earning_policy_with_meal_tax_policy(
+                    allocation.earningCode,
+                    meal_income_tax_exempt,
+                );
                 if allocation.sgkTreatment != policy.sgkTreatment
                     || allocation.incomeTaxTreatment != policy.incomeTaxTreatment
                     || allocation.stampTaxTreatment != policy.stampTaxTreatment

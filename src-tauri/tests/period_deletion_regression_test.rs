@@ -3,7 +3,7 @@ use bordro_programi_lib::domain::models::*;
 use bordro_programi_lib::repositories::{
     attendance_repo::AttendanceRepository, payroll_repo::PayrollRepository,
     period_repo::PeriodRepository, personnel_repo::PersonnelRepository,
-    settings_repo::SettingsRepository,
+    settings_repo::SettingsRepository, tax_opening_repo::TaxOpeningRepository,
 };
 use bordro_programi_lib::services::{
     payroll_service::PayrollService, period_service::PeriodService,
@@ -184,6 +184,64 @@ fn deletion_failure_rolls_back_cascades_and_active_selection() {
         Some("2026-01")
     );
     assert!(PeriodService::delete_period(&mut conn, "missing").is_err());
+}
+
+#[test]
+fn deletion_clears_only_the_tax_opening_component_linked_to_the_period() {
+    let mut conn = setup();
+    let march = period("2026-03", 2026, 3, 2026, 4);
+    PeriodRepository::save(&conn, &march).unwrap();
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: "opening-cross-period".into(),
+            personnelId: "p1".into(),
+            year: 2026,
+            gvCumulativeOpening: Some(dec!(120000)),
+            effectiveFromPeriodId: Some("2026-01".into()),
+            asgariGvCumulativeOpening: Some(dec!(60000)),
+            asgariGvEffectiveFromPeriodId: Some("2026-03".into()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )
+    .unwrap();
+
+    PeriodService::delete_period(&mut conn, "2026-01").unwrap();
+    let opening = TaxOpeningRepository::get_by_personnel_and_year(&conn, "p1", 2026)
+        .unwrap()
+        .expect("March asgari GV opening korunmalı");
+    assert_eq!(opening.gvCumulativeOpening, None);
+    assert_eq!(opening.effectiveFromPeriodId, None);
+    assert_eq!(opening.asgariGvCumulativeOpening, Some(dec!(60000)));
+    assert_eq!(
+        opening.asgariGvEffectiveFromPeriodId.as_deref(),
+        Some("2026-03")
+    );
+
+    PeriodService::delete_period(&mut conn, "2026-03").unwrap();
+    assert!(
+        TaxOpeningRepository::get_by_personnel_and_year(&conn, "p1", 2026)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn deleting_active_period_selects_the_earliest_remaining_period_by_calendar_order() {
+    let mut conn = setup();
+    let earlier = period("2025-12", 2025, 12, 2025, 12);
+    PeriodRepository::save(&conn, &earlier).unwrap();
+    SettingsRepository::set_app_setting(&conn, "active_period_id", "2026-01").unwrap();
+
+    PeriodService::delete_period(&mut conn, "2026-01").unwrap();
+
+    assert_eq!(
+        SettingsRepository::get_app_setting(&conn, "active_period_id")
+            .unwrap()
+            .as_deref(),
+        Some("2025-12")
+    );
 }
 
 fn revision() -> CompensationRevision {

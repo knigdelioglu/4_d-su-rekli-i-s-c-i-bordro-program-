@@ -18,15 +18,41 @@ export function deletePeriodFromPayload(
   ]);
   const affected = [...impact.affectedPayrolls, ...impact.blockedByFinalized];
   const donemler = current.donemler.filter((period) => period.id !== periodId);
+  const nextActivePeriod = [...donemler].sort(
+    (left, right) => left.yil - right.yil || left.ay - right.ay || left.id.localeCompare(right.id)
+  )[0];
   const kurumDegerleriMap = { ...current.kurumDegerleriMap };
   delete kurumDegerleriMap[periodId];
+  const taxOpenings = current.taxOpenings
+    .flatMap((opening) => {
+      const next = { ...opening };
+      let affectedOpening = false;
+      if (next.effectiveFromPeriodId === periodId) {
+        affectedOpening = true;
+        next.effectiveFromPeriodId = null;
+        next.gvCumulativeOpening = null;
+      }
+      if (next.asgariGvEffectiveFromPeriodId === periodId) {
+        affectedOpening = true;
+        next.asgariGvEffectiveFromPeriodId = null;
+        next.asgariGvCumulativeOpening = null;
+      }
+      if (
+        affectedOpening &&
+        next.gvCumulativeOpening == null &&
+        next.asgariGvCumulativeOpening == null
+      ) {
+        return [];
+      }
+      return [next];
+    });
   return {
     ...current,
     donemler,
-    aktifDonemId: current.aktifDonemId === periodId ? donemler[0]?.id ?? '' : current.aktifDonemId,
+    aktifDonemId: current.aktifDonemId === periodId ? nextActivePeriod?.id ?? '' : current.aktifDonemId,
     kurumDegerleriMap,
     puantajlar: current.puantajlar.filter((record) => record.donemId !== periodId),
-    taxOpenings: current.taxOpenings.filter((opening) => opening.effectiveFromPeriodId !== periodId && opening.asgariGvEffectiveFromPeriodId !== periodId),
+    taxOpenings,
     bordrolar: current.bordrolar
       .filter((payroll) => payroll.donemId !== periodId && !removedBatches.has(payroll.accrualId ?? ''))
       .map((payroll) => affected.some((key) => key.personnelId === payroll.personelId && key.periodId === payroll.donemId && (!key.accrualId || key.accrualId === (payroll.accrualId ?? payroll.id)))
