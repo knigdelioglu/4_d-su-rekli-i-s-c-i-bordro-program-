@@ -1051,8 +1051,8 @@ pub fn auto_fill_gelirler_from_puantaj(
     let (mut gelirler, is_primi_detay) =
         calculate_gunluk_gelirler_from_puantaj(puantaj_ozeti, kurum_degerleri, grup)?;
 
-    let birlestirilmis_sosyal_yardim = kurum_degerleri.birlestirilmisSosyalYardim;
-    let giyim_yardimi = kurum_degerleri.giyimYardimi;
+    let birlestirilmis_sosyal_yardim = round2(kurum_degerleri.birlestirilmisSosyalYardim);
+    let giyim_yardimi = round2(kurum_degerleri.giyimYardimi);
     let hizmet_zammi = round2(Decimal::from(hizmet_yili) * kurum_degerleri.hizmetZammiBirimi);
 
     // Tediye ve TİS ikramiyesi authoritative olarak otomatik üretilmez.
@@ -1060,11 +1060,11 @@ pub fn auto_fill_gelirler_from_puantaj(
     // production bordro yolu kişi+dönem bazındaki ManualPayrollIncomeInput'u uygular.
     gelirler.tediye = None;
     gelirler.tisIkramiyesi = None;
-    gelirler.ekOdeme = kurum_degerleri.ekOdeme;
+    gelirler.ekOdeme = kurum_degerleri.ekOdeme.map(round2);
     gelirler.birlestirilmisSosyalYardim = Some(birlestirilmis_sosyal_yardim);
     gelirler.giyimYardimi = Some(giyim_yardimi);
     gelirler.hizmetZammi = Some(hizmet_zammi);
-    gelirler.digerGelir = kurum_degerleri.digerGelirVarsayilan;
+    gelirler.digerGelir = kurum_degerleri.digerGelirVarsayilan.map(round2);
 
     Ok((gelirler, is_primi_detay))
 }

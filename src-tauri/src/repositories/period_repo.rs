@@ -233,6 +233,31 @@ impl PeriodRepository {
         Ok(candidates.into_iter().next())
     }
 
+    pub fn get_before_by_work_period(
+        conn: &Connection,
+        active_period: &BordroDonemi,
+    ) -> Result<Vec<BordroDonemi>> {
+        Self::validate_period(active_period)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month
+                 FROM payroll_periods
+                 WHERE baslangic_tarihi < ?1
+                 ORDER BY baslangic_tarihi ASC, id ASC",
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![active_period.baslangicTarihi], Self::from_row)
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let mut periods = Vec::new();
+        for row in rows {
+            let period = row.map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+            Self::validate_period(&period)?;
+            periods.push(period);
+        }
+        Ok(periods)
+    }
+
     /// Returns the first period after the active work period in the same
     /// deterministic order used by chronology validation. Calculation
     /// snapshots use this single successor instead of loading every period.

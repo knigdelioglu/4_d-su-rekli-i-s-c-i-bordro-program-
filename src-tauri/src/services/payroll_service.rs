@@ -695,6 +695,9 @@ impl PayrollService {
 
         let mut period_ids = std::collections::BTreeSet::new();
         period_ids.insert(active_period.id.clone());
+        for period in PeriodRepository::get_before_by_work_period(conn, &active_period)? {
+            period_ids.insert(period.id);
+        }
         for payroll in &payrolls {
             period_ids.insert(payroll.donemId.clone());
         }

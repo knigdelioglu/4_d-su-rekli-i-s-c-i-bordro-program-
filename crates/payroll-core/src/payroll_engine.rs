@@ -3151,12 +3151,31 @@ fn calculate_payroll_with_index(
             let transition = raise_transition
                 .as_ref()
                 .ok_or_else(|| DomainError::InvalidData("Zam geçişi çözümlenemedi.".into()))?;
-            let previous_settings = transition.previous.clone().ok_or_else(|| {
+            let mut previous_settings = transition.previous.clone().ok_or_else(|| {
                 DomainError::InvalidData(format!(
                     "{} dönemi zam öncesi kurum ayarları bulunamadı.",
                     period.id
                 ))
             })?;
+            // A group may have been introduced in the current period after the
+            // prior period settings were saved. Keep the historical group's
+            // own definition when present; otherwise use the newly configured
+            // group so the pre-raise attendance slice remains calculable.
+            if let Some(current_groups) = settings.isPrimiGruplari.as_ref() {
+                let previous_groups = previous_settings
+                    .isPrimiGruplari
+                    .get_or_insert_with(Vec::new);
+                for group in current_groups {
+                    if group.ad == person.grup || group.id == person.grup {
+                        if !previous_groups.iter().any(|existing| {
+                            existing.ad == person.grup || existing.id == person.grup
+                        }) {
+                            previous_groups.push(group.clone());
+                        }
+                        break;
+                    }
+                }
+            }
             validate_kurum_degerleri_for_payroll(&previous_settings)?;
             let (before_income, before_is_primi) = calculate_gunluk_gelirler_from_puantaj(
                 &before_summary,

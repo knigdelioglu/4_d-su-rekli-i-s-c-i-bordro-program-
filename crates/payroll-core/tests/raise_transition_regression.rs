@@ -364,6 +364,64 @@ fn missing_previous_period_missing_settings_gaps_and_invalid_raise_months_fail_c
     }
 }
 
+#[test]
+fn pre_raise_slice_accepts_a_group_first_defined_in_the_current_period() {
+    let mut request = request(2026, 8);
+    request.dataset.personnel[0].grup = "UX Deneme Grubu".into();
+    let previous = request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-07")
+        .unwrap();
+    previous.isPrimiGruplari = Some(Vec::new());
+    let current = request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-08")
+        .unwrap();
+    current.isPrimiGruplari = Some(vec![IsPrimiGrupItem {
+        id: "ux-test".into(),
+        ad: "UX Deneme Grubu".into(),
+        oran: dec!(5),
+        aktif: true,
+    }]);
+
+    let payroll = calculate_payroll(&request)
+        .expect("a newly configured current-period group must cover the pre-raise slice");
+    assert_eq!(payroll.isPrimiDetay.unwrap().grupAd, "UX Deneme Grubu");
+}
+
+#[test]
+fn indexed_social_aid_carries_forward_at_cent_precision() {
+    let mut request = request(2026, 1);
+    request.dataset.zamAylari = vec![2];
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap()
+        .birlestirilmisSosyalYardim = dec!(5089.70);
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2025-12")
+        .unwrap()
+        .birlestirilmisSosyalYardim = dec!(5089.70);
+    request
+        .dataset
+        .institutionSettings
+        .get_mut("2026-01")
+        .unwrap()
+        .gunlukTabanUcret = dec!(107.08);
+
+    advance(&mut request);
+    let payroll = calculate_payroll(&request).expect("following period after indexed raise");
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(5450.05))
+    );
+}
+
 fn retro_request(
     request: &PayrollCalculationRequest,
     parameter: RetroParameterKey,
