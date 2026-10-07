@@ -60,10 +60,11 @@ afterAll(async () => {
   else process.env.DISABLE_HMR = previousDisableHmr;
 }, 30_000);
 
-async function openPolicyPage(): Promise<Page> {
+async function openPolicyPage(groupsOnly = false): Promise<Page> {
   pageUnderTest = await browser.newPage();
   pageUnderTest.setDefaultTimeout(5_000);
-  await pageUnderTest.setContent('<!doctype html><html lang="tr"><body><div id="root"></div></body></html>');
+  await pageUnderTest.addInitScript((value) => { (window as Window & { __groupsOnly?: boolean }).__groupsOnly = value; }, groupsOnly);
+  await pageUnderTest.setContent(`<!doctype html><html lang="tr"><body><div id="root"></div></body></html>`);
   await pageUnderTest.addStyleTag({ url: `${viteOrigin}/src/index.css` });
   await pageUnderTest.addScriptTag({ content: harnessBundle });
   await pageUnderTest.locator('#compensation-policy-title').waitFor({ state: 'visible' });
@@ -109,6 +110,20 @@ async function prepareExistingDateCorrection(page: Page): Promise<void> {
 }
 
 describe('rendered CompensationPolicyPage interactions with frozen props', () => {
+  test('keeps the group editor out of the full policy form and exposes it in the dedicated view', async () => {
+    const policyPage = await openPolicyPage();
+    expect(await policyPage.getByTestId('policy-premium-group-table').count()).toBe(0);
+    await policyPage.close();
+    pageUnderTest = null;
+
+    const groupsPage = await openPolicyPage(true);
+    await groupsPage.evaluate(() => window.__compensationPolicyTest.useEylulPrefill());
+    expect(await groupsPage.getByTestId('policy-premium-group-table').count()).toBe(1);
+    expect(await groupsPage.locator('#policy-group-name-3').inputValue()).toBe('UX Deneme Grubu');
+    expect(await groupsPage.locator('#policy-base-wage').count()).toBe(0);
+    expect(await groupsPage.locator('#policy-calculation-details').count()).toBe(1);
+  });
+
   test('shows a quarantine error in user language and retries loading the period', async () => {
     const page = await openPolicyPage();
     await page.evaluate(() => window.__compensationPolicyTest.setLoadIdle());
@@ -139,10 +154,6 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(await page.locator('#policy-extra-payment').inputValue()).toBe('0');
     expect(await page.getByRole('checkbox', { name: 'Varsayılan tutar tanımla' }).isChecked()).toBe(false);
     expect(await page.locator('#policy-other-income').count()).toBe(0);
-    await page.locator('details').filter({ has: page.locator('#policy-group-id-1') }).locator('summary').click();
-    expect(await page.locator('#policy-group-id-1').inputValue()).toBe('B');
-    expect(await page.locator('#policy-group-rate-1').inputValue()).toBe('0');
-    expect(await page.getByRole('checkbox', { name: 'Teknik etkin' }).isChecked()).toBe(false);
     expect(await page.locator('#policy-reason').inputValue()).toBe('');
     expect(await page.getByRole('alert').count()).toBe(0);
 
@@ -179,8 +190,6 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(await page.locator('#policy-global-premium').inputValue()).toBe('0');
     expect(await page.locator('#policy-extra-payment').inputValue()).toBe('0');
     expect(await page.locator('#policy-other-income').inputValue()).toBe('0');
-    expect(await page.locator('#policy-group-name-3').inputValue()).toBe('UX Deneme Grubu');
-    expect(await page.locator('#policy-group-rate-3').inputValue()).toBe('6');
     expect(await page.locator('input[name="policy-boundary-scope"]:checked').count()).toBe(0);
     expect(await page.locator('input[name="policy-road-rounding"]:checked').count()).toBe(0);
     expect(await page.getByRole('button', { name: 'Başlangıç ücretini onayla' }).count()).toBe(0);
@@ -298,7 +307,7 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
   });
 
   test('keeps the four premium groups editable and readable at laptop and narrow widths', async () => {
-    const page = await openPolicyPage();
+    const page = await openPolicyPage(true);
     await page.evaluate(() => window.__compensationPolicyTest.useEylulPrefill());
     const viewports = [
       { label: 'desktop', width: 1366, height: 768 },

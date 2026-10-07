@@ -29,6 +29,7 @@ export interface CompensationPolicyFormProps {
   onSelectRoadRoundingMode(mode: RoadRoundingMode): void;
   onCopyActiveState(): void;
   canApplyPercentageIncrease: boolean;
+  groupsOnly?: boolean;
 }
 
 const inputClassName = 'min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 font-mono focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100';
@@ -135,6 +136,7 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
   onSelectRoadRoundingMode,
   onCopyActiveState,
   canApplyPercentageIncrease,
+  groupsOnly = false,
 }) => {
   const [percentageRaw, setPercentageRaw] = useState('');
   const [percentageFeedback, setPercentageFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
@@ -282,6 +284,7 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           </section>
         )}
 
+        {!groupsOnly && <>
         <section aria-labelledby="policy-money-heading" data-testid="compensation-policy-core-fields" className="space-y-3 border-t border-slate-200 pt-3">
           <div>
             <h3 id="policy-money-heading" className="text-sm font-bold text-slate-900">Ücretler ve yan haklar</h3>
@@ -297,6 +300,9 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           </div>
         </section>
 
+        </>}
+
+        {groupsOnly && <>
         <section aria-labelledby="policy-premium-heading" className="space-y-2 border-t border-slate-200 pt-3">
           <div>
             <h3 id="policy-premium-heading" className="text-sm font-bold text-slate-900">İş primi grupları</h3>
@@ -407,7 +413,9 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           </table>
           <button type="button" className="min-h-8 rounded px-2 py-1 text-xs font-semibold text-indigo-800 underline underline-offset-2 hover:bg-indigo-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600" disabled={disabled} onClick={() => change({ isPrimiGruplari: [...draft.isPrimiGruplari, { id: '', ad: '', oran: '', aktif: false }] })}>Grup ekle</button>
         </section>
+        </>}
 
+        {!groupsOnly && <>
         <details className="border-t border-slate-200 pt-3">
           <summary className="cursor-pointer py-1 text-sm font-semibold text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
             Gece ve tatil çalışması · gece %{formatCompensationPolicyDecimalForUser(draft.geceCalismaPrimiYuzde)} · tatil %{formatCompensationPolicyDecimalForUser(draft.geceCalismaTatiliPrimiYuzde)}
@@ -452,6 +460,7 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           )}
           {!canApplyPercentageIncrease && <p className="mt-2 text-xs text-slate-500">Tutarlar geçerli olduğunda kullanılabilir.</p>}
         </details>
+        </>}
 
         <details id="policy-calculation-details" className="border-t border-slate-200 pt-3">
           <summary id="policy-calculation-details-summary" className="flex cursor-pointer flex-wrap items-center justify-between gap-2 rounded-md py-2 text-sm font-semibold text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">

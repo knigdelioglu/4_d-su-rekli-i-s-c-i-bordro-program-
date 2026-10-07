@@ -109,6 +109,7 @@ const DEDUCTION_NAVIGATION_ITEMS: readonly DeductionNavigationItem[] = [
 
 const PARAMETRE_NAVIGATION_ITEMS: readonly ParametreNavigationItem[] = [
   { id: 'gelir', label: 'Ücretler', testId: 'nav-parametre-gelir', icon: Settings },
+  { id: 'isPrimiGruplari', label: 'İş Primi Grupları', testId: 'nav-parametre-is-primi-gruplari', icon: Percent },
   { id: 'kesinti', label: 'Vergi & Yasal Oranlar', testId: 'nav-parametre-kesinti', icon: Percent },
   { id: 'annualTax', label: 'Yıllık GV Tarifesi', testId: 'nav-parametre-gv', icon: Percent },
   { id: 'tediyeTis', label: 'TİS / Tediye Takvimi', testId: 'nav-parametre-tediye-tis', icon: Gift },

@@ -35,6 +35,8 @@ import { TediyeTisSection } from './TediyeTisSection';
 import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
 import { findPeriodSettingsInheritanceSource } from './periodInheritance';
 import { describeError } from '../../utils/errorMessage';
+import { CompensationPolicyPage } from './CompensationPolicyPage';
+import type { CompensationPolicyPageProps } from '../../services/compensationPolicy/contract';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -58,6 +60,7 @@ export interface PeriodSettingsPageProps {
   onSaveSickLeaveRecord: (record: SickLeaveRecord) => Promise<void> | void;
   onDeleteSickLeaveRecord: (id: string) => Promise<void> | void;
   onOpenCompensationPolicy: () => void;
+  compensationPolicyProps?: CompensationPolicyPageProps | null;
 }
 
 const sanitizeTediyeList = (list?: TediyeKalemi[]) =>
@@ -130,6 +133,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   onSaveSickLeaveRecord,
   onDeleteSickLeaveRecord,
   onOpenCompensationPolicy,
+  compensationPolicyProps,
 }) => {
   const currentYear = new Date().getFullYear();
   const configuredYears = [
@@ -469,6 +473,18 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
 
   const renderActiveSection = () => {
     if (activeSection === 'license') return <LicenseSettingsSection />;
+
+    if (activeSection === 'isPrimiGruplari') {
+      return compensationPolicyProps ? (
+        <CompensationPolicyPage {...compensationPolicyProps} groupsOnly />
+      ) : (
+        <MissingPeriodSection
+          testId="period-settings-is-primi-gruplari"
+          title="İş Primi Grupları"
+          onOpenNewPeriod={openNewPeriod}
+        />
+      );
+    }
 
     if (activeSection === 'gelir') {
       return aktifDonem ? (

@@ -503,6 +503,7 @@ const Harness: React.FC = () => {
   };
 
   return <CompensationPolicyPage
+    groupsOnly={Boolean((window as Window & { __groupsOnly?: boolean }).__groupsOnly)}
     scope={scope}
     loadState={loadState}
     draft={draft}

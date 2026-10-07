@@ -28,7 +28,7 @@ const errorBoxClass = 'rounded-md border border-rose-300 bg-rose-50 p-3 text-sm 
 const warningBoxClass = 'rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950';
 const successBoxClass = 'rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900';
 
-type Props = CompensationPolicyPageProps;
+type Props = CompensationPolicyPageProps & { groupsOnly?: boolean };
 type Draft = Props['draft'];
 
 function stableValue(value: unknown): string {
@@ -366,7 +366,7 @@ function policySelectionSource(
   return load.activePolicyProjection.kind === 'ACTIVE' ? load.activePolicyProjection.version : null;
 }
 
-export const CompensationPolicyPage: React.FC<Props> = (props) => {
+export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ...props }) => {
   const succeededLoad = props.saveState.status === 'succeeded' ? props.saveState.authoritativeLoad : null;
   const readyLoad = props.loadState.status === 'ready' ? props.loadState.value : null;
   const candidateAuthoritativeLoad = succeededLoad && stableValue(succeededLoad.scope) === stableValue(props.scope)
@@ -721,8 +721,8 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
       <div data-testid="compensation-policy-scroll-region" className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h1 id="compensation-policy-title" className="text-xl font-bold tracking-tight">{showInitialBaselineCard ? 'Başlangıç ücretlerini oluştur' : 'Ücret politikası'}</h1>
-          <p className="mt-1 text-sm text-slate-600">{showInitialBaselineCard ? 'Dönem başlangıç ücretlerini kontrol edin ve etkileri inceleyin.' : 'Ücretleri gözden geçirin, etkileri önizleyin ve kaydedin.'}</p>
+          <h1 id="compensation-policy-title" className="text-xl font-bold tracking-tight">{groupsOnly ? 'İş Primi Grupları' : showInitialBaselineCard ? 'Başlangıç ücretlerini oluştur' : 'Ücret politikası'}</h1>
+          <p className="mt-1 text-sm text-slate-600">{groupsOnly ? 'Personel kartlarında seçilebilen grupları ve oranlarını düzenleyin. Değişiklikler ücret politikası önizlemesiyle kaydedilir.' : showInitialBaselineCard ? 'Dönem başlangıç ücretlerini kontrol edin ve etkileri inceleyin.' : 'Ücretleri gözden geçirin, etkileri önizleyin ve kaydedin.'}</p>
           <p className="mt-2 text-xs font-medium text-slate-700">{periodName(props.scope.periodId)} · {shortDate(props.scope.periodStartInclusive)}–{shortDate(props.scope.periodEndInclusive)}</p>
         </div>
         {props.loadState.status === 'idle' && (
@@ -815,6 +815,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
             onSelectRoadRoundingMode={selectRoadMode}
             onCopyActiveState={copyActivePolicyDraft}
             canApplyPercentageIncrease={validation.fullState.status === 'VALID' && !disabledForm}
+            groupsOnly={groupsOnly}
           />
 
           {props.previewState.status === 'error' && showApiError(props.previewState.error, 'preview')}

@@ -76,6 +76,7 @@ export function isKesintiTipi(value: string | null): value is KesintiTipi {
 
 export type ParametreSection =
   | 'gelir'
+  | 'isPrimiGruplari'
   | 'kesinti'
   | 'annualTax'
   | 'tediyeTis'
@@ -86,6 +87,7 @@ export type ParametreSection =
 
 export const PARAMETRE_SECTIONS: readonly ParametreSection[] = [
   'gelir',
+  'isPrimiGruplari',
   'kesinti',
   'annualTax',
   'tediyeTis',

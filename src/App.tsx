@@ -813,6 +813,7 @@ export default function App() {
                       setActiveTab('puantaj');
                     }}
                     onOpenCompensationPolicy={() => setActiveTab('compensationPolicy')}
+                    compensationPolicyProps={compensationPolicyProps}
                   />
                 )}
 
