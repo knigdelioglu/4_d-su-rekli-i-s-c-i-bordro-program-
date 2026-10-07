@@ -148,7 +148,7 @@ pub fn canonical_sgk_income_components(
 /// explicit zero has the same meaning as an absent fixed amount.
 pub(crate) fn calculate_oks_deduction(
     pek: Decimal,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
     person: Option<&Personel>,
     apply_fixed: bool,
 ) -> Option<Decimal> {
@@ -837,11 +837,110 @@ pub fn validate_kurum_degerleri_for_payroll(
     Ok(())
 }
 
+/// Validates the legal, deduction, and meal-policy inputs on the active
+/// payroll boundary. Compensation rates are intentionally absent from this
+/// model and are validated by the compensation-policy owner.
+pub fn validate_period_institution_settings_for_payroll(
+    settings: &PayrollPeriodInstitutionSettings,
+) -> Result<()> {
+    let required_non_negative = [
+        ("sgkIsciOraniYuzde", settings.sgkIsciOraniYuzde),
+        ("issizlikIsciOraniYuzde", settings.issizlikIsciOraniYuzde),
+        ("sendikaAidatiYuzde", settings.sendikaAidatiYuzde),
+        ("besOraniYuzde", settings.besOraniYuzde),
+        ("gunlukYemekIstisnasiSGK", settings.gunlukYemekIstisnasiSGK),
+        ("gunlukYemekIstisnasiGV", settings.gunlukYemekIstisnasiGV),
+        ("gunlukAsgariUcret", settings.gunlukAsgariUcret),
+        ("pekTavanKatsayisi", settings.pekTavanKatsayisi),
+        ("sgkIsverenOraniYuzde", settings.sgkIsverenOraniYuzde),
+        (
+            "issizlikIsverenOraniYuzde",
+            settings.issizlikIsverenOraniYuzde,
+        ),
+    ];
+    for (field, value) in required_non_negative {
+        let value = value.ok_or_else(|| {
+            DomainError::ValidationError(format!(
+                "{} dönemi için zorunlu yasal parametre eksik: {}.",
+                settings.donemId, field
+            ))
+        })?;
+        if value < Decimal::ZERO {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi yasal parametresi negatif olamaz: {}.",
+                settings.donemId, field
+            )));
+        }
+    }
+
+    for (field, value) in [
+        ("sgkIsciOraniYuzde", settings.sgkIsciOraniYuzde),
+        ("issizlikIsciOraniYuzde", settings.issizlikIsciOraniYuzde),
+        ("sendikaAidatiYuzde", settings.sendikaAidatiYuzde),
+        ("besOraniYuzde", settings.besOraniYuzde),
+        ("sgkIsverenOraniYuzde", settings.sgkIsverenOraniYuzde),
+        (
+            "issizlikIsverenOraniYuzde",
+            settings.issizlikIsverenOraniYuzde,
+        ),
+    ] {
+        if value.is_some_and(|value| value > dec!(100)) {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi yasal parametresi %0-%100 arasında olmalıdır: {}.",
+                settings.donemId, field
+            )));
+        }
+    }
+
+    let stamp_rate = settings.damgaVergisiOraniBinde.ok_or_else(|| {
+        DomainError::ValidationError(format!(
+            "{} dönemi için zorunlu yasal parametre eksik: damgaVergisiOraniBinde.",
+            settings.donemId
+        ))
+    })?;
+    if !(Decimal::ZERO..=dec!(1000)).contains(&stamp_rate) {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi damga vergisi oranı binde 0-1000 arasında olmalıdır.",
+            settings.donemId
+        )));
+    }
+    if settings
+        .gunlukAsgariUcret
+        .is_some_and(|value| value <= Decimal::ZERO)
+    {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi günlük asgari ücret sıfırdan büyük olmalıdır.",
+            settings.donemId
+        )));
+    }
+    if settings
+        .pekTavanKatsayisi
+        .is_some_and(|value| value < Decimal::ONE)
+    {
+        return Err(DomainError::ValidationError(format!(
+            "{} dönemi PEK tavan katsayısı en az 1 olmalıdır.",
+            settings.donemId
+        )));
+    }
+    for (field, value) in [
+        ("sabitSendikaAidati", settings.sabitSendikaAidati),
+        ("sabitBesTutar", settings.sabitBesTutar),
+    ] {
+        if value.is_some_and(|value| value < Decimal::ZERO) {
+            return Err(DomainError::ValidationError(format!(
+                "{} dönemi kesinti değeri negatif olamaz: {}.",
+                settings.donemId, field
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Validates only the statutory inputs used to build an historical monthly
 /// asgari-GV reference. Historical reference periods need not have unrelated
 /// payroll fields (for example employer premium and night-work rates) filled.
 pub fn validate_kurum_degerleri_for_asgari_gv_reference(
-    kurum_degerleri: &DonemselKurumDegerleri,
+    kurum_degerleri: &PayrollPeriodInstitutionSettings,
 ) -> Result<()> {
     let required = |field: &str, value: Option<Decimal>| {
         value.ok_or_else(|| {
@@ -1075,10 +1174,11 @@ pub fn calculate_prime_esas_kazanc(
     kurum_degerleri: Option<&DonemselKurumDegerleri>,
     devreden_pek_gelen: &[DevredenPekKaydi],
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    let active_settings = kurum_degerleri.map(PayrollPeriodInstitutionSettings::from);
     calculate_prime_esas_kazanc_with_statutory_snapshot(
         gelirler,
         puantaj_ozeti,
-        kurum_degerleri,
+        active_settings.as_ref(),
         devreden_pek_gelen,
         None,
     )
@@ -1087,7 +1187,7 @@ pub fn calculate_prime_esas_kazanc(
 fn calculate_prime_esas_kazanc_with_statutory_snapshot(
     gelirler: &GelirKalemleri,
     puantaj_ozeti: Option<&PuantajOzeti>,
-    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    kurum_degerleri: Option<&PayrollPeriodInstitutionSettings>,
     devreden_pek_gelen: &[DevredenPekKaydi],
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
@@ -1114,10 +1214,11 @@ pub fn calculate_incremental_prime_esas_kazanc(
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     month_to_date_pek: Decimal,
 ) -> (PekDetayi, Vec<DevredenPekKaydi>) {
+    let active_settings = kurum_degerleri.map(PayrollPeriodInstitutionSettings::from);
     calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
         gelirler,
         puantaj_ozeti,
-        kurum_degerleri,
+        active_settings.as_ref(),
         devreden_pek_gelen,
         statutory_snapshot,
         month_to_date_pek,
@@ -1133,7 +1234,7 @@ pub fn calculate_incremental_prime_esas_kazanc(
 fn calculate_prime_esas_kazanc_with_month_to_date(
     gelirler: &GelirKalemleri,
     puantaj_ozeti: Option<&PuantajOzeti>,
-    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    kurum_degerleri: Option<&PayrollPeriodInstitutionSettings>,
     devreden_pek_gelen: &[DevredenPekKaydi],
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     month_to_date_pek: Decimal,
@@ -1171,7 +1272,7 @@ pub(crate) struct PekCalculationOptions {
 pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
     gelirler: &GelirKalemleri,
     puantaj_ozeti: Option<&PuantajOzeti>,
-    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    kurum_degerleri: Option<&PayrollPeriodInstitutionSettings>,
     devreden_pek_gelen: &[DevredenPekKaydi],
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     month_to_date_pek: Decimal,
@@ -1193,7 +1294,7 @@ pub(crate) fn calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
         .clamp(0, 30);
     let fiili_yemek_gunu = puantaj_ozeti.map_or(0, |p| p.c + p.gc);
 
-    let default_k = DonemselKurumDegerleri::default();
+    let default_k = PayrollPeriodInstitutionSettings::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     let brut_yemek = gelirler.yemek.unwrap_or(dec!(0));
@@ -1415,7 +1516,8 @@ pub fn calculate_legacy_statutory_deductions_with_month_to_date(
 /// calculator after the engine has resolved meal, retro, and annual state.
 pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_state(
     gelirler: &GelirKalemleri,
-    kurum_degerleri: Option<&DonemselKurumDegerleri>,
+    kurum_degerleri: Option<&PayrollPeriodInstitutionSettings>,
+    daily_base_wage: Option<Decimal>,
     personel: Option<&Personel>,
     puantaj_ozeti: Option<&PuantajOzeti>,
     tax_inputs: &StatutoryDeductionTaxInputs<'_>,
@@ -1424,7 +1526,7 @@ pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_
 ) -> Result<(KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>)> {
     let month_to_date_pek = options.month_to_date_pek;
     let brut_gelir = calculate_gelir_toplam(gelirler);
-    let default_k = DonemselKurumDegerleri::default();
+    let default_k = PayrollPeriodInstitutionSettings::default();
     let k = kurum_degerleri.unwrap_or(&default_k);
 
     // PEK önce çözülür. Cari brüt sıfır olsa bile tavan içine alınan devreden PEK
@@ -1471,7 +1573,7 @@ pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_
             .or_else(|| k.sabitSendikaAidati.filter(|&sabit| sabit > dec!(0)))
             .unwrap_or_else(|| {
                 let sendika_orani = k.sendikaAidatiYuzde.unwrap_or(dec!(65)) / dec!(100);
-                round2(k.gunlukTabanUcret * sendika_orani)
+                round2(daily_base_wage.unwrap_or_default() * sendika_orani)
             })
     } else {
         dec!(0)
@@ -1530,10 +1632,12 @@ fn calculate_legacy_statutory_deductions_with_month_to_date_impl(
     statutory_snapshot: Option<&ResolvedStatutorySnapshot>,
     options: StatutoryCalculationOptions,
 ) -> Result<(KesintiKalemleri, PekDetayi, Vec<DevredenPekKaydi>)> {
+    let active_settings = kurum_degerleri.map(PayrollPeriodInstitutionSettings::from);
     let (mut deductions, pek_detail, next_devreden) =
         calculate_statutory_contributions_with_month_to_date_and_devreden_state(
             gelirler,
-            kurum_degerleri,
+            active_settings.as_ref(),
+            kurum_degerleri.map(|settings| settings.gunlukTabanUcret),
             personel,
             puantaj_ozeti,
             tax_inputs,

@@ -1,5 +1,10 @@
 #[cfg(test)]
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
+
+#[cfg(test)]
 mod smoke_tests {
+    use super::compensation_policy_test_support;
     use bordro_programi_lib::db::create_connection;
     use bordro_programi_lib::domain::models::*;
     use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
@@ -139,6 +144,11 @@ mod smoke_tests {
                 ..Default::default()
             };
             SettingsRepository::save_institution_settings(&conn, &haziran_settings)?;
+            compensation_policy_test_support::seed_period_baseline(
+                &conn,
+                &mayis2026,
+                &mayis_settings,
+            )?;
 
             // 4. Add Attendance (Puantaj) for May 2026 (30 days "Ç") & June 2026 (30 days "Ç")
             // Attendance keys must be real calendar dates inside the exact 15-14 payroll period.
@@ -178,8 +188,8 @@ mod smoke_tests {
                 year: 2026,
                 gvCumulativeOpening: Some(dec!(120000)),
                 effectiveFromPeriodId: Some("2026-05".into()),
-                asgariGvCumulativeOpening: None,
-                asgariGvEffectiveFromPeriodId: None,
+                asgariGvCumulativeOpening: Some(dec!(0)),
+                asgariGvEffectiveFromPeriodId: Some("2026-05".into()),
                 createdAt: None,
                 updatedAt: None,
             };

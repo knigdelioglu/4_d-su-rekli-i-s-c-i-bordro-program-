@@ -1,3 +1,4 @@
+pub mod compensation_policy_service;
 pub mod cumulative_tax_service;
 pub mod migration_service;
 pub mod payroll_notice_service;

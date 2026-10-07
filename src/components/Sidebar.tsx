@@ -469,6 +469,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             <button
               type="button"
+              data-testid="nav-compensation-policy"
+              onClick={() => {
+                onTabChange('compensationPolicy');
+                onClose();
+              }}
+              aria-current={activeTab === 'compensationPolicy' ? 'page' : undefined}
+              className={`mt-1 flex min-h-10 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-xs font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                activeTab === 'compensationPolicy'
+                  ? 'bg-indigo-50 text-indigo-700'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+              }`}
+            >
+              <FileText aria-hidden="true" className={`h-4 w-4 shrink-0 ${activeTab === 'compensationPolicy' ? 'text-indigo-600' : 'text-slate-400'}`} />
+              <span>Ücret Politikası</span>
+            </button>
+
+            <button
+              type="button"
               data-testid="nav-veri"
               onClick={() => {
                 onTabChange('veri');

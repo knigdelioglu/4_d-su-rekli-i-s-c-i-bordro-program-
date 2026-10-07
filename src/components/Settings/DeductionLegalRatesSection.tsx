@@ -1,6 +1,6 @@
 import React from 'react';
 import { Award, Percent, Plus, Save, ShieldAlert, Trash2, Check } from 'lucide-react';
-import type { BordroDonemi, DönemselKurumDegerleri } from '../../types/payroll';
+import type { BordroDonemi, PayrollPeriodInstitutionSettings } from '../../types/payroll';
 import { formatDateTR, formatTL } from '../../utils/payrollPresentation';
 
 type StatutoryField =
@@ -13,8 +13,8 @@ type StatutoryField =
 interface DeductionLegalRatesSectionProps {
   aktifDonemId: string;
   activePeriodForParams?: BordroDonemi;
-  paramsForm: DönemselKurumDegerleri;
-  setParamsForm: React.Dispatch<React.SetStateAction<DönemselKurumDegerleri>>;
+  paramsForm: PayrollPeriodInstitutionSettings;
+  setParamsForm: React.Dispatch<React.SetStateAction<PayrollPeriodInstitutionSettings>>;
   savedSuccess: boolean;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
 }
@@ -28,16 +28,13 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
   onSubmit,
 }) => {
   const updateNumber = (
-    field: keyof DönemselKurumDegerleri,
+    field: keyof PayrollPeriodInstitutionSettings,
     value: number
   ) => {
     setParamsForm((current) => ({ ...current, [field]: value }));
   };
 
   const sendikaOrani = paramsForm.sendikaAidatiYuzde ?? 65;
-  const otomatikSendikaAidati = Math.round(
-    (paramsForm.gunlukTabanUcret * sendikaOrani) / 100 * 100
-  ) / 100;
 
   const addStatutorySegment = () => {
     setParamsForm((current) => ({
@@ -219,7 +216,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Günlük çıplak ücret × %{sendikaOrani} = {formatTL(otomatikSendikaAidati)} / gün
+                Günlük çıplak ücret × %{sendikaOrani}; ücret, etkin ücret politikası sürümünden alınır.
               </span>
             </div>
 
@@ -236,7 +233,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                0 kalırsa günlük çıplak ücretin %{sendikaOrani}&apos;i ({formatTL(otomatikSendikaAidati)} / gün) uygulanır
+                0 kalırsa oran etkin ücret politikası sürümündeki günlük çıplak ücrete uygulanır.
               </span>
               {(paramsForm.sabitSendikaAidati ?? 0) > 0 && (
                 <span className="text-[11px] text-amber-700 mt-1 block">

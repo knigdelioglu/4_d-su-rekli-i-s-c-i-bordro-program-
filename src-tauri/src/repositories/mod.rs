@@ -1,6 +1,7 @@
 use crate::domain::{DomainError, Result};
 pub mod annual_payroll_parameters_repo;
 pub mod attendance_repo;
+pub mod compensation_policy_repo;
 pub mod payroll_invalidation_repo;
 pub mod payroll_repo;
 pub mod period_repo;

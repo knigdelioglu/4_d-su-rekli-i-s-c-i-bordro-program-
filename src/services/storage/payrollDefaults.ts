@@ -1,7 +1,7 @@
 import type {
   AnnualPayrollParameters,
-  DönemselKurumDegerleri,
   IsPrimiGrupItem,
+  PayrollPeriodInstitutionSettings,
   TaxBracket,
   TediyeKalemi,
   TisIkramiyeKalemi,
@@ -52,23 +52,9 @@ export const DEFAULT_STATUTORY_PERIOD_PARAMETERS = {
   sgkIsverenOraniYuzde: 21.75,
   issizlikIsverenOraniYuzde: 2,
   statutoryParameterSegments: [],
-} satisfies Omit<
-  DönemselKurumDegerleri,
+} satisfies Omit<PayrollPeriodInstitutionSettings,
   | 'donemId'
-  | 'gunlukTabanUcret'
-  | 'gunlukYemek'
   | 'yemekTamGvIstisnaDamgaTabi'
-  | 'birlestirilmisSosyalYardim'
-  | 'gunlukVasitaYol'
-  | 'transportRateChanges'
-  | 'giyimYardimi'
-  | 'hizmetZammiBirimi'
-  | 'isPrimiYuzde'
-  | 'isPrimiGruplari'
-  | 'geceCalismaPrimiYuzde'
-  | 'geceCalismaTatiliPrimiYuzde'
-  | 'ekOdeme'
-  | 'digerGelirVarsayilan'
   | 'tediyeListesi'
   | 'tisIkramiyeListesi'
   | 'tediyeTisNotu'
@@ -105,25 +91,11 @@ export function ensureAnnualPayrollParameters(
  * Boş kurulumun dönem başlangıç snapshot'ı. Kurumun ücretleri bilerek sıfırdır;
  * yasal değerler ise desteklenen yıl için deterministik olarak hazırdır.
  */
-export const DEFAULT_PRODUCTION_KURUM_DEGERLERI: Omit<DönemselKurumDegerleri, 'donemId'> = {
-  gunlukTabanUcret: 0,
-  gunlukYemek: 0,
+export const DEFAULT_PRODUCTION_KURUM_DEGERLERI: Omit<PayrollPeriodInstitutionSettings, 'donemId'> = {
   yemekTamGvIstisnaDamgaTabi: true,
-  birlestirilmisSosyalYardim: 0,
-  gunlukVasitaYol: 0,
-  transportRateChanges: [],
-  giyimYardimi: 0,
-  hizmetZammiBirimi: 0,
-  isPrimiYuzde: 0,
-  isPrimiGruplari: [],
-  geceCalismaPrimiYuzde: 0,
-  geceCalismaTatiliPrimiYuzde: 0,
-  ekOdeme: 0,
-  digerGelirVarsayilan: 0,
   tediyeListesi: [],
   tisIkramiyeListesi: [],
-  tediyeTisNotu:
-    'Kurum ücretleri henüz tanımlanmadı. Yasal değerler sistem tarafından hazırlandı; kurumunuza özgü ücretleri bu bölümden girin.',
+  tediyeTisNotu: '',
   ...DEFAULT_STATUTORY_PERIOD_PARAMETERS,
   sendikaAidatiYuzde: 0,
   sabitSendikaAidati: 0,

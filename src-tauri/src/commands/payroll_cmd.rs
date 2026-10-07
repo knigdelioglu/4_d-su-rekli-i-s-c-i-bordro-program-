@@ -38,6 +38,52 @@ pub fn calculate_payroll(
 }
 
 #[tauri::command]
+pub fn calculate_compensation_policy_payroll(
+    license: State<'_, crate::license::LicenseRuntime>,
+    db: State<'_, DbState>,
+    personnel_id: String,
+    period_id: String,
+    manual_income: Option<ManualPayrollIncomeInput>,
+    accrual: Option<PayrollAccrualInput>,
+) -> Result<BordroKaydi> {
+    crate::license::require_allowed(license.data_dir(), "ücret politikasıyla bordro hesaplama")
+        .map_err(DomainError::ValidationError)?;
+    let conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
+    PayrollService::calculate_payroll_for_accrual_with_compensation_policy_checked(
+        &conn,
+        &personnel_id,
+        &period_id,
+        accrual.as_ref(),
+        manual_income.as_ref(),
+    )
+}
+
+#[tauri::command]
+pub fn validate_payroll_request(
+    license: State<'_, crate::license::LicenseRuntime>,
+    db: State<'_, DbState>,
+    personnel_id: String,
+    period_id: String,
+    manual_income: Option<ManualPayrollIncomeInput>,
+    accrual: Option<PayrollAccrualInput>,
+) -> Result<()> {
+    crate::license::require_allowed(license.data_dir(), "bordro ön kontrolü")
+        .map_err(DomainError::ValidationError)?;
+    let conn = db.lock().map_err(|e| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
+    })?;
+    PayrollService::validate_payroll_request_for_accrual_with_manual_income(
+        &conn,
+        &personnel_id,
+        &period_id,
+        accrual.as_ref(),
+        manual_income.as_ref(),
+    )
+}
+
+#[tauri::command]
 pub fn finalize_payroll(
     license: State<'_, crate::license::LicenseRuntime>,
     db: State<'_, DbState>,

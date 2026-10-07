@@ -4,13 +4,13 @@
 
 import {
   BordroDonemi,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
 } from '../types/payroll';
 import {
   createBordroDonemi,
-  DEFAULT_KURUM_DEGERLERI,
+  DEFAULT_PRODUCTION_KURUM_DEGERLERI,
   generateDefaultPuantajGunler,
 } from './payrollPresentation';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
@@ -109,13 +109,13 @@ export function getInitialDataset() {
   // Include the preceding December as tax month 1 for the current year's
   // minimum-wage income-tax reference chain, then January through August.
   const donemler: BordroDonemi[] = [];
-  const kurumDegerleriMap: Record<string, DönemselKurumDegerleri> = {};
+  const kurumDegerleriMap: Record<string, PayrollPeriodInstitutionSettings> = {};
 
   const referencePeriod = createBordroDonemi(currentYear - 1, 12, currentYear, 1);
   donemler.push(referencePeriod);
   kurumDegerleriMap[referencePeriod.id] = {
     donemId: referencePeriod.id,
-    ...DEFAULT_KURUM_DEGERLERI,
+    ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
   };
 
   for (let m = 1; m <= 8; m++) {
@@ -123,7 +123,7 @@ export function getInitialDataset() {
     donemler.push(d);
     kurumDegerleriMap[d.id] = {
       donemId: d.id,
-      ...DEFAULT_KURUM_DEGERLERI,
+      ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
     };
   }
 
@@ -178,6 +178,5 @@ export function getInitialDataset() {
     taxOpenings: [],
     sickLeaveRecords: [],
     annualPayrollParameters: annualDefaults ? [annualDefaults] : [],
-    zamAylari: [],
   };
 }

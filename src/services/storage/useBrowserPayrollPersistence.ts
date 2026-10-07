@@ -15,6 +15,7 @@ import type { PayrollEngine } from '../payrollEngine/types';
 import {
   parseCurrentBrowserSnapshot,
   parseImportedBackup,
+  validatePayrollMetadataThroughCore,
   verifyCurrentPayrollBackupReplay,
 } from './payrollPayload';
 import { describeError } from '../../utils/errorMessage';
@@ -119,6 +120,7 @@ export function useBrowserPayrollPersistence({
   const verifyStoredSnapshot = useCallback(async (saved: BrowserPayrollSnapshot | null) => {
     if (!saved) return;
     const payload = parseBrowserSnapshotPayload(saved);
+    await validatePayrollMetadataThroughCore(payload);
     if (saved.sourceFormat === 'current') {
       await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
     }
@@ -153,6 +155,11 @@ export function useBrowserPayrollPersistence({
         .catch(() => undefined)
         .then(async () => {
           try {
+            const canonicalPayload = parseCurrentBrowserSnapshot(
+              payload,
+              sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }
+            );
+            await validatePayrollMetadataThroughCore(canonicalPayload);
             const revision = await browserPayrollStore.savePayload(
               payload,
               snapshotRevision.current,
@@ -212,6 +219,7 @@ export function useBrowserPayrollPersistence({
     return browserPayrollStore.subscribe((snapshot: BrowserPayrollSnapshot) => {
       void (async () => {
         const payload = parseBrowserSnapshotPayload(snapshot);
+        await validatePayrollMetadataThroughCore(payload);
         if (snapshot.sourceFormat === 'current') {
           await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
         }

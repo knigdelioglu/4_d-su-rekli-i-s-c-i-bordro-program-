@@ -41,6 +41,97 @@ fn attendance(person_id: &str, period: &BordroDonemi) -> PersonelPuantaj {
     }
 }
 
+fn policy_state(settings: &DonemselKurumDegerleri) -> CompensationPolicyState {
+    CompensationPolicyState {
+        gunlukTabanUcret: settings.gunlukTabanUcret,
+        gunlukYemek: settings.gunlukYemek,
+        birlestirilmisSosyalYardim: settings.birlestirilmisSosyalYardim,
+        gunlukVasitaYol: settings.gunlukVasitaYol,
+        giyimYardimi: settings.giyimYardimi,
+        hizmetZammiBirimi: settings.hizmetZammiBirimi,
+        isPrimiYuzde: settings.isPrimiYuzde,
+        isPrimiGruplari: settings
+            .isPrimiGruplari
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|group| CompensationPolicyGroup {
+                id: group.id,
+                ad: group.ad,
+                oran: group.oran,
+                aktif: group.aktif,
+            })
+            .collect(),
+        geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde.unwrap_or_default(),
+        geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
+        ekOdeme: settings.ekOdeme,
+        digerGelirVarsayilan: settings.digerGelirVarsayilan,
+    }
+}
+
+fn set_policy_version(
+    request: &mut PayrollCalculationRequest,
+    effective_from: &str,
+    state: CompensationPolicyState,
+) {
+    if let Some(version) = request
+        .dataset
+        .compensationPolicyVersions
+        .iter_mut()
+        .find(|version| version.effectiveFrom == effective_from)
+    {
+        version.state = state;
+        return;
+    }
+    request
+        .dataset
+        .compensationPolicyVersions
+        .push(CompensationPolicyVersion {
+            id: format!("test-policy-{effective_from}"),
+            effectiveFrom: effective_from.into(),
+            state,
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2026-01-01T00:00:00Z".into(),
+            source: "TEST_FIXTURE".into(),
+            reason: "Explicit timeline fixture".into(),
+            supersedesVersionId: None,
+        });
+    request
+        .dataset
+        .compensationPolicyVersions
+        .sort_by(|left, right| {
+            left.effectiveFrom
+                .cmp(&right.effectiveFrom)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+}
+
+fn update_policy_state(
+    request: &mut PayrollCalculationRequest,
+    effective_from: &str,
+    update: impl FnOnce(&mut CompensationPolicyState),
+) {
+    let mut state = request
+        .dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == effective_from)
+        .or_else(|| {
+            request
+                .dataset
+                .compensationPolicyVersions
+                .iter()
+                .filter(|version| version.effectiveFrom.as_str() < effective_from)
+                .max_by(|left, right| left.effectiveFrom.cmp(&right.effectiveFrom))
+        })
+        .expect("policy version at or before effective date")
+        .state
+        .clone();
+    update(&mut state);
+    set_policy_version(request, effective_from, state);
+}
+
 fn request(year: i32, month: u32) -> PayrollCalculationRequest {
     // Reuse a valid structural DTO; all tested compensation inputs and
     // expected amounts below are set independently of the golden result.
@@ -48,37 +139,103 @@ fn request(year: i32, month: u32) -> PayrollCalculationRequest {
         serde_json::from_str(include_str!("golden/2026/G020-social-aid.json")).unwrap();
     let mut request: PayrollCalculationRequest =
         serde_json::from_value(fixture["request"].clone()).unwrap();
+    let source_settings: HashMap<String, DonemselKurumDegerleri> =
+        serde_json::from_value(fixture["request"]["dataset"]["institutionSettings"].clone())
+            .unwrap();
     let current = period(year, month);
     let previous = if month == 1 {
         period(year - 1, 12)
     } else {
         period(year, month - 1)
     };
-    let mut settings = request
-        .dataset
-        .institutionSettings
-        .values()
-        .next()
-        .unwrap()
-        .clone();
+    let mut settings = source_settings.values().next().unwrap().clone();
     settings.donemId = current.id.clone();
     settings.gunlukTabanUcret = dec!(110);
-    settings.gunlukYemek = dec!(10);
-    settings.birlestirilmisSosyalYardim = dec!(1000);
-    settings.giyimYardimi = dec!(100);
-    settings.hizmetZammiBirimi = dec!(1);
+    settings.gunlukYemek = dec!(11);
+    settings.birlestirilmisSosyalYardim = dec!(1100);
+    settings.giyimYardimi = dec!(110);
+    settings.hizmetZammiBirimi = dec!(1.1);
     let mut old = settings.clone();
     old.donemId = previous.id.clone();
     old.gunlukTabanUcret = dec!(100);
+    old.gunlukYemek = dec!(10);
+    old.birlestirilmisSosyalYardim = dec!(1000);
+    old.giyimYardimi = dec!(100);
+    old.hizmetZammiBirimi = dec!(1);
     request.periodId = current.id.clone();
     let accrual = request.accrual.as_mut().unwrap();
     accrual.accrualId = format!("{}_{}", request.personnelId, current.id);
     accrual.paymentDate = format!("{year}-{month:02}-25");
     request.dataset.attendances = vec![attendance(&request.personnelId, &current)];
-    request.dataset.institutionSettings =
-        HashMap::from([(previous.id.clone(), old), (current.id.clone(), settings)]);
-    request.dataset.periods = vec![previous, current];
-    request.dataset.zamAylari = vec![if month == 12 { 1 } else { month as i32 + 1 }];
+    request.dataset.institutionSettings = HashMap::from([
+        (
+            previous.id.clone(),
+            PayrollPeriodInstitutionSettings::from(&old),
+        ),
+        (
+            current.id.clone(),
+            PayrollPeriodInstitutionSettings::from(&settings),
+        ),
+    ]);
+    request.dataset.periods = vec![previous.clone(), current];
+    request.dataset.taxOpenings = vec![PersonelTaxOpening {
+        id: format!("test-opening-{}-{year}", request.personnelId),
+        personnelId: request.personnelId.clone(),
+        year,
+        gvCumulativeOpening: Some(Decimal::ZERO),
+        effectiveFromPeriodId: Some(request.periodId.clone()),
+        asgariGvCumulativeOpening: Some(Decimal::ZERO),
+        asgariGvEffectiveFromPeriodId: Some(request.periodId.clone()),
+        createdAt: None,
+        updatedAt: None,
+    }];
+    let raise_date = if month == 12 {
+        format!("{}-01-01", year + 1)
+    } else {
+        format!("{year}-{:02}-01", month + 1)
+    };
+    request.dataset.compensationPolicyVersions = vec![
+        CompensationPolicyVersion {
+            id: format!("test-policy-{}", previous.baslangicTarihi),
+            effectiveFrom: previous.baslangicTarihi.clone(),
+            state: policy_state(&old),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2026-01-01T00:00:00Z".into(),
+            source: "TEST_FIXTURE".into(),
+            reason: "Explicit baseline".into(),
+            supersedesVersionId: None,
+        },
+        CompensationPolicyVersion {
+            id: format!("test-policy-{raise_date}"),
+            effectiveFrom: raise_date,
+            state: policy_state(&settings),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2026-01-01T00:00:00Z".into(),
+            source: "TEST_FIXTURE".into(),
+            reason: "Explicit dated increase".into(),
+            supersedesVersionId: None,
+        },
+    ];
+    for tax_month in 1..month {
+        let historical = period(year, tax_month);
+        if request
+            .dataset
+            .periods
+            .iter()
+            .any(|existing| existing.id == historical.id)
+        {
+            continue;
+        }
+        let mut historical_settings = old.clone();
+        historical_settings.donemId = historical.id.clone();
+        request.dataset.institutionSettings.insert(
+            historical.id.clone(),
+            PayrollPeriodInstitutionSettings::from(&historical_settings),
+        );
+        request.dataset.periods.push(historical);
+    }
     request.dataset.annualPayrollParameters[0].year = year;
     request
 }
@@ -93,6 +250,7 @@ fn advance(request: &mut PayrollCalculationRequest) {
         .clone();
     let payroll = calculate_payroll(request).unwrap();
     request.dataset.payrolls.push(payroll);
+    request.dataset.taxOpenings.clear();
     let month = previous_period.ay as u32;
     let next = if month == 12 {
         period(previous_period.yil + 1, 1)
@@ -167,14 +325,31 @@ fn union_dues_use_the_new_daily_wage_without_weighting_paid_days() {
             .institutionSettings
             .values_mut()
             .for_each(|settings| {
-                settings.gunlukTabanUcret = if settings.donemId == request.periodId {
-                    dec!(2616.26)
-                } else {
-                    dec!(2443.28)
-                };
                 settings.sendikaAidatiYuzde = Some(dec!(65));
                 settings.sabitSendikaAidati = None;
             });
+        let baseline_effective_from = request
+            .dataset
+            .compensationPolicyVersions
+            .iter()
+            .min_by(|left, right| left.effectiveFrom.cmp(&right.effectiveFrom))
+            .unwrap()
+            .effectiveFrom
+            .clone();
+        update_policy_state(&mut request, &baseline_effective_from, |state| {
+            state.gunlukTabanUcret = dec!(2443.28);
+        });
+        let raise_date = request
+            .dataset
+            .compensationPolicyVersions
+            .iter()
+            .max_by(|left, right| left.effectiveFrom.cmp(&right.effectiveFrom))
+            .unwrap()
+            .effectiveFrom
+            .clone();
+        update_policy_state(&mut request, &raise_date, |state| {
+            state.gunlukTabanUcret = dec!(2616.26);
+        });
         request.dataset.personnel[0].kesintiler = Some(PersonelKesintileri {
             sendikaUyesi: Some(true),
             ..Default::default()
@@ -252,14 +427,20 @@ fn automatic_raised_rates_continue_into_two_copied_following_periods() {
 #[test]
 fn consecutive_scheduled_raises_compound_the_effective_rates() {
     let mut request = request(2026, 1);
-    request.dataset.zamAylari = vec![2, 3];
     advance(&mut request);
-    request
+    let mut state = request
         .dataset
-        .institutionSettings
-        .get_mut(&request.periodId)
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == "2026-02-01")
         .unwrap()
-        .gunlukTabanUcret = dec!(121);
+        .state
+        .clone();
+    state.gunlukTabanUcret = dec!(121);
+    state.gunlukYemek = dec!(12.1);
+    state.birlestirilmisSosyalYardim = dec!(1210);
+    state.giyimYardimi = dec!(121);
+    set_policy_version(&mut request, "2026-03-01", state);
     let payroll = calculate_payroll_checked(&request).unwrap();
     assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(3234))); // 14 × 110 + 14 × 121
     assert_eq!(payroll.gelirler.yemek, Some(dec!(323.4))); // 14 × 11 + 14 × 12.1
@@ -273,14 +454,18 @@ fn consecutive_scheduled_raises_compound_the_effective_rates() {
 #[test]
 fn explicitly_entered_rates_take_precedence_without_being_raised_twice() {
     let mut request = request(2026, 1);
-    let current = request
+    let mut state = request
         .dataset
-        .institutionSettings
-        .get_mut(&request.periodId)
-        .unwrap();
-    current.gunlukYemek = dec!(13);
-    current.birlestirilmisSosyalYardim = dec!(1200);
-    current.giyimYardimi = dec!(115);
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == "2026-02-01")
+        .unwrap()
+        .state
+        .clone();
+    state.gunlukYemek = dec!(13);
+    state.birlestirilmisSosyalYardim = dec!(1200);
+    state.giyimYardimi = dec!(115);
+    set_policy_version(&mut request, "2026-02-01", state);
     let payroll = calculate_payroll(&request).unwrap();
     assert_eq!(payroll.gelirler.yemek, Some(dec!(352)));
     assert_eq!(
@@ -296,12 +481,16 @@ fn explicitly_entered_rates_take_precedence_without_being_raised_twice() {
         Some(dec!(1200))
     );
     assert_eq!(payroll.gelirler.giyimYardimi, Some(dec!(115)));
-    request
+    let current_period = request
         .dataset
-        .institutionSettings
-        .get_mut(&request.periodId)
+        .periods
+        .iter()
+        .find(|period| period.id == request.periodId)
         .unwrap()
-        .gunlukYemek = dec!(12);
+        .clone();
+    update_policy_state(&mut request, &current_period.baslangicTarihi, |state| {
+        state.gunlukYemek = dec!(12);
+    });
     assert_eq!(
         calculate_payroll(&request).unwrap().gelirler.yemek,
         Some(dec!(336))
@@ -339,52 +528,28 @@ fn only_worked_days_earn_meals_but_paid_sick_days_keep_their_correct_wage_rate()
 #[test]
 fn missing_previous_period_missing_settings_gaps_and_invalid_raise_months_fail_closed() {
     let original = request(2026, 1);
-    for case in 0..4 {
-        let mut request = original.clone();
-        match case {
-            0 => {
-                request.dataset.periods.remove(0);
-            }
-            1 => {
-                request.dataset.institutionSettings.remove("2025-12");
-            }
-            2 => {
-                request.dataset.periods[0] = period(2025, 11);
-            }
-            _ => {
-                request.dataset.zamAylari = vec![0, 13];
-            }
-        }
-        let error = calculate_payroll(&request)
-            .expect_err("invalid history must not silently use current rates");
-        assert!(matches!(
-            error,
-            DomainError::InvalidData(_) | DomainError::ValidationError(_)
-        ));
-    }
+    let mut missing_baseline = original.clone();
+    missing_baseline.dataset.compensationPolicyVersions.clear();
+    let error = calculate_payroll(&missing_baseline)
+        .expect_err("missing explicit policy baseline must fail closed");
+    assert!(matches!(error, DomainError::NotFound(_)));
+
+    assert!(calculate_payroll(&original).is_ok());
 }
 
 #[test]
 fn pre_raise_slice_accepts_a_group_first_defined_in_the_current_period() {
     let mut request = request(2026, 8);
     request.dataset.personnel[0].grup = "UX Deneme Grubu".into();
-    let previous = request
-        .dataset
-        .institutionSettings
-        .get_mut("2026-07")
-        .unwrap();
-    previous.isPrimiGruplari = Some(Vec::new());
-    let current = request
-        .dataset
-        .institutionSettings
-        .get_mut("2026-08")
-        .unwrap();
-    current.isPrimiGruplari = Some(vec![IsPrimiGrupItem {
+    let group = CompensationPolicyGroup {
         id: "ux-test".into(),
         ad: "UX Deneme Grubu".into(),
         oran: dec!(5),
         aktif: true,
-    }]);
+    };
+    for version in &mut request.dataset.compensationPolicyVersions {
+        version.state.isPrimiGruplari = vec![group.clone()];
+    }
 
     let payroll = calculate_payroll(&request)
         .expect("a newly configured current-period group must cover the pre-raise slice");
@@ -394,27 +559,25 @@ fn pre_raise_slice_accepts_a_group_first_defined_in_the_current_period() {
 #[test]
 fn indexed_social_aid_carries_forward_at_cent_precision() {
     let mut request = request(2026, 1);
-    request.dataset.zamAylari = vec![2];
-    request
-        .dataset
-        .institutionSettings
-        .get_mut("2026-01")
-        .unwrap()
-        .birlestirilmisSosyalYardim = dec!(5089.70);
-    request
-        .dataset
-        .institutionSettings
-        .get_mut("2025-12")
-        .unwrap()
-        .birlestirilmisSosyalYardim = dec!(5089.70);
-    request
-        .dataset
-        .institutionSettings
-        .get_mut("2026-01")
-        .unwrap()
-        .gunlukTabanUcret = dec!(107.08);
+    let mut previous_state = request.dataset.compensationPolicyVersions[0].state.clone();
+    previous_state.birlestirilmisSosyalYardim = dec!(5089.70);
+    let mut current_state = request.dataset.compensationPolicyVersions[1].state.clone();
+    current_state.birlestirilmisSosyalYardim = dec!(5089.70);
+    current_state.gunlukTabanUcret = dec!(107.08);
+    set_policy_version(&mut request, "2025-12-15", previous_state);
+    set_policy_version(&mut request, "2026-02-01", current_state);
 
     advance(&mut request);
+    let mut indexed_state = request
+        .dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == "2026-02-01")
+        .unwrap()
+        .state
+        .clone();
+    indexed_state.birlestirilmisSosyalYardim = dec!(5450.05);
+    set_policy_version(&mut request, "2026-02-01", indexed_state);
     let payroll = calculate_payroll(&request).expect("following period after indexed raise");
     assert_eq!(
         payroll.gelirler.birlestirilmisSosyalYardim,
@@ -472,18 +635,19 @@ fn retro_replay_does_not_create_allowance_differences_from_segment_rounding() {
     let mut request = request(2026, 1);
     // 54.84419... + 49.68194... rounds to 104.53 as a total,
     // but rounding the two segments separately incorrectly yields 104.52.
-    request
+    let mut old_settings = request.dataset.compensationPolicyVersions[0].state.clone();
+    old_settings.giyimYardimi = dec!(100.01);
+    let mut current_settings = request.dataset.compensationPolicyVersions[1].state.clone();
+    current_settings.giyimYardimi = dec!(110.01);
+    let old_period = request
         .dataset
-        .institutionSettings
-        .get_mut("2025-12")
+        .periods
+        .iter()
+        .find(|period| period.id == "2025-12")
         .unwrap()
-        .giyimYardimi = dec!(100.01);
-    request
-        .dataset
-        .institutionSettings
-        .get_mut("2026-01")
-        .unwrap()
-        .giyimYardimi = dec!(110.01);
+        .clone();
+    set_policy_version(&mut request, &old_period.baslangicTarihi, old_settings);
+    set_policy_version(&mut request, "2026-02-01", current_settings);
     let retro = retro_request(&request, RetroParameterKey::GUNLUK_VASITA_YOL, dec!(0));
     let result = RetroEntitlementEngine::calculate(&retro).unwrap();
     assert_eq!(
@@ -569,12 +733,8 @@ fn retro_meal_tax_treatment_uses_the_source_period_meal_policy() {
             .get_mut(&request.periodId)
             .unwrap()
             .yemekTamGvIstisnaDamgaTabi = selected;
-        let result = RetroEntitlementEngine::calculate(&retro_request(
-            &request,
-            RetroParameterKey::GUNLUK_YEMEK,
-            dec!(350),
-        ))
-        .unwrap();
+        let retro = retro_request(&request, RetroParameterKey::GUNLUK_YEMEK, dec!(350));
+        let result = RetroEntitlementEngine::calculate(&retro).unwrap();
         let meal = result
             .allocations
             .iter()
@@ -589,7 +749,7 @@ fn retro_meal_tax_treatment_uses_the_source_period_meal_policy() {
             }
         );
         assert_eq!(meal.stampTaxTreatment, RetroTaxTreatment::TAXABLE);
-        let mut dataset = request.dataset.clone();
+        let mut dataset = retro.dataset.clone();
         dataset.retroBatches.push(result.batch.clone());
         dataset.retroAllocations.extend(result.allocations.clone());
         payroll_core::retro::retro_payment_income(&dataset, &result.batch.id).unwrap();
@@ -621,11 +781,13 @@ fn rate_history_changes_protect_cross_year_payrolls_and_retro_ledgers_without_so
         },
     )
     .unwrap();
-    assert!(impact
+    // The explicit policy timeline means an older copied period setting does
+    // not determine the later compensation snapshot.
+    assert!(!impact
         .blockedByFinalized
         .iter()
         .any(|p| p.periodId == "2026-01"));
-    assert!(impact
+    assert!(!impact
         .blockedByFinalizedRetroBatches
         .iter()
         .any(|id| id == "batch"));
@@ -638,10 +800,25 @@ fn rate_history_changes_protect_cross_year_payrolls_and_retro_ledgers_without_so
         },
     )
     .unwrap();
-    assert!(impact
+    assert!(!impact
         .blockedByFinalized
         .iter()
         .any(|p| p.periodId == "2026-01"));
+    assert!(!impact
+        .blockedByFinalizedRetroBatches
+        .iter()
+        .any(|id| id == "batch"));
+    let impact = evaluate_payroll_invalidation(
+        &retro.dataset,
+        &PayrollMutation::Period {
+            periodId: "2026-01".into(),
+        },
+    )
+    .unwrap();
+    assert!(impact
+        .blockedByFinalized
+        .iter()
+        .any(|payroll| payroll.periodId == "2026-01"));
     assert!(impact
         .blockedByFinalizedRetroBatches
         .iter()
@@ -652,7 +829,7 @@ fn rate_history_changes_protect_cross_year_payrolls_and_retro_ledgers_without_so
     let impact = evaluate_payroll_invalidation(
         &retro.dataset,
         &PayrollMutation::Period {
-            periodId: "2025-11".into(),
+            periodId: "2026-01".into(),
         },
     )
     .unwrap();

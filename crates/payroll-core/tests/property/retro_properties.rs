@@ -3,8 +3,8 @@ use payroll_core::{
     calculate_payroll, AccrualType, AnnualPayrollParameters, BordroDonemi, CompensationRevision,
     CompensationRevisionOverride, CompensationRevisionReason, CompensationRevisionScope,
     CompensationRevisionStatus, DonemselKurumDegerleri, PayrollAccrualInput,
-    PayrollCalculationRequest, PayrollDatasetSnapshot, PersonelPuantaj, RetroEntitlementEngine,
-    RetroParameterKey,
+    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollPeriodInstitutionSettings,
+    PersonelPuantaj, RetroEntitlementEngine, RetroParameterKey,
 };
 use proptest::prelude::*;
 use rust_decimal::Decimal;
@@ -74,11 +74,18 @@ fn dataset_with_original_payroll(daily_wage: Decimal) -> PayrollDatasetSnapshot 
     let mut dataset = PayrollDatasetSnapshot {
         personnel: vec![personnel()],
         periods: vec![period.clone()],
-        institutionSettings: HashMap::from([(period.id.clone(), settings)]),
+        institutionSettings: HashMap::from([(
+            period.id.clone(),
+            PayrollPeriodInstitutionSettings::from(&settings),
+        )]),
         attendances: vec![attendance(&period)],
         annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
+        compensationPolicyVersions: vec![
+            super::compensation_policy_test_support::baseline_version(&period, &settings),
+        ],
         ..Default::default()
     };
+    super::compensation_policy_test_support::seed_zero_tax_openings(&mut dataset);
     let original = calculate_payroll(&PayrollCalculationRequest {
         personnelId: "property-retro-person".into(),
         periodId: period.id,

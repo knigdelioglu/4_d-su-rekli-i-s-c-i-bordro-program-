@@ -1,19 +1,41 @@
 use payroll_core::*;
 use rust_decimal_macros::dec;
 
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
+
 fn request() -> PayrollCalculationRequest {
     let fixture: serde_json::Value =
         serde_json::from_str(include_str!("golden/2026/G020-social-aid.json")).unwrap();
     let mut request: PayrollCalculationRequest =
         serde_json::from_value(fixture["request"].clone()).unwrap();
+    let mut legacy_settings: std::collections::HashMap<String, DonemselKurumDegerleri> =
+        serde_json::from_value(fixture["request"]["dataset"]["institutionSettings"].clone())
+            .unwrap();
+    let legacy_settings = legacy_settings
+        .get_mut(&request.periodId)
+        .expect("golden legacy settings");
+    legacy_settings.gunlukYemek = dec!(350);
+    legacy_settings.gunlukYemekIstisnasiGV = Some(dec!(300));
+    legacy_settings.gunlukYemekIstisnasiSGK = Some(dec!(300));
     let settings = request
         .dataset
         .institutionSettings
         .get_mut(&request.periodId)
         .unwrap();
-    settings.gunlukYemek = dec!(350);
     settings.gunlukYemekIstisnasiGV = Some(dec!(300));
     settings.gunlukYemekIstisnasiSGK = Some(dec!(300));
+    let period = request
+        .dataset
+        .periods
+        .iter()
+        .find(|period| period.id == request.periodId)
+        .expect("golden period");
+    request.dataset.compensationPolicyVersions =
+        vec![compensation_policy_test_support::baseline_version(
+            period,
+            legacy_settings,
+        )];
     request
 }
 

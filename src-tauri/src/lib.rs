@@ -42,6 +42,11 @@ fn configure_builder<R: tauri::Runtime>(
             commands::get_payroll_list,
             commands::get_payroll_notices,
             commands::calculate_payroll,
+            commands::calculate_compensation_policy_payroll,
+            commands::validate_payroll_request,
+            commands::load_compensation_policy,
+            commands::preview_compensation_policy,
+            commands::save_compensation_policy,
             commands::delete_payroll_accrual,
             commands::finalize_payroll,
             commands::evaluate_mutation_policy,
@@ -86,9 +91,12 @@ pub fn run() {
 mod ipc_tests {
     use super::*;
     use crate::domain::models::{
-        AnnualPayrollParameters, BordroDonemi, DonemselKurumDegerleri, Personel,
-        PersonelKesintileri, PersonelPuantaj, PersonelTaxOpening, SickLeaveRecord,
+        AnnualPayrollParameters, BordroDonemi, CompensationBoundaryScope, CompensationPolicyGroup,
+        CompensationPolicyState, CompensationPolicyVersion, DonemselKurumDegerleri, Personel,
+        PersonelKesintileri, PersonelPuantaj, PersonelTaxOpening, RoadRoundingMode,
+        SickLeaveRecord,
     };
+    use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
     use chrono::{Duration, NaiveDate};
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -123,6 +131,53 @@ mod ipc_tests {
                 .deserialize::<Value>()
                 .expect("Tauri IPC response should be valid JSON")
         })
+    }
+
+    fn save_policy_baseline(
+        state: &DbState,
+        period: &BordroDonemi,
+        settings: &DonemselKurumDegerleri,
+    ) {
+        let policy_state = CompensationPolicyState {
+            gunlukTabanUcret: settings.gunlukTabanUcret,
+            gunlukYemek: settings.gunlukYemek,
+            birlestirilmisSosyalYardim: settings.birlestirilmisSosyalYardim,
+            gunlukVasitaYol: settings.gunlukVasitaYol,
+            giyimYardimi: settings.giyimYardimi,
+            hizmetZammiBirimi: settings.hizmetZammiBirimi,
+            isPrimiYuzde: settings.isPrimiYuzde,
+            isPrimiGruplari: settings
+                .isPrimiGruplari
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|group| CompensationPolicyGroup {
+                    id: group.id,
+                    ad: group.ad,
+                    oran: group.oran,
+                    aktif: group.aktif,
+                })
+                .collect(),
+            geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde.unwrap_or_default(),
+            geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
+            ekOdeme: settings.ekOdeme,
+            digerGelirVarsayilan: settings.digerGelirVarsayilan,
+        };
+        CompensationPolicyRepository::insert_version(
+            &state.lock().expect("test DB lock should be available"),
+            &CompensationPolicyVersion {
+                id: "ipc-policy-baseline".into(),
+                effectiveFrom: period.baslangicTarihi.clone(),
+                state: policy_state,
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+                createdAt: "2026-01-01T00:00:00Z".into(),
+                source: "TEST_FIXTURE".into(),
+                reason: "IPC calculation fixture baseline".into(),
+                supersedesVersionId: None,
+            },
+        )
+        .expect("IPC calculation fixture should have an explicit policy baseline");
     }
 
     #[test]
@@ -202,11 +257,10 @@ mod ipc_tests {
             invoke(
                 &webview,
                 "save_institution_settings",
-                json!({ "settings": settings })
+                json!({ "settings": settings.clone() })
             ),
             Ok(Value::Null)
         );
-
         let periods = invoke(&webview, "get_periods", json!({}))
             .expect("get_periods IPC command should succeed");
         assert_eq!(periods.as_array().map(Vec::len), Some(2));
@@ -472,8 +526,8 @@ mod ipc_tests {
         // BUG-RETRO-001: 2026-01 has attendance but no NORMAL payroll yet, so
         // the preview must fail closed with an explicit domain error instead
         // of recognizing 0 TL and returning a full-month retro difference.
-        let preview_error = retro_preview
-            .expect_err("retro preview without a NORMAL baseline must be rejected");
+        let preview_error =
+            retro_preview.expect_err("retro preview without a NORMAL baseline must be rejected");
         assert!(
             format!("{preview_error:?}").contains("NORMAL bordro yok"),
             "unexpected retro preview error: {preview_error:?}"
@@ -517,6 +571,7 @@ mod ipc_tests {
             invoke(&webview, "check_legacy_migrated", json!({})),
             Ok(json!(true))
         );
+        save_policy_baseline(&app.state::<DbState>(), &period, &settings);
 
         let calculated_payroll = invoke(
             &webview,
@@ -667,7 +722,6 @@ mod ipc_tests {
                         "taxOpenings": [],
                         "sickLeaveRecords": [],
                         "annualPayrollParameters": [],
-                        "zamAylari": [],
                         "compensationRevisions": [],
                         "compensationRevisionOverrides": [],
                         "retroBatches": [],

@@ -8,22 +8,22 @@ use tauri::State;
 #[tauri::command]
 pub fn get_institution_settings(
     db: State<'_, DbState>,
-) -> Result<HashMap<String, DonemselKurumDegerleri>> {
+) -> Result<HashMap<String, payroll_core::PayrollPeriodInstitutionSettings>> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    SettingsRepository::get_all_institution_settings(&conn)
+    SettingsRepository::get_all_active_institution_settings(&conn)
 }
 
 #[tauri::command]
 pub fn save_institution_settings(
     db: State<'_, DbState>,
-    settings: DonemselKurumDegerleri,
+    settings: payroll_core::PayrollPeriodInstitutionSettings,
 ) -> Result<()> {
     let conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;
-    SettingsRepository::save_institution_settings(&conn, &settings)
+    SettingsRepository::save_active_institution_settings(&conn, &settings)
 }
 
 #[tauri::command]

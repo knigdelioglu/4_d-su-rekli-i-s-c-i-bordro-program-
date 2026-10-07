@@ -3,12 +3,16 @@ use payroll_core::{
     calculate_payroll, AccrualType, AnnualPayrollParameters, BordroDonemi, BordroKaydi,
     CompensationRevision, CompensationRevisionOverride, CompensationRevisionReason,
     CompensationRevisionScope, CompensationRevisionStatus, DonemselKurumDegerleri,
-    PayrollAccrualInput, PayrollCalculationRequest, PayrollDatasetSnapshot, Personel,
-    PersonelPuantaj, RetroEntitlementEngine, RetroParameterKey,
+    PayrollAccrualInput, PayrollCalculationRequest, PayrollDatasetSnapshot,
+    PayrollPeriodInstitutionSettings, Personel, PersonelPuantaj, RetroEntitlementEngine,
+    RetroParameterKey,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn period() -> BordroDonemi {
     BordroDonemi {
@@ -89,16 +93,28 @@ fn attendance(period: &BordroDonemi) -> PersonelPuantaj {
 
 fn dataset(daily_wage: Decimal) -> PayrollDatasetSnapshot {
     let source_period = period();
-    PayrollDatasetSnapshot {
+    let legacy_settings = settings(daily_wage);
+    let mut dataset = PayrollDatasetSnapshot {
         personnel: vec![person()],
         periods: vec![source_period.clone()],
-        institutionSettings: [(source_period.id.clone(), settings(daily_wage))]
-            .into_iter()
-            .collect(),
+        institutionSettings: [(
+            source_period.id.clone(),
+            PayrollPeriodInstitutionSettings::from(&legacy_settings),
+        )]
+        .into_iter()
+        .collect(),
         attendances: vec![attendance(&source_period)],
         annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
         ..PayrollDatasetSnapshot::default()
-    }
+    };
+    dataset
+        .compensationPolicyVersions
+        .push(compensation_policy_test_support::baseline_version(
+            &source_period,
+            &legacy_settings,
+        ));
+    compensation_policy_test_support::seed_zero_tax_openings(&mut dataset);
+    dataset
 }
 
 fn normal_payroll(dataset: &PayrollDatasetSnapshot) -> BordroKaydi {

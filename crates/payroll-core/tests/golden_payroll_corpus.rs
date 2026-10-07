@@ -1,10 +1,15 @@
 use chrono::NaiveDate;
-use payroll_core::{calculate_payroll_checked, BordroDonemi, PayrollCalculationRequest};
+use payroll_core::{
+    calculate_payroll_checked, BordroDonemi, DonemselKurumDegerleri, PayrollCalculationRequest,
+};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 const GOLDEN_SCHEMA_VERSION: u32 = 1;
 const MINIMUM_GOLDEN_CASES: usize = 30;
@@ -569,9 +574,10 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
         let raw_fixture: Value = serde_json::from_str(&payload)
             .unwrap_or_else(|error| panic!("{} JSON parse edilemedi: {error}", path.display()));
         assert_schema_instance(&path, &schema, &raw_fixture);
-        let fixture: GoldenFixture = serde_json::from_value(raw_fixture).unwrap_or_else(|error| {
-            panic!("{} typed model parse edilemedi: {error}", path.display())
-        });
+        let fixture: GoldenFixture =
+            serde_json::from_value(raw_fixture.clone()).unwrap_or_else(|error| {
+                panic!("{} typed model parse edilemedi: {error}", path.display())
+            });
         assert_fixture_metadata(&path, &fixture);
         assert!(
             ids.insert(fixture.id.clone()),
@@ -583,19 +589,42 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
             evidence_count += 1;
         }
 
-        let actual = calculate_payroll_checked(&fixture.request).unwrap_or_else(|error| {
+        let mut request = fixture.request.clone();
+        let legacy_settings: HashMap<String, DonemselKurumDegerleri> = serde_json::from_value(
+            raw_fixture["request"]["dataset"]["institutionSettings"].clone(),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} legacy settings parse edilemedi: {error}",
+                path.display()
+            )
+        });
+        for period in &request.dataset.periods {
+            if let Some(settings) = legacy_settings.get(&period.id) {
+                request.dataset.compensationPolicyVersions.push(
+                    compensation_policy_test_support::baseline_version(period, settings),
+                );
+            }
+        }
+        let actual = calculate_payroll_checked(&request).unwrap_or_else(|error| {
             panic!(
                 "{} ({}) calculate_payroll_checked ile hesaplanamadı: {error}",
                 path.display(),
                 fixture.id
             )
         });
-        let actual_json = serde_json::to_value(&actual).unwrap_or_else(|error| {
+        let mut actual_json = serde_json::to_value(&actual).unwrap_or_else(|error| {
             panic!(
                 "{} actual result serialize edilemedi: {error}",
                 path.display()
             )
         });
+        // Provenance metadata is validated by snapshot and policy tests; this
+        // corpus remains an exact oracle for the established financial result.
+        actual_json
+            .as_object_mut()
+            .expect("payroll result serializes as an object")
+            .remove("calculationMetadata");
         assert_eq!(
             actual_json,
             fixture.expected.result,

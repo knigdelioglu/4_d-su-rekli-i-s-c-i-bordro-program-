@@ -11,6 +11,7 @@ import {
 } from '../services/payrollEngine/decimalBoundary';
 import {
   parseImportedBackup,
+  validatePayrollMetadataThroughCore,
   verifyCurrentPayrollBackupReplay,
 } from '../services/storage/payrollPayload';
 
@@ -37,11 +38,37 @@ export interface BackupControllerOptions {
 }
 
 function makeBackupPayload<T extends object>(dataset: T): PayrollStorageDto {
+  const datasetWithTimeline = {
+    ...dataset,
+    compensationPolicyVersions:
+      (dataset as { compensationPolicyVersions?: unknown }).compensationPolicyVersions ?? [],
+  };
   return {
     backupVersion: BACKUP_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
-    ...toPayrollBoundaryDto(dataset),
+    ...toPayrollBoundaryDto(datasetWithTimeline),
   } as unknown as PayrollStorageDto;
+}
+
+function currentBackupExportPayload(payload: PayrollStorageDto): PayrollStorageDto {
+  return {
+    backupVersion: payload.backupVersion,
+    exportedAt: payload.exportedAt,
+    donemler: payload.donemler,
+    aktifDonemId: payload.aktifDonemId,
+    personeller: payload.personeller,
+    kurumDegerleriMap: payload.kurumDegerleriMap,
+    puantajlar: payload.puantajlar,
+    bordrolar: payload.bordrolar,
+    taxOpenings: payload.taxOpenings,
+    sickLeaveRecords: payload.sickLeaveRecords,
+    annualPayrollParameters: payload.annualPayrollParameters,
+    compensationRevisions: payload.compensationRevisions,
+    compensationRevisionOverrides: payload.compensationRevisionOverrides,
+    retroBatches: payload.retroBatches,
+    retroAllocations: payload.retroAllocations,
+    compensationPolicyVersions: payload.compensationPolicyVersions,
+  };
 }
 
 function formatPreservedDataFailure(action: string, error: unknown): string {
@@ -103,11 +130,11 @@ export function useBackupController({
       taxOpenings: initialData.taxOpenings || [],
       sickLeaveRecords: initialData.sickLeaveRecords || [],
       annualPayrollParameters: initialData.annualPayrollParameters || [],
-      zamAylari: initialData.zamAylari || [],
       compensationRevisions: [],
       compensationRevisionOverrides: [],
       retroBatches: [],
       retroAllocations: [],
+      compensationPolicyVersions: [],
     });
 
     try {
@@ -154,7 +181,6 @@ export function useBackupController({
       taxOpenings: [],
       sickLeaveRecords: [],
       annualPayrollParameters: [],
-      zamAylari: [],
       compensationRevisions: [],
       compensationRevisionOverrides: [],
       retroBatches: [],
@@ -181,7 +207,7 @@ export function useBackupController({
 
   const handleExportBackup = async () => {
     if (!authoritativePayload) return;
-    const jsonStr = serializePayrollStorage(authoritativePayload, 2);
+    const jsonStr = serializePayrollStorage(currentBackupExportPayload(authoritativePayload), 2);
     const fileName = `4D_Bordro_Yedek_${activePeriodId || 'bos'}_${new Date()
       .toISOString()
       .slice(0, 10)}.json`;
@@ -212,16 +238,17 @@ export function useBackupController({
   const handleImportBackup = async (jsonStr: string) => {
     try {
       const raw: unknown = JSON.parse(jsonStr);
-      const isCurrentBackup = Boolean(
-        raw && typeof raw === 'object' && !Array.isArray(raw)
-          && (raw as { backupVersion?: unknown }).backupVersion === BACKUP_FORMAT_VERSION
-      );
+      const sourceVersion = Boolean(raw && typeof raw === 'object' && !Array.isArray(raw))
+        ? (raw as { backupVersion?: unknown }).backupVersion
+        : undefined;
+      const hasV5Authority = typeof sourceVersion === 'number' && sourceVersion >= 5;
       const payload = parseImportedBackup(jsonStr);
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await reloadPersistedBackup(loadData);
       } else {
-        if (isCurrentBackup) {
+        await validatePayrollMetadataThroughCore(payload);
+        if (hasV5Authority) {
           await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
         }
         if (isDataLoaded) {
@@ -231,7 +258,7 @@ export function useBackupController({
         // before replacing the in-memory dataset or announcing success.
         await browserPersistence.savePayload(
           serializePayrollStorage(payload),
-          isCurrentBackup ? 'current' : 'legacy'
+          hasV5Authority ? 'current' : 'legacy'
         );
         commitBrowserPayload(payload);
       }

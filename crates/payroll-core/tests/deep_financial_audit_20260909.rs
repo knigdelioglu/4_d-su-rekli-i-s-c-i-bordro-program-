@@ -4,6 +4,42 @@ use chrono::NaiveDate;
 use payroll_core::*;
 use rust_decimal_macros::dec;
 
+fn append_policy_wage(
+    request: &mut PayrollCalculationRequest,
+    version_id: &str,
+    effective_from: &str,
+    daily_wage: rust_decimal::Decimal,
+) {
+    let supersedes = request
+        .dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == effective_from)
+        .map(|version| version.id.clone());
+    let mut state = request
+        .dataset
+        .compensationPolicyVersions
+        .last()
+        .expect("audit fixture has its explicit baseline")
+        .state
+        .clone();
+    state.gunlukTabanUcret = daily_wage;
+    request
+        .dataset
+        .compensationPolicyVersions
+        .push(CompensationPolicyVersion {
+            id: version_id.into(),
+            effectiveFrom: effective_from.into(),
+            state,
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: format!("{effective_from}T00:00:00Z"),
+            source: "user-confirmed".into(),
+            reason: "explicit policy change in audit fixture".into(),
+            supersedesVersionId: supersedes,
+        });
+}
+
 fn with_full_year_periods(
     mut req: PayrollCalculationRequest,
     year: i32,
@@ -29,6 +65,18 @@ fn audit_multi_accrual_same_month_ordering_and_cumulative_gv() {
     let mut req_normal = support::dated_request(2026, 7);
     req_normal = with_full_year_periods(req_normal, 2026);
     req_normal.dataset.annualPayrollParameters = vec![AnnualPayrollParameters::default_for_2026()];
+    req_normal.dataset.taxOpenings.clear();
+    req_normal.dataset.taxOpenings.push(PersonelTaxOpening {
+        id: "july-opening".into(),
+        personnelId: req_normal.personnelId.clone(),
+        year: 2026,
+        gvCumulativeOpening: Some(dec!(189000)),
+        effectiveFromPeriodId: Some(req_normal.periodId.clone()),
+        asgariGvCumulativeOpening: Some(dec!(168453)),
+        asgariGvEffectiveFromPeriodId: Some(req_normal.periodId.clone()),
+        createdAt: None,
+        updatedAt: None,
+    });
 
     // 1. First payment event: TEDIYE on 2026-07-05
     let mut req_tediye = req_normal.clone();
@@ -151,17 +199,7 @@ fn audit_year_transition_with_pek_carry_and_gv_reset() {
             ..AnnualPayrollParameters::default_for_2026()
         },
     ];
-    let mut dec_settings = req_dec
-        .dataset
-        .institutionSettings
-        .get(&req_dec.periodId)
-        .unwrap()
-        .clone();
-    dec_settings.gunlukTabanUcret = dec!(3000);
-    req_dec
-        .dataset
-        .institutionSettings
-        .insert(req_dec.periodId.clone(), dec_settings);
+    append_policy_wage(&mut req_dec, "audit-dec-wage", "2026-12-15", dec!(3000));
 
     // Supplementary bonus in December: 350,000 TL non-wage
     let mut req_dec_bonus = req_dec.clone();
@@ -192,6 +230,7 @@ fn audit_year_transition_with_pek_carry_and_gv_reset() {
     req_jan = with_full_year_periods(req_jan, 2027);
     req_jan = with_full_year_periods(req_jan, 2026);
     req_jan.dataset.annualPayrollParameters = req_dec.dataset.annualPayrollParameters.clone();
+    req_jan.dataset.compensationPolicyVersions = req_dec.dataset.compensationPolicyVersions.clone();
     let mut dec_stored = dec_bonus_payroll.clone();
     dec_stored.donemId = req_dec.periodId.clone();
     req_jan.dataset.payrolls.push(dec_stored);
@@ -259,17 +298,9 @@ fn audit_pek_carry_aging_and_exact_expiration() {
     req_nov = with_full_year_periods(req_nov, 2026);
     req_nov = with_full_year_periods(req_nov, 2027);
     req_nov.dataset.annualPayrollParameters = req_oct.dataset.annualPayrollParameters.clone();
-    let mut nov_settings = req_nov
-        .dataset
-        .institutionSettings
-        .get(&req_nov.periodId)
-        .unwrap()
-        .clone();
-    nov_settings.gunlukTabanUcret = dec!(9800); // 9800 * 30 = 294,000 TL (near ceiling of 297,270)
-    req_nov
-        .dataset
-        .institutionSettings
-        .insert(req_nov.periodId.clone(), nov_settings);
+    // 9800 * 30 = 294,000 TL (near ceiling of 297,270).
+    append_policy_wage(&mut req_nov, "audit-nov-wage", "2026-11-15", dec!(9800));
+    req_nov.dataset.taxOpenings.clear();
 
     let mut oct_stored = oct_payroll.clone();
     oct_stored.donemId = req_oct.periodId.clone();
@@ -293,17 +324,9 @@ fn audit_pek_carry_aging_and_exact_expiration() {
     req_dec = with_full_year_periods(req_dec, 2026);
     req_dec = with_full_year_periods(req_dec, 2027);
     req_dec.dataset.annualPayrollParameters = req_oct.dataset.annualPayrollParameters.clone();
-    let mut dec_settings = req_dec
-        .dataset
-        .institutionSettings
-        .get(&req_dec.periodId)
-        .unwrap()
-        .clone();
-    dec_settings.gunlukTabanUcret = dec!(9800);
-    req_dec
-        .dataset
-        .institutionSettings
-        .insert(req_dec.periodId.clone(), dec_settings);
+    req_dec.dataset.compensationPolicyVersions = req_nov.dataset.compensationPolicyVersions.clone();
+    req_dec.dataset.taxOpenings.clear();
+    append_policy_wage(&mut req_dec, "audit-dec-wage", "2026-12-15", dec!(9800));
 
     let mut nov_stored = nov_payroll.clone();
     nov_stored.donemId = req_nov.periodId.clone();
@@ -404,17 +427,8 @@ fn audit_sick_leave_exact_quota_and_split_episodes() {
 fn audit_lower_bound_completion_with_earlier_same_month_event() {
     let mut req = support::dated_request(2026, 7);
     req = with_full_year_periods(req, 2026);
-    let period_id = req.periodId.clone();
-    let mut settings = req
-        .dataset
-        .institutionSettings
-        .get(&period_id)
-        .unwrap()
-        .clone();
-    settings.gunlukTabanUcret = dec!(500); // 500 TL/day
-    req.dataset
-        .institutionSettings
-        .insert(period_id.clone(), settings);
+    // The 500 TL/day input lives in the explicit policy version.
+    append_policy_wage(&mut req, "audit-july-wage", "2026-07-15", dec!(500));
 
     // Scenario A: Single NORMAL accrual
     // Prim days = 30. Ham PEK = 15,500 TL (15,000 wage + meal subject to sgk). Alt sınır = 33,030 TL.

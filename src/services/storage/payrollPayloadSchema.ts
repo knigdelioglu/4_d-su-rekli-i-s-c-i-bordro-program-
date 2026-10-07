@@ -5,6 +5,7 @@ import {
   type PayrollStorageDto,
 } from '../payrollEngine/decimalBoundary';
 import { RUST_ENUM_VALUES } from '../payrollEngine/generated/payrollContract';
+import { compensationPolicyStateEqualsExceptRoad } from '../compensationPolicy/contract';
 import { annualPayrollParameterSemanticIssue } from './annualPayrollParametersValidation';
 
 type UnknownRecord = Record<string, unknown>;
@@ -45,6 +46,19 @@ export function isValidIsoDate(dateString: string): boolean {
   return day <= daysInMonth;
 }
 
+function nextIsoDate(dateString: string): string {
+  const [year, month, day] = dateString.split('-').map(Number);
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (day < daysInMonth) {
+    return `${dateString.slice(0, 8)}${String(day + 1).padStart(2, '0')}`;
+  }
+  if (month < 12) {
+    return `${String(year).padStart(4, '0')}-${String(month + 1).padStart(2, '0')}-01`;
+  }
+  return `${String(year + 1).padStart(4, '0')}-01-01`;
+}
+
 /** Shared form/persistence boundary validation; calculation stays in Rust. */
 export function validateTransportRatesForPeriod(
   period: { baslangicTarihi: string; bitisTarihi: string },
@@ -72,6 +86,8 @@ const RETRO_PARAMETER_VALUES = RUST_ENUM_VALUES.RetroParameterKey;
 const RETRO_EARNING_CODE_VALUES = RUST_ENUM_VALUES.RetroEarningCode;
 const RETRO_TAX_TREATMENT_VALUES = RUST_ENUM_VALUES.RetroTaxTreatment;
 const RETRO_SETTLEMENT_STATUS_VALUES = RUST_ENUM_VALUES.RetroSettlementStatus;
+const COMPENSATION_BOUNDARY_SCOPE_VALUES = RUST_ENUM_VALUES.CompensationBoundaryScope;
+const ROAD_ROUNDING_MODE_VALUES = RUST_ENUM_VALUES.RoadRoundingMode;
 const RETRO_SGK_TREATMENT_VALUES = RUST_ENUM_VALUES.RetroSgkTreatment;
 const RETRO_POLICY_BY_EARNING_CODE: Record<
   (typeof RETRO_EARNING_CODE_VALUES)[number],
@@ -593,7 +609,7 @@ export function validateInstitutionSettings(
     'gunlukVasitaYol',
     'giyimYardimi',
     'hizmetZammiBirimi',
-  ].forEach((key) => requiredDecimal(value, key, path));
+  ].forEach((key) => optionalDecimal(value, key, path));
   [
     'isPrimiYuzde',
     'geceCalismaPrimiYuzde',
@@ -621,6 +637,31 @@ export function validateInstitutionSettings(
   optionalNullableString(value, 'tediyeTisNotu', path);
   optionalNullableArray(value, 'statutoryParameterSegments', path, validateStatutoryParameterSegment);
   optionalNullableRecord(value, 'statutoryParameterSnapshot', path, validateStatutoryParameterSnapshot);
+}
+
+const LEGACY_COMPENSATION_SETTING_KEYS = [
+  'gunlukTabanUcret',
+  'gunlukYemek',
+  'birlestirilmisSosyalYardim',
+  'gunlukVasitaYol',
+  'transportRateChanges',
+  'giyimYardimi',
+  'hizmetZammiBirimi',
+  'isPrimiYuzde',
+  'isPrimiGruplari',
+  'geceCalismaPrimiYuzde',
+  'geceCalismaTatiliPrimiYuzde',
+  'ekOdeme',
+  'digerGelirVarsayilan',
+] as const;
+
+function assertActiveInstitutionSettings(value: unknown, path: string): void {
+  assertRecord(value, path);
+  for (const key of LEGACY_COMPENSATION_SETTING_KEYS) {
+    if (hasOwn(value, key)) {
+      fail(fieldPath(path, key), 'aktif dönem ayarlarında bulunamaz; legacy arşiv alanıdır.');
+    }
+  }
 }
 
 function validateTaxBracket(value: unknown, path: string): void {
@@ -757,6 +798,239 @@ export function validateBordroKaydi(
   optionalNullableRecord(value, 'statutorySnapshot', path, validateResolvedStatutorySnapshot);
   optionalNullableInteger(value, 'odenenRaporluGun', path);
   optionalNullableInteger(value, 'raporluGun', path);
+  optionalNullableRecord(value, 'calculationMetadata', path, validatePayrollCalculationMetadata);
+  const metadata =
+    value.calculationMetadata !== undefined && value.calculationMetadata !== null
+      ? value.calculationMetadata as UnknownRecord
+      : null;
+  if (
+    metadata?.provenance === 'COMPENSATION_POLICY_ENGINE' &&
+    value.accrualType === 'NORMAL' &&
+    (value.status === 'CALCULATED' || value.status === 'FINALIZED') &&
+    (metadata.snapshot === undefined || metadata.snapshot === null)
+  ) {
+    fail(fieldPath(path, 'calculationMetadata.snapshot'), 'hesaplanmış NORMAL kayıt için zorunludur.');
+  }
+}
+
+function validatePayrollCalculationMetadata(value: UnknownRecord, path: string): void {
+  requiredEnum(value, 'provenance', ['COMPENSATION_POLICY_ENGINE'], path);
+  optionalNullableRecord(value, 'snapshot', path, validatePayrollCalculationSnapshot);
+}
+
+function validatePayrollCalculationSnapshot(value: UnknownRecord, path: string): void {
+  requiredInteger(value, 'snapshotSchemaVersion', path);
+  if (value.snapshotSchemaVersion !== 2) {
+    fail(fieldPath(path, 'snapshotSchemaVersion'), 'desteklenmeyen snapshot şema sürümü.');
+  }
+  requiredString(value, 'calculationVersion', path);
+  if (value.calculationVersion !== 'compensation-engine-v1') {
+    fail(fieldPath(path, 'calculationVersion'), 'desteklenmeyen hesaplama sürümü.');
+  }
+  const compensation = required(value, 'compensation', path);
+  assertRecord(compensation, fieldPath(path, 'compensation'));
+  const segments = required(compensation, 'segments', fieldPath(path, 'compensation'));
+  assertArray(segments, fieldPath(fieldPath(path, 'compensation'), 'segments'));
+  segments.forEach((segment, index) => {
+    const segmentPath = `${fieldPath(fieldPath(path, 'compensation'), 'segments')}[${index}]`;
+    assertRecord(segment, segmentPath);
+    ['versionId', 'startDate', 'endDate'].forEach((key) => requiredString(segment, key, segmentPath));
+    requiredEnum(segment, 'boundaryScope', COMPENSATION_BOUNDARY_SCOPE_VALUES, segmentPath);
+    requiredEnum(segment, 'roadRoundingMode', ROAD_ROUNDING_MODE_VALUES, segmentPath);
+    requiredIsoDate(segment, 'startDate', segmentPath);
+    requiredIsoDate(segment, 'endDate', segmentPath);
+    const state = required(segment, 'state', segmentPath);
+    assertRecord(state, fieldPath(segmentPath, 'state'));
+    validateCompensationPolicyState(state, fieldPath(segmentPath, 'state'));
+  });
+  const usedInputs = required(value, 'usedInputs', path);
+  assertRecord(usedInputs, fieldPath(path, 'usedInputs'));
+}
+
+function validateCompensationPolicyState(value: UnknownRecord, path: string): void {
+  [
+    'gunlukTabanUcret',
+    'gunlukYemek',
+    'birlestirilmisSosyalYardim',
+    'gunlukVasitaYol',
+    'giyimYardimi',
+    'hizmetZammiBirimi',
+    'geceCalismaPrimiYuzde',
+    'geceCalismaTatiliPrimiYuzde',
+  ].forEach((key) => requiredDecimal(value, key, path));
+  ['isPrimiYuzde', 'ekOdeme', 'digerGelirVarsayilan'].forEach((key) =>
+    requiredNullableDecimal(value, key, path)
+  );
+  const groups = required(value, 'isPrimiGruplari', path);
+  assertArray(groups, fieldPath(path, 'isPrimiGruplari'));
+  groups.forEach((group, index) => {
+    const groupPath = `${fieldPath(path, 'isPrimiGruplari')}[${index}]`;
+    assertRecord(group, groupPath);
+    ['id', 'ad'].forEach((key) => requiredString(group, key, groupPath));
+    requiredDecimal(group, 'oran', groupPath);
+    required(group, 'aktif', groupPath);
+    assertBoolean(group.aktif, fieldPath(groupPath, 'aktif'));
+  });
+}
+
+function validateCompensationPolicyVersion(value: unknown, path: string): void {
+  assertRecord(value, path);
+  ['id', 'effectiveFrom', 'createdAt', 'source', 'reason'].forEach((key) => requiredString(value, key, path));
+  requiredEnum(value, 'boundaryScope', COMPENSATION_BOUNDARY_SCOPE_VALUES, path);
+  requiredEnum(value, 'roadRoundingMode', ROAD_ROUNDING_MODE_VALUES, path);
+  requiredIsoDate(value, 'effectiveFrom', path);
+  const supersedes = required(value, 'supersedesVersionId', path);
+  if (supersedes !== null) assertString(supersedes, fieldPath(path, 'supersedesVersionId'));
+  const state = required(value, 'state', path);
+  assertRecord(state, fieldPath(path, 'state'));
+  validateCompensationPolicyState(state, fieldPath(path, 'state'));
+}
+
+function assertCompensationPolicyGraph(
+  versions: PayrollStorageDto['compensationPolicyVersions']
+): void {
+  const byId = new Map(versions.map((version) => [version.id, version]));
+  const byDate = new Map<string, typeof versions>();
+  const childByParent = new Map<string, string>();
+  for (const version of versions) {
+    if (!version.id.trim() || version.id !== version.id.trim()) {
+      fail('$.compensationPolicyVersions', 'policy version id boş veya canonical değil.');
+    }
+    if (!version.createdAt.trim() || !version.source.trim() || !version.reason.trim()) {
+      fail(`$.compensationPolicyVersions[${version.id}]`, 'createdAt/source/reason zorunludur.');
+    }
+    const sameDate = byDate.get(version.effectiveFrom) ?? [];
+    sameDate.push(version);
+    byDate.set(version.effectiveFrom, sameDate);
+    if (version.supersedesVersionId === null) continue;
+    const parent = byId.get(version.supersedesVersionId);
+    if (!parent) {
+      fail(`$.compensationPolicyVersions[${version.id}].supersedesVersionId`, 'referans verilen policy sürümü bulunamadı.');
+    }
+    if (parent.effectiveFrom !== version.effectiveFrom) {
+      fail(`$.compensationPolicyVersions[${version.id}].supersedesVersionId`, 'yalnız aynı effectiveFrom tarihindeki sürüm supersede edilebilir.');
+    }
+    if (childByParent.has(parent.id)) {
+      fail('$.compensationPolicyVersions', `policy supersession fork'u bulundu: ${parent.id}.`);
+    }
+    childByParent.set(parent.id, version.id);
+  }
+  for (const [effectiveFrom, datedVersions] of byDate) {
+    const roots = datedVersions.filter((version) => version.supersedesVersionId === null);
+    if (roots.length !== 1) {
+      fail('$.compensationPolicyVersions', `${effectiveFrom} tarihinde tek policy kökü bulunmalıdır.`);
+    }
+    const seen = new Set<string>();
+    let cursor: string | undefined = roots[0].id;
+    while (cursor !== undefined && !seen.has(cursor)) {
+      seen.add(cursor);
+      cursor = childByParent.get(cursor);
+    }
+    if (seen.size !== datedVersions.length) {
+      fail('$.compensationPolicyVersions', `${effectiveFrom} tarihindeki policy graph döngülü veya kopuk.`);
+    }
+  }
+  const supersededIds = new Set(childByParent.keys());
+  const activeTimeline = versions
+    .filter((version) => !supersededIds.has(version.id))
+    .sort((left, right) => left.effectiveFrom.localeCompare(right.effectiveFrom));
+  for (let index = 1; index < activeTimeline.length; index += 1) {
+    const previous = activeTimeline[index - 1];
+    const current = activeTimeline[index];
+    if (current.boundaryScope === 'ROAD_ONLY' &&
+        !samePolicyStateExceptRoad(
+          previous.state as unknown as UnknownRecord,
+          current.state as unknown as UnknownRecord
+        )) {
+      fail(
+        `$.compensationPolicyVersions[${current.id}]`,
+        'ROAD_ONLY yalnız gunlukVasitaYol değerini değiştirebilir.'
+      );
+    }
+  }
+}
+
+function stablePolicyStateValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stablePolicyStateValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, stablePolicyStateValue(child)])
+  );
+}
+
+function samePolicyStateExceptRoad(left: UnknownRecord, right: UnknownRecord): boolean {
+  return compensationPolicyStateEqualsExceptRoad(
+    left as unknown as PayrollStorageDto['compensationPolicyVersions'][number]['state'],
+    right as unknown as PayrollStorageDto['compensationPolicyVersions'][number]['state']
+  );
+}
+
+function assertV6SnapshotPolicyLinks(payload: PayrollStorageDto): void {
+  const policies = new Map(payload.compensationPolicyVersions.map((version) => [version.id, version]));
+  const periods = new Map(payload.donemler.map((period) => [period.id, period]));
+  payload.bordrolar.forEach((payroll, index) => {
+    const snapshot = payroll.calculationMetadata?.snapshot;
+    if (!snapshot) return;
+    if (
+      (payroll.status === 'CALCULATED' || payroll.status === 'FINALIZED') &&
+      payroll.accrualType === 'NORMAL' &&
+      payroll.calculationMetadata?.provenance === 'COMPENSATION_POLICY_ENGINE' &&
+      snapshot.compensation.segments.length === 0
+    ) {
+      fail(`$.bordrolar[${index}].calculationMetadata.snapshot.compensation.segments`, 'NORMAL hesap için boş olamaz.');
+    }
+    const segments = snapshot.compensation.segments;
+    if (segments.length === 0) return;
+    const period = periods.get(payroll.donemId);
+    if (!period) {
+      fail(`$.bordrolar[${index}].donemId`, `parent dönem bulunamadı: ${payroll.donemId}.`);
+    }
+    const path = `$.bordrolar[${index}].calculationMetadata.snapshot.compensation.segments`;
+    if (segments[0].startDate !== period.baslangicTarihi ||
+        segments[segments.length - 1].endDate !== period.bitisTarihi) {
+      fail(path, 'resolved compensation segmentleri parent service period aralığını tam örtmelidir.');
+    }
+    const seenSegmentVersions = new Set<string>();
+    let previousMode: string | null = null;
+    segments.forEach((segment, segmentIndex) => {
+      const policy = policies.get(segment.versionId);
+      const segmentPath = `${path}[${segmentIndex}]`;
+      if (!seenSegmentVersions.add(segment.versionId)) {
+        fail(`${segmentPath}.versionId`, `aynı policy sürümü birden fazla segmentte bulundu: ${segment.versionId}.`);
+      }
+      if (!policy) fail(`${segmentPath}.versionId`, `policy sürümü bulunamadı: ${segment.versionId}.`);
+      if (policy.effectiveFrom > segment.startDate) {
+        fail(`${segmentPath}.versionId`, 'policy sürümü segment başlangıcında henüz etkin değil.');
+      }
+      if (
+        JSON.stringify(stablePolicyStateValue(policy.state)) !==
+        JSON.stringify(stablePolicyStateValue(segment.state))
+      ) {
+        fail(`${segmentPath}.state`, 'snapshot full-state referans verilen policy sürümüyle eşleşmiyor.');
+      }
+      if (policy.boundaryScope !== segment.boundaryScope ||
+          policy.roadRoundingMode !== segment.roadRoundingMode) {
+        fail(segmentPath, 'snapshot boundary flagleri referans verilen policy sürümüyle eşleşmiyor.');
+      }
+      if (previousMode !== null && previousMode !== segment.roadRoundingMode) {
+        fail(`${segmentPath}.roadRoundingMode`, 'roadRoundingMode tek service period boyunca değişemez.');
+      }
+      if (segmentIndex > 0) {
+        const previous = segments[segmentIndex - 1];
+        if (segment.startDate !== nextIsoDate(previous.endDate)) {
+          fail(`${segmentPath}.startDate`, 'resolved compensation segmentlerinde tarih boşluğu veya çakışması var.');
+        }
+        if (segment.boundaryScope === 'ROAD_ONLY' &&
+            !samePolicyStateExceptRoad(previous.state as unknown as UnknownRecord,
+              segment.state as unknown as UnknownRecord)) {
+          fail(`${segmentPath}.state`, 'ROAD_ONLY yalnız gunlukVasitaYol değerini değiştirebilir.');
+        }
+      }
+      previousMode = segment.roadRoundingMode;
+    });
+  });
 }
 
 function validateCompensationRevision(value: unknown, path: string): void {
@@ -1290,11 +1564,6 @@ function assertCrossRecordIntegrity(
 ): void {
   const personnelIds = new Set(payload.personeller.map((person) => person.id));
   const periodIds = new Set(payload.donemler.map((period) => period.id));
-  for (const [periodId, settings] of Object.entries(payload.kurumDegerleriMap)) {
-    const period = payload.donemler.find((period) => period.id === periodId);
-    if (period) validateTransportRatesForPeriod(period, settings);
-  }
-
   if (payload.aktifDonemId !== '' && !periodIds.has(payload.aktifDonemId)) {
     fail(
       '$.aktifDonemId',
@@ -1496,7 +1765,13 @@ function assertCrossRecordIntegrity(
     }
     if (linked.length === 1) {
       const payment = linked[0];
-      const expectedPaymentStatus = status === 'FINALIZED' ? 'FINALIZED' : status === 'CALCULATED' ? 'CALCULATED' : null;
+      const expectedPaymentStatus = status === 'FINALIZED'
+        ? 'FINALIZED'
+        : status === 'CALCULATED'
+          ? 'CALCULATED'
+          : status === 'STALE'
+            ? 'STALE'
+            : null;
       // A source-data mutation can invalidate a previously calculated payment
       // while leaving the retro entitlement batch itself unchanged. Preserve
       // that event for audit/recovery, but only accept it when every linking
@@ -1570,7 +1845,7 @@ function assertCrossRecordIntegrity(
     });
 }
 
-function validateTopLevelArrays(value: UnknownRecord): void {
+function validateTopLevelArrays(value: UnknownRecord, expectedVersion: number): void {
   const arrayFields = [
     'donemler',
     'personeller',
@@ -1579,7 +1854,6 @@ function validateTopLevelArrays(value: UnknownRecord): void {
     'taxOpenings',
     'sickLeaveRecords',
     'annualPayrollParameters',
-    'zamAylari',
     'compensationRevisions',
     'compensationRevisionOverrides',
     'retroBatches',
@@ -1589,26 +1863,33 @@ function validateTopLevelArrays(value: UnknownRecord): void {
     const propertyPath = fieldPath('$', key);
     assertArray(required(value, key, '$'), propertyPath);
   });
+  if (expectedVersion < 6) {
+    assertArray(required(value, 'zamAylari', '$'), '$.zamAylari');
+  }
+  if (expectedVersion >= 6) {
+    assertArray(required(value, 'compensationPolicyVersions', '$'), '$.compensationPolicyVersions');
+  }
 }
 
-/** Full current V5 runtime schema. Unknown fields are intentionally ignored. */
-export function validateCurrentPayrollPayload(
+function validatePayrollPayloadVersion(
   value: unknown,
-  options: PayrollPayloadValidationOptions = {}
+  options: PayrollPayloadValidationOptions,
+  expectedVersion: number
 ): asserts value is PayrollStorageDto {
   assertRecord(value, '$');
   const backupVersion = required(value, 'backupVersion', '$');
   assertInteger(backupVersion, '$.backupVersion');
-  if (backupVersion !== BACKUP_FORMAT_VERSION) {
+  if (backupVersion !== expectedVersion) {
     fail(
       '$.backupVersion',
-      `desteklenmeyen sürüm: ${backupVersion} (beklenen: ${BACKUP_FORMAT_VERSION}).`
+      `desteklenmeyen sürüm: ${backupVersion} (beklenen: ${expectedVersion}).`
     );
   }
   requiredString(value, 'exportedAt', '$');
   requiredString(value, 'aktifDonemId', '$');
   assertRecord(required(value, 'kurumDegerleriMap', '$'), '$.kurumDegerleriMap');
-  validateTopLevelArrays(value);
+  const isV6 = expectedVersion >= 6;
+  validateTopLevelArrays(value, expectedVersion);
 
   const periods = value.donemler as unknown[];
   periods.forEach((item, index) => validateBordroDonemi(item, `$.donemler[${index}]`));
@@ -1627,8 +1908,12 @@ export function validateCurrentPayrollPayload(
     validateAnnualPayrollParameters(item, `$.annualPayrollParameters[${index}]`)
   );
 
-  const zamAylari = value.zamAylari as unknown[];
-  zamAylari.forEach((item, index) => assertInteger(item, `$.zamAylari[${index}]`));
+  if (expectedVersion < 6) {
+    const zamAylari = value.zamAylari as unknown[];
+    zamAylari.forEach((item, index) => assertInteger(item, `$.zamAylari[${index}]`));
+  } else if (hasOwn(value, 'zamAylari')) {
+    fail('$.zamAylari', 'V6 aktif yedek sözleşmesinde bulunamaz.');
+  }
 
   const revisions = required(value, 'compensationRevisions', '$');
   assertArray(revisions, '$.compensationRevisions');
@@ -1647,10 +1932,27 @@ export function validateCurrentPayrollPayload(
     validateRetroAllocation(item, `$.retroAllocations[${index}]`)
   );
 
+  if (isV6) {
+    const policyVersions = value.compensationPolicyVersions as unknown[];
+    policyVersions.forEach((item, index) =>
+      validateCompensationPolicyVersion(item, `$.compensationPolicyVersions[${index}]`)
+    );
+  }
+
   const institutionSettings = value.kurumDegerleriMap;
-  Object.entries(institutionSettings).forEach(([key, settings]) =>
-    validateInstitutionSettings(settings, fieldPath('$.kurumDegerleriMap', key))
-  );
+  Object.entries(institutionSettings).forEach(([key, settings]) => {
+    const path = fieldPath('$.kurumDegerleriMap', key);
+    if (isV6) assertActiveInstitutionSettings(settings, path);
+    validateInstitutionSettings(settings, path);
+  });
+
+  if (isV6 && hasOwn(value, 'legacyInstitutionSettings')) {
+    const legacyArchive = value.legacyInstitutionSettings;
+    assertRecord(legacyArchive, '$.legacyInstitutionSettings');
+    Object.entries(legacyArchive).forEach(([key, settings]) =>
+      validateInstitutionSettings(settings, fieldPath('$.legacyInstitutionSettings', key))
+    );
+  }
 
   // The structural walk above intentionally runs first. This is the single
   // Decimal grammar/number rejection implementation for the whole payload.
@@ -1678,6 +1980,11 @@ export function validateCurrentPayrollPayload(
   assertUniqueIds(typedRevisionOverrides, '$.compensationRevisionOverrides');
   assertUniqueIds(typedRetroBatches, '$.retroBatches');
   assertUniqueIds(typedRetroAllocations, '$.retroAllocations');
+  if (isV6) {
+    assertUniqueIds(typedPayload.compensationPolicyVersions, '$.compensationPolicyVersions');
+    assertCompensationPolicyGraph(typedPayload.compensationPolicyVersions);
+    assertV6SnapshotPolicyLinks(typedPayload);
+  }
   assertUniqueCompositeKey(
     typedRevisionOverrides,
     (override) => [override.revisionId, override.parameter, override.personnelId ?? ''],
@@ -1747,6 +2054,22 @@ export function validateCurrentPayrollPayload(
   );
   assertCrossRecordIntegrity(typedPayload, options);
   assertRetroLedgerAmounts(typedPayload);
+}
+
+/** Full current V6 runtime schema. Unknown fields are intentionally ignored. */
+export function validateCurrentPayrollPayload(
+  value: unknown,
+  options: PayrollPayloadValidationOptions = {}
+): asserts value is PayrollStorageDto {
+  validatePayrollPayloadVersion(value, options, BACKUP_FORMAT_VERSION);
+}
+
+/** Strict compatibility schema for V5 before adapting it to canonical V6. */
+export function validateV5PayrollPayload(
+  value: unknown,
+  options: PayrollPayloadValidationOptions = {}
+): asserts value is PayrollStorageDto {
+  validatePayrollPayloadVersion(value, options, 5);
 }
 
 export function parseAndValidatePayrollPayload(

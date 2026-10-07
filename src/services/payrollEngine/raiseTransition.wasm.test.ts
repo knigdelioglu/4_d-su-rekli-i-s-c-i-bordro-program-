@@ -1,8 +1,74 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
-import init, { calculate_payroll_json, evaluate_mutation_policy_json } from '../../wasm/pkg/payroll_wasm.js';
+import init, {
+  calculate_payroll_json,
+  evaluate_mutation_policy_json,
+  validate_payroll_json,
+} from '../../wasm/pkg/payroll_wasm.js';
 import { parseWasmPayrollBoundaryResult } from './decimalBoundary';
 import type { PayrollBoundaryPayroll, PayrollCalculationRequest } from './types';
+
+type PolicyState = PayrollCalculationRequest['dataset']['compensationPolicyVersions'][number]['state'];
+type PolicyVersion = PayrollCalculationRequest['dataset']['compensationPolicyVersions'][number];
+
+const LEGACY_COMPENSATION_FIELDS = [
+  'gunlukTabanUcret',
+  'gunlukYemek',
+  'birlestirilmisSosyalYardim',
+  'gunlukVasitaYol',
+  'giyimYardimi',
+  'hizmetZammiBirimi',
+  'isPrimiYuzde',
+  'isPrimiGruplari',
+  'geceCalismaPrimiYuzde',
+  'geceCalismaTatiliPrimiYuzde',
+  'ekOdeme',
+  'digerGelirVarsayilan',
+] as const;
+
+function policyState(
+  gunlukTabanUcret: string,
+  gunlukYemek: string,
+  birlestirilmisSosyalYardim: string,
+  giyimYardimi: string,
+): PolicyState {
+  return {
+    gunlukTabanUcret,
+    gunlukYemek,
+    birlestirilmisSosyalYardim,
+    gunlukVasitaYol: '80',
+    giyimYardimi,
+    hizmetZammiBirimi: '0',
+    isPrimiYuzde: '0',
+    isPrimiGruplari: [{ id: '1. Grup', ad: '1. Grup', oran: '0', aktif: true }],
+    geceCalismaPrimiYuzde: '0',
+    geceCalismaTatiliPrimiYuzde: '0',
+    ekOdeme: '0',
+    digerGelirVarsayilan: '0',
+  };
+}
+
+function policyVersion(
+  id: string,
+  effectiveFrom: string,
+  state: PolicyState,
+): PolicyVersion {
+  return {
+    id,
+    effectiveFrom,
+    state,
+    boundaryScope: 'FULL_EARNING',
+    roadRoundingMode: 'PER_COMPENSATION_SLICE',
+    createdAt: `${effectiveFrom}T00:00:00Z`,
+    source: 'ADMINISTRATIVE_DECISION',
+    reason: 'Explicit WASM regression fixture',
+    supersedesVersionId: null,
+  };
+}
+
+function removeLegacyCompensationFields(settings: Record<string, unknown>): void {
+  for (const field of LEGACY_COMPENSATION_FIELDS) delete settings[field];
+}
 
 async function request(): Promise<PayrollCalculationRequest> {
   await init();
@@ -11,20 +77,28 @@ async function request(): Promise<PayrollCalculationRequest> {
   ), 'utf8')) as { request: PayrollCalculationRequest };
   const value = fixture.request;
   const current = value.dataset.periods[0];
-  const settings = value.dataset.institutionSettings[current.id];
-  Object.assign(settings, {
-    gunlukTabanUcret: '110', gunlukYemek: '10',
-    birlestirilmisSosyalYardim: '1000', giyimYardimi: '100',
-  });
+  const settings = value.dataset.institutionSettings[current.id] as unknown as Record<string, unknown>;
+  removeLegacyCompensationFields(settings);
+
   const previous = {
-    ...current, id: '2025-12', yil: 2025, ay: 12,
-    baslangicTarihi: '2025-12-15', bitisTarihi: '2026-01-14', taxYear: 2025, taxMonth: 12,
+    ...current,
+    id: '2025-12',
+    yil: 2025,
+    ay: 12,
+    baslangicTarihi: '2025-12-15',
+    bitisTarihi: '2026-01-14',
+    taxYear: 2025,
+    taxMonth: 12,
   };
   value.dataset.periods.push(previous);
   value.dataset.institutionSettings[previous.id] = {
-    ...structuredClone(settings), donemId: previous.id, gunlukTabanUcret: '100',
+    ...structuredClone(value.dataset.institutionSettings[current.id]),
+    donemId: previous.id,
   };
-  value.dataset.zamAylari = [2];
+  value.dataset.compensationPolicyVersions = [
+    policyVersion('policy-root', '2025-12-15', policyState('100', '10', '1000', '100')),
+    policyVersion('policy-raise', '2026-02-01', policyState('110', '11', '1100', '110')),
+  ];
   return value;
 }
 
@@ -32,17 +106,14 @@ function calculate(value: PayrollCalculationRequest): PayrollBoundaryPayroll {
   return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(calculate_payroll_json(JSON.stringify(value)));
 }
 
-describe('production WASM raise transition', () => {
+describe('production WASM compensation policy transition', () => {
   test('defaults meal policy on and switches GV/DV without changing the split meal or SGK', async () => {
     const value = await request();
+    value.dataset.compensationPolicyVersions[0].state = policyState('2443.28', '300.75', '1000', '100');
+    value.dataset.compensationPolicyVersions[1].state = policyState('2616.26', '322.0431', '1070.8', '107.08');
     const settings = value.dataset.institutionSettings[value.periodId];
-    settings.gunlukTabanUcret = '2616.26';
-    settings.gunlukYemek = '300.75';
     settings.gunlukYemekIstisnasiGV = '300';
     settings.gunlukYemekIstisnasiSGK = '300';
-    const previous = value.dataset.institutionSettings['2025-12'];
-    previous.gunlukTabanUcret = '2443.28';
-    previous.gunlukYemek = '300.75';
     const days = value.dataset.attendances[0].gunler;
     Object.keys(days).forEach((date) => { days[date] = 'T'; });
     for (let day = 15; day <= 25; day++) days[`2026-01-${day}`] = 'Ç';
@@ -74,7 +145,6 @@ describe('production WASM raise transition', () => {
     expect(member.kesintiler.sendikaAidati).toBe('71.50');
     expect(member.gelirler.tabanBrutAylik).toBe('3240');
 
-    // A fixed deduction of the same amount must produce identical taxes/net.
     person.kesintiler.sabitSendikaAidati = '71.50';
     const fixed = calculate(value);
     expect(member.gvDetay).toEqual(fixed.gvDetay);
@@ -84,7 +154,7 @@ describe('production WASM raise transition', () => {
     expect(calculate(value).kesintiler.sendikaAidati).toBe('0');
   });
 
-  test('splits the four incomes and preserves full raised rates through the next JSON request', async () => {
+  test('splits the four incomes and carries policy rates into the next JSON request', async () => {
     const value = await request();
     const first = calculate(value);
     expect(first.gelirler.tabanBrutAylik).toBe('3240');
@@ -93,15 +163,22 @@ describe('production WASM raise transition', () => {
     expect(first.gelirler.giyimYardimi).toBe('104.52');
     value.dataset.payrolls.push(first);
     const next = {
-      ...value.dataset.periods[0], id: '2026-02', ay: 2,
-      baslangicTarihi: '2026-02-15', bitisTarihi: '2026-03-14', taxMonth: 2,
+      ...value.dataset.periods[0],
+      id: '2026-02',
+      ay: 2,
+      baslangicTarihi: '2026-02-15',
+      bitisTarihi: '2026-03-14',
+      taxMonth: 2,
     };
     value.dataset.institutionSettings[next.id] = {
-      ...structuredClone(value.dataset.institutionSettings[value.periodId]), donemId: next.id,
+      ...structuredClone(value.dataset.institutionSettings[value.periodId]),
+      donemId: next.id,
     };
     value.dataset.periods.push(next);
     value.dataset.attendances.push({
-      id: `${value.personnelId}_${next.id}`, personelId: value.personnelId, donemId: next.id,
+      id: `${value.personnelId}_${next.id}`,
+      personelId: value.personnelId,
+      donemId: next.id,
       gunler: Object.fromEntries([
         ...Array.from({ length: 14 }, (_, index) => [`2026-02-${index + 15}`, 'Ç']),
         ...Array.from({ length: 14 }, (_, index) => [`2026-03-${String(index + 1).padStart(2, '0')}`, 'Ç']),
@@ -109,31 +186,60 @@ describe('production WASM raise transition', () => {
     });
     value.periodId = next.id;
     value.accrual = {
-      accrualId: `${value.personnelId}_${next.id}`, accrualType: 'NORMAL',
-      paymentDate: '2026-02-28', sequence: 0, grossAmount: null, description: null,
+      accrualId: `${value.personnelId}_${next.id}`,
+      accrualType: 'NORMAL',
+      paymentDate: '2026-02-28',
+      sequence: 0,
+      grossAmount: null,
+      description: null,
     };
     const second = calculate(value);
     expect(second.gelirler.tabanBrutAylik).toBe('3080');
     expect(second.gelirler.yemek).toBe('308');
     expect(second.gelirler.birlestirilmisSosyalYardim).toBe('1100');
     expect(second.gelirler.giyimYardimi).toBe('110');
-    expect(value.dataset.institutionSettings[next.id].gunlukYemek).toBe('10');
+    expect('gunlukYemek' in value.dataset.institutionSettings[next.id]).toBe(false);
+    expect(value.dataset.compensationPolicyVersions[1].state.gunlukYemek).toBe('11');
   });
 
-  test('rejects a transition with missing previous settings at the WASM boundary', async () => {
+  test('resolves the raise from policy history without prior period compensation settings', async () => {
     const value = await request();
     delete value.dataset.institutionSettings['2025-12'];
-    expect(() => calculate(value)).toThrow();
+    const payroll = calculate(value);
+    expect(payroll.gelirler.tabanBrutAylik).toBe('3240');
+    expect(payroll.gelirler.yemek).toBe('324');
   });
 
-  test('protects finalized payrolls across tax years when their historical rate settings change', async () => {
+  test('blocks finalized payrolls when their historical compensation policy changes', async () => {
     const value = await request();
     const payroll = calculate(value);
     payroll.status = 'FINALIZED';
     value.dataset.payrolls.push(payroll);
     const impact = JSON.parse(evaluate_mutation_policy_json(JSON.stringify({
-      dataset: value.dataset, mutation: { kind: 'PERIOD', periodId: '2025-12' },
+      dataset: value.dataset,
+      mutation: {
+        kind: 'COMPENSATION_POLICY',
+        effectiveFrom: '2025-12-15',
+        throughInclusive: null,
+      },
     }))) as { blockedByFinalized: Array<{ periodId: string }> };
     expect(impact.blockedByFinalized.map((key) => key.periodId)).toEqual([value.periodId]);
+  });
+
+  test('does not infer a NORMAL baseline from archived rates or a legacy raise calendar', async () => {
+    const value = await request();
+    value.dataset.compensationPolicyVersions = [];
+    const settings = value.dataset.institutionSettings[value.periodId] as unknown as Record<string, unknown>;
+    Object.assign(settings, {
+      gunlukTabanUcret: '110',
+      gunlukYemek: '10',
+      birlestirilmisSosyalYardim: '1000',
+      giyimYardimi: '100',
+      gunlukVasitaYol: '80',
+    });
+    Object.assign(value.dataset, { zamAylari: [2] });
+    const requestJson = JSON.stringify(value);
+    expect(() => validate_payroll_json(requestJson)).toThrow();
+    expect(() => calculate_payroll_json(requestJson)).toThrow();
   });
 });

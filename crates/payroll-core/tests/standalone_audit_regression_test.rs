@@ -1,3 +1,5 @@
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 #[path = "support/independent_audit.rs"]
 mod support;
 use payroll_core::*;
@@ -208,16 +210,27 @@ fn test_audit_pek_lower_bound_zero_deduction_for_worker() {
     req = with_full_year_periods(req, 2026);
     let period_id = req.periodId.clone();
 
-    let mut settings = req
+    let period = req
         .dataset
-        .institutionSettings
-        .get(&period_id)
-        .unwrap()
+        .periods
+        .iter()
+        .find(|period| period.id == period_id)
+        .expect("active period")
         .clone();
-    settings.gunlukTabanUcret = dec!(400);
-    req.dataset
-        .institutionSettings
-        .insert(period_id.clone(), settings);
+    let mut state = req
+        .dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == period.baslangicTarihi)
+        .expect("period baseline")
+        .state
+        .clone();
+    state.gunlukTabanUcret = dec!(400);
+    compensation_policy_test_support::replace_period_baseline_from_state(
+        &mut req.dataset,
+        &period,
+        state,
+    );
 
     let payroll = calculate_payroll_checked(&req).unwrap();
     let pek = payroll.pekDetay.as_ref().unwrap();

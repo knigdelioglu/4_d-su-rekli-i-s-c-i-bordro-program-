@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle2, Download, ShieldCheck } from 'lucide-react
 import type {
   BordroDonemi,
   BordroKaydi,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   Personel,
   RetroAdjustmentBatch,
   RetroAllocation,
@@ -27,7 +27,7 @@ interface SgkPrimKontroluProps {
   bordrolar: BordroKaydi[];
   retroBatches: RetroAdjustmentBatch[];
   retroAllocations: RetroAllocation[];
-  kurumDegerleri?: DönemselKurumDegerleri;
+  kurumDegerleri?: PayrollPeriodInstitutionSettings;
 }
 
 const periodLabel = (period: BordroDonemi): string =>

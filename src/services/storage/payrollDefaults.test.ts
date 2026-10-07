@@ -24,9 +24,13 @@ describe('production payroll defaults', () => {
     expect(DEFAULT_PRODUCTION_KURUM_DEGERLERI.pekTavanKatsayisi).toBe(9);
     expect(DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemekIstisnasiSGK).toBe(300);
     expect(DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemekIstisnasiGV).toBe(300);
-    expect(DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari).toEqual([]);
     expect(DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeListesi).toEqual([]);
     expect(DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi).toEqual([]);
+    expect(Object.keys(DEFAULT_PRODUCTION_KURUM_DEGERLERI).some((key) => [
+      'gunlukTabanUcret', 'gunlukYemek', 'birlestirilmisSosyalYardim', 'gunlukVasitaYol',
+      'giyimYardimi', 'hizmetZammiBirimi', 'isPrimiYuzde', 'isPrimiGruplari',
+      'geceCalismaPrimiYuzde', 'geceCalismaTatiliPrimiYuzde', 'ekOdeme', 'digerGelirVarsayilan',
+    ].includes(key))).toBe(false);
   });
 
   test('does not silently create a future-year copy', () => {

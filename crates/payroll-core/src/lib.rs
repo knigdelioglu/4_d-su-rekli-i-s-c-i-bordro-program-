@@ -8,6 +8,7 @@
 //! runtimes.
 
 pub mod calculations;
+pub mod compensation_policy;
 pub mod errors;
 pub mod models;
 
@@ -19,16 +20,19 @@ pub mod gv_exemption;
 pub mod index;
 pub mod notices;
 pub mod payroll_engine;
+pub mod payroll_snapshot;
 pub mod policies;
 pub(crate) mod raise_transition;
 pub mod retro;
-pub mod transport_rates;
+pub(crate) mod transport_rates;
 
 pub use calculations::*;
+pub use compensation_policy::*;
 pub use index::*;
 pub use models::*;
 pub use notices::*;
 pub use payroll_engine::*;
+pub use payroll_snapshot::*;
 pub use policies::*;
 pub use retro::*;
 

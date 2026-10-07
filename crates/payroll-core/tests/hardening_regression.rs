@@ -38,6 +38,7 @@ fn sparse_payroll() -> BordroKaydi {
         statutorySnapshot: None,
         odenenRaporluGun: None,
         raporluGun: None,
+        calculationMetadata: None,
     }
 }
 

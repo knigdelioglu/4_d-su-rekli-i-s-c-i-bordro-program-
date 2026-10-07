@@ -2,12 +2,11 @@ use bordro_programi_lib::db::create_in_memory_connection;
 use bordro_programi_lib::domain::models::*;
 use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
+use bordro_programi_lib::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
-use bordro_programi_lib::repositories::settings_repo::{
-    SettingsRepository, ZAM_AYLARI_SETTING_KEY,
-};
+use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
 use bordro_programi_lib::services::payroll_notice_service::{
     PayrollNoticeService, PayrollNoticeSeverity,
@@ -88,6 +87,43 @@ fn settings(period_id: &str, daily_wage: rust_decimal::Decimal) -> DonemselKurum
         sgkIsverenOraniYuzde: Some(dec!(21.75)),
         issizlikIsverenOraniYuzde: Some(dec!(2)),
         ..DonemselKurumDegerleri::default()
+    }
+}
+
+fn policy_version(
+    id: &str,
+    effective_from: &str,
+    daily_wage: rust_decimal::Decimal,
+    supersedes: Option<&str>,
+) -> CompensationPolicyVersion {
+    CompensationPolicyVersion {
+        id: id.into(),
+        effectiveFrom: effective_from.into(),
+        state: CompensationPolicyState {
+            gunlukTabanUcret: daily_wage,
+            gunlukYemek: dec!(0),
+            birlestirilmisSosyalYardim: dec!(0),
+            gunlukVasitaYol: dec!(0),
+            giyimYardimi: dec!(0),
+            hizmetZammiBirimi: dec!(0),
+            isPrimiYuzde: None,
+            isPrimiGruplari: vec![CompensationPolicyGroup {
+                id: "1. Grup".into(),
+                ad: "1. Grup".into(),
+                oran: dec!(0),
+                aktif: true,
+            }],
+            geceCalismaPrimiYuzde: dec!(0),
+            geceCalismaTatiliPrimiYuzde: dec!(0),
+            ekOdeme: Some(dec!(0)),
+            digerGelirVarsayilan: Some(dec!(0)),
+        },
+        boundaryScope: CompensationBoundaryScope::FullEarning,
+        roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+        createdAt: "2026-01-01T00:00:00Z".into(),
+        source: "TEST_FIXTURE".into(),
+        reason: format!("{id} test policy"),
+        supersedesVersionId: supersedes.map(str::to_owned),
     }
 }
 
@@ -189,6 +225,7 @@ fn payroll_with_snapshots(personnel_id: &str, period_id: &str) -> BordroKaydi {
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
         raporluGun: Some(0),
+        calculationMetadata: None,
     }
 }
 
@@ -198,7 +235,6 @@ fn setup_period_basics(conn: &rusqlite::Connection, p: &BordroDonemi, worker: &P
     SettingsRepository::save_institution_settings(conn, &settings(&p.id, dec!(1000))).unwrap();
     AnnualPayrollParametersRepository::save(conn, &AnnualPayrollParameters::default_for_2026())
         .unwrap();
-    SettingsRepository::set_app_setting(conn, ZAM_AYLARI_SETTING_KEY, "[1,7]").unwrap();
 }
 
 #[test]
@@ -219,7 +255,7 @@ fn missing_attendance_is_a_critical_notice() {
 }
 
 #[test]
-fn raise_transition_notice_shows_previous_and_current_daily_wages() {
+fn compensation_policy_change_notice_lists_effective_date() {
     let conn = create_in_memory_connection().unwrap();
     let worker = person("p-raise");
     PersonnelRepository::save(&conn, &worker).unwrap();
@@ -234,18 +270,29 @@ fn raise_transition_notice_shows_previous_and_current_daily_wages() {
         .unwrap();
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
         .unwrap();
-    SettingsRepository::set_app_setting(&conn, ZAM_AYLARI_SETTING_KEY, "[8]").unwrap();
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &policy_version("notice-baseline", "2026-06-15", dec!(1000), None),
+    )
+    .unwrap();
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &policy_version("notice-august-change", "2026-08-01", dec!(1100), None),
+    )
+    .unwrap();
     AttendanceRepository::save(&conn, &full_attendance(&worker.id, &active)).unwrap();
 
     let notices = PayrollNoticeService::get_period_notices(&conn, &active.id).unwrap();
-    let raise = notices
+    let change = notices
         .iter()
-        .find(|notice| notice.code == "RAISE_TRANSITION_PERIOD")
-        .expect("raise transition notice should exist");
+        .find(|notice| notice.code == "COMPENSATION_POLICY_CHANGE_ACTIVE")
+        .expect("active policy change notice should exist");
 
-    assert_eq!(raise.severity, PayrollNoticeSeverity::Warning);
-    assert!(raise.details.iter().any(|detail| detail.contains("1000")));
-    assert!(raise.details.iter().any(|detail| detail.contains("1100")));
+    assert_eq!(change.severity, PayrollNoticeSeverity::Info);
+    assert!(change
+        .details
+        .iter()
+        .any(|detail| detail.contains("2026-08-01") && detail.contains("notice-august-change")));
 }
 
 #[test]

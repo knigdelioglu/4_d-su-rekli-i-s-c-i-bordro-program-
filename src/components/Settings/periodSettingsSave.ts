@@ -1,15 +1,10 @@
-import type { DönemselKurumDegerleri } from '../../types/payroll';
+import type { PayrollPeriodInstitutionSettings } from '../../types/payroll';
 
 export type PeriodSettingsSaveOutcome =
   | { kind: 'success' }
-  | {
-      kind: 'error' | 'partial-error';
-      message: string;
-      paramsForm: DönemselKurumDegerleri;
-      zamAylariForm: number[];
-    };
+  | { kind: 'error'; message: string; paramsForm: PayrollPeriodInstitutionSettings };
 
-export function formatPeriodSettingsSaveError(error: unknown, context = 'Ücret ayarları'): string {
+export function formatPeriodSettingsSaveError(error: unknown, context = 'Kurum ayarları'): string {
   let detail: string | undefined;
 
   if (typeof error === 'string') {
@@ -38,39 +33,6 @@ export function formatPeriodSettingsSaveError(error: unknown, context = 'Ücret 
     : `${context} kaydedilemedi. Lütfen tekrar deneyin.`;
 }
 
-export async function savePeriodSettings(
-  paramsForm: DönemselKurumDegerleri,
-  zamAylariForm: number[],
-  persistedParams: DönemselKurumDegerleri,
-  persistedZamAylari: number[],
-  onSaveParams: (settings: DönemselKurumDegerleri) => Promise<void> | void,
-  onSaveZamAylari: (months: number[]) => Promise<void> | void
-): Promise<PeriodSettingsSaveOutcome> {
-  // Each persisted save is a payroll mutation: period settings invalidate the
-  // period and every later period, and the zam schedule invalidates ALL
-  // payrolls. Unchanged sections must therefore not be re-saved; otherwise a
-  // single "Kaydet" click on one field marks the entire ledger STALE (or is
-  // rejected because some unrelated history is FINALIZED).
-  const paramsChanged = !sameSettingsValue(paramsForm, persistedParams);
-  const zamAylariChanged = !sameZamAylari(zamAylariForm, persistedZamAylari);
-  let paramsSaved = false;
-  try {
-    if (paramsChanged) await onSaveParams(paramsForm);
-    paramsSaved = true;
-    if (zamAylariChanged) await onSaveZamAylari(zamAylariForm);
-    return { kind: 'success' };
-  } catch (saveError) {
-    return {
-      kind: paramsSaved ? 'partial-error' : 'error',
-      message: paramsSaved
-        ? `Ücret ayarları kaydedildi. ${formatPeriodSettingsSaveError(saveError, 'Zam takvimi')}`
-        : formatPeriodSettingsSaveError(saveError),
-      paramsForm: paramsSaved ? paramsForm : persistedParams,
-      zamAylariForm: [...persistedZamAylari],
-    };
-  }
-}
-
 function stableSettingsJson(value: unknown): string {
   const normalize = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(normalize);
@@ -82,8 +44,6 @@ function stableSettingsJson(value: unknown): string {
           .map(([key, entry]) => [key, normalize(entry)])
       );
     }
-    // UI forms keep numbers while the persisted boundary may keep exact
-    // Decimal strings; compare their numeric meaning.
     if (typeof item === 'string' && /^-?\d+(\.\d+)?$/.test(item)) return Number(item);
     return item;
   };
@@ -94,10 +54,20 @@ export function sameSettingsValue(left: unknown, right: unknown): boolean {
   return stableSettingsJson(left) === stableSettingsJson(right);
 }
 
-export function sameZamAylari(left: number[], right: number[]): boolean {
-  const normalize = (months: number[]) =>
-    [...new Set(months.filter((month) => Number.isInteger(month)))].sort((a, b) => a - b);
-  const a = normalize(left);
-  const b = normalize(right);
-  return a.length === b.length && a.every((month, index) => month === b[index]);
+export async function savePeriodSettings(
+  paramsForm: PayrollPeriodInstitutionSettings,
+  persistedParams: PayrollPeriodInstitutionSettings,
+  onSaveParams: (settings: PayrollPeriodInstitutionSettings) => Promise<void> | void
+): Promise<PeriodSettingsSaveOutcome> {
+  if (sameSettingsValue(paramsForm, persistedParams)) return { kind: 'success' };
+  try {
+    await onSaveParams(paramsForm);
+    return { kind: 'success' };
+  } catch (saveError) {
+    return {
+      kind: 'error',
+      message: formatPeriodSettingsSaveError(saveError),
+      paramsForm: persistedParams,
+    };
+  }
 }

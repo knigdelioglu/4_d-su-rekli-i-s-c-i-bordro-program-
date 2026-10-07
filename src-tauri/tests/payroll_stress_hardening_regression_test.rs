@@ -6,12 +6,15 @@ use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
+use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::payroll_service::{
     resolve_statutory_snapshot_for_period_with_paid_sick_dates, PayrollService,
 };
 use chrono::{Duration, NaiveDate};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn period(id: &str, year: i32, month: i32, tax_year: i32, tax_month: i32) -> BordroDonemi {
     let (end_year, end_month) = if month == 12 {
@@ -97,6 +100,10 @@ fn settings(period_id: &str) -> DonemselKurumDegerleri {
     }
 }
 
+fn active_settings(period_id: &str) -> PayrollPeriodInstitutionSettings {
+    settings(period_id).into()
+}
+
 fn attendance_from_codes(
     personnel_id: &str,
     period: &BordroDonemi,
@@ -155,6 +162,7 @@ fn prior_payroll_with_devreden(
     period_id: &str,
     amount: rust_decimal::Decimal,
     remaining_months: i32,
+    statutory_snapshot: ResolvedStatutorySnapshot,
 ) -> BordroKaydi {
     BordroKaydi {
         id: format!("{}_{}", personnel_id, period_id),
@@ -184,7 +192,27 @@ fn prior_payroll_with_devreden(
             kalanAySayisi: remaining_months,
             kaynakDonemId: Some(period_id.into()),
         }]),
-        pekDetay: None,
+        pekDetay: Some(PekDetayi {
+            hesaplananPek: dec!(0),
+            hamPek: dec!(0),
+            devredenPekKullanilan: dec!(0),
+            primMatrahi: dec!(0),
+            aylikOncekiPekTuketimi: Some(dec!(0)),
+            aylikSonrasiPekTuketimi: Some(dec!(0)),
+            finalPek: dec!(0),
+            devredenPekAşanTutar: dec!(0),
+            pekAltSinir: statutory_snapshot.pekAltSinir,
+            pekUstSinir: statutory_snapshot.pekUstSinir,
+            altSinirTamamlamaFarki: dec!(0),
+            fiiliYemekGunu: 0,
+            yemekIstisnasiTutar: dec!(0),
+            isverenSgkPrimi: Some(dec!(0)),
+            isverenIssizlikPrimi: Some(dec!(0)),
+            pekAltSinirTamamlamaIsverenPrimi: Some(dec!(0)),
+            isverenPrimToplami: Some(dec!(0)),
+            sgkIsverenOraniYuzde: Some(dec!(21.75)),
+            isverenIssizlikOraniYuzde: Some(dec!(2)),
+        }),
         isPrimiDetay: None,
         gvDetay: Some(GvHesapDetayi {
             oncekiKumulatifGvMatrahi: dec!(0),
@@ -207,9 +235,10 @@ fn prior_payroll_with_devreden(
         }),
         persistedGvBase: Some(dec!(0)),
         damgaDetay: None,
-        statutorySnapshot: None,
+        statutorySnapshot: Some(statutory_snapshot),
         odenenRaporluGun: Some(0),
         raporluGun: Some(0),
+        calculationMetadata: None,
     }
 }
 
@@ -228,13 +257,46 @@ fn setup_devreden_case(
     let active = period("2026-07-stress", 2026, 7, 2026, 8);
     PeriodRepository::save(&conn, &prior)?;
     PeriodRepository::save(&conn, &active)?;
-    SettingsRepository::save_institution_settings(&conn, &settings(&prior.id))?;
-    SettingsRepository::save_institution_settings(&conn, &settings(&active.id))?;
+    let prior_legacy_settings = settings(&prior.id);
+    let active_legacy_settings = settings(&active.id);
+    let prior_settings: PayrollPeriodInstitutionSettings = prior_legacy_settings.clone().into();
+    let active_settings: PayrollPeriodInstitutionSettings = active_legacy_settings.clone().into();
+    SettingsRepository::save_active_institution_settings(&conn, &prior_settings)?;
+    SettingsRepository::save_active_institution_settings(&conn, &active_settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &prior, &prior_legacy_settings)?;
+    compensation_policy_test_support::seed_period_baseline(
+        &conn,
+        &active,
+        &active_legacy_settings,
+    )?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
 
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: format!("{personnel_id}-opening-2026"),
+            personnelId: personnel_id.into(),
+            year: 2026,
+            gvCumulativeOpening: Some(dec!(0)),
+            effectiveFromPeriodId: Some(prior.id.clone()),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some(prior.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
+
+    let prior_codes = vec!["R"; 30];
+    let prior_attendance = attendance_from_codes(personnel_id, &prior, &prior_codes);
+    let prior_statutory = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
+        &prior_attendance,
+        &prior,
+        &prior_settings,
+        &[],
+    )?;
     PayrollRepository::save(
         &conn,
-        &prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2),
+        &prior_payroll_with_devreden(personnel_id, &prior.id, dec!(20000), 2, prior_statutory),
     )?;
     AttendanceRepository::save(
         &conn,
@@ -247,7 +309,7 @@ fn setup_devreden_case(
 #[test]
 fn unpaid_r_is_not_sgk_day_but_paid_r_is() -> Result<(), Box<dyn std::error::Error>> {
     let p = period("2026-07-r", 2026, 7, 2026, 8);
-    let k = settings(&p.id);
+    let k = active_settings(&p.id);
     let attendance = attendance_from_codes("r-person", &p, &["Ç", "R"]);
 
     let unpaid =
@@ -269,7 +331,7 @@ fn unpaid_r_is_not_sgk_day_but_paid_r_is() -> Result<(), Box<dyn std::error::Err
 fn unpaid_r_sgk_day_count_is_independent_of_calendar_position(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let july = period("2026-07-full-r", 2026, 7, 2026, 8);
-    let k = settings(&july.id);
+    let k = active_settings(&july.id);
 
     // 15 Temmuz-14 Ağustos 31 takvim günüdür. Tek ücretsiz R olduğunda
     // gerçek primli gün 30'dur; R'nin eski normalizasyonda 0 ağırlık verilen
@@ -288,7 +350,7 @@ fn unpaid_r_sgk_day_count_is_independent_of_calendar_position(
     // 15 Şubat-14 Mart 2026 dönemi 28 takvim günüdür. Tam ve eksiksiz dönem
     // 30 gün normalize edilir; tek ücretsiz R varsa eksik-gün kuralıyla 27 gün kalır.
     let feb = period("2026-02-full-r", 2026, 2, 2026, 3);
-    let feb_settings = settings(&feb.id);
+    let feb_settings = active_settings(&feb.id);
     let feb_attendance = full_attendance_with_unpaid_r("feb-r", &feb, "2026-02-20");
     let feb_snapshot = resolve_statutory_snapshot_for_period_with_paid_sick_dates(
         &feb_attendance,
@@ -368,6 +430,7 @@ fn stamp_tax_uses_resolved_minimum_wage_after_in_period_change(
         gunlukYemekIstisnasiGV: None,
     }]);
     SettingsRepository::save_institution_settings(&conn, &k)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &active, &k)?;
 
     let work_codes = vec!["Ç"; 30];
     AttendanceRepository::save(&conn, &attendance_from_codes(&p.id, &active, &work_codes))?;

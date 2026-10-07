@@ -4,6 +4,8 @@ use rust_decimal_macros::dec;
 use serde_json::json;
 #[path = "support/audit_fixture.rs"]
 mod audit_fixture;
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 use audit_fixture::request;
 
 fn export_wasm_case(name: &str, request: &PayrollCalculationRequest, result: &BordroKaydi) {
@@ -202,6 +204,7 @@ fn audit_pek_capacity_conservation_matrix() {
 fn audit_opening_zero_nonzero_and_stale_history() {
     for opening in [dec!(0), dec!(189999)] {
         let mut req = request();
+        req.dataset.taxOpenings.clear();
         req.dataset.taxOpenings.push(PersonelTaxOpening {
             id: "opening".into(),
             personnelId: "audit".into(),
@@ -246,6 +249,7 @@ fn audit_new_tax_year_resets_gv_but_preserves_pek_carry() {
     req.dataset.periods[0].taxYear = 2025;
     req.dataset.periods[0].taxMonth = 12;
     req.dataset.periods[1].taxMonth = 1;
+    req.dataset.taxOpenings.clear();
     let mut previous_year = AnnualPayrollParameters::default_for_2026();
     previous_year.year = 2025;
     req.dataset.annualPayrollParameters.push(previous_year);
@@ -257,6 +261,17 @@ fn audit_new_tax_year_resets_gv_but_preserves_pek_carry() {
         effectiveFromPeriodId: Some("source".into()),
         asgariGvCumulativeOpening: Some(dec!(200000)),
         asgariGvEffectiveFromPeriodId: Some("source".into()),
+        createdAt: None,
+        updatedAt: None,
+    });
+    req.dataset.taxOpenings.push(PersonelTaxOpening {
+        id: "2026-opening".into(),
+        personnelId: "audit".into(),
+        year: 2026,
+        gvCumulativeOpening: Some(Decimal::ZERO),
+        effectiveFromPeriodId: Some("payment".into()),
+        asgariGvCumulativeOpening: Some(Decimal::ZERO),
+        asgariGvEffectiveFromPeriodId: Some("payment".into()),
         createdAt: None,
         updatedAt: None,
     });
@@ -332,16 +347,29 @@ fn audit_mixed_income_personal_deductions_and_tax_discount_oracle() {
         "oksOraniYuzde":"3", "icraTutar":"500", "kisiBorcuTutar":"200",
         "gvIndirimleri":{"dogumAskerlikGvIndirimTutar":"100", "hayatSigortasiPrimiTutar":"1000", "saglikSigortasiPrimiTutar":"500"}
     })).unwrap());
-    let settings = req.dataset.institutionSettings.get_mut("source").unwrap();
-    settings.gunlukYemek = dec!(400);
-    settings.gunlukVasitaYol = dec!(100);
-    settings.birlestirilmisSosyalYardim = dec!(5000);
-    settings.giyimYardimi = dec!(200);
-    settings.hizmetZammiBirimi = dec!(10);
-    settings.ekOdeme = Some(dec!(1000));
-    settings.digerGelirVarsayilan = Some(dec!(500));
-    settings.geceCalismaPrimiYuzde = Some(dec!(25));
-    settings.geceCalismaTatiliPrimiYuzde = Some(dec!(50));
+    let period = req.dataset.periods[0].clone();
+    let mut state = req
+        .dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == period.baslangicTarihi)
+        .expect("period baseline")
+        .state
+        .clone();
+    state.gunlukYemek = dec!(400);
+    state.gunlukVasitaYol = dec!(100);
+    state.birlestirilmisSosyalYardim = dec!(5000);
+    state.giyimYardimi = dec!(200);
+    state.hizmetZammiBirimi = dec!(10);
+    state.ekOdeme = Some(dec!(1000));
+    state.digerGelirVarsayilan = Some(dec!(500));
+    state.geceCalismaPrimiYuzde = dec!(25);
+    state.geceCalismaTatiliPrimiYuzde = dec!(50);
+    compensation_policy_test_support::replace_period_baseline_from_state(
+        &mut req.dataset,
+        &period,
+        state,
+    );
     for (date, code) in [
         ("2025-12-15", "GÇ"),
         ("2025-12-16", "GÇT"),

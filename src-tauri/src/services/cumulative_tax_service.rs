@@ -268,16 +268,16 @@ impl CumulativeTaxService {
                 crate::repositories::settings_repo::SettingsRepository::get_institution_settings(
                     conn, &period.id,
                 )? {
-                settings
+                payroll_core::PayrollPeriodInstitutionSettings::from(settings)
             } else if require_settings {
                 return Err(DomainError::InvalidData(format!(
                     "{} dönemi kurum ayarları bulunamadı; asgari GV kümülatifi hesaplanamaz.",
                     period.id
                 )));
             } else {
-                DonemselKurumDegerleri {
+                payroll_core::PayrollPeriodInstitutionSettings {
                     donemId: period.id.clone(),
-                    ..DonemselKurumDegerleri::default()
+                    ..payroll_core::PayrollPeriodInstitutionSettings::default()
                 }
             };
             let settings = historical_statutory_settings(conn, period, &settings)?;
@@ -308,8 +308,8 @@ impl CumulativeTaxService {
 fn historical_statutory_settings(
     conn: &Connection,
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
-) -> Result<DonemselKurumDegerleri> {
+    settings: &payroll_core::PayrollPeriodInstitutionSettings,
+) -> Result<payroll_core::PayrollPeriodInstitutionSettings> {
     if settings.statutoryParameterSnapshot.is_some() {
         return Ok(settings.clone());
     }

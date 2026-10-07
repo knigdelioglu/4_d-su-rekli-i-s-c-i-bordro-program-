@@ -95,6 +95,53 @@ export interface IsPrimiGrupItem {
   aktif?: boolean;
 }
 
+/** Full-state normal compensation timeline DTO; Decimal values become exact strings at the engine boundary. */
+export interface CompensationPolicyGroup {
+  id: string;
+  ad: string;
+  oran: number;
+  aktif: boolean;
+}
+
+export interface CompensationPolicyState {
+  gunlukTabanUcret: number;
+  gunlukYemek: number;
+  birlestirilmisSosyalYardim: number;
+  gunlukVasitaYol: number;
+  giyimYardimi: number;
+  hizmetZammiBirimi: number;
+  isPrimiYuzde: number | null;
+  isPrimiGruplari: CompensationPolicyGroup[];
+  geceCalismaPrimiYuzde: number;
+  geceCalismaTatiliPrimiYuzde: number;
+  ekOdeme: number | null;
+  digerGelirVarsayilan: number | null;
+}
+
+export type CompensationBoundaryScope = 'FULL_EARNING' | 'ROAD_ONLY';
+export type RoadRoundingMode = 'PER_COMPENSATION_SLICE' | 'PERIOD_TOTAL';
+
+export interface CompensationPolicyVersion {
+  id: string;
+  effectiveFrom: string;
+  state: CompensationPolicyState;
+  boundaryScope: CompensationBoundaryScope;
+  roadRoundingMode: RoadRoundingMode;
+  createdAt: string;
+  source: string;
+  reason: string;
+  supersedesVersionId: string | null;
+}
+
+export interface ResolvedCompensationSegment {
+  versionId: string;
+  startDate: string;
+  endDate: string;
+  state: CompensationPolicyState;
+  boundaryScope: CompensationBoundaryScope;
+  roadRoundingMode: RoadRoundingMode;
+}
+
 export interface IsPrimiHesapDetayi {
   grupId: string;
   grupAd: string;
@@ -275,7 +322,8 @@ export interface TransportRateChange {
   gunlukVasitaYol: number;
 }
 
-export interface DönemselKurumDegerleri {
+/** Raw settings DTO retained for legacy backup and import compatibility. */
+export interface LegacyInstitutionSettings {
   donemId: string;
   gunlukTabanUcret: number;
   gunlukYemek: number;
@@ -317,6 +365,34 @@ export interface DönemselKurumDegerleri {
   issizlikIsverenOraniYuzde?: number;
 }
 
+/** Compatibility name used by old forms and read-only legacy reports. */
+export type DönemselKurumDegerleri = LegacyInstitutionSettings;
+
+/** Legal, deduction, meal-tax, and manual Tediye/TİS inputs for an active period. */
+export interface PayrollPeriodInstitutionSettings {
+  donemId: string;
+  yemekTamGvIstisnaDamgaTabi?: boolean;
+  tediyeListesi?: TediyeKalemi[];
+  tisIkramiyeListesi?: TisIkramiyeKalemi[];
+  tediyeTisNotu?: string;
+  sgkIsciOraniYuzde?: number;
+  issizlikIsciOraniYuzde?: number;
+  gelirVergisiOraniYuzde?: number;
+  damgaVergisiOraniBinde?: number;
+  sendikaAidatiYuzde?: number;
+  sabitSendikaAidati?: number;
+  besOraniYuzde?: number;
+  sabitBesTutar?: number;
+  gunlukYemekIstisnasiSGK?: number;
+  gunlukYemekIstisnasiGV?: number;
+  statutoryParameterSegments?: StatutoryParameterSegment[];
+  statutoryParameterSnapshot?: StatutoryParameterSnapshot;
+  pekTavanKatsayisi?: number;
+  gunlukAsgariUcret?: number;
+  sgkIsverenOraniYuzde?: number;
+  issizlikIsverenOraniYuzde?: number;
+}
+
 export interface SickLeaveRecord {
   id: string;
   personnelId: string;
@@ -326,30 +402,31 @@ export interface SickLeaveRecord {
   updatedAt?: string;
 }
 
-export const BACKUP_FORMAT_VERSION = 5;
+export const BACKUP_FORMAT_VERSION = 6;
 /** Native app_settings anahtarı: kurum genelinde zam yürürlük ayları (1-12). */
 export const ZAM_AYLARI_SETTING_KEY = 'zam_aylari';
 
-/** JSON yedek sözleşmesi. V5, settlement-flow snapshot'larını da kapsar. */
+/** JSON yedek sözleşmesi. V6, immutable compensation timeline ve payroll input snapshot'larını kapsar. */
 export interface BackupPayload {
   backupVersion: number;
   exportedAt: string;
   donemler: BordroDonemi[];
   aktifDonemId: string;
   personeller: Personel[];
-  kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
+  kurumDegerleriMap: Record<string, PayrollPeriodInstitutionSettings>;
   puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
   taxOpenings: PersonelTaxOpening[];
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
-  /** Kurum genelinde zam yürürlük ayları; seçilen ayın 1'i esas alınır. */
-  zamAylari: number[];
   /** V5 retro graph; V4 and earlier are adapted through the compatibility path. */
   compensationRevisions: CompensationRevision[];
   compensationRevisionOverrides: CompensationRevisionOverride[];
   retroBatches: RetroAdjustmentBatch[];
   retroAllocations: RetroAllocation[];
+  /** Full immutable normal-compensation history; V1-V5 imports canonicalize this to an empty list. */
+  /** Added by the V6 backup adapter; optional for legacy in-memory UI datasets. */
+  compensationPolicyVersions?: CompensationPolicyVersion[];
 }
 
 export type PuantajOzeti = Record<PuantajKodu, number>;
@@ -533,6 +610,221 @@ export interface PekDetayi {
   isverenIssizlikOraniYuzde?: number;
 }
 
+export type PayrollCalculationProvenance = 'COMPENSATION_POLICY_ENGINE';
+
+export interface PayrollCalculationMetadata {
+  provenance: PayrollCalculationProvenance;
+  snapshot?: PayrollCalculationSnapshot | null;
+}
+
+export interface PayrollCalculationSnapshot {
+  snapshotSchemaVersion: number;
+  /** Semantic calculation version; independent from a build hash. */
+  calculationVersion: string;
+  compensation: ResolvedCompensationSnapshot;
+  usedInputs: PayrollUsedInputSnapshot;
+}
+
+export interface ResolvedCompensationSnapshot {
+  segments: ResolvedCompensationSegment[];
+}
+
+export interface PayrollUsedInputSnapshot {
+  personnelGroup: string;
+  serviceYear: number;
+  personalDeductions?: PayrollPersonalDeductionInputsSnapshot | null;
+  attendance?: PayrollAttendanceInputSnapshot | null;
+  paidSickLeave?: PayrollPaidSickLeaveInputSnapshot | null;
+  manualIncome: PayrollManualIncomeInputSnapshot;
+  accrualGrossAmount: number | null;
+  institutionDeductionSettings: PayrollInstitutionDeductionInputsSnapshot;
+  statutoryParameters: PayrollStatutoryInputsSnapshot;
+  annualParameters: PayrollAnnualParametersSnapshot;
+  taxHistory: PayrollTaxHistoryInputsSnapshot;
+  incomingPekCarry: PayrollIncomingPekCarrySnapshot;
+}
+
+export interface PayrollPersonalDeductionInputsSnapshot {
+  sendikaUyesi?: boolean | null;
+  sabitSendikaAidati: number | null;
+  besUyesi?: boolean | null;
+  oksOraniYuzde: number | null;
+  sabitBesTutar: number | null;
+  icraTutar: number | null;
+  nafakaTutar: number | null;
+  kisiBorcuTutar: number | null;
+  dogumAskerlikBorclanmasiTutar: number | null;
+  hayatSaglikSigortasiTutar: number | null;
+  digerKesintiTutar: number | null;
+  gvIndirimleri?: PayrollGvDeductionInputsSnapshot | null;
+}
+
+export interface PayrollGvDeductionInputsSnapshot {
+  dogumAskerlikGvIndirimTutar: number | null;
+  hayatSigortasiPrimiTutar: number | null;
+  saglikSigortasiPrimiTutar: number | null;
+}
+
+export type PayrollAttendanceCoverage = 'COMPLETE' | 'PARTIAL';
+
+export interface PayrollAttendanceInputSnapshot {
+  coverage: PayrollAttendanceCoverage;
+  days: PayrollAttendanceDaySnapshot[];
+}
+
+export interface PayrollAttendanceDaySnapshot {
+  date: string;
+  code: string;
+}
+
+export interface PayrollPaidSickLeaveInputSnapshot {
+  ruleVersion: string;
+  sourceEpisodes: PayrollSickLeaveEpisodeSnapshot[];
+  paidDates: string[];
+}
+
+export interface PayrollSickLeaveEpisodeSnapshot {
+  id: string;
+  startDate: string;
+  endDate: string;
+}
+
+export interface PayrollManualIncomeInputSnapshot {
+  supplied: boolean;
+  tediye: number | null;
+  tisIkramiyesi: number | null;
+}
+
+export interface PayrollInstitutionDeductionInputsSnapshot {
+  yemekTamGvIstisnaDamgaTabi: boolean;
+  damgaVergisiOraniBinde: number | null;
+  sendikaAidatiYuzde: number | null;
+  sabitSendikaAidati: number | null;
+  besOraniYuzde: number | null;
+  sabitBesTutar: number | null;
+}
+
+export interface PayrollStatutoryInputsSnapshot {
+  gunlukAsgariUcret: number;
+  sgkIsciOraniYuzde: number;
+  issizlikIsciOraniYuzde: number;
+  pekTavanKatsayisi: number;
+  gunlukYemekIstisnasiSGK: number;
+  gunlukYemekIstisnasiGV: number;
+  sgkIsverenOraniYuzde: number | null;
+  issizlikIsverenOraniYuzde: number | null;
+  statutoryParameterSegments: PayrollStatutoryInputSegmentSnapshot[];
+}
+
+export interface PayrollStatutoryInputSegmentSnapshot {
+  effectiveFrom: string;
+  gunlukAsgariUcret: number | null;
+  pekTavanKatsayisi: number | null;
+  gunlukYemekIstisnasiSGK: number | null;
+  gunlukYemekIstisnasiGV: number | null;
+}
+
+export interface PayrollAnnualParametersSnapshot {
+  year: number;
+  gelirVergisiDilimleri: PayrollTaxBracketSnapshot[];
+  sigortaGvYillikBrutAsgariUcretTavani: number | null;
+}
+
+export interface PayrollTaxBracketSnapshot {
+  limit: number;
+  oran: number;
+}
+
+export type PayrollTaxOpeningSource =
+  | 'EXPLICIT_OPENING'
+  | 'LEGACY_PERSONNEL_VALUE'
+  | 'IMPLICIT_ZERO';
+
+export interface PayrollTaxOpeningSnapshot {
+  source: PayrollTaxOpeningSource;
+  openingId?: string | null;
+  effectiveFromTaxYear: number;
+  effectiveFromTaxMonth: number;
+  amount: number;
+}
+
+export interface PayrollTaxHistoryInputsSnapshot {
+  normalGvOpening: PayrollTaxOpeningSnapshot;
+  minimumWageGvOpening: PayrollTaxOpeningSnapshot;
+  previousCumulativeGv: number;
+  previousCumulativeMinimumWageGv: number;
+  previousAnnualInsuranceGvDeduction: number;
+  samePaymentMonthPekUsed: number;
+  samePaymentMonthGvExemptionUsed: number;
+  samePaymentMonthStampExemptionUsed: number;
+  previousPaymentEvents: PayrollPriorPaymentEventSnapshot[];
+  minimumWageMonthlyReferences: PayrollMinimumWageMonthInputSnapshot[];
+}
+
+export interface PayrollPriorPaymentEventSnapshot {
+  periodId: string;
+  accrualId: string;
+  accrualType: AccrualType;
+  taxYear: number;
+  taxMonth: number;
+  paymentDate: string;
+  sequence: number;
+  gvTaxableBase: number;
+  insuranceGvDeductionUsed: number;
+  gvExemptionUsed: number;
+  stampExemptionUsed: number;
+  pekPrimeBase: number;
+  monthPekConsumptionAfter: number | null;
+  pekCeiling: number;
+  mealSgkExemption: number;
+  income: PayrollIncomeInputsSnapshot;
+  outgoingPekCarry: PayrollPekCarrySnapshot[];
+}
+
+export interface PayrollIncomeInputsSnapshot {
+  tabanBrutAylik: number | null;
+  tediye: number | null;
+  tisIkramiyesi: number | null;
+  ekOdeme: number | null;
+  yemek: number | null;
+  birlestirilmisSosyalYardim: number | null;
+  vasitaYol: number | null;
+  giyimYardimi: number | null;
+  isPrimi: number | null;
+  geceCalismasiUcreti: number | null;
+  geceCalismasiTatiliUcreti: number | null;
+  hizmetZammi: number | null;
+  digerGelir: number | null;
+}
+
+export interface PayrollMinimumWageMonthInputSnapshot {
+  periodId: string;
+  taxYear: number;
+  taxMonth: number;
+  dailyMinimumWage: number;
+  sgkWorkerRatePercent: number;
+  unemploymentWorkerRatePercent: number;
+  monthlyGvBase: number;
+}
+
+export type PayrollPekCarrySource = 'NONE' | 'PAYMENT_EVENT' | 'RETRO_OVERRIDE';
+
+export interface PayrollIncomingPekCarrySnapshot {
+  source: PayrollPekCarrySource;
+  sourceId?: string | null;
+  sourcePeriodId?: string | null;
+  sourceTaxYear?: number | null;
+  sourceTaxMonth?: number | null;
+  taxMonthsElapsed: number;
+  records: PayrollPekCarrySnapshot[];
+}
+
+export interface PayrollPekCarrySnapshot {
+  tutar: number;
+  kalanAySayisi: number;
+  kaynakDonemId?: string | null;
+}
+
 export const BORDRO_STATUS_VALUES = RUST_ENUM_VALUES.BordroStatus;
 export type BordroStatus = (typeof BORDRO_STATUS_VALUES)[number];
 
@@ -569,6 +861,8 @@ export interface BordroKaydi {
   statutorySnapshot?: ResolvedStatutorySnapshot;
   odenenRaporluGun?: number;
   raporluGun?: number;
+  /** Absent on all legacy records until the compensation engine is activated. */
+  calculationMetadata?: PayrollCalculationMetadata | null;
 }
 
 export interface DamgaVergisiHesapDetayi {

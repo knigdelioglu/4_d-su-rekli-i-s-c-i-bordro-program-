@@ -2,7 +2,7 @@ use bordro_programi_lib::{
     db::create_in_memory_connection,
     repositories::{period_repo::PeriodRepository, settings_repo::SettingsRepository},
 };
-use payroll_core::PayrollCalculationRequest;
+use payroll_core::{DonemselKurumDegerleri, PayrollCalculationRequest};
 
 #[test]
 fn legacy_sqlite_settings_default_on_and_an_explicit_false_survives_save_reload() {
@@ -14,8 +14,11 @@ fn legacy_sqlite_settings_default_on_and_an_explicit_false_survives_save_reload(
     let request: PayrollCalculationRequest =
         serde_json::from_value(fixture["request"].clone()).unwrap();
     let period = &request.dataset.periods[0];
+    let legacy_settings: std::collections::HashMap<String, DonemselKurumDegerleri> =
+        serde_json::from_value(fixture["request"]["dataset"]["institutionSettings"].clone())
+            .unwrap();
+    let original = &legacy_settings[&period.id];
     PeriodRepository::save(&conn, period).unwrap();
-    let original = &request.dataset.institutionSettings[&period.id];
     let mut legacy = serde_json::to_value(original).unwrap();
     legacy
         .as_object_mut()
@@ -43,7 +46,11 @@ fn legacy_sqlite_settings_default_on_and_an_explicit_false_survives_save_reload(
 
 #[test]
 fn legacy_sqlite_settings_with_recorded_payroll_history_keep_the_legacy_policy() {
-    let mut conn = create_in_memory_connection().unwrap();
+    let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    bordro_programi_lib::db::migrations::get_migrations()
+        .to_version(&mut conn, 19)
+        .unwrap();
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../crates/payroll-core/tests/golden/2026/G020-social-aid.json"
     ))
@@ -51,7 +58,22 @@ fn legacy_sqlite_settings_with_recorded_payroll_history_keep_the_legacy_policy()
     let request: PayrollCalculationRequest =
         serde_json::from_value(fixture["request"].clone()).unwrap();
     let period = &request.dataset.periods[0];
-    PeriodRepository::save(&conn, period).unwrap();
+    conn.execute(
+        "INSERT INTO payroll_periods
+            (id, yil, ay, baslangic_tarihi, bitis_tarihi, donem_adi, tax_year, tax_month, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'legacy-fixture')",
+        rusqlite::params![
+            period.id,
+            period.yil,
+            period.ay,
+            period.baslangicTarihi,
+            period.bitisTarihi,
+            period.donemAdi,
+            period.taxYear,
+            period.taxMonth
+        ],
+    )
+    .unwrap();
     let original = &request.dataset.institutionSettings[&period.id];
     let mut legacy = serde_json::to_value(original).unwrap();
     legacy
@@ -83,8 +105,7 @@ fn legacy_sqlite_settings_with_recorded_payroll_history_keep_the_legacy_policy()
     )
     .unwrap();
 
-    // Simulate the version immediately before the compatibility migration.
-    conn.pragma_update(None, "user_version", 8).unwrap();
+    // Version 19 is immediately before the compatibility migration.
     bordro_programi_lib::db::migrations::initialize_db(&mut conn).unwrap();
 
     let restored = SettingsRepository::get_institution_settings(&conn, &period.id)

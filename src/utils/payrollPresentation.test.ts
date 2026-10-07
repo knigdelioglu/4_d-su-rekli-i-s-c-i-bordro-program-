@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import type {
   AnnualPayrollParameters,
   DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   PuantajOzeti,
 } from '../types/payroll';
 import {
   DEFAULT_KURUM_DEGERLERI,
+  DEFAULT_PRODUCTION_KURUM_DEGERLERI,
   formatCompactPuantaj,
   hasCompleteAnnualPayrollParameters,
   hasCompletePeriodIncomeParameters,
@@ -42,8 +44,18 @@ function annual(
   };
 }
 
-function legal(overrides: Partial<DönemselKurumDegerleri> = {}): boolean {
-  return hasCompletePeriodLegalParameters(institution(overrides), activePeriod);
+function legal(overrides: Partial<PayrollPeriodInstitutionSettings> = {}): boolean {
+  return hasCompletePeriodLegalParameters(legalInstitution(overrides), activePeriod);
+}
+
+function legalInstitution(
+  overrides: Partial<PayrollPeriodInstitutionSettings> = {}
+): PayrollPeriodInstitutionSettings {
+  return {
+    donemId: periodId,
+    ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+    ...overrides,
+  };
 }
 
 describe('dönem ücret ve yardım readiness', () => {
@@ -103,45 +115,37 @@ describe('dönem ücret ve yardım readiness', () => {
 
 describe('dönem vergi ve yasal oran readiness', () => {
   test('accepts a complete legal parameter set', () => {
-    expect(hasCompletePeriodLegalParameters(institution(), activePeriod)).toBe(true);
+    expect(hasCompletePeriodLegalParameters(legalInstitution(), activePeriod)).toBe(true);
   });
 
   test('requires every authoritative legal field', () => {
     expect(
       hasCompletePeriodLegalParameters(
-        institution({ sgkIsciOraniYuzde: undefined }),
+        legalInstitution({ sgkIsciOraniYuzde: undefined }),
         activePeriod
       )
     ).toBe(false);
     expect(
       hasCompletePeriodLegalParameters(
-        institution({ damgaVergisiOraniBinde: undefined }),
+        legalInstitution({ damgaVergisiOraniBinde: undefined }),
         activePeriod
       )
     ).toBe(false);
     expect(
-      hasCompletePeriodLegalParameters(institution({ gunlukAsgariUcret: 0 }), activePeriod)
+      hasCompletePeriodLegalParameters(legalInstitution({ gunlukAsgariUcret: 0 }), activePeriod)
     ).toBe(false);
     expect(
-      hasCompletePeriodLegalParameters(institution({ pekTavanKatsayisi: 0.99 }), activePeriod)
+      hasCompletePeriodLegalParameters(legalInstitution({ pekTavanKatsayisi: 0.99 }), activePeriod)
     ).toBe(false);
-    expect(
-      hasCompletePeriodLegalParameters(institution({ isPrimiGruplari: undefined }), activePeriod)
-    ).toBe(false);
-    expect(hasCompletePeriodLegalParameters(institution({ isPrimiGruplari: [] }), activePeriod)).toBe(
-      false
-    );
   });
 
-  test('materializes legal defaults visibly shown for legacy partial settings', () => {
+  test('materializes legal defaults for partial active settings without compensation fields', () => {
     const restoredForm = withVisiblePeriodLegalDefaults(
       {
-        ...institution(),
+        ...legalInstitution(),
         sgkIsciOraniYuzde: undefined,
         issizlikIsciOraniYuzde: undefined,
         damgaVergisiOraniBinde: undefined,
-        geceCalismaPrimiYuzde: undefined,
-        geceCalismaTatiliPrimiYuzde: undefined,
         sgkIsverenOraniYuzde: undefined,
         issizlikIsverenOraniYuzde: undefined,
         sendikaAidatiYuzde: undefined,
@@ -156,57 +160,35 @@ describe('dönem vergi ve yasal oran readiness', () => {
 
     expect(restoredForm.donemId).toBe(periodId);
     expect(restoredForm.sgkIsciOraniYuzde).toBe(14);
-    expect(restoredForm.geceCalismaPrimiYuzde).toBe(0);
+    expect('geceCalismaPrimiYuzde' in restoredForm).toBe(false);
+    expect('isPrimiGruplari' in restoredForm).toBe(false);
     expect(restoredForm.gunlukYemekIstisnasiGV).toBe(300);
     expect(hasCompletePeriodLegalParameters(restoredForm, activePeriod)).toBe(true);
   });
 
-  test('accepts legal zero values and rejects invalid group rates', () => {
+  test('accepts legal zero values without compensation policy fields', () => {
     expect(
       hasCompletePeriodLegalParameters(
-        institution({
+        legalInstitution({
           sgkIsciOraniYuzde: 0,
           issizlikIsciOraniYuzde: 0,
           sendikaAidatiYuzde: 0,
           besOraniYuzde: 0,
-          geceCalismaPrimiYuzde: 0,
-          geceCalismaTatiliPrimiYuzde: 0,
           sgkIsverenOraniYuzde: 0,
           issizlikIsverenOraniYuzde: 0,
           damgaVergisiOraniBinde: 0,
           gunlukYemekIstisnasiSGK: 0,
           gunlukYemekIstisnasiGV: 0,
-          isPrimiGruplari: [{ id: '1', ad: 'Grup', oran: 0, aktif: true }],
         }),
         activePeriod
       )
     ).toBe(true);
-    expect(
-      hasCompletePeriodLegalParameters(
-        institution({ isPrimiGruplari: [{ id: '1', ad: 'Grup', oran: -1, aktif: true }] }),
-        activePeriod
-      )
-    ).toBe(false);
-  });
-
-  test('rejects repeated active group identities', () => {
-    expect(
-      hasCompletePeriodLegalParameters(
-        institution({
-          isPrimiGruplari: [
-            { id: '1', ad: 'Bir', oran: 0, aktif: true },
-            { id: '1', ad: 'İki', oran: 0, aktif: true },
-          ],
-        }),
-        activePeriod
-      )
-    ).toBe(false);
   });
 
   test('requires the active period object and matching period id', () => {
-    expect(hasCompletePeriodLegalParameters(institution(), undefined)).toBe(false);
+    expect(hasCompletePeriodLegalParameters(legalInstitution(), undefined)).toBe(false);
     expect(
-      hasCompletePeriodLegalParameters(institution(), { ...activePeriod, id: '2026-10' })
+      hasCompletePeriodLegalParameters(legalInstitution(), { ...activePeriod, id: '2026-10' })
     ).toBe(false);
   });
 
@@ -220,14 +202,11 @@ describe('dönem vergi ve yasal oran readiness', () => {
         issizlikIsciOraniYuzde: 0,
         sendikaAidatiYuzde: 0,
         besOraniYuzde: 0,
-        geceCalismaPrimiYuzde: 0,
-        geceCalismaTatiliPrimiYuzde: 0,
         sgkIsverenOraniYuzde: 0,
         issizlikIsverenOraniYuzde: 0,
         damgaVergisiOraniBinde: 0,
         gunlukYemekIstisnasiSGK: 0,
         gunlukYemekIstisnasiGV: 0,
-        isPrimiGruplari: [{ id: '1', ad: 'Grup', oran: 0, aktif: true }],
       })
     ).toBe(true);
   });
@@ -238,8 +217,6 @@ describe('dönem vergi ve yasal oran readiness', () => {
       'issizlikIsciOraniYuzde',
       'sendikaAidatiYuzde',
       'besOraniYuzde',
-      'geceCalismaPrimiYuzde',
-      'geceCalismaTatiliPrimiYuzde',
       'sgkIsverenOraniYuzde',
       'issizlikIsverenOraniYuzde',
     ] as const;
@@ -260,54 +237,7 @@ describe('dönem vergi ve yasal oran readiness', () => {
   test('rejects negative optional constrained values', () => {
     expect(legal({ sabitSendikaAidati: -1 })).toBe(false);
     expect(legal({ sabitBesTutar: -1 })).toBe(false);
-    expect(legal({ ekOdeme: -1 })).toBe(false);
-    expect(legal({ digerGelirVarsayilan: -1 })).toBe(false);
-    expect(legal({ ekOdeme: Number.NaN })).toBe(false);
-    expect(legal({ digerGelirVarsayilan: Number.POSITIVE_INFINITY })).toBe(false);
     expect(legal({ sabitSendikaAidati: null as unknown as number })).toBe(true);
-  });
-});
-
-describe('iş primi grupları production parity', () => {
-  test('rejects duplicate active ids and names after trimming', () => {
-    expect(
-      legal({
-        isPrimiGruplari: [
-          { id: ' 1 ', ad: 'Bir', oran: 0, aktif: true },
-          { id: '1', ad: 'İki', oran: 0, aktif: true },
-        ],
-      })
-    ).toBe(false);
-    expect(
-      legal({
-        isPrimiGruplari: [
-          { id: '1', ad: ' Grup ', oran: 0, aktif: true },
-          { id: '2', ad: 'Grup', oran: 0, aktif: true },
-        ],
-      })
-    ).toBe(false);
-  });
-
-  test('does not include duplicate inactive groups in the active identity sets', () => {
-    expect(
-      legal({
-        isPrimiGruplari: [
-          { id: '1', ad: 'Pasif', oran: 0, aktif: false },
-          { id: ' 1 ', ad: ' Pasif ', oran: 100, aktif: false },
-          { id: '2', ad: 'Aktif', oran: 0, aktif: true },
-        ],
-      })
-    ).toBe(true);
-  });
-
-  test('validates every group, including inactive groups', () => {
-    expect(legal({ isPrimiGruplari: [{ id: '  ', ad: 'Grup', oran: 0, aktif: true }] })).toBe(
-      false
-    );
-    expect(
-      legal({ isPrimiGruplari: [{ id: '1', ad: 'Grup', oran: 100.01, aktif: false }] })
-    ).toBe(false);
-    expect(legal({ isPrimiGruplari: [{ id: '1', ad: 'Grup', oran: Number.NaN }] })).toBe(false);
   });
 });
 
@@ -520,7 +450,7 @@ describe('cross-year period creation (2026 Aralık -> 2027 Ocak)', () => {
     const settings = withVisiblePeriodLegalDefaults(
       {
         donemId: decemberPeriod.id,
-        ...DEFAULT_KURUM_DEGERLERI,
+        ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
         sgkIsciOraniYuzde: undefined,
         issizlikIsciOraniYuzde: undefined,
         gelirVergisiOraniYuzde: undefined,
@@ -572,4 +502,3 @@ describe('formatPeriodSelectorLabel', () => {
     ).toBe('Bilinmeyen Dönem');
   });
 });
-

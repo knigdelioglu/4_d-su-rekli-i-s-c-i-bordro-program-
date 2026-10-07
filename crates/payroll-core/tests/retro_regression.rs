@@ -1,19 +1,25 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::{
-    calculate_payroll, canonical_sgk_earning_class, replay_retro_outstanding_receivables,
-    retro_earning_policy, retro_payable_settlement_amount, retro_payment_income, round_sgk_amount,
-    validate_v5_retro_outstanding_receivables, AccrualType, AnnualPayrollParameters, BordroDonemi,
-    BordroKaydi, BordroStatus, CanonicalSgkEarningClass, CompensationRevision,
-    CompensationRevisionOverride, CompensationRevisionReason, CompensationRevisionScope,
-    CompensationRevisionStatus, DonemselKurumDegerleri, PayrollAccrualInput,
-    PayrollCalculationRequest, PayrollDatasetSnapshot, Personel, PersonelPuantaj,
-    RetroAdjustmentBatch, RetroAllocation, RetroEarningCode, RetroEntitlementEngine,
-    RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment, RetroTaxTreatment,
-    SickLeaveRecord, StatutoryParameterSegment,
+    calculate_payroll, calculate_payroll_with_compensation_policy, canonical_sgk_earning_class,
+    finalize_payroll, finalize_payroll_with_compensation_policy_checked,
+    replay_retro_outstanding_receivables, retro_earning_policy, retro_payable_settlement_amount,
+    retro_payment_income, round_sgk_amount, validate_v5_retro_outstanding_receivables, AccrualType,
+    AnnualPayrollParameters, BordroDonemi, BordroKaydi, BordroStatus, CanonicalSgkEarningClass,
+    CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
+    CompensationPolicyVersion, CompensationRevision, CompensationRevisionOverride,
+    CompensationRevisionReason, CompensationRevisionScope, CompensationRevisionStatus,
+    DonemselKurumDegerleri, ManualPayrollIncomeInput, PayrollAccrualInput,
+    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollPeriodInstitutionSettings, Personel,
+    PersonelPuantaj, RetroAdjustmentBatch, RetroAllocation, RetroEarningCode,
+    RetroEntitlementEngine, RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment,
+    RetroTaxTreatment, RoadRoundingMode, SickLeaveRecord, StatutoryParameterSegment,
 };
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn period(id: &str, start: &str, end: &str, tax_month: i32) -> BordroDonemi {
     BordroDonemi {
@@ -107,15 +113,24 @@ fn dataset(
     daily_wage: Decimal,
     pek_multiplier: Decimal,
 ) -> PayrollDatasetSnapshot {
-    PayrollDatasetSnapshot {
+    let legacy_settings = periods
+        .iter()
+        .map(|period| {
+            (
+                period.id.clone(),
+                settings(&period.id, daily_wage, pek_multiplier),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut dataset = PayrollDatasetSnapshot {
         personnel: vec![person()],
         periods: periods.to_vec(),
-        institutionSettings: periods
+        institutionSettings: legacy_settings
             .iter()
-            .map(|period| {
+            .map(|(period_id, settings)| {
                 (
-                    period.id.clone(),
-                    settings(&period.id, daily_wage, pek_multiplier),
+                    period_id.clone(),
+                    PayrollPeriodInstitutionSettings::from(settings),
                 )
             })
             .collect(),
@@ -127,8 +142,40 @@ fn dataset(
         taxOpenings: Vec::new(),
         sickLeaveRecords: Vec::new(),
         annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
+        compensationPolicyVersions: periods
+            .iter()
+            .filter_map(|period| {
+                legacy_settings.get(&period.id).map(|settings| {
+                    compensation_policy_test_support::baseline_version(period, settings)
+                })
+            })
+            .collect(),
         ..PayrollDatasetSnapshot::default()
-    }
+    };
+    compensation_policy_test_support::seed_zero_tax_openings(&mut dataset);
+    dataset
+}
+
+fn update_policy_for_period(
+    dataset: &mut PayrollDatasetSnapshot,
+    period_id: &str,
+    update: impl FnOnce(&mut CompensationPolicyState),
+) {
+    let period = dataset
+        .periods
+        .iter()
+        .find(|period| period.id == period_id)
+        .expect("policy period")
+        .clone();
+    let mut state = dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == period.baslangicTarihi)
+        .expect("period baseline")
+        .state
+        .clone();
+    update(&mut state);
+    compensation_policy_test_support::replace_period_baseline_from_state(dataset, &period, state);
 }
 
 fn normal_payroll(
@@ -229,6 +276,486 @@ fn append_retro_result(
 ) {
     dataset.retroBatches.push(result.batch);
     dataset.retroAllocations.extend(result.allocations);
+}
+
+fn schema2_policy_state(
+    daily_wage: Decimal,
+    group_one_rate: Decimal,
+    road_amount: Decimal,
+    supplemental: Option<Decimal>,
+    other_income: Option<Decimal>,
+) -> CompensationPolicyState {
+    CompensationPolicyState {
+        gunlukTabanUcret: daily_wage,
+        gunlukYemek: Decimal::ZERO,
+        birlestirilmisSosyalYardim: Decimal::ZERO,
+        gunlukVasitaYol: road_amount,
+        giyimYardimi: Decimal::ZERO,
+        hizmetZammiBirimi: Decimal::ZERO,
+        isPrimiYuzde: Some(Decimal::ZERO),
+        isPrimiGruplari: vec![
+            CompensationPolicyGroup {
+                id: "1. Grup".into(),
+                ad: "1. Grup".into(),
+                oran: group_one_rate,
+                aktif: true,
+            },
+            CompensationPolicyGroup {
+                id: "2. Grup".into(),
+                ad: "2. Grup".into(),
+                oran: dec!(75),
+                aktif: true,
+            },
+        ],
+        geceCalismaPrimiYuzde: Decimal::ZERO,
+        geceCalismaTatiliPrimiYuzde: Decimal::ZERO,
+        ekOdeme: supplemental,
+        digerGelirVarsayilan: other_income,
+    }
+}
+
+fn schema2_policy_version(
+    id: &str,
+    effective_from: &str,
+    state: CompensationPolicyState,
+    boundary_scope: CompensationBoundaryScope,
+) -> CompensationPolicyVersion {
+    CompensationPolicyVersion {
+        id: id.into(),
+        effectiveFrom: effective_from.into(),
+        state,
+        boundaryScope: boundary_scope,
+        roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+        createdAt: "2026-02-01T00:00:00Z".into(),
+        source: "ADMINISTRATIVE_DECISION".into(),
+        reason: "Schema-2 retro fixture".into(),
+        supersedesVersionId: None,
+    }
+}
+
+fn schema2_source_with_payment_events(finalized: bool) -> PayrollDatasetSnapshot {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut january_reference = period("2025-12", "2025-12-15", "2026-01-14", 1);
+    january_reference.yil = 2025;
+    january_reference.ay = 12;
+    let february_reference = period("2026-01", "2026-01-15", "2026-02-14", 2);
+    let mut source = dataset(
+        &[january_reference, february_reference, source_period.clone()],
+        dec!(100),
+        dec!(100),
+    );
+    let second_state = schema2_policy_state(
+        dec!(110),
+        dec!(15),
+        Decimal::ZERO,
+        None,
+        Some(Decimal::ZERO),
+    );
+    let mut road_state = second_state.clone();
+    road_state.gunlukVasitaYol = dec!(7.5);
+    source.compensationPolicyVersions = vec![
+        schema2_policy_version(
+            "policy-base",
+            &source_period.baslangicTarihi,
+            schema2_policy_state(dec!(100), dec!(5), Decimal::ZERO, Some(Decimal::ZERO), None),
+            CompensationBoundaryScope::FullEarning,
+        ),
+        schema2_policy_version(
+            "policy-mid-period",
+            "2026-02-20",
+            second_state,
+            CompensationBoundaryScope::FullEarning,
+        ),
+        schema2_policy_version(
+            "policy-road-only",
+            "2026-03-01",
+            road_state,
+            CompensationBoundaryScope::RoadOnly,
+        ),
+    ];
+    let source_attendance = source
+        .attendances
+        .iter_mut()
+        .find(|attendance| attendance.donemId == source_period.id)
+        .expect("source attendance fixture should exist");
+    source_attendance
+        .gunler
+        .insert("2026-02-20".into(), "R".into());
+    source.sickLeaveRecords.push(SickLeaveRecord {
+        id: "schema2-sick".into(),
+        personnelId: "p1".into(),
+        startDate: "2026-02-20".into(),
+        endDate: "2026-02-20".into(),
+        createdAt: None,
+        updatedAt: None,
+    });
+
+    let early_supplement = calculate_payroll(&PayrollCalculationRequest {
+        personnelId: "p1".into(),
+        periodId: source_period.id.clone(),
+        calculatedAt: "2026-03-05T00:00:00Z".into(),
+        manualIncome: None,
+        accrual: Some(PayrollAccrualInput {
+            accrualId: "p1_2026-02_supplement-early".into(),
+            accrualType: AccrualType::SUPPLEMENTAL,
+            paymentDate: "2026-03-05".into(),
+            sequence: 0,
+            grossAmount: Some(dec!(500)),
+            description: Some("Early supplement".into()),
+        }),
+        dataset: source.clone(),
+    })
+    .expect("early supplemental event should calculate");
+    source.payrolls.push(early_supplement);
+    if finalized {
+        let finalized_early_supplement = finalize_payroll(&PayrollCalculationRequest {
+            personnelId: "p1".into(),
+            periodId: source_period.id.clone(),
+            calculatedAt: "2026-03-05T00:00:00Z".into(),
+            manualIncome: None,
+            accrual: Some(PayrollAccrualInput {
+                accrualId: "p1_2026-02_supplement-early".into(),
+                accrualType: AccrualType::SUPPLEMENTAL,
+                paymentDate: "2026-03-05".into(),
+                sequence: 0,
+                grossAmount: Some(dec!(500)),
+                description: Some("Early supplement".into()),
+            }),
+            dataset: source.clone(),
+        })
+        .expect("early supplemental event should finalize");
+        source.payrolls[0] = finalized_early_supplement;
+    }
+
+    let normal_request = PayrollCalculationRequest {
+        personnelId: "p1".into(),
+        periodId: source_period.id.clone(),
+        calculatedAt: "2026-03-05T00:00:00Z".into(),
+        manualIncome: Some(ManualPayrollIncomeInput {
+            tediye: Some(Decimal::ZERO),
+            tisIkramiyesi: None,
+        }),
+        accrual: Some(PayrollAccrualInput {
+            accrualId: "p1_2026-02_normal".into(),
+            accrualType: AccrualType::NORMAL,
+            paymentDate: "2026-03-05".into(),
+            sequence: 1,
+            grossAmount: None,
+            description: Some("Normal payroll".into()),
+        }),
+        dataset: source.clone(),
+    };
+    let normal = calculate_payroll_with_compensation_policy(&normal_request)
+        .expect("schema-2 NORMAL event should calculate");
+    assert!(normal
+        .calculationMetadata
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .is_some());
+    source.payrolls.push(normal);
+    if finalized {
+        let finalized_normal =
+            finalize_payroll_with_compensation_policy_checked(&PayrollCalculationRequest {
+                dataset: source.clone(),
+                ..normal_request
+            })
+            .expect("schema-2 NORMAL event should finalize");
+        let normal_index = source
+            .payrolls
+            .iter()
+            .position(|payroll| payroll.accrualType == AccrualType::NORMAL)
+            .unwrap();
+        source.payrolls[normal_index] = finalized_normal;
+    }
+
+    for (accrual_type, accrual_id, gross, sequence) in [
+        (AccrualType::TEDIYE, "tediye-late", dec!(300), 2),
+        (AccrualType::TIS_IKRAMIYE, "tis-late", dec!(400), 3),
+    ] {
+        let event = calculate_payroll(&PayrollCalculationRequest {
+            personnelId: "p1".into(),
+            periodId: source_period.id.clone(),
+            calculatedAt: "2026-03-05T00:00:00Z".into(),
+            manualIncome: None,
+            accrual: Some(PayrollAccrualInput {
+                accrualId: format!("p1_2026-02_{accrual_id}"),
+                accrualType: accrual_type,
+                paymentDate: "2026-03-05".into(),
+                sequence,
+                grossAmount: Some(gross),
+                description: Some("Payment event".into()),
+            }),
+            dataset: source.clone(),
+        })
+        .expect("later source payment event should calculate");
+        source.payrolls.push(event);
+    }
+    source
+}
+
+fn schema2_wage_retro(
+    source: PayrollDatasetSnapshot,
+    batch_id: &str,
+    revision_id: &str,
+    global_daily_wage: Decimal,
+    personnel_daily_wage: Decimal,
+) -> payroll_core::RetroCalculationResult {
+    RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        batch_id,
+        revision(revision_id, "2026-02-15"),
+        vec![
+            wage_override(
+                &format!("{batch_id}-global-wage"),
+                revision_id,
+                global_daily_wage,
+            ),
+            CompensationRevisionOverride {
+                id: format!("{batch_id}-p1-wage"),
+                revisionId: revision_id.into(),
+                parameter: RetroParameterKey::GUNLUK_TABAN_UCRET,
+                value: personnel_daily_wage,
+                personnelId: Some("p1".into()),
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect("schema-2 payment-event replay should calculate")
+}
+
+#[test]
+fn schema2_normal_replays_real_non_normal_events_from_their_saved_payment_snapshots() {
+    let calculated_source = schema2_source_with_payment_events(false);
+    let calculated = schema2_wage_retro(
+        calculated_source.clone(),
+        "schema2-positive",
+        "schema2-positive-revision",
+        dec!(130),
+        dec!(120),
+    );
+    let normal_snapshot = calculated_source.payrolls[1]
+        .calculationMetadata
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap();
+    assert_eq!(normal_snapshot.usedInputs.personnelGroup, "1. Grup");
+    assert_eq!(normal_snapshot.compensation.segments.len(), 3);
+    assert_eq!(
+        normal_snapshot.compensation.segments[0]
+            .state
+            .gunlukTabanUcret,
+        dec!(100)
+    );
+    assert_eq!(
+        normal_snapshot.compensation.segments[1]
+            .state
+            .gunlukTabanUcret,
+        dec!(110)
+    );
+    assert_eq!(
+        normal_snapshot.compensation.segments[2].boundaryScope,
+        CompensationBoundaryScope::RoadOnly
+    );
+    assert_eq!(
+        normal_snapshot.compensation.segments[0].state.ekOdeme,
+        Some(Decimal::ZERO)
+    );
+    assert_eq!(
+        normal_snapshot.compensation.segments[0]
+            .state
+            .digerGelirVarsayilan,
+        None
+    );
+    assert_eq!(normal_snapshot.compensation.segments[1].state.ekOdeme, None);
+    assert_eq!(
+        normal_snapshot.compensation.segments[1]
+            .state
+            .digerGelirVarsayilan,
+        Some(Decimal::ZERO)
+    );
+    assert_eq!(
+        calculated_source.payrolls[0].accrualType,
+        AccrualType::SUPPLEMENTAL
+    );
+    assert_eq!(
+        calculated_source.payrolls[1].accrualType,
+        AccrualType::NORMAL
+    );
+    assert_eq!(
+        calculated_source.payrolls[1].status,
+        BordroStatus::CALCULATED
+    );
+    assert_eq!(
+        calculated_source.payrolls[2].accrualType,
+        AccrualType::TEDIYE
+    );
+    assert_eq!(
+        calculated_source.payrolls[3].accrualType,
+        AccrualType::TIS_IKRAMIYE
+    );
+    assert_eq!(calculated.batch.totalGrossDelta, dec!(368));
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+            .map(|allocation| allocation.deltaAmount)
+            .sum::<Decimal>(),
+        dec!(330)
+    );
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.earningCode == RetroEarningCode::WORK_PREMIUM)
+            .map(|allocation| allocation.deltaAmount)
+            .sum::<Decimal>(),
+        dec!(38)
+    );
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .map(|allocation| allocation.retroPekDelta)
+            .sum::<Decimal>(),
+        dec!(330)
+    );
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .map(|allocation| allocation.workerSgkDelta)
+            .sum::<Decimal>(),
+        dec!(46.20)
+    );
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .map(|allocation| allocation.workerUnemploymentDelta)
+            .sum::<Decimal>(),
+        dec!(3.30)
+    );
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .map(|allocation| allocation.employerSgkDelta)
+            .sum::<Decimal>(),
+        dec!(71.78)
+    );
+    assert_eq!(
+        calculated
+            .allocations
+            .iter()
+            .map(|allocation| allocation.employerUnemploymentDelta)
+            .sum::<Decimal>(),
+        dec!(6.60)
+    );
+
+    let mut changed_live_sources = calculated_source;
+    changed_live_sources.personnel[0].soyad = "Changed after save".into();
+    changed_live_sources.personnel[0].hizmetYili = 30;
+    changed_live_sources.personnel[0].grup = "2. Grup".into();
+    changed_live_sources.institutionSettings.insert(
+        "2026-02".into(),
+        PayrollPeriodInstitutionSettings::from(settings("2026-02", dec!(999), dec!(1))),
+    );
+    let live_source_attendance = changed_live_sources
+        .attendances
+        .iter_mut()
+        .find(|attendance| attendance.donemId == "2026-02")
+        .expect("source attendance fixture should exist");
+    for day in live_source_attendance.gunler.values_mut() {
+        *day = "X".into();
+    }
+    changed_live_sources.sickLeaveRecords.clear();
+    let replay_after_live_mutation = schema2_wage_retro(
+        changed_live_sources,
+        "schema2-positive",
+        "schema2-positive-revision",
+        dec!(130),
+        dec!(120),
+    );
+    assert_eq!(replay_after_live_mutation.batch.totalGrossDelta, dec!(368));
+    assert_eq!(
+        replay_after_live_mutation.allocations,
+        calculated.allocations
+    );
+
+    let finalized_source = schema2_source_with_payment_events(true);
+    assert_eq!(finalized_source.payrolls[1].status, BordroStatus::FINALIZED);
+    let negative = schema2_wage_retro(
+        finalized_source,
+        "schema2-negative",
+        "schema2-negative-revision",
+        dec!(130),
+        dec!(80),
+    );
+    assert_eq!(negative.batch.totalGrossDelta, dec!(-894));
+    assert_eq!(
+        negative
+            .allocations
+            .iter()
+            .map(|allocation| allocation.retroPekDelta)
+            .sum::<Decimal>(),
+        dec!(-790)
+    );
+    assert_eq!(
+        negative
+            .allocations
+            .iter()
+            .filter(|allocation| allocation.earningCode == RetroEarningCode::WORK_PREMIUM)
+            .map(|allocation| allocation.deltaAmount)
+            .sum::<Decimal>(),
+        dec!(-104)
+    );
+    assert_eq!(
+        negative
+            .allocations
+            .iter()
+            .map(|allocation| allocation.workerSgkDelta)
+            .sum::<Decimal>(),
+        dec!(-110.60)
+    );
+    assert_eq!(
+        negative
+            .allocations
+            .iter()
+            .map(|allocation| allocation.workerUnemploymentDelta)
+            .sum::<Decimal>(),
+        dec!(-7.90)
+    );
+}
+
+#[test]
+fn schema2_non_normal_source_requires_its_saved_statutory_snapshot() {
+    let mut source = schema2_source_with_payment_events(false);
+    source.payrolls[0].statutorySnapshot = None;
+    let request = retro_request(
+        source,
+        "schema2-missing-statutory",
+        revision("schema2-missing-statutory-revision", "2026-02-15"),
+        vec![wage_override(
+            "schema2-missing-statutory-override",
+            "schema2-missing-statutory-revision",
+            dec!(120),
+        )],
+        "2026-06-20",
+    );
+    let error = RetroEntitlementEngine::calculate(&request)
+        .expect_err("schema-2 replay must not invent saved event statutory inputs");
+    assert!(
+        error.to_string().contains("UNSUPPORTED_HISTORICAL_REPLAY"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.to_string().contains("supplement-early"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -859,7 +1386,7 @@ fn retro_source_periods_stop_at_revision_effective_to_even_when_paid_later() {
 }
 
 #[test]
-fn source_payroll_without_required_attendance_fails_closed() {
+fn schema2_source_payroll_replays_without_live_attendance_rows() {
     let source_period = period("2026-03", "2026-03-15", "2026-04-14", 4);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
     let mut finalized = normal_payroll(&source, "2026-03", "2026-04-14", 0);
@@ -867,7 +1394,7 @@ fn source_payroll_without_required_attendance_fails_closed() {
     source.payrolls.push(finalized);
     source.attendances.clear();
 
-    let error = RetroEntitlementEngine::calculate(&retro_request(
+    let result = RetroEntitlementEngine::calculate(&retro_request(
         source,
         "retro-source-missing-attendance",
         revision("selected-march-revision", "2026-03-15"),
@@ -878,9 +1405,8 @@ fn source_payroll_without_required_attendance_fails_closed() {
         )],
         "2026-05-14",
     ))
-    .expect_err("an authoritative source payroll without attendance must fail closed");
-
-    assert!(error.to_string().contains("tarihsel puantaj bulunamadı"));
+    .expect("schema-2 payroll retains the inputs needed for deterministic replay");
+    assert_eq!(result.batch.totalGrossDelta, dec!(620));
 }
 
 #[test]
@@ -1004,7 +1530,6 @@ fn retro_source_replay_uses_segmented_meal_capacity() {
         .institutionSettings
         .get_mut("2026-01")
         .expect("source settings");
-    settings.gunlukYemek = dec!(200);
     settings.gunlukYemekIstisnasiSGK = Some(dec!(1000));
     settings.gunlukYemekIstisnasiGV = Some(dec!(1000));
     settings.statutoryParameterSegments = Some(vec![StatutoryParameterSegment {
@@ -1013,6 +1538,9 @@ fn retro_source_replay_uses_segmented_meal_capacity() {
         gunlukYemekIstisnasiGV: Some(dec!(200)),
         ..StatutoryParameterSegment::default()
     }]);
+    update_policy_for_period(&mut source, "2026-01", |state| {
+        state.gunlukYemek = dec!(200);
+    });
     let attendance = source.attendances.get_mut(0).expect("source attendance");
     for (date, code) in &mut attendance.gunler {
         *code = if date == "2026-01-15" || date == "2026-02-01" {
@@ -1063,11 +1591,9 @@ fn source_month_sgk_rounding_uses_aggregate_pek_across_earning_codes() {
         }
     }
     source.attendances = vec![source_attendance];
-    source
-        .institutionSettings
-        .get_mut("2026-02")
-        .expect("source settings")
-        .geceCalismaPrimiYuzde = Some(dec!(1));
+    update_policy_for_period(&mut source, "2026-02", |state| {
+        state.geceCalismaPrimiYuzde = dec!(1);
+    });
     source
         .payrolls
         .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
@@ -1660,15 +2186,13 @@ fn negative_retro_reconciles_increased_employer_lower_bound_completion() {
 fn meal_and_clothing_retro_use_source_month_statutory_pek_policy() {
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
-    let source_settings = source
-        .institutionSettings
-        .get_mut("2026-02")
-        .expect("source settings");
     // 28 worked days: the historical SGK meal exemption is 8,400, so the
     // original 5,600 meal is fully exempt while the revised 11,200 meal has
     // only 2,800 of source-month PEK subject to SGK.
-    source_settings.gunlukYemek = dec!(200);
-    source_settings.giyimYardimi = dec!(100);
+    update_policy_for_period(&mut source, "2026-02", |state| {
+        state.gunlukYemek = dec!(200);
+        state.giyimYardimi = dec!(100);
+    });
     source
         .payrolls
         .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
@@ -2552,17 +3076,13 @@ fn personnel_group_scope_requires_exact_match_for_current_and_historical_revisio
 fn split_replay_prorates_fixed_monthly_allowances_without_duplication() {
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
-    {
-        let settings = source
-            .institutionSettings
-            .get_mut("2026-02")
-            .expect("source settings");
-        settings.birlestirilmisSosyalYardim = dec!(280);
-        settings.giyimYardimi = dec!(140);
-        settings.hizmetZammiBirimi = dec!(10);
-        settings.ekOdeme = Some(dec!(70));
-        settings.digerGelirVarsayilan = Some(dec!(35));
-    }
+    update_policy_for_period(&mut source, "2026-02", |state| {
+        state.birlestirilmisSosyalYardim = dec!(280);
+        state.giyimYardimi = dec!(140);
+        state.hizmetZammiBirimi = dec!(10);
+        state.ekOdeme = Some(dec!(70));
+        state.digerGelirVarsayilan = Some(dec!(35));
+    });
     source
         .payrolls
         .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
@@ -2612,15 +3132,8 @@ fn work_premium_override_updates_only_the_active_group_matching_the_personnel() 
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
     source.personnel[0].grup = "target-group".into();
-    {
-        let settings = source
-            .institutionSettings
-            .get_mut("2026-02")
-            .expect("source settings");
-        let groups = settings
-            .isPrimiGruplari
-            .as_mut()
-            .expect("work premium groups");
+    update_policy_for_period(&mut source, "2026-02", |state| {
+        let groups = &mut state.isPrimiGruplari;
         groups[0].id = "unrelated-id".into();
         groups[0].ad = "Unrelated Group".into();
         groups[0].oran = Decimal::ZERO;
@@ -2630,7 +3143,7 @@ fn work_premium_override_updates_only_the_active_group_matching_the_personnel() 
         groups[1].oran = Decimal::ZERO;
         groups[1].aktif = true;
         groups[2].oran = Decimal::ZERO;
-    }
+    });
     source
         .payrolls
         .push(normal_payroll(&source, "2026-02", "2026-03-10", 0));
@@ -2817,9 +3330,11 @@ fn missing_original_accrual_adds_two_paid_sick_days_by_multiplication_not_divisi
         .expect("base wage allocation");
     assert!(base.originalRecognizedAmount > Decimal::ZERO);
     assert_eq!(base.targetAmount, dec!(3360));
-    assert_eq!(base.deltaAmount, base.targetAmount - base.originalRecognizedAmount);
+    assert_eq!(
+        base.deltaAmount,
+        base.targetAmount - base.originalRecognizedAmount
+    );
 }
-
 
 // ---------------------------------------------------------------------------
 // BUG-RETRO-001 regression: effective window, missing NORMAL baseline and
@@ -2870,7 +3385,11 @@ fn bug_retro_001_test_a_period_after_effective_to_is_never_a_candidate() {
         source,
         "bug-retro-001-a",
         bug_retro_001_revision(Some("2026-04-14")),
-        vec![wage_override("bug-retro-001-a-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-a-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-07-14",
     ))
     .expect("only the revision window must be replayed");
@@ -2893,7 +3412,11 @@ fn bug_retro_001_effective_to_boundary_is_inclusive_on_period_start() {
         source.clone(),
         "bug-retro-001-boundary-before",
         bug_retro_001_revision(Some("2026-04-14")),
-        vec![wage_override("bug-retro-001-bb-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-bb-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-06-14",
     ))
     .expect("boundary before");
@@ -2905,7 +3428,11 @@ fn bug_retro_001_effective_to_boundary_is_inclusive_on_period_start() {
         source,
         "bug-retro-001-boundary-on",
         bug_retro_001_revision(Some("2026-04-15")),
-        vec![wage_override("bug-retro-001-bo-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-bo-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-06-14",
     ))
     .expect("boundary on period start");
@@ -2932,7 +3459,11 @@ fn bug_retro_001_test_b_missing_normal_inside_window_fails_closed() {
         source.clone(),
         "bug-retro-001-b-open",
         bug_retro_001_revision(None),
-        vec![wage_override("bug-retro-001-b-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-b-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-07-14",
     ))
     .expect_err("a period without NORMAL must not be recognized as zero");
@@ -2949,7 +3480,11 @@ fn bug_retro_001_test_b_missing_normal_inside_window_fails_closed() {
         source,
         "bug-retro-001-b-bounded",
         bug_retro_001_revision(Some("2026-05-14")),
-        vec![wage_override("bug-retro-001-b2-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-b2-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-07-14",
     ))
     .expect_err("missing NORMAL inside a bounded window fails closed");
@@ -2968,7 +3503,11 @@ fn bug_retro_001_stale_normal_inside_window_names_the_period() {
         source,
         "bug-retro-001-stale",
         bug_retro_001_revision(Some("2026-04-14")),
-        vec![wage_override("bug-retro-001-s-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-s-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-07-14",
     ))
     .expect_err("stale NORMAL baseline is not authoritative");
@@ -3012,7 +3551,11 @@ fn bug_retro_001_test_d_valid_daily_wage_retro_matches_normal_entitlement() {
         source.clone(),
         "bug-retro-001-d",
         bug_retro_001_revision(Some("2026-04-14")),
-        vec![wage_override("bug-retro-001-d-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-d-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-07-14",
     ))
     .expect("valid retro");
@@ -3027,11 +3570,9 @@ fn bug_retro_001_test_d_valid_daily_wage_retro_matches_normal_entitlement() {
     // equal recognized + retro delta for every earning code
     // (new entitlement - previously recognized - previous retro).
     let mut new_wage = source.clone();
-    new_wage
-        .institutionSettings
-        .get_mut("2026-03")
-        .expect("settings")
-        .gunlukTabanUcret = dec!(2500);
+    update_policy_for_period(&mut new_wage, "2026-03", |state| {
+        state.gunlukTabanUcret = dec!(2500);
+    });
     let expected = normal_payroll(&new_wage, "2026-03", "2026-04-14", 0);
     let original = source
         .payrolls
@@ -3049,7 +3590,11 @@ fn bug_retro_001_test_d_valid_daily_wage_retro_matches_normal_entitlement() {
         with_first,
         "bug-retro-001-d-second",
         bug_retro_001_revision(Some("2026-04-14")),
-        vec![wage_override("bug-retro-001-d2-w", "bug-retro-001", dec!(2500))],
+        vec![wage_override(
+            "bug-retro-001-d2-w",
+            "bug-retro-001",
+            dec!(2500),
+        )],
         "2026-07-14",
     ))
     .expect("second calculation");
@@ -3137,12 +3682,16 @@ fn receivable_replay_matches_runtime_order_for_zero_and_unpaid_overpayment_batch
 fn dated_transport_replay_preserves_historical_schedule_and_applies_transport_override() {
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
-    let settings = source.institutionSettings.get_mut("2026-02").unwrap();
-    settings.gunlukVasitaYol = dec!(10);
-    settings.transportRateChanges = Some(vec![payroll_core::TransportRateChange {
-        effectiveFrom: "2026-03-05".into(),
-        gunlukVasitaYol: dec!(20),
-    }]);
+    update_policy_for_period(&mut source, "2026-02", |state| {
+        state.gunlukVasitaYol = dec!(10);
+    });
+    let mut march_road = source.compensationPolicyVersions[0].clone();
+    march_road.id = "transport-road-march".into();
+    march_road.effectiveFrom = "2026-03-05".into();
+    march_road.state.gunlukVasitaYol = dec!(20);
+    march_road.boundaryScope = CompensationBoundaryScope::RoadOnly;
+    march_road.supersedesVersionId = None;
+    source.compensationPolicyVersions.push(march_road);
     let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
     assert_eq!(normal.gelirler.vasitaYol, Some(dec!(380)));
     source.payrolls.push(normal);

@@ -3,7 +3,7 @@ import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import type {
   AnnualPayrollParameters,
   BordroDonemi,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
   SickLeaveRecord,
@@ -12,7 +12,6 @@ import type {
 } from '../../types/payroll';
 import type { ParametreSection } from '../../types/navigation';
 import {
-  AY_ISIMLERI,
   createBordroDonemi,
   DEFAULT_PRODUCTION_KURUM_DEGERLERI,
   withVisiblePeriodLegalDefaults,
@@ -36,7 +35,6 @@ import { TediyeTisSection } from './TediyeTisSection';
 import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
 import { findPeriodSettingsInheritanceSource } from './periodInheritance';
 import { describeError } from '../../utils/errorMessage';
-import { transportRateForNewPeriod, validateTransportRatesForPeriod } from '../../services/storage/transportRatesValidation';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -48,10 +46,10 @@ export interface PeriodSettingsPageProps {
   onSelectDonem: (donemId: string) => Promise<void> | void;
   onCreateDonem: (
     donem: BordroDonemi,
-    kurumDegerleri?: DönemselKurumDegerleri
+    kurumDegerleri?: PayrollPeriodInstitutionSettings
   ) => Promise<void> | void;
-  kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
-  onSaveKurumDegerleri: (kurumDegerleri: DönemselKurumDegerleri) => Promise<void> | void;
+  kurumDegerleriMap: Record<string, PayrollPeriodInstitutionSettings>;
+  onSaveKurumDegerleri: (kurumDegerleri: PayrollPeriodInstitutionSettings) => Promise<void> | void;
   personeller: Personel[];
   annualPayrollParameters: AnnualPayrollParameters[];
   onSaveAnnualPayrollParameters: (parameters: AnnualPayrollParameters) => Promise<void> | void;
@@ -59,8 +57,7 @@ export interface PeriodSettingsPageProps {
   sickLeaveRecords: SickLeaveRecord[];
   onSaveSickLeaveRecord: (record: SickLeaveRecord) => Promise<void> | void;
   onDeleteSickLeaveRecord: (id: string) => Promise<void> | void;
-  zamAylari: number[];
-  onSaveZamAylari: (months: number[]) => Promise<void> | void;
+  onOpenCompensationPolicy: () => void;
 }
 
 const sanitizeTediyeList = (list?: TediyeKalemi[]) =>
@@ -70,12 +67,11 @@ const sanitizeTediyeList = (list?: TediyeKalemi[]) =>
   }));
 
 const createParamsForm = (
-  settings: DönemselKurumDegerleri,
+  settings: PayrollPeriodInstitutionSettings,
   donemId: string
-): DönemselKurumDegerleri => ({
+): PayrollPeriodInstitutionSettings => ({
   ...withVisiblePeriodLegalDefaults(settings, donemId),
   yemekTamGvIstisnaDamgaTabi: settings.yemekTamGvIstisnaDamgaTabi ?? true,
-  isPrimiGruplari: settings.isPrimiGruplari ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.isPrimiGruplari,
   tediyeListesi: sanitizeTediyeList(settings.tediyeListesi),
   tisIkramiyeListesi:
     settings.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
@@ -133,8 +129,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   sickLeaveRecords,
   onSaveSickLeaveRecord,
   onDeleteSickLeaveRecord,
-  zamAylari,
-  onSaveZamAylari,
+  onOpenCompensationPolicy,
 }) => {
   const currentYear = new Date().getFullYear();
   const configuredYears = [
@@ -193,7 +188,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
       donemId: aktifDonemId,
       ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
     };
-  const [paramsForm, setParamsForm] = useState<DönemselKurumDegerleri>(
+  const [paramsForm, setParamsForm] = useState<PayrollPeriodInstitutionSettings>(
     createParamsForm(activeKurumDegerleri, aktifDonemId)
   );
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -207,9 +202,6 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     initialAnnualDefaults?.sigortaGvYillikBrutAsgariUcretTavani ?? 0
   );
   const [annualTaxSuccess, setAnnualTaxSuccess] = useState(false);
-  const [zamAylariForm, setZamAylariForm] = useState<number[]>(
-    [...zamAylari].sort((a, b) => a - b)
-  );
   const [selectedPersonForSick, setSelectedPersonForSick] = useState(
     personeller[0]?.id || ''
   );
@@ -258,10 +250,6 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         0
     );
   }, [annualPayrollParameters, annualTaxYear, activeTaxYear]);
-
-  useEffect(() => {
-    setZamAylariForm([...zamAylari].sort((a, b) => a - b));
-  }, [zamAylari]);
 
   const activePeriodForParams =
     donemler.find((period) => period.id === aktifDonemId) || aktifDonem;
@@ -393,33 +381,17 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         kurumDegerleriMap,
         newDonem.baslangicTarihi
       );
-      let initialKurum: DönemselKurumDegerleri | undefined;
+      let initialKurum: PayrollPeriodInstitutionSettings | undefined;
       if (sourcePeriod) {
         const inherited = createParamsForm(kurumDegerleriMap[sourcePeriod.id], sourcePeriod.id);
-        validateTransportRatesForPeriod(sourcePeriod, inherited);
         initialKurum = withVisiblePeriodLegalDefaults(
           {
             ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
             ...inherited,
             donemId: newDonem.id,
-            gunlukTabanUcret: inherited.gunlukTabanUcret,
-            gunlukYemek: inherited.gunlukYemek ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukYemek,
-            birlestirilmisSosyalYardim:
-              inherited.birlestirilmisSosyalYardim ??
-              DEFAULT_PRODUCTION_KURUM_DEGERLERI.birlestirilmisSosyalYardim,
-            gunlukVasitaYol:
-              transportRateForNewPeriod(inherited, newDonem.baslangicTarihi),
-            transportRateChanges: [],
-            giyimYardimi: inherited.giyimYardimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.giyimYardimi,
-            hizmetZammiBirimi:
-              inherited.hizmetZammiBirimi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.hizmetZammiBirimi,
-            isPrimiYuzde: inherited.isPrimiYuzde || 0,
-            isPrimiGruplari: inherited.isPrimiGruplari ?? [],
-            ekOdeme: inherited.ekOdeme || 0,
             tediyeListesi: sanitizeTediyeList(inherited.tediyeListesi),
             tisIkramiyeListesi:
               inherited.tisIkramiyeListesi ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.tisIkramiyeListesi,
-            tediyeTisNotu: inherited.tediyeTisNotu || DEFAULT_PRODUCTION_KURUM_DEGERLERI.tediyeTisNotu,
             statutoryParameterSegments: inherited.statutoryParameterSegments ?? [],
             statutoryParameterSnapshot: undefined,
           },
@@ -443,26 +415,16 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     event.preventDefault();
     setParamsSaveError(null);
     setSavedSuccess(false);
-    try {
-      if (aktifDonem) validateTransportRatesForPeriod(aktifDonem, paramsForm);
-    } catch (error) {
-      setParamsSaveError(describeError(error));
-      return;
-    }
     const outcome = await savePeriodSettings(
       { ...paramsForm, donemId: aktifDonemId },
-      zamAylariForm,
       createParamsForm(activeKurumDegerleri, aktifDonemId),
-      zamAylari,
-      onSaveKurumDegerleri,
-      onSaveZamAylari
+      onSaveKurumDegerleri
     );
     if (outcome.kind === 'success') {
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 2500);
     } else {
       setParamsForm(outcome.paramsForm);
-      setZamAylariForm(outcome.zamAylariForm);
       setParamsSaveError(outcome.message);
     }
   };
@@ -511,16 +473,13 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     if (activeSection === 'gelir') {
       return aktifDonem ? (
         <IncomeParametersSection
-          period={aktifDonem}
           aktifDonemId={aktifDonem.id}
           paramsForm={paramsForm}
-          savedParams={createParamsForm(activeKurumDegerleri, aktifDonemId)}
           setParamsForm={setParamsForm}
-          zamAylariForm={zamAylariForm}
-          setZamAylariForm={setZamAylariForm}
           savedSuccess={savedSuccess}
           errorMessage={paramsSaveError}
           onSubmit={handleSaveParams}
+          onOpenCompensationPolicy={onOpenCompensationPolicy}
         />
       ) : (
         <MissingPeriodSection

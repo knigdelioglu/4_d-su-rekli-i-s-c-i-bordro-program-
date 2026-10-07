@@ -4,19 +4,24 @@ use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use crate::repositories::attendance_repo::AttendanceRepository;
+use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
-use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
+use crate::repositories::settings_repo::SettingsRepository;
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use crate::services::payroll_service::PayrollService;
 use rusqlite::Connection;
 use serde::Deserialize;
+use serde_json::{Map, Value};
 use std::collections::{BTreeSet, HashMap};
 
-pub const CURRENT_BACKUP_VERSION: u32 = 5;
+pub const CURRENT_BACKUP_VERSION: u32 = 6;
+const MULTI_ACCRUAL_BACKUP_VERSION: u32 = 3;
+const RETRO_AUTHORITY_BACKUP_VERSION: u32 = 5;
+const COMPENSATION_SNAPSHOT_BACKUP_VERSION: u32 = 6;
 
 /// Legacy person records stored only a month integer. Resolve it only when
 /// the imported period set proves one unique period; ambiguous work-month vs
@@ -59,7 +64,9 @@ pub struct LegacyPayload {
     #[serde(default)]
     pub personeller: Option<Vec<LegacyPersonel>>,
     #[serde(default)]
-    pub kurumDegerleriMap: Option<HashMap<String, DonemselKurumDegerleri>>,
+    pub kurumDegerleriMap: Option<HashMap<String, payroll_core::PayrollPeriodInstitutionSettings>>,
+    #[serde(default)]
+    pub legacyInstitutionSettings: Option<HashMap<String, Value>>,
     #[serde(default)]
     pub puantajlar: Option<Vec<PersonelPuantaj>>,
     #[serde(default)]
@@ -80,6 +87,234 @@ pub struct LegacyPayload {
     pub retroBatches: Option<Vec<RetroAdjustmentBatch>>,
     #[serde(default)]
     pub retroAllocations: Option<Vec<RetroAllocation>>,
+    #[serde(default)]
+    pub compensationPolicyVersions: Option<Vec<CompensationPolicyVersion>>,
+    /// Periods whose original legacy money fields were all present in the
+    /// incoming JSON. This is import-only provenance and is never persisted.
+    #[serde(skip)]
+    pub exactLegacyCompensationSourcePeriods: BTreeSet<String>,
+}
+
+fn exact_legacy_compensation_source_periods(raw: &serde_json::Value) -> BTreeSet<String> {
+    const REQUIRED_FIELDS: &[&str] = &[
+        "gunlukTabanUcret",
+        "gunlukYemek",
+        "birlestirilmisSosyalYardim",
+        "gunlukVasitaYol",
+        "giyimYardimi",
+        "hizmetZammiBirimi",
+        "isPrimiYuzde",
+        "isPrimiGruplari",
+        "geceCalismaPrimiYuzde",
+        "geceCalismaTatiliPrimiYuzde",
+        "ekOdeme",
+        "digerGelirVarsayilan",
+    ];
+    raw.get("legacyInstitutionSettings")
+        .or_else(|| raw.get("kurumDegerleriMap"))
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|settings| settings.iter())
+        .filter_map(|(period_id, settings)| {
+            let settings = settings.as_object()?;
+            REQUIRED_FIELDS
+                .iter()
+                .all(|field| settings.contains_key(*field))
+                .then(|| period_id.clone())
+        })
+        .collect()
+}
+
+const ACTIVE_PERIOD_SETTING_FIELDS: &[&str] = &[
+    "donemId",
+    "yemekTamGvIstisnaDamgaTabi",
+    "tediyeListesi",
+    "tisIkramiyeListesi",
+    "tediyeTisNotu",
+    "sgkIsciOraniYuzde",
+    "issizlikIsciOraniYuzde",
+    "gelirVergisiOraniYuzde",
+    "damgaVergisiOraniBinde",
+    "sendikaAidatiYuzde",
+    "sabitSendikaAidati",
+    "besOraniYuzde",
+    "sabitBesTutar",
+    "gunlukYemekIstisnasiSGK",
+    "gunlukYemekIstisnasiGV",
+    "statutoryParameterSegments",
+    "statutoryParameterSnapshot",
+    "pekTavanKatsayisi",
+    "gunlukAsgariUcret",
+    "sgkIsverenOraniYuzde",
+    "issizlikIsverenOraniYuzde",
+];
+
+const LEGACY_COMPENSATION_SETTING_FIELDS: &[&str] = &[
+    "gunlukTabanUcret",
+    "gunlukYemek",
+    "birlestirilmisSosyalYardim",
+    "gunlukVasitaYol",
+    "transportRateChanges",
+    "giyimYardimi",
+    "hizmetZammiBirimi",
+    "isPrimiYuzde",
+    "isPrimiGruplari",
+    "geceCalismaPrimiYuzde",
+    "geceCalismaTatiliPrimiYuzde",
+    "ekOdeme",
+    "digerGelirVarsayilan",
+];
+
+fn legacy_settings_to_active_map(raw: &Value) -> Option<Value> {
+    let source = raw.as_object()?;
+    let mut active = Map::with_capacity(source.len());
+    for (period_id, raw_settings) in source {
+        let Some(raw_settings) = raw_settings.as_object() else {
+            active.insert(period_id.clone(), raw_settings.clone());
+            continue;
+        };
+        let mut settings = Map::new();
+        for field in ACTIVE_PERIOD_SETTING_FIELDS {
+            if let Some(value) = raw_settings.get(*field) {
+                settings.insert((*field).to_owned(), value.clone());
+            }
+        }
+        settings.insert("donemId".into(), Value::String(period_id.clone()));
+        active.insert(period_id.clone(), Value::Object(settings));
+    }
+    Some(Value::Object(active))
+}
+
+fn contains_legacy_compensation_settings(raw: &Value) -> bool {
+    raw.as_object().is_some_and(|settings_map| {
+        settings_map.values().any(|settings| {
+            settings.as_object().is_some_and(|settings| {
+                LEGACY_COMPENSATION_SETTING_FIELDS
+                    .iter()
+                    .any(|field| settings.contains_key(*field))
+            })
+        })
+    })
+}
+
+fn validate_v6_payload(payload: &mut LegacyPayload) -> Result<()> {
+    let versions = payload.compensationPolicyVersions.as_ref().ok_or_else(|| {
+        DomainError::InvalidData(
+            "V6 yedek payload'ı compensationPolicyVersions koleksiyonunu içermelidir.".into(),
+        )
+    })?;
+    let ordered_versions =
+        payroll_core::validate_compensation_policy_timeline(versions).map_err(|error| {
+            DomainError::InvalidData(format!("V6 policy timeline geçersiz: {error}"))
+        })?;
+    let periods = payload.donemler.as_ref().ok_or_else(|| {
+        DomainError::InvalidData("V6 yedek payload'ı donemler koleksiyonunu içermelidir.".into())
+    })?;
+    let mut periods_by_id = HashMap::with_capacity(periods.len());
+    for period in periods {
+        if periods_by_id.insert(period.id.as_str(), period).is_some() {
+            return Err(DomainError::InvalidData(format!(
+                "V6 yedek payload'ında yinelenen dönem kimliği: {}.",
+                period.id
+            )));
+        }
+    }
+    let payrolls = payload.bordrolar.as_ref().ok_or_else(|| {
+        DomainError::InvalidData("V6 yedek payload'ı bordrolar koleksiyonunu içermelidir.".into())
+    })?;
+    let mut payroll_ids = BTreeSet::new();
+    for payroll in payrolls {
+        if !payroll_ids.insert(payroll.id.as_str()) {
+            return Err(DomainError::InvalidData(format!(
+                "V6 yedek payload'ında yinelenen bordro kimliği: {}.",
+                payroll.id
+            )));
+        }
+        let period = periods_by_id.get(payroll.donemId.as_str()).ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "V6 bordro {} için parent dönem bulunamadı: {}.",
+                payroll.id, payroll.donemId
+            ))
+        })?;
+        let is_policy_engine_row = payroll
+            .calculationMetadata
+            .as_ref()
+            .is_some_and(|metadata| {
+                metadata.provenance
+                    == payroll_core::PayrollCalculationProvenance::COMPENSATION_POLICY_ENGINE
+            });
+        if is_policy_engine_row {
+            payroll_core::validate_payroll_calculation_metadata_with_context(
+                payroll, period, payrolls, periods,
+            )
+            .map_err(|error| {
+                DomainError::InvalidData(format!(
+                    "V6 bordro {} calculationMetadata doğrulaması başarısız: {error}",
+                    payroll.id
+                ))
+            })?;
+            payroll_core::validate_compensation_snapshot_policy_links(payroll, &ordered_versions)
+                .map_err(|error| {
+                DomainError::InvalidData(format!(
+                    "V6 bordro {} snapshot policy bağlantısı geçersiz: {error}",
+                    payroll.id
+                ))
+            })?;
+        }
+    }
+    payload.compensationPolicyVersions = Some(ordered_versions);
+    Ok(())
+}
+
+fn validate_policy_restore_compatibility(
+    conn: &Connection,
+    incoming: &[CompensationPolicyVersion],
+) -> Result<Vec<CompensationPolicyVersion>> {
+    let ordered =
+        payroll_core::validate_compensation_policy_timeline(incoming).map_err(|error| {
+            DomainError::InvalidData(format!("Yedek policy timeline geçersiz: {error}"))
+        })?;
+    let existing = CompensationPolicyRepository::get_all_versions(conn)?;
+    let incoming_by_id: HashMap<&str, &CompensationPolicyVersion> = ordered
+        .iter()
+        .map(|version| (version.id.as_str(), version))
+        .collect();
+    let existing_ids: BTreeSet<&str> = existing.iter().map(|version| version.id.as_str()).collect();
+
+    for version in &existing {
+        let Some(restored) = incoming_by_id.get(version.id.as_str()) else {
+            return Err(DomainError::InvalidData(format!(
+                "Immutable policy restore çakışması: mevcut sürüm {} payload'da yok; policy geçmişi silinemez.",
+                version.id
+            )));
+        };
+        let existing_json = serde_json::to_string(version)
+            .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+        let restored_json = serde_json::to_string(restored)
+            .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+        if existing_json != restored_json {
+            return Err(DomainError::InvalidData(format!(
+                "Immutable policy restore çakışması: {} kimliği farklı full-state, boundary flag veya supersession içeriyor.",
+                version.id
+            )));
+        }
+    }
+
+    Ok(ordered
+        .into_iter()
+        .filter(|version| !existing_ids.contains(version.id.as_str()))
+        .collect())
+}
+
+fn restore_policy_timeline_in_transaction(
+    conn: &Connection,
+    incoming: &[CompensationPolicyVersion],
+) -> Result<()> {
+    let missing = validate_policy_restore_compatibility(conn, incoming)?;
+    for version in missing {
+        CompensationPolicyRepository::insert_version_in_transaction(conn, &version)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -998,8 +1233,16 @@ mod backup_replay_comparison_tests {
     }
 }
 
-fn validate_current_backup_replay(conn: &Connection) -> Result<()> {
+fn validate_current_backup_replay(
+    conn: &Connection,
+    legacy_raise_months: &[i32],
+    exact_source_periods: &BTreeSet<String>,
+) -> Result<()> {
     let dataset = PayrollService::build_dataset_snapshot(conn)?;
+    let legacy_input = payroll_core::payroll_engine::LegacyBackupPayrollInput {
+        institutionSettings: SettingsRepository::get_all_institution_settings(conn)?,
+        raiseMonths: legacy_raise_months.to_vec(),
+    };
     payroll_core::validate_v5_retro_outstanding_receivables(&dataset.retroBatches)?;
     let targets = dataset
         .payrolls
@@ -1008,19 +1251,34 @@ fn validate_current_backup_replay(conn: &Connection) -> Result<()> {
             matches!(
                 payroll.status,
                 BordroStatus::CALCULATED | BordroStatus::FINALIZED
-            )
+            ) && payroll.calculationMetadata.is_none()
         })
         .cloned()
         .collect::<Vec<_>>();
 
     for imported in targets {
+        let Some(target_period) = dataset
+            .periods
+            .iter()
+            .find(|period| period.id == imported.donemId)
+        else {
+            continue;
+        };
+        let source_history_complete = legacy_raise_months.is_empty()
+            || dataset
+                .periods
+                .iter()
+                .filter(|period| period.baslangicTarihi <= target_period.baslangicTarihi)
+                .all(|period| exact_source_periods.contains(&period.id));
+        if !exact_source_periods.contains(&imported.donemId) || !source_history_complete {
+            continue;
+        }
         let request = replay_payroll_request_for_current_backup(&dataset, &imported)?;
-        let replayed = payroll_core::calculate_payroll_checked(&request).map_err(|error| {
-            DomainError::InvalidData(format!(
-                "V5 backup replay: {} canonical Rust replay ile doğrulanamadı: {}.",
-                imported.id, error
-            ))
-        })?;
+        let Some(replayed) =
+            payroll_core::calculate_legacy_backup_payroll_checked(&request, &legacy_input)?
+        else {
+            continue;
+        };
         compare_backup_snapshots(&imported, &replayed)?;
     }
     Ok(())
@@ -1037,6 +1295,23 @@ impl MigrationService {
     fn parse_payload(payload_json: &str) -> Result<LegacyPayload> {
         let mut raw: serde_json::Value = serde_json::from_str(payload_json)
             .map_err(|e| DomainError::InvalidData(format!("Geçersiz yedek payload: {}", e)))?;
+        let compensation_policy_data_present =
+            raw.get("compensationPolicyVersions")
+                .is_some_and(|value| match value {
+                    serde_json::Value::Null => false,
+                    serde_json::Value::Array(versions) => !versions.is_empty(),
+                    _ => true,
+                });
+        let compensation_metadata_data_present = raw
+            .get("bordrolar")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|payrolls| {
+                payrolls.iter().any(|payroll| {
+                    payroll
+                        .get("calculationMetadata")
+                        .is_some_and(|metadata| !metadata.is_null())
+                })
+            });
         // Explicit compatibility mapping for pre-policy historical backups.
         // Do not replay recorded financial history with a new default policy.
         let mut historical_periods = BTreeSet::new();
@@ -1066,40 +1341,94 @@ impl MigrationService {
                 }
             }
         }
-        let payload: LegacyPayload = serde_json::from_value(raw)
+
+        let backup_version = raw
+            .get("backupVersion")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(1);
+        if raw.get("legacyInstitutionSettings").is_none()
+            && raw
+                .get("kurumDegerleriMap")
+                .is_some_and(contains_legacy_compensation_settings)
+        {
+            raw["legacyInstitutionSettings"] = raw["kurumDegerleriMap"].clone();
+        } else if backup_version < u64::from(COMPENSATION_SNAPSHOT_BACKUP_VERSION)
+            && raw.get("legacyInstitutionSettings").is_none()
+        {
+            if let Some(settings) = raw.get("kurumDegerleriMap") {
+                raw["legacyInstitutionSettings"] = settings.clone();
+            }
+        }
+        if let Some(settings) = raw.get("kurumDegerleriMap").cloned() {
+            if let Some(active_settings) = legacy_settings_to_active_map(&settings) {
+                raw["kurumDegerleriMap"] = active_settings;
+            }
+        }
+        let exact_source_periods = exact_legacy_compensation_source_periods(&raw);
+        let mut payload: LegacyPayload = serde_json::from_value(raw)
             .map_err(|e| DomainError::InvalidData(format!("Geçersiz yedek payload: {}", e)))?;
+        payload.exactLegacyCompensationSourcePeriods = exact_source_periods;
+
+        let version = payload.backupVersion.unwrap_or(1);
+        if version == 0 || version > CURRENT_BACKUP_VERSION {
+            return Err(DomainError::InvalidData(format!(
+                "Desteklenmeyen yedek sürümü: {} (desteklenen en yeni sürüm: {}).",
+                version, CURRENT_BACKUP_VERSION
+            )));
+        }
+        if version < COMPENSATION_SNAPSHOT_BACKUP_VERSION
+            && (compensation_policy_data_present || compensation_metadata_data_present)
+        {
+            return Err(DomainError::InvalidData(
+                "V1-V5 veya sürümsüz yedekler compensationPolicyVersions ya da calculationMetadata taşıyamaz; V6 gerekir."
+                    .into(),
+            ));
+        }
 
         if let Some(version) = payload.backupVersion {
-            if version == 0 || version > CURRENT_BACKUP_VERSION {
-                return Err(DomainError::InvalidData(format!(
-                    "Desteklenmeyen yedek sürümü: {} (desteklenen en yeni sürüm: {}).",
-                    version, CURRENT_BACKUP_VERSION
-                )));
-            }
-
             if version >= 2
                 && (payload.taxOpenings.is_none()
                     || payload.sickLeaveRecords.is_none()
                     || payload.annualPayrollParameters.is_none())
             {
                 return Err(DomainError::InvalidData(
-                    "V2-V5 yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
+                    "V2+ yedek payload'ı vergi açılışları, rapor kayıtları ve yıllık bordro parametrelerini içermelidir."
                         .into(),
                 ));
             }
-            if version >= CURRENT_BACKUP_VERSION
+            if version >= RETRO_AUTHORITY_BACKUP_VERSION
                 && (payload.compensationRevisions.is_none()
                     || payload.compensationRevisionOverrides.is_none()
                     || payload.retroBatches.is_none()
                     || payload.retroAllocations.is_none())
             {
                 return Err(DomainError::InvalidData(
-                    "V5 yedek payload'ı retro revision, override, batch ve allocation koleksiyonlarını içermelidir."
+                    "V5+ yedek payload'ı retro revision, override, batch ve allocation koleksiyonlarını içermelidir."
                         .into(),
                 ));
             }
-            if version >= CURRENT_BACKUP_VERSION {
+            if version >= RETRO_AUTHORITY_BACKUP_VERSION {
+                // HEAD V5 required its complete retro graph, but did not
+                // require these common top-level export fields. V6 is the
+                // first strict full-snapshot contract.
+                if version >= COMPENSATION_SNAPSHOT_BACKUP_VERSION
+                    && (payload.exportedAt.is_none()
+                        || payload.donemler.is_none()
+                        || payload.aktifDonemId.is_none()
+                        || payload.personeller.is_none()
+                        || payload.kurumDegerleriMap.is_none()
+                        || payload.puantajlar.is_none()
+                        || payload.bordrolar.is_none())
+                {
+                    return Err(DomainError::InvalidData(
+                        "V6 yedek payload'ı dönem, personel, ayar, puantaj ve bordro alanlarını içermelidir."
+                            .into(),
+                    ));
+                }
                 validate_v5_retro_lifecycle_fields(payload_json)?;
+            }
+            if version >= COMPENSATION_SNAPSHOT_BACKUP_VERSION {
+                validate_v6_payload(&mut payload)?;
             }
         }
         if let Some(ref parameters) = payload.annualPayrollParameters {
@@ -1124,21 +1453,26 @@ impl MigrationService {
             aktifDonemId,
             personeller,
             kurumDegerleriMap,
+            legacyInstitutionSettings,
             puantajlar,
             mut bordrolar,
             taxOpenings,
             sickLeaveRecords,
             annualPayrollParameters,
-            zamAylari,
+            zamAylari: legacy_raise_months,
             compensationRevisions,
             compensationRevisionOverrides,
             retroBatches,
             retroAllocations,
+            compensationPolicyVersions,
+            exactLegacyCompensationSourcePeriods: exact_source_periods,
         } = payload;
+        let compensation_policy_versions = compensationPolicyVersions.unwrap_or_default();
+        restore_policy_timeline_in_transaction(conn, &compensation_policy_versions)?;
         // V3 already introduced independent payment-event/accrual metadata.
         // Only V1/V2 backups may be normalized to the single legacy NORMAL
         // node; treating V3 as pre-accrual would erase retro/TEDIYE ordering.
-        let is_pre_accrual_backup = backupVersion.unwrap_or(1) < 3;
+        let is_pre_accrual_backup = backupVersion.unwrap_or(1) < MULTI_ACCRUAL_BACKUP_VERSION;
         let explicit_opening_keys: BTreeSet<(String, i32)> = taxOpenings
             .as_ref()
             .map(|items| {
@@ -1151,14 +1485,14 @@ impl MigrationService {
         let had_retro_batches = retroBatches.is_some();
         let mut retro_batches = retroBatches.unwrap_or_default();
         let mut retro_allocations = retroAllocations.unwrap_or_default();
-        if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+        if backupVersion.unwrap_or(1) >= RETRO_AUTHORITY_BACKUP_VERSION {
             if let Some(payrolls) = bordrolar.as_ref() {
                 for payroll in payrolls {
                     payroll_core::validate_current_payroll_snapshot_authority(payroll)?;
                 }
             }
         }
-        if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION {
+        if backupVersion.unwrap_or(1) < RETRO_AUTHORITY_BACKUP_VERSION {
             normalize_legacy_retro_settlement(&mut retro_batches, &mut retro_allocations);
         }
 
@@ -1199,8 +1533,17 @@ impl MigrationService {
 
         if let Some(inst_map) = kurumDegerleriMap {
             for (period_id, mut settings) in inst_map {
-                settings.donemId = period_id;
-                SettingsRepository::save_institution_settings_in_transaction(conn, &settings)?;
+                settings.donemId = period_id.clone();
+                SettingsRepository::save_active_institution_settings_in_transaction(
+                    conn, &settings,
+                )?;
+            }
+        }
+        if let Some(legacy_map) = legacyInstitutionSettings {
+            for (period_id, settings) in legacy_map {
+                SettingsRepository::merge_legacy_compensation_settings_in_transaction(
+                    conn, &period_id, &settings,
+                )?;
             }
         }
 
@@ -1331,7 +1674,7 @@ impl MigrationService {
 
         if let Some(sick_records) = sickLeaveRecords {
             for record in sick_records {
-                if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+                if backupVersion.unwrap_or(1) >= RETRO_AUTHORITY_BACKUP_VERSION {
                     SickLeaveRepository::save_for_restore_in_transaction(conn, &record)?;
                 } else {
                     SickLeaveRepository::save_in_transaction(conn, &record)?;
@@ -1354,7 +1697,7 @@ impl MigrationService {
                 }
             }
             for parameter in parameters {
-                if backupVersion.unwrap_or(1) >= CURRENT_BACKUP_VERSION {
+                if backupVersion.unwrap_or(1) >= RETRO_AUTHORITY_BACKUP_VERSION {
                     AnnualPayrollParametersRepository::save_for_restore_in_transaction(
                         conn, &parameter,
                     )?;
@@ -1362,17 +1705,6 @@ impl MigrationService {
                     AnnualPayrollParametersRepository::save_in_transaction(conn, &parameter)?;
                 }
             }
-        }
-
-        if let Some(months) = zamAylari {
-            let normalized_months = SettingsRepository::normalize_zam_aylari(&months)?;
-            let value = serde_json::to_string(&normalized_months)
-                .map_err(|e| DomainError::InvalidData(e.to_string()))?;
-            SettingsRepository::set_app_setting_in_transaction(
-                conn,
-                ZAM_AYLARI_SETTING_KEY,
-                &value,
-            )?;
         }
 
         // Fill missing supported-year parameters before importing the retro
@@ -1428,7 +1760,7 @@ impl MigrationService {
                 // cannot be counted as an authoritative entitlement on the
                 // next calculation.  Only a matching FINALIZED payment event
                 // can establish settlement during the compatibility import.
-                if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION
+                if backupVersion.unwrap_or(1) < RETRO_AUTHORITY_BACKUP_VERSION
                     && batch.status == CompensationRevisionStatus::FINALIZED
                 {
                     let has_matching_finalized_payment =
@@ -1497,6 +1829,16 @@ impl MigrationService {
         // bulk-persistence path; normal calculation/finalization still goes
         // through the core policy and transaction adapters.
         if let Some(payroll_list) = bordrolar {
+            let mut payroll_list = payroll_list;
+            // Schema-2 NORMAL replay can reference earlier authoritative
+            // payment events in the same tax month. Restore them first so
+            // each incremental repository write can prove that provenance.
+            payroll_list.sort_by(|left, right| {
+                left.paymentDate
+                    .cmp(&right.paymentDate)
+                    .then_with(|| left.sequence.cmp(&right.sequence))
+                    .then_with(|| left.accrualId.cmp(&right.accrualId))
+            });
             for mut payroll in payroll_list {
                 // V1/V2 snapshots had one person+period row and no accrual
                 // metadata. Preserve the old id and make it the sole NORMAL
@@ -1522,7 +1864,7 @@ impl MigrationService {
                 if payroll.accrualDescription.is_none() {
                     payroll.accrualDescription = payroll.notlar.clone();
                 }
-                if backupVersion.unwrap_or(1) < CURRENT_BACKUP_VERSION {
+                if backupVersion.unwrap_or(1) < RETRO_AUTHORITY_BACKUP_VERSION {
                     PayrollRepository::save_legacy_in_transaction(conn, &payroll)?;
                 } else {
                     PayrollRepository::save_for_restore_in_transaction(conn, &payroll)?;
@@ -1531,18 +1873,19 @@ impl MigrationService {
         }
 
         // V5 is the first backup contract that declares the complete retro
-        // graph. Its FINALIZED settlement must therefore have an actual,
-        // matching RETRO_ADJUSTMENT payment event; otherwise a restore would
-        // claim a paid batch while dropping the bank/tax event linkage.
+        // graph. V6 carries that same authority plus compensation provenance.
         match backupVersion.unwrap_or(1) {
             4 => validate_retro_payment_links(conn, "V4")?,
-            version if version >= CURRENT_BACKUP_VERSION => {
+            version if version >= RETRO_AUTHORITY_BACKUP_VERSION => {
                 validate_retro_payment_links(conn, "V5")?;
-                // V5 is an authoritative snapshot contract.  Every stored
-                // calculated/finalized payment must be reproducible from the
-                // imported source dataset before the transaction can commit.
-                // V1-V4 deliberately stay on their compatibility path.
-                validate_current_backup_replay(conn)?;
+                // Rows without policy-engine provenance keep their own
+                // historical authority. Exact legacy sources are replayed;
+                // unsupported rows remain readable and are not reinterpreted.
+                validate_current_backup_replay(
+                    conn,
+                    legacy_raise_months.as_deref().unwrap_or(&[]),
+                    &exact_source_periods,
+                )?;
             }
             _ => {}
         }
@@ -1595,6 +1938,13 @@ impl MigrationService {
         let tx = conn
             .transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        validate_policy_restore_compatibility(
+            &tx,
+            payload
+                .compensationPolicyVersions
+                .as_deref()
+                .unwrap_or_default(),
+        )?;
 
         tx.execute_batch(
             "DELETE FROM retro_adjustment_allocations;

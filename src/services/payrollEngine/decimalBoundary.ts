@@ -1,4 +1,4 @@
-import type { BackupPayload } from '../../types/payroll';
+import type { BackupPayload, LegacyInstitutionSettings } from '../../types/payroll';
 import type { PayrollCalculationRequest } from './types';
 import { RUST_DECIMAL_KEYS } from './generated/payrollContract';
 
@@ -25,7 +25,13 @@ export type Exactify<T> = T extends readonly (infer Item)[]
     : T;
 
 /** Exact browser snapshot used by IndexedDB and the calculation boundary. */
-export type PayrollStorageDto = Exactify<BackupPayload>;
+export type PayrollStorageDto = Exactify<BackupPayload> &
+  Required<Pick<Exactify<BackupPayload>, 'compensationPolicyVersions'>> & {
+    /** Raw V1-V5 money fields retained for explicit prefill/import adapters. */
+    legacyInstitutionSettings?: Record<string, Exactify<LegacyInstitutionSettings>>;
+    /** Historical raise calendar retained only for import-only legacy replay. */
+    legacyRaiseMonths?: number[];
+  };
 export type PayrollStorageFields = Omit<PayrollStorageDto, 'backupVersion' | 'exportedAt'>;
 
 export const DECIMAL_KEYS = new Set<DecimalKey>(RUST_DECIMAL_KEYS);

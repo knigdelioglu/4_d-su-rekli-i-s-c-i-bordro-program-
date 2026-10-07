@@ -25,7 +25,7 @@ pub fn save_period(db: State<'_, DbState>, period: BordroDonemi) -> Result<()> {
 pub fn save_period_with_settings(
     db: State<'_, DbState>,
     period: BordroDonemi,
-    settings: DonemselKurumDegerleri,
+    settings: payroll_core::PayrollPeriodInstitutionSettings,
 ) -> Result<()> {
     let mut conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))

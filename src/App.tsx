@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
+import { CompensationPolicyPage } from './components/Settings/CompensationPolicyPage';
 import {
   isKesintiTipi,
   isParametreSection,
@@ -26,7 +27,7 @@ import { KesintiListesi } from './components/Listeler/KesintiListesi';
 import {
   BACKUP_FORMAT_VERSION,
   BackupPayload,
-  ZAM_AYLARI_SETTING_KEY,
+  PayrollPeriodInstitutionSettings,
 } from './types/payroll';
 import { tauriBridge } from './services/tauriBridge';
 import { getPayrollEngine } from './services/payrollEngine';
@@ -40,7 +41,9 @@ import {
 import { useBrowserPayrollPersistence } from './services/storage/useBrowserPayrollPersistence';
 import { usePayrollMutationController } from './hooks/usePayrollMutationController';
 import { useBackupController } from './hooks/useBackupController';
+import { useCompensationPolicyController } from './hooks/useCompensationPolicyController';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
+import { DEFAULT_PRODUCTION_KURUM_DEGERLERI } from './utils/payrollPresentation';
 import { PeriodSummary } from './components/Dashboard/PeriodSummary';
 import { DataBackupPage } from './components/DataBackupPage';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
@@ -59,11 +62,13 @@ type UiDatasetFields = Omit<
   BackupPayload,
   | 'backupVersion'
   | 'exportedAt'
+  | 'kurumDegerleriMap'
   | 'compensationRevisions'
   | 'compensationRevisionOverrides'
   | 'retroBatches'
   | 'retroAllocations'
 > &
+  { kurumDegerleriMap: Record<string, PayrollPeriodInstitutionSettings> } &
   Required<
     Pick<
       BackupPayload,
@@ -74,30 +79,13 @@ type UiDatasetFields = Omit<
     >
   >;
 
-function normalizeZamAylari(value: unknown): number[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(
-    value.filter(
-      (month): month is number =>
-        typeof month === 'number' && Number.isInteger(month) && month >= 1 && month <= 12
-    )
-  )].sort((a, b) => a - b);
-}
-
-function parseZamAylariSetting(value: string | null): number[] {
-  if (!value) return [];
-  try {
-    return normalizeZamAylari(JSON.parse(value));
-  } catch {
-    return [];
-  }
-}
-
 function makeBackupPayload(data: DatasetFields): PayrollStorageDto {
   return {
     backupVersion: BACKUP_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
     ...data,
+    kurumDegerleriMap: toPayrollBoundaryDto(data.kurumDegerleriMap),
+    compensationPolicyVersions: data.compensationPolicyVersions ?? [],
   };
 }
 
@@ -167,7 +155,6 @@ const EMPTY_UI_DATASET: UiDatasetFields = {
   taxOpenings: [],
   sickLeaveRecords: [],
   annualPayrollParameters: [],
-  zamAylari: [],
   compensationRevisions: [],
   compensationRevisionOverrides: [],
   retroBatches: [],
@@ -234,6 +221,13 @@ export default function App() {
     const decoded = toPayrollUiModel(authoritativePayload) as unknown as BackupPayload;
     return {
       ...decoded,
+      kurumDegerleriMap: Object.fromEntries(
+        Object.entries(decoded.kurumDegerleriMap).map(([periodId, saved]) => [periodId, {
+          ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+          ...saved,
+          donemId: periodId,
+        }])
+      ),
       compensationRevisions: decoded.compensationRevisions ?? [],
       compensationRevisionOverrides: decoded.compensationRevisionOverrides ?? [],
       retroBatches: decoded.retroBatches ?? [],
@@ -251,7 +245,6 @@ export default function App() {
     taxOpenings,
     sickLeaveRecords,
     annualPayrollParameters,
-    zamAylari,
     compensationRevisions,
     compensationRevisionOverrides,
     retroBatches,
@@ -327,7 +320,7 @@ export default function App() {
         }
         if (!isLatestLoad()) return false;
 
-        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, savedZamAylari, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations] =
+        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations] =
           await Promise.all([
             tauriBridge.getPeriods(),
             tauriBridge.getPersonnelList(),
@@ -338,7 +331,6 @@ export default function App() {
             tauriBridge.getSickLeaveRecords(),
             tauriBridge.getAnnualPayrollParameters(),
             tauriBridge.getAppSetting('active_period_id'),
-            tauriBridge.getAppSetting(ZAM_AYLARI_SETTING_KEY),
             tauriBridge.getCompensationRevisions(),
             tauriBridge.getCompensationRevisionOverrides(),
             tauriBridge.getRetroAdjustmentBatches(),
@@ -356,7 +348,6 @@ export default function App() {
           taxOpenings: fetchedTaxOpenings,
           sickLeaveRecords: fetchedSickLeaves,
           annualPayrollParameters: fetchedAnnualParameters,
-          zamAylari: parseZamAylariSetting(savedZamAylari),
           compensationRevisions: fetchedRevisions,
           compensationRevisionOverrides: fetchedRevisionOverrides,
           retroBatches: fetchedRetroBatches,
@@ -381,7 +372,6 @@ export default function App() {
           taxOpenings: [],
           sickLeaveRecords: [],
           annualPayrollParameters: [],
-          zamAylari: [],
           compensationRevisions: [],
           compensationRevisionOverrides: [],
           retroBatches: [],
@@ -428,6 +418,7 @@ export default function App() {
   };
 
   const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
+  const compensationPolicyProps = useCompensationPolicyController(aktifDonem, loadData);
   const payrollDataset = useMemo<PayrollDatasetSnapshot>(() => {
     if (authoritativePayload) {
       return {
@@ -439,7 +430,6 @@ export default function App() {
         taxOpenings: authoritativePayload.taxOpenings,
         sickLeaveRecords: authoritativePayload.sickLeaveRecords,
         annualPayrollParameters: authoritativePayload.annualPayrollParameters,
-        zamAylari: authoritativePayload.zamAylari,
         compensationRevisions: authoritativePayload.compensationRevisions ?? [],
         compensationRevisionOverrides: authoritativePayload.compensationRevisionOverrides ?? [],
         retroBatches: authoritativePayload.retroBatches ?? [],
@@ -485,7 +475,6 @@ export default function App() {
     handleSavePuantajBatch,
     handleSaveSickLeaveRecord,
     handleSaveAnnualPayrollParameters,
-    handleSaveZamAylari,
     handleDeleteSickLeaveRecord,
     handleDeleteBordro,
     handleSaveBordro,
@@ -719,8 +708,16 @@ export default function App() {
                     onSavePersonel={handleSavePersonel}
                     onDeletePersonel={handleDeletePersonel}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}
-                    isPrimiGruplari={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.isPrimiGruplari : undefined}
-                    gunlukTabanUcret={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.gunlukTabanUcret : undefined}
+                    isPrimiGruplari={compensationPolicyProps?.loadState.status === 'ready'
+                      ? compensationPolicyProps.loadState.value.activePolicyProjection.kind === 'ACTIVE'
+                        ? compensationPolicyProps.loadState.value.activePolicyProjection.version.state.isPrimiGruplari
+                        : undefined
+                      : undefined}
+                    gunlukTabanUcret={compensationPolicyProps?.loadState.status === 'ready'
+                      ? compensationPolicyProps.loadState.value.activePolicyProjection.kind === 'ACTIVE'
+                        ? compensationPolicyProps.loadState.value.activePolicyProjection.version.state.gunlukTabanUcret
+                        : undefined
+                      : undefined}
                     sendikaAidatiYuzde={aktifDonemId ? kurumDegerleriMap[aktifDonemId]?.sendikaAidatiYuzde : undefined}
                   />
                 )}
@@ -728,6 +725,7 @@ export default function App() {
                 {!aktifDonem &&
                   activeTab !== 'personel' &&
                   activeTab !== 'parametrelar' &&
+                  activeTab !== 'compensationPolicy' &&
                   activeTab !== 'ozet' &&
                   activeTab !== 'veri' && (
                   <div className="mx-auto my-12 max-w-xl space-y-4 rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
@@ -750,6 +748,10 @@ export default function App() {
                     puantajlar={puantajlar}
                     bordrolar={bordrolar}
                     activeKurumDegerleri={aktifDonem ? kurumDegerleriMap[aktifDonem.id] : undefined}
+                    compensationPolicyReady={Boolean(
+                      compensationPolicyProps?.loadState.status === 'ready' &&
+                      compensationPolicyProps.loadState.value.timeline.resolution === 'RESOLVED'
+                    )}
                     annualPayrollParameters={annualPayrollParameters}
                     payrollNotices={payrollNotices}
                     isRefreshingNotices={arePayrollNoticesRefreshing}
@@ -801,7 +803,6 @@ export default function App() {
                     taxOpenings={taxOpenings}
                     sickLeaveRecords={sickLeaveRecords}
                     annualPayrollParameters={annualPayrollParameters}
-                    zamAylari={zamAylari}
                     activePayrollView={activePayrollView}
                     authoritativeDataset={payrollDataset}
                     onSaveBordro={handleSaveBordro}
@@ -812,6 +813,7 @@ export default function App() {
                       if (personelId) setTargetPersonelIdForBordro(personelId);
                       setActiveTab('puantaj');
                     }}
+                    onOpenCompensationPolicy={() => setActiveTab('compensationPolicy')}
                   />
                 )}
 
@@ -854,9 +856,19 @@ export default function App() {
                     sickLeaveRecords={sickLeaveRecords}
                     onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
                     onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
-                    zamAylari={zamAylari}
-                    onSaveZamAylari={handleSaveZamAylari}
+                    onOpenCompensationPolicy={() => setActiveTab('compensationPolicy')}
                   />
+                )}
+
+                {activeTab === 'compensationPolicy' && compensationPolicyProps && (
+                  <CompensationPolicyPage {...compensationPolicyProps} />
+                )}
+                {activeTab === 'compensationPolicy' && !compensationPolicyProps && (
+                  <div className="mx-auto my-12 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+                    <h2 className="text-lg font-bold text-slate-800">Ücret politikası için dönem seçin</h2>
+                    <p className="mt-2 text-sm text-slate-600">Yetkili ücret geçmişini görüntülemek için önce bir bordro dönemi oluşturun.</p>
+                    <button type="button" onClick={handleOpenNewPeriodSettings} className="mt-4 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Yeni dönem aç</button>
+                  </div>
                 )}
 
                 {activeTab === 'veri' && authoritativePayload && (

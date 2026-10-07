@@ -2,7 +2,7 @@ import {
   BordroDonemi,
   BordroKaydi,
   BordroStatus,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   AnnualPayrollParameters,
   Personel,
   PersonelPuantaj,
@@ -16,6 +16,16 @@ import {
   RetroAllocation,
 } from '../types/payroll';
 import type { RetroCalculationRequest, RetroCalculationResult } from './payrollEngine/types';
+import type {
+  CompensationPolicyApi,
+  CompensationPolicyLoadData,
+  CompensationPolicyLoadRequest,
+  CompensationPolicyOperationResult,
+  CompensationPolicyPreviewData,
+  CompensationPolicyPreviewRequest,
+  CompensationPolicySaveReceipt,
+  CompensationPolicySaveRequest,
+} from './compensationPolicy/contract';
 import { PayrollNotice } from '../types/payrollNotice';
 import { decodeDecimalValues, encodeDecimalValues } from './payrollEngine/decimalBoundary';
 import type { MutationImpact, PayrollMutation } from './payrollEngine/types';
@@ -43,6 +53,18 @@ async function invokeTauri<T>(cmd: string, args: Record<string, any> = {}): Prom
   }
   if (win && win.__TAURI__ && win.__TAURI__.core && typeof win.__TAURI__.core.invoke === 'function') {
     return decodeDecimalValues(await win.__TAURI__.core.invoke(cmd, args)) as T;
+  }
+  throw new Error(`Tauri IPC context not available for command "${cmd}".`);
+}
+
+/** Exact JSON boundary for DTOs that must retain Decimal strings on return. */
+async function invokeTauriExact<T>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
+  const win = typeof window !== 'undefined' ? (window as any) : null;
+  if (win && win.__TAURI_INTERNALS__ && typeof win.__TAURI_INTERNALS__.invoke === 'function') {
+    return await win.__TAURI_INTERNALS__.invoke(cmd, args) as T;
+  }
+  if (win && win.__TAURI__ && win.__TAURI__.core && typeof win.__TAURI__.core.invoke === 'function') {
+    return await win.__TAURI__.core.invoke(cmd, args) as T;
   }
   throw new Error(`Tauri IPC context not available for command "${cmd}".`);
 }
@@ -132,7 +154,7 @@ export const tauriBridge = {
 
   async savePeriodWithSettings(
     period: BordroDonemi,
-    settings: DönemselKurumDegerleri
+    settings: PayrollPeriodInstitutionSettings
   ): Promise<void> {
     return mutateTauri<void>('save_period_with_settings', {
       period,
@@ -174,6 +196,68 @@ export const tauriBridge = {
     });
   },
 
+  async validatePayrollRequest(
+    personnelId: string,
+    periodId: string,
+    manualIncome?: ManualPayrollIncomeInput,
+    accrual?: PayrollAccrualInput
+  ): Promise<void> {
+    await invokeTauri<void>('validate_payroll_request', {
+      personnelId,
+      periodId,
+      manualIncome: manualIncome ? encodeDecimalValues(manualIncome) : null,
+      accrual: accrual ? encodeDecimalValues(accrual) : null,
+    });
+  },
+
+  async calculatePayrollWithCompensationPolicy(
+    personnelId: string,
+    periodId: string,
+    manualIncome?: ManualPayrollIncomeInput,
+    accrual?: PayrollAccrualInput
+  ): Promise<import('./payrollEngine/types').PayrollBoundaryPayroll> {
+    const payroll = await invokeTauriExact<import('./payrollEngine/types').PayrollBoundaryPayroll>(
+      'calculate_compensation_policy_payroll',
+      {
+        personnelId,
+        periodId,
+        manualIncome: manualIncome ? encodeDecimalValues(manualIncome) : null,
+        accrual: accrual ? encodeDecimalValues(accrual) : null,
+      }
+    );
+    emitPayrollDataChanged();
+    return payroll;
+  },
+
+  async loadCompensationPolicy(
+    request: CompensationPolicyLoadRequest
+  ): Promise<CompensationPolicyOperationResult<CompensationPolicyLoadData>> {
+    return invokeTauriExact<CompensationPolicyOperationResult<CompensationPolicyLoadData>>(
+      'load_compensation_policy',
+      { request: encodeDecimalValues(request) }
+    );
+  },
+
+  async previewCompensationPolicy(
+    request: CompensationPolicyPreviewRequest
+  ): Promise<CompensationPolicyOperationResult<CompensationPolicyPreviewData>> {
+    return invokeTauriExact<CompensationPolicyOperationResult<CompensationPolicyPreviewData>>(
+      'preview_compensation_policy',
+      { request: encodeDecimalValues(request) }
+    );
+  },
+
+  async saveCompensationPolicy(
+    request: CompensationPolicySaveRequest
+  ): Promise<CompensationPolicyOperationResult<CompensationPolicySaveReceipt>> {
+    const result = await invokeTauriExact<CompensationPolicyOperationResult<CompensationPolicySaveReceipt>>(
+      'save_compensation_policy',
+      { request: encodeDecimalValues(request) }
+    );
+    if (result.ok) emitPayrollDataChanged();
+    return result;
+  },
+
   async finalizePayroll(
     personnelId: string,
     periodId: string,
@@ -207,11 +291,11 @@ export const tauriBridge = {
     });
   },
 
-  async getInstitutionSettings(): Promise<Record<string, DönemselKurumDegerleri>> {
-    return invokeTauri<Record<string, DönemselKurumDegerleri>>('get_institution_settings');
+  async getInstitutionSettings(): Promise<Record<string, PayrollPeriodInstitutionSettings>> {
+    return invokeTauri<Record<string, PayrollPeriodInstitutionSettings>>('get_institution_settings');
   },
 
-  async saveInstitutionSettings(settings: DönemselKurumDegerleri): Promise<void> {
+  async saveInstitutionSettings(settings: PayrollPeriodInstitutionSettings): Promise<void> {
     return mutateTauri<void>('save_institution_settings', {
       settings: encodeDecimalValues(settings),
     });
@@ -335,4 +419,10 @@ export const tauriBridge = {
       sequence,
     });
   },
+};
+
+export const tauriCompensationPolicyApi: CompensationPolicyApi = {
+  load: (request) => tauriBridge.loadCompensationPolicy(request),
+  preview: (request) => tauriBridge.previewCompensationPolicy(request),
+  save: (request) => tauriBridge.saveCompensationPolicy(request),
 };

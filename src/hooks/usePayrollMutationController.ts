@@ -5,7 +5,7 @@ import {
   BordroKaydi,
   CompensationRevision,
   CompensationRevisionOverride,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
@@ -13,7 +13,6 @@ import {
   RetroAdjustmentBatch,
   RetroAllocation,
   SickLeaveRecord,
-  ZAM_AYLARI_SETTING_KEY,
 } from '../types/payroll';
 import { RetroPreviewInput } from '../components/GeriyeDonukFarklar';
 import { tauriBridge } from '../services/tauriBridge';
@@ -43,7 +42,6 @@ import {
 import { nextPaymentSequence } from '../services/payrollEngine/paymentEventOrder';
 import { assertPayrollCalculationSnapshotCurrent } from '../services/payrollEngine/calculationSnapshot';
 import { sameSettingsValue } from '../components/Settings/periodSettingsSave';
-import { validateTransportRatesForPeriod } from '../services/storage/transportRatesValidation';
 import { deletePeriodFromPayload } from '../services/storage/periodDeletion';
 import { reconcileStatutorySnapshot } from '../services/storage/statutorySnapshotPolicy';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
@@ -73,14 +71,6 @@ export interface PayrollMutationControllerOptions {
     update: (current: PayrollStorageDto) => PayrollStorageDto
   ) => void;
   loadData: () => Promise<void>;
-}
-
-function normalizeZamAylari(months: number[]): number[] {
-  return [...new Set(
-    months.filter(
-      (month) => Number.isInteger(month) && month >= 1 && month <= 12
-    )
-  )].sort((left, right) => left - right);
 }
 
 function sameRevisionDefinition(
@@ -422,7 +412,7 @@ export function usePayrollMutationController({
 
   const handleCreateDonem = async (
     newDonem: BordroDonemi,
-    kurumDegerleri?: DönemselKurumDegerleri
+    kurumDegerleri?: PayrollPeriodInstitutionSettings
   ) => {
     if (isNative) {
       if (kurumDegerleri) await tauriBridge.savePeriodWithSettings(newDonem, kurumDegerleri);
@@ -430,7 +420,6 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
-    if (kurumDegerleri) validateTransportRatesForPeriod(newDonem, kurumDegerleri);
     const existing = donemler.find((period) => period.id === newDonem.id);
     // A brand-new period is empty; it can only affect later periods of the
     // same tax year (PERIOD_INSERT). Editing an existing period keeps the
@@ -472,7 +461,10 @@ export function usePayrollMutationController({
           )
         : [...current.donemler, exactPeriod];
       const preservedSettings = kurumDegerleri
-        ? reconcileStatutorySnapshot(previousSettings, mergePayrollUiIntoBoundary(previousSettings, kurumDegerleri))
+        ? (() => {
+            const exactSettings = mergePayrollUiIntoBoundary(previousSettings, kurumDegerleri);
+            return toPayrollBoundaryDto(reconcileStatutorySnapshot(previousSettings, exactSettings));
+          })()
         : undefined;
       return {
         ...current,
@@ -490,10 +482,9 @@ export function usePayrollMutationController({
     });
   };
 
-  const handleSaveKurumDegerleri = async (settings: DönemselKurumDegerleri) => {
+  const handleSaveKurumDegerleri = async (settings: PayrollPeriodInstitutionSettings) => {
     const period = donemler.find((period) => period.id === settings.donemId);
-    if (!period) throw new Error('Yol ayarları için bordro dönemi bulunamadı.');
-    validateTransportRatesForPeriod(period, settings);
+    if (!period) throw new Error('Dönem kurum ayarları için bordro dönemi bulunamadı.');
     if (isNative) {
       await tauriBridge.saveInstitutionSettings(settings);
       await loadData();
@@ -502,10 +493,10 @@ export function usePayrollMutationController({
     const persistedSettings = authoritativePayload?.kurumDegerleriMap?.[settings.donemId];
     if (persistedSettings) {
       const unchanged = sameSettingsValue(
-        reconcileStatutorySnapshot(
+        toPayrollBoundaryDto(reconcileStatutorySnapshot(
           persistedSettings,
           mergePayrollUiIntoBoundary(persistedSettings, settings)
-        ),
+        )),
         persistedSettings
       );
       // A no-op save must not invalidate the period and every later period.
@@ -519,7 +510,7 @@ export function usePayrollMutationController({
         [settings.donemId]: (() => {
           const previousSettings = current.kurumDegerleriMap[settings.donemId];
           const exactSettings = mergePayrollUiIntoBoundary(previousSettings, settings);
-          return reconcileStatutorySnapshot(previousSettings, exactSettings);
+          return toPayrollBoundaryDto(reconcileStatutorySnapshot(previousSettings, exactSettings));
         })(),
       },
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
@@ -700,31 +691,6 @@ export function usePayrollMutationController({
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
       };
     });
-  };
-
-  const handleSaveZamAylari = async (months: number[]) => {
-    const normalized = normalizeZamAylari(months);
-    if (isNative) {
-      await tauriBridge.setAppSetting(ZAM_AYLARI_SETTING_KEY, JSON.stringify(normalized));
-      await loadData();
-      return;
-    }
-    const persistedZamAylari = normalizeZamAylari(authoritativePayload?.zamAylari ?? []);
-    if (
-      persistedZamAylari.length === normalized.length &&
-      persistedZamAylari.every((month, index) => month === normalized[index])
-    ) {
-      // Unchanged schedule: an ALL mutation here would mark every payroll in
-      // every period STALE (or be rejected by unrelated FINALIZED history).
-      return;
-    }
-    const impact = await evaluateBrowserMutations({ kind: 'ALL' });
-    updateAuthoritativePayload((current) => ({
-      ...current,
-      zamAylari: normalized,
-      bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
-      retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
-    }));
   };
 
   const handleDeleteSickLeaveRecord = async (id: string) => {
@@ -1263,7 +1229,6 @@ export function usePayrollMutationController({
     handleSaveTaxOpening,
     handleSaveSickLeaveRecord,
     handleSaveAnnualPayrollParameters,
-    handleSaveZamAylari,
     handleDeleteSickLeaveRecord,
     handleDeleteBordro,
     handleSaveBordro,

@@ -32,9 +32,10 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   // An explicit empty period group list is a real configuration state. Do not
   // replace it with demo groups; the institution must define its own groups.
   const groups = isPrimiGruplari ?? [];
-  const dailyWage = gunlukTabanUcret ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.gunlukTabanUcret;
   const unionRate = sendikaAidatiYuzde ?? DEFAULT_PRODUCTION_KURUM_DEGERLERI.sendikaAidatiYuzde;
-  const calculatedUnionFee = Math.round((dailyWage * unionRate) / 100 * 100) / 100;
+  const calculatedUnionFee = gunlukTabanUcret === undefined
+    ? null
+    : Math.round((gunlukTabanUcret * unionRate) / 100 * 100) / 100;
 
   const [formData, setFormData] = useState<Partial<Personel>>({
     tcNo: '',
@@ -423,7 +424,9 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     <div>
                       <span className="font-bold text-slate-900">Sendika Üyesi</span>
                       <p className="text-[10px] text-indigo-600 font-medium">
-                        Otomatik tutar: {formatTL(calculatedUnionFee)} / gün (günlük ücret × %{unionRate})
+                        {calculatedUnionFee === null
+                          ? `Otomatik tutar etkin ücret politikası sürümündeki günlük çıplak ücrete göre hesaplanır (%${unionRate}).`
+                          : `Otomatik tutar: ${formatTL(calculatedUnionFee)} / gün (günlük ücret × %${unionRate})`}
                       </p>
                     </div>
                   </label>

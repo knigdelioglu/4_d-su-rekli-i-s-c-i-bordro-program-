@@ -1,5 +1,62 @@
 /**
- * Calculates one payroll from a complete, JSON-serializable snapshot.
+ * Calculates one payroll through the explicit compensation-policy engine.
+ * Compatibility export for callers that explicitly select the policy API.
+ * The ordinary calculation export already uses the same resolver for NORMAL.
+ * @param {string} request_json
+ * @returns {string}
+ */
+export function calculate_compensation_policy_payroll_json(request_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.calculate_compensation_policy_payroll_json(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Import-only exact V1-V5 replay. Missing legacy sources return JSON null so
+ * callers can retain the historical snapshot without rejecting the import.
+ * @param {string} replay_json
+ * @returns {string}
+ */
+export function calculate_legacy_backup_payroll_json(replay_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(replay_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.calculate_legacy_backup_payroll_json(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Calculates one payroll from a complete, JSON-serializable snapshot. NORMAL
+ * payrolls use the authoritative compensation timeline through the default
+ * checked core entry point.
  *
  * Decimal inputs are expected as JSON strings. Returning JSON rather than
  * `JsValue` keeps the boundary explicit and auditable; the UI converts the
@@ -83,6 +140,33 @@ export function evaluate_mutation_policy_json(request_json) {
 }
 
 /**
+ * Recalculates and finalizes a schema-2 NORMAL payroll through the explicit
+ * compensation-policy engine.
+ * @param {string} request_json
+ * @returns {string}
+ */
+export function finalize_compensation_policy_payroll_json(request_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.finalize_compensation_policy_payroll_json(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Recalculates and finalizes a payroll from the supplied authoritative
  * snapshot. Persistence remains the responsibility of the browser adapter.
  * @param {string} request_json
@@ -136,6 +220,34 @@ export function get_payroll_notices_json(request_json) {
 }
 
 /**
+ * Resolves the same typed compensation timeline used by the Rust payroll
+ * engine. Browser policy previews use this instead of duplicating the
+ * supersession graph or ROAD_ONLY validation rules in TypeScript.
+ * @param {string} request_json
+ * @returns {string}
+ */
+export function resolve_compensation_policy_timeline_json(request_json) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.resolve_compensation_policy_timeline_json(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
  * Validates the annual tariff with the same core-owned semantic contract
  * used by checked payroll calculation. Browser persistence tests use this
  * narrow endpoint for direct Rust/WASM parity without duplicating tax logic.
@@ -145,6 +257,21 @@ export function validate_annual_payroll_parameters_json(parameters_json) {
     const ptr0 = passStringToWasm0(parameters_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
     const ret = wasm.validate_annual_payroll_parameters_json(ptr0, len0);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
+ * Validates V6 compensation policy graph links and every payroll envelope
+ * against its parent period with the same core authority as native restore.
+ * This checks structure and input consistency only; it does not replay payroll.
+ * @param {string} payload_json
+ */
+export function validate_payroll_backup_metadata_json(payload_json) {
+    const ptr0 = passStringToWasm0(payload_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.validate_payroll_backup_metadata_json(ptr0, len0);
     if (ret[1]) {
         throw takeFromExternrefTable0(ret[0]);
     }

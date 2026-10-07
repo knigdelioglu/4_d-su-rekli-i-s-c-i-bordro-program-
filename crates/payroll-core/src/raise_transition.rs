@@ -43,12 +43,13 @@ impl RaiseTransition {
 /// History is chronological by service dates, never by tax/payment month.
 pub(crate) fn resolve_raise_transition(
     dataset: &PayrollDatasetSnapshot,
+    institution_settings: &std::collections::HashMap<String, DonemselKurumDegerleri>,
+    raise_months: &[i32],
     period: &BordroDonemi,
 ) -> Result<RaiseTransition> {
-    let cutoff = find_zam_tarihi(period, &dataset.zamAylari)?;
+    let cutoff = find_zam_tarihi(period, raise_months)?;
     let settings_for = |period: &BordroDonemi| -> Result<DonemselKurumDegerleri> {
-        dataset
-            .institutionSettings
+        institution_settings
             .get(&period.id)
             .cloned()
             .ok_or_else(|| {
@@ -59,7 +60,7 @@ pub(crate) fn resolve_raise_transition(
             })
     };
     let current = settings_for(period)?;
-    if dataset.zamAylari.is_empty() {
+    if raise_months.is_empty() {
         return Ok(RaiseTransition {
             current,
             previous: None,
@@ -91,7 +92,7 @@ pub(crate) fn resolve_raise_transition(
     let mut before_current = None;
     for next in history.into_iter().skip(1) {
         let raw = settings_for(next)?;
-        let scheduled_raise = find_zam_tarihi(next, &dataset.zamAylari)?.is_some();
+        let scheduled_raise = find_zam_tarihi(next, raise_months)?.is_some();
         let adjust = |current_rate, previous_raw_rate, previous_effective_rate| {
             if current_rate != previous_raw_rate {
                 current_rate

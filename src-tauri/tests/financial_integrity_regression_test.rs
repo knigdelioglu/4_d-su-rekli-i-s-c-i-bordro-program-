@@ -83,6 +83,7 @@ fn payroll(accrual_type: AccrualType, sequence: i32, net: rust_decimal::Decimal)
         statutorySnapshot: None,
         odenenRaporluGun: None,
         raporluGun: None,
+        calculationMetadata: None,
     }
 }
 
@@ -189,6 +190,7 @@ fn reconciled_payroll(accrual_type: AccrualType, sequence: i32) -> BordroKaydi {
         statutorySnapshot: Some(statutory),
         odenenRaporluGun: Some(0),
         raporluGun: Some(0),
+        calculationMetadata: None,
     }
 }
 

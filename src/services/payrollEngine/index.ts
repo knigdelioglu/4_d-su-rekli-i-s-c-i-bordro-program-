@@ -32,10 +32,30 @@ const tauriEngine: PayrollEngine = {
         >[3]
       )
     ) as PayrollBoundaryPayroll,
+  calculatePayrollWithCompensationPolicy: async (request) =>
+    tauriBridge.calculatePayrollWithCompensationPolicy(
+      request.personnelId,
+      request.periodId,
+      toPayrollBoundaryDto(request.manualIncome ?? null) as unknown as Parameters<
+        typeof tauriBridge.calculatePayrollWithCompensationPolicy
+      >[2],
+      toPayrollBoundaryDto(request.accrual ?? null) as unknown as Parameters<
+        typeof tauriBridge.calculatePayrollWithCompensationPolicy
+      >[3]
+    ),
   calculateRetroPreview: async (request: RetroCalculationRequest) =>
     toPayrollBoundaryDto(await tauriBridge.calculateRetroPreview(request)) as RetroCalculationResult,
-  // Tauri's command performs the authoritative database-backed preflight.
-  validatePayroll: async () => undefined,
+  validatePayroll: async (request) =>
+    tauriBridge.validatePayrollRequest(
+      request.personnelId,
+      request.periodId,
+      toPayrollBoundaryDto(request.manualIncome ?? null) as unknown as Parameters<
+        typeof tauriBridge.validatePayrollRequest
+      >[2],
+      toPayrollBoundaryDto(request.accrual ?? null) as unknown as Parameters<
+        typeof tauriBridge.validatePayrollRequest
+      >[3]
+    ),
   getPayrollNotices: (periodId) => tauriBridge.getPayrollNotices(periodId),
   getPayrolls: async () =>
     (await tauriBridge.getPayrollList()).map((payroll) =>
@@ -69,6 +89,13 @@ const wasmEngine: PayrollEngine = {
   calculatePayroll: async (request: PayrollCalculationRequest) => {
     const runtime = await getWasmRuntime();
     const json = runtime.calculate_payroll_json(serializePayrollRequestForWasm(request));
+    return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(json);
+  },
+  calculatePayrollWithCompensationPolicy: async (request: PayrollCalculationRequest) => {
+    const runtime = await getWasmRuntime();
+    const json = runtime.calculate_compensation_policy_payroll_json(
+      serializePayrollRequestForWasm(request)
+    );
     return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(json);
   },
   calculateRetroPreview: async (request: RetroCalculationRequest) => {
@@ -106,33 +133,32 @@ const wasmEngine: PayrollEngine = {
     );
     if (!current) throw new Error('Bordro kaydı bulunamadı.');
     const runtime = await getWasmRuntime();
-    const json = runtime.finalize_payroll_json(
-      serializePayrollRequestForWasm({
-        personnelId,
-        periodId,
-        calculatedAt: new Date().toISOString(),
-        manualIncome: {
-          tediye: current.accrualType === 'NORMAL' ? current.gelirler.tediye : null,
-          tisIkramiyesi: current.accrualType === 'NORMAL' ? current.gelirler.tisIkramiyesi : null,
-        },
-        accrual: {
-          accrualId: current.accrualId,
-          accrualType: current.accrualType,
-          paymentDate: current.paymentDate,
-          sequence: current.sequence,
-          grossAmount:
-            current.accrualType === 'TEDIYE'
-              ? current.gelirler.tediye
-              : current.accrualType === 'TIS_IKRAMIYE'
-                ? current.gelirler.tisIkramiyesi
-                : current.accrualType === 'SUPPLEMENTAL'
-                  ? current.gelirler.ekOdeme
-                  : null,
-          description: current.accrualDescription ?? null,
-        },
-        dataset,
-      })
-    );
+    const requestJson = serializePayrollRequestForWasm({
+      personnelId,
+      periodId,
+      calculatedAt: new Date().toISOString(),
+      manualIncome: {
+        tediye: current.accrualType === 'NORMAL' ? current.gelirler.tediye : null,
+        tisIkramiyesi: current.accrualType === 'NORMAL' ? current.gelirler.tisIkramiyesi : null,
+      },
+      accrual: {
+        accrualId: current.accrualId,
+        accrualType: current.accrualType,
+        paymentDate: current.paymentDate,
+        sequence: current.sequence,
+        grossAmount:
+          current.accrualType === 'TEDIYE'
+            ? current.gelirler.tediye
+            : current.accrualType === 'TIS_IKRAMIYE'
+              ? current.gelirler.tisIkramiyesi
+              : current.accrualType === 'SUPPLEMENTAL'
+                ? current.gelirler.ekOdeme
+                : null,
+        description: current.accrualDescription ?? null,
+      },
+      dataset,
+    });
+    const json = runtime.finalize_payroll_json(requestJson);
     return parseWasmPayrollBoundaryResult<PayrollBoundaryPayroll>(json);
   },
   evaluateMutationPolicy: async (mutation, dataset) => {

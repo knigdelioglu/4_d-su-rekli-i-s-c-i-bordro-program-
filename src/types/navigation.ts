@@ -8,6 +8,7 @@ export type TabType =
   | 'sgkKontrol'
   | 'kesintiler'
   | 'parametrelar'
+  | 'compensationPolicy'
   | 'veri';
 
 export const TAB_TYPES: readonly TabType[] = [
@@ -20,6 +21,7 @@ export const TAB_TYPES: readonly TabType[] = [
   'sgkKontrol',
   'kesintiler',
   'parametrelar',
+  'compensationPolicy',
   'veri',
 ];
 

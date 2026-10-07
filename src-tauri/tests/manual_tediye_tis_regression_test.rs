@@ -7,10 +7,13 @@ use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
+use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use rusqlite::params;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn person(id: &str) -> Personel {
     Personel {
@@ -74,6 +77,21 @@ fn setup(personnel_id: &str) -> Result<rusqlite::Connection> {
         ..DonemselKurumDegerleri::default()
     };
     SettingsRepository::save_institution_settings(&conn, &settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &d, &settings)?;
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: format!("{personnel_id}-opening-2026"),
+            personnelId: p.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: Some(dec!(0)),
+            effectiveFromPeriodId: Some(d.id.clone()),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some(d.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
     let mut gunler = HashMap::new();
     gunler.insert("2026-05-15".into(), "Ç".into());
     AttendanceRepository::save(

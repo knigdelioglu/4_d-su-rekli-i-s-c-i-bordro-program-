@@ -4,7 +4,9 @@ use crate::domain::calculations::{
 };
 use crate::domain::models::*;
 use crate::domain::{DomainError, Result};
+use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
+use crate::repositories::period_repo::PeriodRepository;
 use chrono::{Datelike, NaiveDate, Utc};
 use payroll_core::PayrollMutation;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -23,10 +25,10 @@ struct PayrollDependencyFingerprint {
     damga_snapshot_json: Option<String>,
     statutory_snapshot_json: Option<String>,
     pek_detail_json: Option<String>,
+    calculation_metadata_json: Option<String>,
 }
 
 type ExistingPayrollIdentity = (String, String, String, String, String, String, i32);
-
 pub struct PayrollRepository;
 
 impl PayrollRepository {
@@ -110,6 +112,50 @@ impl PayrollRepository {
                 "{} bordrosunun ödeme tarihi {} dönem vergi ayı {:04}-{:02} ile eşleşmiyor.",
                 bordro.accrualId, bordro.paymentDate, tax_year, tax_month
             )));
+        }
+        Ok(())
+    }
+
+    fn validate_calculation_metadata(conn: &Connection, bordro: &BordroKaydi) -> Result<()> {
+        let period = PeriodRepository::get_by_id(conn, &bordro.donemId)?.ok_or_else(|| {
+            DomainError::NotFound(format!("Bordro dönemi bulunamadı: {}", bordro.donemId))
+        })?;
+        let source_payrolls = Self::get_for_personnel(conn, &bordro.personelId)?;
+        let source_periods = PeriodRepository::get_all(conn)?;
+        payroll_core::validate_payroll_calculation_metadata_with_context(
+            bordro,
+            &period,
+            &source_payrolls,
+            &source_periods,
+        )
+        .map_err(|error| {
+            DomainError::ValidationError(format!(
+                "{} bordrosunun calculationMetadata alanı geçersiz: {}",
+                bordro.id, error
+            ))
+        })?;
+        if let Some(snapshot) = bordro
+            .calculationMetadata
+            .as_ref()
+            .and_then(|metadata| metadata.snapshot.as_ref())
+        {
+            let policy_ids = snapshot
+                .compensation
+                .segments
+                .iter()
+                .map(|segment| segment.versionId.clone())
+                .collect::<std::collections::HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            let versions = CompensationPolicyRepository::get_versions_by_ids(conn, &policy_ids)?;
+            payroll_core::validate_compensation_snapshot_policy_links(bordro, &versions).map_err(
+                |error| {
+                    DomainError::InvalidData(format!(
+                        "{} bordrosunun snapshot policy bağlantısı geçersiz: {error}",
+                        bordro.id
+                    ))
+                },
+            )?;
         }
         Ok(())
     }
@@ -564,7 +610,7 @@ impl PayrollRepository {
         accrual_id: &str,
     ) -> Result<Option<PayrollDependencyFingerprint>> {
         conn.query_row(
-            "SELECT gv_base, sgk_base, new_cumulative_gv, net_payment, sonraki_devreden_pek_json, gv_snapshot_json, damga_snapshot_json, statutory_snapshot_json, pek_detail_json
+            "SELECT gv_base, sgk_base, new_cumulative_gv, net_payment, sonraki_devreden_pek_json, gv_snapshot_json, damga_snapshot_json, statutory_snapshot_json, pek_detail_json, calculation_metadata_json
              FROM payroll_records
              WHERE personnel_id = ?1 AND period_id = ?2 AND accrual_id = ?3",
             params![personnel_id, period_id, accrual_id],
@@ -579,6 +625,7 @@ impl PayrollRepository {
                     damga_snapshot_json: row.get(6)?,
                     statutory_snapshot_json: row.get(7)?,
                     pek_detail_json: row.get(8)?,
+                    calculation_metadata_json: row.get(9)?,
                 })
             },
         )
@@ -753,6 +800,10 @@ impl PayrollRepository {
             ));
         }
 
+        if current_status == BordroStatus::FINALIZED {
+            return Ok(());
+        }
+
         if status == BordroStatus::FINALIZED {
             if current_status == BordroStatus::STALE {
                 return Err(DomainError::ValidationError(
@@ -771,6 +822,15 @@ impl PayrollRepository {
                     "Bu bordro kesinleştirilemez: aynı vergi yılındaki önceki mevcut bordrolar önce FINALIZED olmalıdır.".into(),
                 ));
             }
+            let mut payroll = Self::get_for_personnel(conn, personnel_id)?
+                .into_iter()
+                .find(|payroll| {
+                    payroll.donemId == period_id
+                        && Self::effective_accrual_id(payroll) == accrual_id
+                })
+                .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+            payroll.status = BordroStatus::FINALIZED;
+            Self::validate_calculation_metadata(conn, &payroll)?;
         }
 
         let updated_at = Utc::now().to_rfc3339();
@@ -1002,6 +1062,18 @@ impl PayrollRepository {
         json.map(|value| Self::parse_json(value, field)).transpose()
     }
 
+    fn parse_calculation_metadata_json(
+        json: Option<&str>,
+        field: &str,
+    ) -> Result<Option<PayrollCalculationMetadata>> {
+        let Some(json) = json else {
+            return Ok(None);
+        };
+        serde_json::from_str(json)
+            .map(Some)
+            .map_err(|error| DomainError::InvalidData(format!("{} geçersiz: {}", field, error)))
+    }
+
     fn serialize_json<T: Serialize>(value: &T, field: &str) -> Result<String> {
         serde_json::to_string(value)
             .map_err(|e| DomainError::InvalidData(format!("{} serileştirilemedi: {}", field, e)))
@@ -1014,6 +1086,12 @@ impl PayrollRepository {
         value
             .map(|item| Self::serialize_json(item, field))
             .transpose()
+    }
+
+    fn serialize_calculation_metadata_json(
+        metadata: Option<&PayrollCalculationMetadata>,
+    ) -> Result<Option<String>> {
+        Self::serialize_optional_json(metadata, "calculationMetadata")
     }
 
     fn set_income_item(
@@ -1094,7 +1172,7 @@ impl PayrollRepository {
                         pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                         calculated_at, updated_at, raporlu_gun, odenen_raporlu_gun,
                         is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json,
-                        damga_snapshot_json, notlar
+                        damga_snapshot_json, notlar, calculation_metadata_json
                  FROM payroll_records
                  WHERE (?1 IS NULL OR personnel_id = ?1)",
             )
@@ -1130,6 +1208,7 @@ impl PayrollRepository {
                     row.get::<_, Option<String>>(24)?,
                     row.get::<_, Option<String>>(25)?,
                     row.get::<_, Option<String>>(26)?,
+                    row.get::<_, Option<String>>(27)?,
                 ))
             })
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
@@ -1228,6 +1307,7 @@ impl PayrollRepository {
             statutory_snapshot_json,
             damga_snapshot_json,
             notlar,
+            calculation_metadata_json,
         ) in raw_records
         {
             let status = Self::parse_status(&id, &status_str)?;
@@ -1262,6 +1342,10 @@ impl PayrollRepository {
             let damga_detay = Self::parse_optional_json(
                 damga_snapshot_json.as_deref(),
                 &format!("{} damga vergisi snapshot'ı", id),
+            )?;
+            let calculation_metadata = Self::parse_calculation_metadata_json(
+                calculation_metadata_json.as_deref(),
+                &format!("{} calculationMetadata", id),
             )?;
             let gelirler = income_by_payroll.remove(&id).unwrap_or_default();
             let kesintiler = deductions_by_payroll.remove(&id).unwrap_or_default();
@@ -1301,6 +1385,7 @@ impl PayrollRepository {
                 statutorySnapshot: statutory_snapshot,
                 odenenRaporluGun: odenen_raporlu_gun,
                 raporluGun: raporlu_gun,
+                calculationMetadata: calculation_metadata,
             });
         }
 
@@ -1513,6 +1598,7 @@ impl PayrollRepository {
         preserve_imported_updated_at: bool,
     ) -> Result<()> {
         Self::validate_payment_date_matches_period(conn, b)?;
+        Self::validate_calculation_metadata(conn, b)?;
         // Even the explicit legacy compatibility path must keep ordinary
         // payroll line items non-negative and must reject a split GV
         // authority. It intentionally skips only the aggregate/tax snapshot
@@ -1680,6 +1766,9 @@ impl PayrollRepository {
         let damga_snapshot_json =
             Self::serialize_optional_json(b.damgaDetay.as_ref(), "Damga vergisi snapshot'ı")?;
 
+        let calculation_metadata_json =
+            Self::serialize_calculation_metadata_json(b.calculationMetadata.as_ref())?;
+
         conn.execute(
             "INSERT INTO payroll_records (
                 id, personnel_id, period_id, accrual_id, accrual_type, payment_date, sequence,
@@ -1687,9 +1776,10 @@ impl PayrollRepository {
                 new_cumulative_gv, income_tax, stamp_tax, total_deductions, net_payment, status,
                 puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
                 raporlu_gun, odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json,
-                statutory_snapshot_json, damga_snapshot_json, notlar, calculated_at, updated_at
+                statutory_snapshot_json, damga_snapshot_json, notlar, calculated_at, updated_at,
+                calculation_metadata_json
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
-                       ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)
+                       ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32)
              ON CONFLICT(id) DO UPDATE SET
                 personnel_id=?2, period_id=?3, accrual_id=?4, accrual_type=?5,
                 payment_date=?6, sequence=?7, accrual_description=?8, gross_total=?9,
@@ -1698,7 +1788,8 @@ impl PayrollRepository {
                 puantaj_summary_json=?19, pek_detail_json=?20, devreden_pek_gelen_json=?21,
                 sonraki_devreden_pek_json=?22, raporlu_gun=?23, odenen_raporlu_gun=?24,
                 is_primi_snapshot_json=?25, gv_snapshot_json=?26, statutory_snapshot_json=?27,
-                damga_snapshot_json=?28, notlar=?29, calculated_at=?30, updated_at=?31",
+                damga_snapshot_json=?28, notlar=?29, calculated_at=?30, updated_at=?31,
+                calculation_metadata_json=?32",
             params![
                 b.id,
                 b.personelId,
@@ -1731,6 +1822,7 @@ impl PayrollRepository {
                 b.notlar,
                 calculated_at,
                 updated_at,
+                calculation_metadata_json,
             ],
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;

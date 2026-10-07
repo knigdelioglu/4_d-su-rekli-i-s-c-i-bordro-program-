@@ -1,5 +1,7 @@
 #[path = "support/independent_audit.rs"]
 mod audit_support;
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 use chrono::NaiveDate;
 use payroll_core::*;
@@ -24,7 +26,7 @@ fn canonical_period(year: i32, month: i32) -> BordroDonemi {
     }
 }
 
-fn period_and_settings() -> (BordroDonemi, DonemselKurumDegerleri) {
+fn period_and_settings() -> (BordroDonemi, PayrollPeriodInstitutionSettings) {
     let request = audit_support::request();
     let period = request.dataset.periods[0].clone();
     let settings = request
@@ -215,23 +217,16 @@ fn manual_payroll_income_rejects_negative_optional_lines_at_public_boundary() {
 #[test]
 fn raise_split_merges_work_premium_details_with_exact_weighted_values() {
     let mut request = audit_support::request();
-    request.dataset.zamAylari = vec![2];
-
-    let current_settings = request
-        .dataset
-        .institutionSettings
-        .get_mut(&request.periodId)
-        .expect("current settings");
-    current_settings.gunlukTabanUcret = dec!(1000);
-    current_settings.gunlukYemek = Decimal::ZERO;
-    let current_group = current_settings
-        .isPrimiGruplari
-        .as_mut()
-        .expect("current groups")
-        .first_mut()
-        .expect("current group");
-    current_group.ad = "current".into();
-    current_group.oran = dec!(9);
+    let active_period = request.dataset.periods[0].clone();
+    let mut previous_state = request.dataset.compensationPolicyVersions[0].state.clone();
+    previous_state.gunlukTabanUcret = dec!(2000);
+    previous_state.isPrimiGruplari[0].ad = "previous".into();
+    previous_state.isPrimiGruplari[0].oran = dec!(8);
+    let mut current_state = previous_state.clone();
+    current_state.gunlukTabanUcret = dec!(1000);
+    current_state.gunlukYemek = Decimal::ZERO;
+    current_state.isPrimiGruplari[0].ad = "current".into();
+    current_state.isPrimiGruplari[0].oran = dec!(9);
 
     let mut previous_period = request.dataset.periods[0].clone();
     previous_period.id = "audit-dec".into();
@@ -250,20 +245,23 @@ fn raise_split_merges_work_premium_details_with_exact_weighted_values() {
         .expect("current settings")
         .clone();
     previous_settings.donemId = previous_period.id.clone();
-    previous_settings.gunlukTabanUcret = dec!(2000);
-    let previous_group = previous_settings
-        .isPrimiGruplari
-        .as_mut()
-        .expect("previous groups")
-        .first_mut()
-        .expect("previous group");
-    previous_group.ad = "previous".into();
-    previous_group.oran = dec!(8);
     request.dataset.periods.push(previous_period);
     request
         .dataset
         .institutionSettings
         .insert("audit-dec".into(), previous_settings);
+    compensation_policy_test_support::replace_period_baseline_from_state(
+        &mut request.dataset,
+        &active_period,
+        previous_state,
+    );
+    let mut after_raise = compensation_policy_test_support::baseline_version_from_state(
+        &active_period,
+        current_state,
+    );
+    after_raise.id = "quality-explicit-february-policy".into();
+    after_raise.effectiveFrom = "2026-02-01".into();
+    request.dataset.compensationPolicyVersions.push(after_raise);
 
     for value in request.dataset.attendances[0].gunler.values_mut() {
         *value = "T".into();
@@ -310,23 +308,16 @@ fn raise_split_merges_work_premium_details_with_exact_weighted_values() {
 #[test]
 fn raise_split_with_no_after_raise_premium_keeps_the_before_raise_group() {
     let mut request = audit_support::request();
-    request.dataset.zamAylari = vec![2];
-
-    let current_settings = request
-        .dataset
-        .institutionSettings
-        .get_mut(&request.periodId)
-        .expect("current settings");
-    current_settings.gunlukTabanUcret = dec!(1000);
-    current_settings.gunlukYemek = Decimal::ZERO;
-    let current_group = current_settings
-        .isPrimiGruplari
-        .as_mut()
-        .expect("current groups")
-        .first_mut()
-        .expect("current group");
-    current_group.ad = "current".into();
-    current_group.oran = dec!(9);
+    let active_period = request.dataset.periods[0].clone();
+    let mut previous_state = request.dataset.compensationPolicyVersions[0].state.clone();
+    previous_state.gunlukTabanUcret = dec!(2000);
+    previous_state.isPrimiGruplari[0].ad = "previous".into();
+    previous_state.isPrimiGruplari[0].oran = dec!(8);
+    let mut current_state = previous_state.clone();
+    current_state.gunlukTabanUcret = dec!(1000);
+    current_state.gunlukYemek = Decimal::ZERO;
+    current_state.isPrimiGruplari[0].ad = "current".into();
+    current_state.isPrimiGruplari[0].oran = dec!(9);
 
     let mut previous_period = request.dataset.periods[0].clone();
     previous_period.id = "audit-dec".into();
@@ -344,20 +335,23 @@ fn raise_split_with_no_after_raise_premium_keeps_the_before_raise_group() {
         .expect("current settings")
         .clone();
     previous_settings.donemId = previous_period.id.clone();
-    previous_settings.gunlukTabanUcret = dec!(2000);
-    let previous_group = previous_settings
-        .isPrimiGruplari
-        .as_mut()
-        .expect("previous groups")
-        .first_mut()
-        .expect("previous group");
-    previous_group.ad = "previous".into();
-    previous_group.oran = dec!(8);
     request.dataset.periods.push(previous_period);
     request
         .dataset
         .institutionSettings
         .insert("audit-dec".into(), previous_settings);
+    compensation_policy_test_support::replace_period_baseline_from_state(
+        &mut request.dataset,
+        &active_period,
+        previous_state,
+    );
+    let mut after_raise = compensation_policy_test_support::baseline_version_from_state(
+        &active_period,
+        current_state,
+    );
+    after_raise.id = "quality-no-premium-february-policy".into();
+    after_raise.effectiveFrom = "2026-02-01".into();
+    request.dataset.compensationPolicyVersions.push(after_raise);
 
     for value in request.dataset.attendances[0].gunler.values_mut() {
         *value = "T".into();
@@ -699,14 +693,21 @@ fn normal_with_icra(icra: Decimal) -> PayrollCalculationRequest {
     settings.damgaVergisiOraniBinde = Some(Decimal::ZERO);
     settings.sendikaAidatiYuzde = Some(Decimal::ZERO);
     settings.besOraniYuzde = Some(Decimal::ZERO);
-    settings.gunlukTabanUcret = dec!(100);
-    settings.gunlukYemek = Decimal::ZERO;
     for value in request.dataset.attendances[0].gunler.values_mut() {
         *value = "R".into();
     }
     request.dataset.attendances[0]
         .gunler
         .insert("2026-01-15".into(), "Ç".into());
+    let period = request.dataset.periods[0].clone();
+    let policy = request
+        .dataset
+        .compensationPolicyVersions
+        .iter_mut()
+        .find(|version| version.effectiveFrom == period.baslangicTarihi)
+        .expect("baseline policy");
+    policy.state.gunlukTabanUcret = dec!(100);
+    policy.state.gunlukYemek = Decimal::ZERO;
     request
 }
 
@@ -1088,6 +1089,16 @@ fn same_month_reconciliation_does_not_promote_a_normal_prior_event_to_provisiona
         .dataset
         .institutionSettings
         .insert("audit-dec".into(), previous_settings);
+    let previous_state = previous_request.dataset.compensationPolicyVersions[0]
+        .state
+        .clone();
+    previous_request.dataset.compensationPolicyVersions.clear();
+    previous_request.dataset.compensationPolicyVersions.push(
+        compensation_policy_test_support::baseline_version_from_state(
+            previous_period,
+            previous_state,
+        ),
+    );
     let previous_attendance = &mut previous_request.dataset.attendances[0];
     previous_attendance.id = "audit-dec-attendance".into();
     previous_attendance.donemId = "audit-dec".into();
@@ -1140,7 +1151,7 @@ fn same_month_reconciliation_does_not_promote_a_normal_prior_event_to_provisiona
 }
 
 #[test]
-fn legacy_supplementary_snapshots_preserve_wage_and_net_meal_components() {
+fn legacy_supplementary_without_statutory_provenance_fails_closed() {
     let mut first_request =
         audit_support::supplementary(audit_support::request(), AccrualType::TEDIYE);
     first_request.dataset.attendances.clear();
@@ -1191,22 +1202,13 @@ fn legacy_supplementary_snapshots_preserve_wage_and_net_meal_components() {
     }
     normal_request.dataset.payrolls.extend([first, second]);
 
-    let normal = calculate_payroll(&normal_request).expect("normal payment with legacy sources");
-    let pek = normal.pekDetay.as_ref().expect("normal PEK detail");
-    assert_eq!(pek.aylikOncekiPekTuketimi, Some(dec!(15000)));
-    assert_eq!(pek.aylikSonrasiPekTuketimi, Some(dec!(99090)));
-    assert_eq!(pek.primMatrahi, dec!(20000));
-    let outgoing = normal
-        .sonrakiDevredenPek
-        .as_ref()
-        .expect("legacy non-wage carry");
-    assert_eq!(outgoing.len(), 1);
-    assert_eq!(outgoing[0].tutar, dec!(145910));
-    assert_eq!(outgoing[0].kalanAySayisi, 2);
+    let error = calculate_payroll(&normal_request)
+        .expect_err("missing statutory provenance must not produce a compensable source snapshot");
+    assert!(error.to_string().contains("statutory provenance eksik"));
 }
 
 #[test]
-fn legacy_wage_snapshot_handles_zero_and_non_wage_capacity_edges() {
+fn legacy_wage_without_statutory_provenance_fails_closed() {
     let mut prior_request =
         audit_support::supplementary(audit_support::request(), AccrualType::TEDIYE);
     prior_request.dataset.attendances.clear();
@@ -1228,24 +1230,14 @@ fn legacy_wage_snapshot_handles_zero_and_non_wage_capacity_edges() {
         date += chrono::Duration::days(1);
     }
     zero_meal_request.dataset.payrolls.push(prior.clone());
-    let zero_meal = calculate_payroll(&zero_meal_request).expect("zero non-wage capacity edge");
-    assert_eq!(
-        zero_meal.pekDetay.as_ref().unwrap().aylikOncekiPekTuketimi,
-        Some(dec!(99090))
-    );
-    assert_eq!(zero_meal.sonrakiDevredenPek, Some(Vec::new()));
+    let error = calculate_payroll(&zero_meal_request)
+        .expect_err("missing statutory provenance must fail closed");
+    assert!(error.to_string().contains("statutory provenance eksik"));
 
     let mut non_wage_request = audit_support::request();
-    non_wage_request
-        .dataset
-        .institutionSettings
-        .get_mut("audit-jan")
-        .unwrap()
-        .isPrimiGruplari
-        .as_mut()
-        .unwrap()
-        .first_mut()
-        .unwrap()
+    non_wage_request.dataset.compensationPolicyVersions[0]
+        .state
+        .isPrimiGruplari[0]
         .oran = dec!(10);
     for value in non_wage_request.dataset.attendances[0].gunler.values_mut() {
         *value = "R".into();
@@ -1258,16 +1250,9 @@ fn legacy_wage_snapshot_handles_zero_and_non_wage_capacity_edges() {
         date += chrono::Duration::days(1);
     }
     non_wage_request.dataset.payrolls.push(prior);
-    let non_wage = calculate_payroll(&non_wage_request).expect("current non-wage edge");
-    let pek = non_wage.pekDetay.as_ref().expect("non-wage PEK detail");
-    assert_eq!(pek.aylikSonrasiPekTuketimi, Some(dec!(99090)));
-    let outgoing = non_wage
-        .sonrakiDevredenPek
-        .as_ref()
-        .expect("current meal excess carry");
-    assert_eq!(outgoing.len(), 1);
-    assert_eq!(outgoing[0].tutar, dec!(2000));
-    assert_eq!(outgoing[0].kalanAySayisi, 2);
+    let error = calculate_payroll(&non_wage_request)
+        .expect_err("missing statutory provenance must fail closed");
+    assert!(error.to_string().contains("statutory provenance eksik"));
 }
 
 #[test]
@@ -1350,12 +1335,21 @@ fn skipped_tax_month_expires_a_two_month_pek_carry_exactly() {
                 .clone(),
         );
     }
-    december_request
+    let december_period = december_request
         .dataset
-        .institutionSettings
-        .get_mut(&december_request.periodId)
-        .expect("December settings")
-        .gunlukTabanUcret = dec!(9000);
+        .periods
+        .iter()
+        .find(|period| period.id == december_request.periodId)
+        .expect("December period")
+        .clone();
+    let december_policy = december_request
+        .dataset
+        .compensationPolicyVersions
+        .iter_mut()
+        .find(|version| version.effectiveFrom == december_period.baslangicTarihi)
+        .expect("December baseline policy");
+    december_policy.state.gunlukTabanUcret = dec!(9000);
+    december_request.dataset.taxOpenings.clear();
     december_request.dataset.payrolls.push(october);
 
     let december = calculate_payroll_checked(&december_request)
@@ -1411,6 +1405,7 @@ fn insurance_gv_usage_is_carried_only_from_prior_tax_events() {
     );
 
     let mut current_request = audit_support::dated_request(2026, 2);
+    current_request.dataset.taxOpenings.clear();
     current_request.dataset.periods.push(
         previous_request
             .dataset

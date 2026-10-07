@@ -1,0 +1,470 @@
+{
+  "bordrolar": [
+    {
+      "accrualDescription": null,
+      "accrualId": "person-1_2026-01",
+      "accrualType": "NORMAL",
+      "calculationMetadata": {
+        "provenance": "COMPENSATION_POLICY_ENGINE",
+        "snapshot": {
+          "calculationVersion": "compensation-engine-v1",
+          "compensation": {
+            "segments": [
+              {
+                "boundaryScope": "FULL_EARNING",
+                "endDate": "2026-02-14",
+                "roadRoundingMode": "PER_COMPENSATION_SLICE",
+                "startDate": "2026-01-15",
+                "state": {
+                  "birlestirilmisSosyalYardim": "0",
+                  "digerGelirVarsayilan": null,
+                  "ekOdeme": "0",
+                  "geceCalismaPrimiYuzde": "0",
+                  "geceCalismaTatiliPrimiYuzde": "0",
+                  "giyimYardimi": "0",
+                  "gunlukTabanUcret": "2443.281234567",
+                  "gunlukVasitaYol": "0",
+                  "gunlukYemek": "0",
+                  "hizmetZammiBirimi": "0",
+                  "isPrimiGruplari": [
+                    {
+                      "ad": "Grup 1",
+                      "aktif": true,
+                      "id": "g1",
+                      "oran": "10"
+                    }
+                  ],
+                  "isPrimiYuzde": "0"
+                },
+                "versionId": "policy-v1"
+              }
+            ]
+          },
+          "snapshotSchemaVersion": 2,
+          "usedInputs": {
+            "accrualGrossAmount": null,
+            "annualParameters": {
+              "gelirVergisiDilimleri": [
+                {
+                  "limit": "1000000",
+                  "oran": "0.15"
+                }
+              ],
+              "sigortaGvYillikBrutAsgariUcretTavani": "100000",
+              "year": 2026
+            },
+            "attendance": {
+              "coverage": "COMPLETE",
+              "days": [
+                {
+                  "code": "Ç",
+                  "date": "2026-01-15"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-16"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-17"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-18"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-19"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-20"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-21"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-22"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-23"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-24"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-25"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-26"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-27"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-28"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-29"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-30"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-01-31"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-01"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-02"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-03"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-04"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-05"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-06"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-07"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-08"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-09"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-10"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-11"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-12"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-13"
+                },
+                {
+                  "code": "Ç",
+                  "date": "2026-02-14"
+                }
+              ]
+            },
+            "incomingPekCarry": {
+              "records": [],
+              "source": "NONE",
+              "sourceId": null,
+              "sourcePeriodId": null,
+              "sourceTaxMonth": null,
+              "sourceTaxYear": null,
+              "taxMonthsElapsed": 0
+            },
+            "institutionDeductionSettings": {
+              "besOraniYuzde": "3",
+              "damgaVergisiOraniBinde": "7.59",
+              "sabitBesTutar": null,
+              "sabitSendikaAidati": null,
+              "sendikaAidatiYuzde": "65",
+              "yemekTamGvIstisnaDamgaTabi": true
+            },
+            "manualIncome": {
+              "supplied": true,
+              "tediye": "0",
+              "tisIkramiyesi": null
+            },
+            "paidSickLeave": {
+              "paidDates": [],
+              "ruleVersion": "first-two-days-first-five-episodes-by-start-year-v1",
+              "sourceEpisodes": []
+            },
+            "personalDeductions": null,
+            "personnelGroup": "g1",
+            "serviceYear": 4,
+            "statutoryParameters": {
+              "gunlukAsgariUcret": "1000",
+              "gunlukYemekIstisnasiGV": "0",
+              "gunlukYemekIstisnasiSGK": "0",
+              "issizlikIsciOraniYuzde": "1",
+              "issizlikIsverenOraniYuzde": "2",
+              "pekTavanKatsayisi": "7.5",
+              "sgkIsciOraniYuzde": "14",
+              "sgkIsverenOraniYuzde": "21.75",
+              "statutoryParameterSegments": []
+            },
+            "taxHistory": {
+              "minimumWageGvOpening": {
+                "amount": "0",
+                "effectiveFromTaxMonth": 2,
+                "effectiveFromTaxYear": 2026,
+                "openingId": "minimum-opening-2026-02",
+                "source": "EXPLICIT_OPENING"
+              },
+              "minimumWageMonthlyReferences": [],
+              "normalGvOpening": {
+                "amount": "1.234",
+                "effectiveFromTaxMonth": 1,
+                "effectiveFromTaxYear": 2026,
+                "openingId": "normal-opening-2026",
+                "source": "EXPLICIT_OPENING"
+              },
+              "previousAnnualInsuranceGvDeduction": "0.01",
+              "previousCumulativeGv": "1.24",
+              "previousCumulativeMinimumWageGv": "0",
+              "previousPaymentEvents": [
+                {
+                  "accrualId": "prior-payment-event",
+                  "accrualType": "NORMAL",
+                  "gvExemptionUsed": "0.006",
+                  "gvTaxableBase": "0.004",
+                  "income": {
+                    "birlestirilmisSosyalYardim": null,
+                    "digerGelir": null,
+                    "ekOdeme": null,
+                    "geceCalismasiTatiliUcreti": null,
+                    "geceCalismasiUcreti": null,
+                    "giyimYardimi": null,
+                    "hizmetZammi": null,
+                    "isPrimi": null,
+                    "tabanBrutAylik": null,
+                    "tediye": null,
+                    "tisIkramiyesi": null,
+                    "vasitaYol": null,
+                    "yemek": null
+                  },
+                  "insuranceGvDeductionUsed": "0.006",
+                  "mealSgkExemption": "0",
+                  "monthPekConsumptionAfter": "100.006",
+                  "outgoingPekCarry": [],
+                  "paymentDate": "2026-01-05",
+                  "pekCeiling": "100000",
+                  "pekPrimeBase": "80",
+                  "periodId": "2025-12",
+                  "sequence": 0,
+                  "stampExemptionUsed": "0.006",
+                  "taxMonth": 1,
+                  "taxYear": 2026
+                }
+              ],
+              "samePaymentMonthGvExemptionUsed": "0",
+              "samePaymentMonthPekUsed": "0",
+              "samePaymentMonthStampExemptionUsed": "0"
+            }
+          }
+        }
+      },
+      "damgaDetay": {
+        "aylikDamgaIstisnaHakki": "227.70",
+        "ayniAyOncekiKullanilanDamgaIstisnasi": "0",
+        "brutDamgaVergisi": "632.37",
+        "kalanDamgaIstisnasi": "0.00",
+        "kesilenDamgaVergisi": "404.67",
+        "uygulananDamgaIstisnasi": "227.70"
+      },
+      "devredenPekGelen": [],
+      "donemId": "2026-01",
+      "gelirToplam": "83315.89",
+      "gelirler": {
+        "birlestirilmisSosyalYardim": "0",
+        "digerGelir": null,
+        "ekOdeme": "0",
+        "geceCalismasiTatiliUcreti": "0",
+        "geceCalismasiUcreti": "0",
+        "giyimYardimi": "0",
+        "hizmetZammi": "0",
+        "isPrimi": "7574.17",
+        "tabanBrutAylik": "75741.72",
+        "tediye": "0",
+        "tisIkramiyesi": null,
+        "vasitaYol": "0",
+        "yemek": "0"
+      },
+      "gvDetay": {
+        "asgariUcretGvIstisnasi": "3825.00",
+        "asgariUcretGvMatrahi": "25500.00",
+        "asgariUcretReferansKumulatifMatrahi": "25500.00",
+        "ayniAyOncekiKullanilanGvIstisnasi": "0",
+        "brutGelirVergisi": "10622.78",
+        "cariGvMatrahi": "70818.51",
+        "dogumAskerlikGvIndirimi": "0",
+        "kesilenGelirVergisi": "6797.78",
+        "oncekiKumulatifGvMatrahi": "1.24",
+        "sigortaGvAylikLimiti": "12497.38",
+        "sigortaGvIndirimAdayi": "0",
+        "sigortaGvYillikKalanLimiti": "99999.99",
+        "tahakkukOncesiKalanGvIstisnasi": "3825.00",
+        "tahakkukSonrasiKalanGvIstisnasi": "0.00",
+        "uygulanabilirSigortaGvIndirimi": "0",
+        "uygulananGvIstisnasi": "3825.00",
+        "yeniKumulatifGvMatrahi": "70819.75"
+      },
+      "id": "person-1_2026-01",
+      "isPrimiDetay": {
+        "grupAd": "Grup 1",
+        "grupId": "g1",
+        "gunlukIsPrimi": "244.33",
+        "hakGunu": 31,
+        "oran": "10",
+        "tutar": "7574.17"
+      },
+      "kesintiToplam": "19699.83",
+      "kesintiler": {
+        "bes": "0",
+        "damgaVergisi": "404.67",
+        "digerKesinti": null,
+        "dogumAskerlikBorclanmasi": null,
+        "gelirVergisi": "6797.78",
+        "hayatSaglikSigortasi": null,
+        "icra": null,
+        "isciIssizlikPrimi": "833.16",
+        "isciSgkPrimi": "11664.22",
+        "kisiBorcu": null,
+        "sendikaAidati": "0"
+      },
+      "manuelKumulatifGvMatrahi": null,
+      "netOdeme": "63616.06",
+      "notlar": "Ocak 2026 dönemi hesaplandı.",
+      "odenenRaporluGun": 0,
+      "olusturulmaTarihi": "2026-02-10T00:00:00Z",
+      "oncekiKumulatifAsgariGvMatrahi": "0",
+      "oncekiKumulatifGvMatrahi": "1.24",
+      "paymentDate": "2026-02-10",
+      "pekDetay": {
+        "altSinirTamamlamaFarki": "0",
+        "aylikOncekiPekTuketimi": "0",
+        "aylikSonrasiPekTuketimi": "83315.89",
+        "devredenPekAşanTutar": "0",
+        "devredenPekKullanilan": "0",
+        "fiiliYemekGunu": 31,
+        "finalPek": "83315.89",
+        "hamPek": "83315.89",
+        "hesaplananPek": "83315.89",
+        "isverenIssizlikOraniYuzde": "2",
+        "isverenIssizlikPrimi": "1666.32",
+        "isverenPrimToplami": "19787.53",
+        "isverenSgkPrimi": "18121.21",
+        "pekAltSinir": "30000",
+        "pekAltSinirTamamlamaIsverenPrimi": "0",
+        "pekUstSinir": "225000.0",
+        "primMatrahi": "83315.89",
+        "sgkIsverenOraniYuzde": "21.75",
+        "yemekIstisnasiTutar": "0"
+      },
+      "persistedGvBase": "70818.51",
+      "personelId": "person-1",
+      "puantajOzeti": {
+        "G": 0,
+        "GÇ": 0,
+        "GÇT": 0,
+        "R": 0,
+        "T": 0,
+        "Ç": 31,
+        "İ": 0
+      },
+      "raporluGun": 0,
+      "sequence": 0,
+      "sonGuncellemeTarihi": "2026-02-10T00:00:00Z",
+      "sonrakiDevredenPek": [],
+      "status": "CALCULATED",
+      "statutorySnapshot": {
+        "gvReferansGunlukAsgariUcret": "1000",
+        "gvYemekIstisnasiToplam": "0",
+        "issizlikIsciOraniYuzde": "1",
+        "pekAltSinir": "30000",
+        "pekUstSinir": "225000.0",
+        "segments": [
+          {
+            "effectiveFrom": "2026-01-15",
+            "effectiveTo": "2026-02-14",
+            "sgkPrimGunSayisi": 30,
+            "fiiliYemekGunu": 31,
+            "gunlukAsgariUcret": "1000",
+            "pekTavanKatsayisi": "7.5",
+            "gunlukYemekIstisnasiSGK": "0",
+            "gunlukYemekIstisnasiGV": "0"
+          }
+        ],
+        "sgkIsciOraniYuzde": "14",
+        "sgkPrimGunSayisi": 30,
+        "sgkYemekIstisnasiToplam": "0",
+        "source": "ATTENDANCE_BACKED"
+      }
+    }
+  ],
+  "compensationPolicyVersions": [
+    {
+      "boundaryScope": "FULL_EARNING",
+      "createdAt": "2026-01-15T00:00:00Z",
+      "effectiveFrom": "2026-01-15",
+      "id": "policy-v1",
+      "reason": "V6 structural persistence fixture",
+      "roadRoundingMode": "PER_COMPENSATION_SLICE",
+      "source": "ADMINISTRATIVE_DECISION",
+      "state": {
+        "birlestirilmisSosyalYardim": "0",
+        "digerGelirVarsayilan": null,
+        "ekOdeme": "0",
+        "geceCalismaPrimiYuzde": "0",
+        "geceCalismaTatiliPrimiYuzde": "0",
+        "giyimYardimi": "0",
+        "gunlukTabanUcret": "2443.281234567",
+        "gunlukVasitaYol": "0",
+        "gunlukYemek": "0",
+        "hizmetZammiBirimi": "0",
+        "isPrimiGruplari": [
+          {
+            "ad": "Grup 1",
+            "aktif": true,
+            "id": "g1",
+            "oran": "10"
+          }
+        ],
+        "isPrimiYuzde": "0"
+      },
+      "supersedesVersionId": null
+    }
+  ],
+  "donemler": [
+    {
+      "ay": 1,
+      "baslangicTarihi": "2026-01-15",
+      "bitisTarihi": "2026-02-14",
+      "donemAdi": "Ocak 2026",
+      "id": "2026-01",
+      "taxMonth": 2,
+      "taxYear": 2026,
+      "yil": 2026
+    }
+  ]
+}

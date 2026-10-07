@@ -23,7 +23,7 @@ describe('useBackupController - sample data reset', () => {
     try {
       const controller = useBackupController({
         authoritativePayload: {
-          backupVersion: 5,
+          backupVersion: 6,
           exportedAt: '2026-09-30T00:00:00.000Z',
           ...toPayrollBoundaryDto(getInitialDataset()),
         } as any,
@@ -41,7 +41,7 @@ describe('useBackupController - sample data reset', () => {
 
       await controller.handleExportBackup();
       expect(calls).toHaveLength(1);
-      expect(JSON.parse(calls[0].payload).backupVersion).toBe(5);
+      expect(JSON.parse(calls[0].payload).backupVersion).toBe(6);
       expect(calls[0].fileName).toMatch(/^4D_Bordro_Yedek_2026-09_.*\.json$/);
       expect(successMessages).toEqual(['Yedek dosyası başarıyla kaydedildi.']);
 
@@ -298,6 +298,7 @@ describe('useBackupController - sample data reset', () => {
         backupVersion: 5,
         exportedAt: new Date().toISOString(),
         ...toPayrollBoundaryDto(getInitialDataset()),
+        zamAylari: [],
         compensationRevisions: [],
         compensationRevisionOverrides: [],
         retroBatches: [],

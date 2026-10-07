@@ -1,4 +1,6 @@
-use bordro_programi_lib::db::migrations::{get_migrations, initialize_db};
+use bordro_programi_lib::db::migrations::{
+    get_migrations, initialize_db, COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION,
+};
 use bordro_programi_lib::domain::models::{Personel, PersonelKesintileri};
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use rusqlite::Connection;
@@ -7,7 +9,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const PRE_NAFAKA_LATEST_USER_VERSION: u32 = 18;
+const PRE_COMPENSATION_POLICY_USER_VERSION: u32 = 20;
 
 struct TemporaryDatabase(PathBuf);
 
@@ -61,13 +63,11 @@ fn disk_database_at_previous_latest_version_upgrades_without_losing_personnel(
     {
         let mut conn = Connection::open(&database.0)?;
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        get_migrations().to_latest(&mut conn)?;
+        get_migrations().to_version(&mut conn, PRE_COMPENSATION_POLICY_USER_VERSION as usize)?;
         let latest: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        assert_eq!(latest, PRE_NAFAKA_LATEST_USER_VERSION + 1);
+        assert_eq!(latest, PRE_COMPENSATION_POLICY_USER_VERSION);
 
         PersonnelRepository::save(&conn, &legacy_personnel())?;
-        conn.execute("ALTER TABLE personnel DROP COLUMN nafaka_tutar", [])?;
-        conn.pragma_update(None, "user_version", PRE_NAFAKA_LATEST_USER_VERSION)?;
 
         assert_eq!(
             conn.query_row(
@@ -77,18 +77,21 @@ fn disk_database_at_previous_latest_version_upgrades_without_losing_personnel(
             )?,
             1
         );
-        assert!(!column_exists(&conn, "nafaka_tutar")?);
+        assert!(column_exists(&conn, "nafaka_tutar")?);
     }
 
     {
         let mut conn = Connection::open(&database.0)?;
         let old_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        assert_eq!(old_version, PRE_NAFAKA_LATEST_USER_VERSION);
+        assert_eq!(old_version, PRE_COMPENSATION_POLICY_USER_VERSION);
 
         initialize_db(&mut conn)?;
 
         let upgraded_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        assert_eq!(upgraded_version, PRE_NAFAKA_LATEST_USER_VERSION + 1);
+        assert_eq!(
+            upgraded_version,
+            COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION
+        );
         assert!(column_exists(&conn, "nafaka_tutar")?);
 
         let mut restored = PersonnelRepository::get_by_id(&conn, "p-existing")?
@@ -124,7 +127,7 @@ fn disk_database_at_previous_latest_version_upgrades_without_losing_personnel(
         let mut reopened = Connection::open(&database.0)?;
         initialize_db(&mut reopened)?;
         let version: u32 = reopened.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        assert_eq!(version, PRE_NAFAKA_LATEST_USER_VERSION + 1);
+        assert_eq!(version, COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION);
         let saved = PersonnelRepository::get_by_id(&reopened, "p-existing")?
             .expect("ikinci açılışta personel korunmalı");
         assert_eq!(

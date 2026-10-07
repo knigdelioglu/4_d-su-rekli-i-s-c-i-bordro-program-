@@ -1,5 +1,7 @@
 use bordro_programi_lib::db::create_in_memory_connection;
-use bordro_programi_lib::domain::models::{BordroDonemi, Personel, PersonelPuantaj, SickLeaveRecord};
+use bordro_programi_lib::domain::models::{
+    BordroDonemi, Personel, PersonelPuantaj, SickLeaveRecord,
+};
 use bordro_programi_lib::domain::DomainError;
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
@@ -179,25 +181,22 @@ fn overlapping_atomic_save_leaves_record_and_attendance_unchanged(
     AttendanceRepository::save(&conn, &attendance)?;
     SickLeaveRepository::save_and_sync_attendance(&conn, &leave("a", "2027-03-20", "2027-03-20"))?;
 
-    let before = AttendanceRepository::get_by_personnel_and_period(
-        &conn,
-        "p-sick-overlap",
-        &period.id,
-    )?
-    .expect("attendance exists");
+    let before =
+        AttendanceRepository::get_by_personnel_and_period(&conn, "p-sick-overlap", &period.id)?
+            .expect("attendance exists");
     assert_validation(SickLeaveRepository::save_and_sync_attendance(
         &conn,
         &leave("b", "2027-03-19", "2027-03-21"),
     ));
 
-    let after = AttendanceRepository::get_by_personnel_and_period(
-        &conn,
-        "p-sick-overlap",
-        &period.id,
-    )?
-    .expect("attendance remains");
+    let after =
+        AttendanceRepository::get_by_personnel_and_period(&conn, "p-sick-overlap", &period.id)?
+            .expect("attendance remains");
     assert_eq!(after.gunler, before.gunler);
-    assert_eq!(SickLeaveRepository::get_by_personnel(&conn, "p-sick-overlap")?.len(), 1);
+    assert_eq!(
+        SickLeaveRepository::get_by_personnel(&conn, "p-sick-overlap")?.len(),
+        1
+    );
     assert!(SickLeaveRepository::get_by_id(&conn, "b")?.is_none());
     Ok(())
 }

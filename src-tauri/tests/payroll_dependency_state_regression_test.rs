@@ -13,6 +13,8 @@ use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn period(id: &str, year: i32, month: i32, tax_year: i32, tax_month: i32) -> BordroDonemi {
     let (end_year, end_month) = if month == 12 {
@@ -169,6 +171,7 @@ fn calculated_payroll(
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
         raporluGun: Some(0),
+        calculationMetadata: None,
     }
 }
 
@@ -221,6 +224,12 @@ fn native_finalize_recalculates_through_core_and_persists_finalized_result() {
     PeriodRepository::save(&conn, &active).unwrap();
     SettingsRepository::save_institution_settings(&conn, &settings(&active.id, dec!(1000)))
         .unwrap();
+    compensation_policy_test_support::seed_period_baseline(
+        &conn,
+        &active,
+        &settings(&active.id, dec!(1000)),
+    )
+    .unwrap();
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())
         .unwrap();
     AttendanceRepository::save(&conn, &complete_attendance(&p.id, &active, "Ç")).unwrap();
@@ -361,6 +370,14 @@ fn missing_tax_month_period_fails_closed() {
     let tax_month_3 = period("tax-3", 2026, 2, 2026, 3);
     PeriodRepository::save(&conn, &tax_month_1).unwrap();
     PeriodRepository::save(&conn, &tax_month_3).unwrap();
+    let tax_month_3_settings = settings(&tax_month_3.id, dec!(1000));
+    SettingsRepository::save_institution_settings(&conn, &tax_month_3_settings).unwrap();
+    compensation_policy_test_support::seed_period_baseline(
+        &conn,
+        &tax_month_3,
+        &tax_month_3_settings,
+    )
+    .unwrap();
 
     let error = PayrollPreflightService::validate_for_calculation(&conn, &p.id, &tax_month_3.id)
         .unwrap_err();
@@ -395,7 +412,9 @@ fn stale_future_payroll_does_not_block_recalculation_of_earlier_period() {
         let id = format!("{year}-{month:02}");
         let period = period(&id, year, month, 2026, tax_month);
         PeriodRepository::save(&conn, &period).unwrap();
-        SettingsRepository::save_institution_settings(&conn, &settings(&period.id, dec!(1000)))
+        let period_settings = settings(&period.id, dec!(1000));
+        SettingsRepository::save_institution_settings(&conn, &period_settings).unwrap();
+        compensation_policy_test_support::seed_period_baseline(&conn, &period, &period_settings)
             .unwrap();
         if tax_month == 10 {
             active = Some(period.clone());
@@ -451,7 +470,9 @@ fn finalizing_later_payroll_rejects_prior_stale_event_without_mutating_target() 
         let id = format!("{year}-{month:02}");
         let period = period(&id, year, month, 2026, tax_month);
         PeriodRepository::save(&conn, &period).unwrap();
-        SettingsRepository::save_institution_settings(&conn, &settings(&period.id, dec!(1000)))
+        let period_settings = settings(&period.id, dec!(1000));
+        SettingsRepository::save_institution_settings(&conn, &period_settings).unwrap();
+        compensation_policy_test_support::seed_period_baseline(&conn, &period, &period_settings)
             .unwrap();
         if tax_month == 10 {
             prior = Some(period);
@@ -466,11 +487,11 @@ fn finalizing_later_payroll_rejects_prior_stale_event_without_mutating_target() 
         .unwrap();
     AttendanceRepository::save(&conn, &complete_attendance(&p.id, &active, "Ç")).unwrap();
 
+    PayrollService::calculate_payroll_for_personnel(&conn, &p.id, &active.id)
+        .expect("target NORMAL must carry valid schema-2 provenance");
     let mut stale_prior = calculated_payroll(&p.id, &prior.id, None);
     stale_prior.status = BordroStatus::STALE;
     PayrollRepository::save_legacy_in_transaction(&conn, &stale_prior).unwrap();
-    let target = calculated_payroll(&p.id, &active.id, None);
-    PayrollRepository::save_legacy_in_transaction(&conn, &target).unwrap();
 
     let error = PayrollService::finalize_payroll_for_personnel(&conn, &p.id, &active.id)
         .expect_err("a later payroll must not finalize over a stale prior event");
@@ -505,6 +526,8 @@ fn historical_asgari_gv_reference_ignores_unrelated_payroll_parameters() {
 
         let mut period_settings = settings(&period.id, dec!(1000));
         SettingsRepository::save_institution_settings(&conn, &period_settings).unwrap();
+        compensation_policy_test_support::seed_period_baseline(&conn, &period, &period_settings)
+            .unwrap();
         if tax_month < 9 {
             // Existing historical rows can predate these unrelated fields.
             // The asgari-GV reference needs only worker rates and the
@@ -569,6 +592,7 @@ fn tax_month_minimum_wage_reference_mismatch_fails_closed() {
         gunlukYemekIstisnasiGV: None,
     }]);
     SettingsRepository::save_institution_settings(&conn, &k).unwrap();
+    compensation_policy_test_support::seed_period_baseline(&conn, &active, &k).unwrap();
 
     let error =
         PayrollPreflightService::validate_for_calculation(&conn, &p.id, &active.id).unwrap_err();
@@ -606,6 +630,9 @@ fn live_deferred_pek_cannot_silently_disappear_across_missing_payroll() {
     )
     .unwrap();
     SettingsRepository::save_institution_settings(&conn, &settings(&august.id, dec!(1000)))
+        .unwrap();
+    let august_settings = settings(&august.id, dec!(1000));
+    compensation_policy_test_support::seed_period_baseline(&conn, &august, &august_settings)
         .unwrap();
 
     PayrollRepository::save_legacy_in_transaction(

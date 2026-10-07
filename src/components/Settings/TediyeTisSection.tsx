@@ -1,7 +1,7 @@
 import React from 'react';
 import { Award, Check, Gift, Info, Plus, Save, Trash2 } from 'lucide-react';
 import type {
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   TediyeKalemi,
   TisIkramiyeKalemi,
 } from '../../types/payroll';
@@ -13,8 +13,8 @@ import {
 } from '../../utils/payrollPresentation';
 
 interface TediyeTisSectionProps {
-  paramsForm: DönemselKurumDegerleri;
-  setParamsForm: React.Dispatch<React.SetStateAction<DönemselKurumDegerleri>>;
+  paramsForm: PayrollPeriodInstitutionSettings;
+  setParamsForm: React.Dispatch<React.SetStateAction<PayrollPeriodInstitutionSettings>>;
   savedSuccess: boolean;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => Promise<void> | void;
 }

@@ -5,16 +5,20 @@ use bordro_programi_lib::domain::models::*;
 use bordro_programi_lib::domain::{DomainError, Result};
 use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
+use bordro_programi_lib::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::migration_service::MigrationService;
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use bordro_programi_lib::services::period_service::PeriodService;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn person(id: &str) -> Personel {
     Personel {
@@ -57,6 +61,10 @@ fn settings(period_id: &str) -> DonemselKurumDegerleri {
     }
 }
 
+fn active_settings(period_id: &str) -> PayrollPeriodInstitutionSettings {
+    settings(period_id).into()
+}
+
 fn attendance(personnel_id: &str, period_id: &str, code: &str) -> PersonelPuantaj {
     let mut gunler = HashMap::new();
     gunler.insert("2026-05-15".into(), code.into());
@@ -87,35 +95,55 @@ fn open_ended_tax_bracket_is_sqlite_safe_and_unbounded() -> Result<()> {
 
 #[test]
 fn devir_migration_with_existing_columns_is_idempotent() -> Result<()> {
-    let mut conn =
-        create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    let mut saved_person = person("migration-person");
-    saved_person.devirKumulatifGvMatrahi = Some(dec!(1234.56));
-    saved_person.devirKumulatifGvMatrahiYili = Some(2026);
-    PersonnelRepository::save(&conn, &saved_person)?;
-
-    conn.execute("ALTER TABLE payroll_records DROP COLUMN notlar", [])
-        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    conn.pragma_update(None, "user_version", 5u32)
-        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    initialize_db(&mut conn).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-
-    let restored = PersonnelRepository::get_by_id(&conn, "migration-person")?
-        .expect("migration must preserve existing personnel data");
-    assert_eq!(restored.devirKumulatifGvMatrahi, Some(dec!(1234.56)));
-    assert!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('payroll_records') WHERE name = 'notlar'",
-            [],
-            |row| row.get::<_, i64>(0),
+    for (version, notlar_exists) in [(5, true), (6, false)] {
+        let mut conn = rusqlite::Connection::open_in_memory()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        bordro_programi_lib::db::migrations::get_migrations()
+            .to_version(&mut conn, version)
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        conn.execute_batch(
+            "ALTER TABLE personnel ADD COLUMN devir_kumulatif_gv_matrahi INTEGER DEFAULT 0;
+             ALTER TABLE personnel ADD COLUMN devir_kumulatif_gv_matrahi_yili INTEGER;
+             ALTER TABLE personnel ADD COLUMN devir_kumulatif_gv_matrahi_baslangic_ayi INTEGER;
+             ALTER TABLE personnel ADD COLUMN devir_kumulatif_asgari_gv_matrahi INTEGER DEFAULT 0;
+             ALTER TABLE personnel ADD COLUMN devir_kumulatif_asgari_gv_matrahi_yili INTEGER;",
         )
-        .unwrap()
-            == 1
-    );
-
-    conn.pragma_update(None, "user_version", 6u32)
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    initialize_db(&mut conn).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        if notlar_exists {
+            conn.execute_batch("ALTER TABLE payroll_records ADD COLUMN notlar TEXT;")
+                .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        }
+        if version == 5 {
+            conn.execute_batch("DROP TABLE sick_leave_records;")
+                .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        }
+        conn.execute(
+            "INSERT INTO personnel
+                (id, tc_no, ad, soyad, grup, devir_kumulatif_gv_matrahi,
+                 devir_kumulatif_gv_matrahi_yili, devir_kumulatif_gv_matrahi_baslangic_ayi,
+                 created_at, updated_at)
+             VALUES ('migration-person', '10000000000', 'Migration', 'Person', '1. Grup',
+                     123456, 2026, 1, 't', 't')",
+            [],
+        )
+        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+
+        initialize_db(&mut conn).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        let restored = PersonnelRepository::get_by_id(&conn, "migration-person")?
+            .expect("migration must preserve existing personnel data");
+        assert_eq!(restored.devirKumulatifGvMatrahi, Some(dec!(1234.56)));
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('payroll_records') WHERE name = 'notlar'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?,
+            1
+        );
+
+        initialize_db(&mut conn).map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+    }
     Ok(())
 }
 
@@ -145,7 +173,7 @@ fn period_creation_bootstraps_only_supported_annual_parameters() -> Result<()> {
     PeriodService::save_period_with_settings(
         &mut conn,
         &period("supported-period", 2026),
-        &settings("supported-period"),
+        &active_settings("supported-period"),
     )?;
     assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2026)?.is_some());
 
@@ -159,7 +187,11 @@ fn period_creation_bootstraps_only_supported_annual_parameters() -> Result<()> {
         taxMonth: 1,
         ..period("2026-12", 2027)
     };
-    PeriodService::save_period_with_settings(&mut conn, &unsupported_period, &settings("2026-12"))?;
+    PeriodService::save_period_with_settings(
+        &mut conn,
+        &unsupported_period,
+        &active_settings("2026-12"),
+    )?;
     assert!(AnnualPayrollParametersRepository::get_by_year(&conn, 2027)?.is_none());
     let saved_period = PeriodRepository::get_by_id(&conn, "2026-12")?.unwrap();
     assert_eq!(saved_period.baslangicTarihi, "2026-12-15");
@@ -270,7 +302,7 @@ fn period_and_settings_are_atomic_when_settings_write_fails() -> Result<()> {
     let result = PeriodService::save_period_with_settings(
         &mut conn,
         &period("atomic-period", 2026),
-        &settings("atomic-period"),
+        &active_settings("atomic-period"),
     );
     assert!(result.is_err());
     let count: i64 = conn
@@ -285,7 +317,7 @@ fn period_and_settings_are_atomic_when_settings_write_fails() -> Result<()> {
 }
 
 #[test]
-fn clean_database_first_period_requires_a_positive_daily_base_wage() -> Result<()> {
+fn new_period_keeps_compensation_baseline_explicit_and_separate() -> Result<()> {
     let mut conn =
         create_in_memory_connection().map_err(|e| DomainError::DatabaseError(e.to_string()))?;
     let periods_before: i64 = conn
@@ -299,8 +331,7 @@ fn clean_database_first_period_requires_a_positive_daily_base_wage() -> Result<(
     assert_eq!((periods_before, settings_before), (0, 0));
 
     let first = period("2027-01", 2027);
-    let mut first_settings = settings(&first.id);
-    first_settings.gunlukTabanUcret = dec!(2443.28);
+    let first_settings = active_settings(&first.id);
     PeriodService::save_period_with_settings(&mut conn, &first, &first_settings)?;
 
     let periods_after: i64 = conn
@@ -318,30 +349,16 @@ fn clean_database_first_period_requires_a_positive_daily_base_wage() -> Result<(
         )
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
     assert_eq!((periods_after, settings_after), (1, 1));
-
-    let invalid = BordroDonemi {
-        id: "2027-02".into(),
-        ..period("2027-02", 2027)
-    };
-    let invalid_settings = settings(&invalid.id);
-    assert!(
-        PeriodService::save_period_with_settings(&mut conn, &invalid, &invalid_settings).is_err()
-    );
-    let invalid_period_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM payroll_periods WHERE id = '2027-02'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    let invalid_settings_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM institution_settings WHERE period_id = '2027-02'",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-    assert_eq!((invalid_period_count, invalid_settings_count), (0, 0));
+    assert!(CompensationPolicyRepository::get_versions_for_period(
+        &conn,
+        &first.baslangicTarihi,
+        &first.bitisTarihi,
+    )?
+    .is_empty());
+    let snapshot = PayrollService::build_dataset_snapshot(&conn)?;
+    let active_settings = serde_json::to_value(&snapshot.institutionSettings[&first.id])
+        .map_err(|e| DomainError::InvalidData(e.to_string()))?;
+    assert!(active_settings.get("gunlukTabanUcret").is_none());
     Ok(())
 }
 
@@ -386,6 +403,41 @@ fn common_raise_month_splits_15_14_daily_income() -> Result<()> {
     current_settings.gunlukYemek = dec!(20);
     current_settings.gunlukVasitaYol = dec!(7);
     SettingsRepository::save_institution_settings(&conn, &current_settings)?;
+    compensation_policy_test_support::seed_period_baseline(
+        &conn,
+        &previous_period,
+        &previous_settings,
+    )?;
+    let raised_state = compensation_policy_test_support::state_from_settings(&current_settings);
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &CompensationPolicyVersion {
+            id: "policy-april-raise".into(),
+            effectiveFrom: "2026-04-01".into(),
+            state: raised_state,
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2026-04-01T00:00:00Z".into(),
+            source: "TEST_FIXTURE".into(),
+            reason: "Explicit April compensation policy change".into(),
+            supersedesVersionId: None,
+        },
+    )?;
+
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: "raise-opening-2026".into(),
+            personnelId: personnel.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: Some(dec!(0)),
+            effectiveFromPeriodId: Some(previous_period.id.clone()),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some(previous_period.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
 
     let mut gunler = HashMap::new();
     for day in 15..=31 {
@@ -403,8 +455,6 @@ fn common_raise_month_splits_15_14_daily_income() -> Result<()> {
             gunler,
         },
     )?;
-    SettingsRepository::set_app_setting(&conn, "zam_aylari", "[4]")?;
-
     let payroll =
         PayrollService::calculate_payroll_for_personnel(&conn, &personnel.id, &current_period.id)?;
 
@@ -417,7 +467,7 @@ fn common_raise_month_splits_15_14_daily_income() -> Result<()> {
 }
 
 #[test]
-fn dated_transport_native_save_roundtrip_invalidation_and_finalized_protection() -> Result<()> {
+fn legacy_transport_schedule_does_not_override_payroll_or_block_settings_storage() -> Result<()> {
     use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
     use chrono::{Duration, NaiveDate};
     let conn =
@@ -439,6 +489,7 @@ fn dated_transport_native_save_roundtrip_invalidation_and_finalized_protection()
     settings.gunlukVasitaYol = dec!(100);
     settings.transportRateChanges = Some(vec![]);
     SettingsRepository::save_institution_settings(&conn, &settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &period, &settings)?;
     let mut gunler = HashMap::new();
     let mut date = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
     while date <= NaiveDate::from_ymd_opt(2026, 2, 14).unwrap() {
@@ -474,31 +525,49 @@ fn dated_transport_native_save_roundtrip_invalidation_and_finalized_protection()
     );
     assert_eq!(
         PayrollRepository::get_for_personnel(&conn, &person.id)?[0].status,
-        BordroStatus::STALE
+        BordroStatus::CALCULATED
     );
     let recalculated =
         PayrollService::calculate_payroll_for_personnel(&conn, &person.id, &period.id)?;
-    assert_eq!(recalculated.gelirler.vasitaYol, Some(dec!(3820)));
-    let before = serde_json::to_value(&loaded).unwrap();
+    assert_eq!(recalculated.gelirler.vasitaYol, Some(dec!(3100)));
     let mut bad = settings.clone();
     bad.transportRateChanges.as_mut().unwrap()[0].effectiveFrom = "2026-02-30".into();
-    assert!(SettingsRepository::save_institution_settings(&conn, &bad).is_err());
+    SettingsRepository::save_institution_settings(&conn, &bad)?;
+    let stored_bad = SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap();
     assert_eq!(
-        serde_json::to_value(
-            SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap()
-        )
-        .unwrap(),
-        before
+        serde_json::to_value(&stored_bad.transportRateChanges).unwrap(),
+        serde_json::to_value(&bad.transportRateChanges).unwrap()
     );
+    let recalculated =
+        PayrollService::calculate_payroll_for_personnel(&conn, &person.id, &period.id)?;
+    assert_eq!(recalculated.gelirler.vasitaYol, Some(dec!(3100)));
     PayrollService::finalize_payroll_for_personnel(&conn, &person.id, &period.id)?;
+    let finalized_payroll = serde_json::to_value(
+        PayrollRepository::get_for_personnel(&conn, &person.id)?
+            .first()
+            .expect("finalized payroll remains available"),
+    )
+    .unwrap();
     settings.transportRateChanges.as_mut().unwrap()[0].gunlukVasitaYol = dec!(130);
-    assert!(SettingsRepository::save_institution_settings(&conn, &settings).is_err());
+    SettingsRepository::save_institution_settings(&conn, &settings)?;
+    let saved = SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap();
+    assert_eq!(
+        serde_json::to_value(&saved.transportRateChanges).unwrap(),
+        serde_json::to_value(&settings.transportRateChanges).unwrap()
+    );
+    assert_eq!(
+        PayrollRepository::get_for_personnel(&conn, &person.id)?[0].status,
+        BordroStatus::FINALIZED
+    );
     assert_eq!(
         serde_json::to_value(
-            SettingsRepository::get_institution_settings(&conn, &period.id)?.unwrap()
+            PayrollRepository::get_for_personnel(&conn, &person.id)?
+                .first()
+                .expect("finalized payroll remains available"),
         )
         .unwrap(),
-        before
+        finalized_payroll,
+        "legacy transport-only edits must not mutate finalized payroll"
     );
     Ok(())
 }

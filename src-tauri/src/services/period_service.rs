@@ -163,7 +163,7 @@ impl PeriodService {
     pub fn save_period_with_settings(
         conn: &mut Connection,
         period: &BordroDonemi,
-        settings: &DonemselKurumDegerleri,
+        settings: &payroll_core::PayrollPeriodInstitutionSettings,
     ) -> Result<()> {
         if settings.donemId != period.id {
             return Err(DomainError::ValidationError(
@@ -188,7 +188,7 @@ impl PeriodService {
         }
 
         PeriodRepository::save_in_transaction(&tx, period)?;
-        SettingsRepository::save_institution_settings_in_transaction(&tx, settings)?;
+        SettingsRepository::save_active_institution_settings_in_transaction(&tx, settings)?;
         // The Rust core owns the supported legal package. Bootstrap it when a
         // new period is created, but never reinterpret an unsupported year as
         // 2026.

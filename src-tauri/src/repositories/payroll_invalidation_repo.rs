@@ -39,10 +39,14 @@ impl PayrollInvalidationRepository {
         let impact = Self::evaluate_mutation(conn, mutation)?;
         if !impact.blockedByFinalized.is_empty()
             || !impact.blockedByFinalizedRetroBatches.is_empty()
+            || impact.retroEffects.iter().any(|effect| {
+                effect.action == payroll_core::RetroMutationAction::ImmutableBlocker
+                    || !effect.blockers.is_empty()
+            })
         {
-            return Err(DomainError::PayrollFinalized(Self::finalized_block_message(
-                conn, &impact,
-            )));
+            return Err(DomainError::PayrollFinalized(
+                Self::finalized_block_message(conn, &impact),
+            ));
         }
         Ok(impact)
     }
@@ -72,9 +76,18 @@ impl PayrollInvalidationRepository {
             .blockedByFinalized
             .iter()
             .take(3)
-            .map(|key| format!("{} – {}", person_name(&key.personnelId), period_name(&key.periodId)))
+            .map(|key| {
+                format!(
+                    "{} – {}",
+                    person_name(&key.personnelId),
+                    period_name(&key.periodId)
+                )
+            })
             .collect();
-        let remaining = impact.blockedByFinalized.len().saturating_sub(examples.len());
+        let remaining = impact
+            .blockedByFinalized
+            .len()
+            .saturating_sub(examples.len());
         if remaining > 0 {
             examples.push(format!("ve {remaining} kayıt daha"));
         }
@@ -95,6 +108,10 @@ impl PayrollInvalidationRepository {
     pub fn apply_impact(conn: &Connection, impact: &MutationImpact) -> Result<usize> {
         if !impact.blockedByFinalized.is_empty()
             || !impact.blockedByFinalizedRetroBatches.is_empty()
+            || impact.retroEffects.iter().any(|effect| {
+                effect.action == payroll_core::RetroMutationAction::ImmutableBlocker
+                    || !effect.blockers.is_empty()
+            })
         {
             return Err(DomainError::PayrollFinalized(
                 "Kesinleştirilmiş bordro/retro tarihçesini etkileyen mutation uygulanamaz.".into(),

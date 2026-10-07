@@ -55,7 +55,7 @@ function snapshotMatchesCurrentDefinition(settings: StatutorySettingsLike): bool
  * policy before this helper is called.
  */
 export function reconcileStatutorySnapshot<T extends StatutorySettingsLike>(
-  previous: T | undefined,
+  previous: StatutorySettingsLike | undefined,
   next: T
 ): T {
   if (!previous) return next;

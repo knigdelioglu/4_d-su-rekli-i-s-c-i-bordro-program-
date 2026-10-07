@@ -28,14 +28,12 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 pub struct PayrollDatasetSnapshot {
     pub personnel: Vec<Personel>,
     pub periods: Vec<BordroDonemi>,
-    pub institutionSettings: HashMap<String, DonemselKurumDegerleri>,
+    pub institutionSettings: HashMap<String, PayrollPeriodInstitutionSettings>,
     pub attendances: Vec<PersonelPuantaj>,
     pub payrolls: Vec<BordroKaydi>,
     pub taxOpenings: Vec<PersonelTaxOpening>,
     pub sickLeaveRecords: Vec<SickLeaveRecord>,
     pub annualPayrollParameters: Vec<AnnualPayrollParameters>,
-    #[serde(default)]
-    pub zamAylari: Vec<i32>,
     #[serde(default)]
     pub compensationRevisions: Vec<CompensationRevision>,
     #[serde(default)]
@@ -44,6 +42,20 @@ pub struct PayrollDatasetSnapshot {
     pub retroBatches: Vec<RetroAdjustmentBatch>,
     #[serde(default)]
     pub retroAllocations: Vec<RetroAllocation>,
+    /// Independent institution-wide compensation timeline. The legacy
+    /// calculation path intentionally does not read this additive collection.
+    #[serde(default)]
+    pub compensationPolicyVersions: Vec<CompensationPolicyVersion>,
+}
+
+/// Import-only source data for validating historical backups with the exact
+/// legacy calculator. It is separate from the active calculation dataset and
+/// is never serialized as a payroll request.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyBackupPayrollInput {
+    pub institutionSettings: HashMap<String, LegacyInstitutionSettings>,
+    pub raiseMonths: Vec<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,7 +226,7 @@ pub fn validate_tax_month_overlap(period: &BordroDonemi) -> Result<()> {
 /// resolved into a payroll snapshot.
 pub fn validate_statutory_segments_for_period(
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<()> {
     validate_period(period)?;
     if settings.donemId != period.id {
@@ -295,7 +307,7 @@ pub fn validate_statutory_segments_for_period(
 /// statutory reference. It intentionally excludes attendance, personnel and
 /// payment-event state so the same snapshot can serve every employee.
 pub fn snapshot_statutory_parameters(
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<StatutoryParameterSnapshot> {
     if let Some(snapshot) = settings.statutoryParameterSnapshot.as_ref() {
         return Ok(snapshot.clone());
@@ -309,7 +321,7 @@ pub fn snapshot_statutory_parameters(
 /// any already-persisted snapshot so settings mutation can compare the new
 /// legal definition with the old one.
 pub fn current_statutory_parameter_definition(
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<StatutoryParameterSnapshot> {
     Ok(StatutoryParameterSnapshot {
         gunlukAsgariUcret: settings
@@ -343,8 +355,8 @@ pub fn current_statutory_parameter_definition(
 /// Applies the immutable period-level legal snapshot to the mutable settings
 /// envelope. Non-statutory earning/deduction settings remain untouched.
 fn effective_statutory_settings(
-    settings: &DonemselKurumDegerleri,
-) -> Result<DonemselKurumDegerleri> {
+    settings: &PayrollPeriodInstitutionSettings,
+) -> Result<PayrollPeriodInstitutionSettings> {
     let Some(snapshot) = settings.statutoryParameterSnapshot.as_ref() else {
         return Ok(settings.clone());
     };
@@ -365,9 +377,9 @@ fn effective_statutory_settings(
 /// period-level immutable snapshot existed; the period-level snapshot remains
 /// the primary source whenever it is available.
 pub fn settings_with_resolved_statutory_snapshot(
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
     snapshot: &ResolvedStatutorySnapshot,
-) -> Result<DonemselKurumDegerleri> {
+) -> Result<PayrollPeriodInstitutionSettings> {
     let Some(first_segment) = snapshot.segments.first() else {
         return Err(DomainError::InvalidData(
             "Tarihsel statutory snapshot'ı boş; yasal ayarlar yeniden üretilemez.".into(),
@@ -408,7 +420,7 @@ pub fn settings_with_resolved_statutory_snapshot(
 pub fn resolve_statutory_snapshot_for_period(
     attendance: &PersonelPuantaj,
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<ResolvedStatutorySnapshot> {
     resolve_statutory_snapshot_for_period_with_paid_sick_dates(attendance, period, settings, &[])
 }
@@ -416,7 +428,7 @@ pub fn resolve_statutory_snapshot_for_period(
 pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
     attendance: &PersonelPuantaj,
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
     paid_sick_dates: &[NaiveDate],
 ) -> Result<ResolvedStatutorySnapshot> {
     resolve_statutory_snapshot_internal(Some(attendance), period, settings, paid_sick_dates)
@@ -429,7 +441,7 @@ pub fn resolve_statutory_snapshot_for_period_with_paid_sick_dates(
 /// sick-leave inputs remain empty.
 pub fn resolve_statutory_snapshot_for_payment_month(
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<ResolvedStatutorySnapshot> {
     resolve_statutory_snapshot_internal(None, period, settings, &[])
 }
@@ -437,7 +449,7 @@ pub fn resolve_statutory_snapshot_for_payment_month(
 fn resolve_statutory_snapshot_internal(
     attendance: Option<&PersonelPuantaj>,
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
     paid_sick_dates: &[NaiveDate],
 ) -> Result<ResolvedStatutorySnapshot> {
     let settings = effective_statutory_settings(settings)?;
@@ -975,6 +987,11 @@ pub struct AccrualOrder {
 pub(crate) struct IncomingDevredenPekState {
     pub(crate) records: Vec<DevredenPekKaydi>,
     pub(crate) tax_months_elapsed: i32,
+    pub(crate) source: PayrollPekCarrySource,
+    pub(crate) source_id: Option<String>,
+    pub(crate) source_period_id: Option<String>,
+    pub(crate) source_tax_year: Option<i32>,
+    pub(crate) source_tax_month: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -1088,6 +1105,8 @@ fn carry_override_for_source_period<'a>(
 fn incoming_from_retro_source_carry(
     override_state: &RetroSourceCarryOverride,
     current_order: &AccrualOrder,
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
 ) -> Result<IncomingDevredenPekState> {
     let tax_months_elapsed =
         tax_month_distance(current_order.tax_ordinal, override_state.source_tax_ordinal)?;
@@ -1096,10 +1115,47 @@ fn incoming_from_retro_source_carry(
             "Retro source carry mevcut vergi ayından ileri olamaz.".into(),
         ));
     }
+    let source_period = period_by_id(dataset, index, &override_state.source_period_id)?;
     Ok(IncomingDevredenPekState {
         records: override_state.target_carry.clone(),
         tax_months_elapsed,
+        source: PayrollPekCarrySource::RETRO_OVERRIDE,
+        source_id: Some(override_state.batch_id.clone()),
+        source_period_id: Some(override_state.source_period_id.clone()),
+        source_tax_year: Some(source_period.taxYear),
+        source_tax_month: Some(source_period.taxMonth),
     })
+}
+
+fn incoming_from_payment_event(
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
+    payroll: &BordroKaydi,
+    records: Vec<DevredenPekKaydi>,
+    tax_months_elapsed: i32,
+) -> Result<IncomingDevredenPekState> {
+    let source_period = period_by_id(dataset, index, &payroll.donemId)?;
+    Ok(IncomingDevredenPekState {
+        records,
+        tax_months_elapsed,
+        source: PayrollPekCarrySource::PAYMENT_EVENT,
+        source_id: Some(effective_accrual_id(payroll)),
+        source_period_id: Some(payroll.donemId.clone()),
+        source_tax_year: Some(source_period.taxYear),
+        source_tax_month: Some(source_period.taxMonth),
+    })
+}
+
+fn empty_incoming_pek() -> IncomingDevredenPekState {
+    IncomingDevredenPekState {
+        records: Vec::new(),
+        tax_months_elapsed: 0,
+        source: PayrollPekCarrySource::NONE,
+        source_id: None,
+        source_period_id: None,
+        source_tax_year: None,
+        source_tax_month: None,
+    }
 }
 
 fn retro_event_contains_carry_override(
@@ -1180,31 +1236,35 @@ fn ordered_prior_payment_events<'a>(
         })
         .collect::<Result<Vec<_>>>()?;
     events.retain(|(order, payroll)| {
-        order < current_order && !is_superseded_zero_payable_retro(dataset, payroll)
+        order < current_order && !is_retired_retro_payment_event(dataset, payroll)
     });
     events.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(events)
 }
 
-/// A stale retro event remains in payroll_records as an audit record when its
-/// explicit recalculation resolves to no payment. The newly CALCULATED
-/// settlement ledger is authoritative evidence that this old event is retired;
-/// it must not enter PEK/GV ordering or be treated as an authoritative payment.
-fn is_superseded_zero_payable_retro(
-    dataset: &PayrollDatasetSnapshot,
-    payroll: &BordroKaydi,
-) -> bool {
-    payroll.accrualType == AccrualType::RETRO_ADJUSTMENT
-        && payroll.status == BordroStatus::STALE
-        && dataset.retroBatches.iter().any(|batch| {
-            batch.id == effective_accrual_id(payroll)
-                && batch.personnelId == payroll.personelId
-                && batch.paymentDate == payroll.paymentDate
-                && batch.status == CompensationRevisionStatus::CALCULATED
-                && retro_payable_settlement_amount(batch) <= Decimal::ZERO
-                && (batch.totalGrossDelta <= Decimal::ZERO
-                    || batch.settlementStatus == RetroSettlementStatus::SETTLED_BY_OFFSET)
-        })
+/// A stale retro event remains in payroll_records as an audit record after an
+/// explicit recalculation resolves to no payment. The CALCULATED zero-payable
+/// settlement is authoritative evidence that this old event is retired. A
+/// stale/unsettled batch has no such resolution and must remain fail-closed.
+fn is_retired_retro_payment_event(dataset: &PayrollDatasetSnapshot, payroll: &BordroKaydi) -> bool {
+    if payroll.accrualType != AccrualType::RETRO_ADJUSTMENT || payroll.status != BordroStatus::STALE
+    {
+        return false;
+    }
+    let Some(batch) = dataset.retroBatches.iter().find(|batch| {
+        batch.id == effective_accrual_id(payroll)
+            && batch.personnelId == payroll.personelId
+            && batch.paymentDate == payroll.paymentDate
+    }) else {
+        return false;
+    };
+    batch.status == CompensationRevisionStatus::CALCULATED
+        && retro_payable_settlement_amount(batch) <= Decimal::ZERO
+        && (batch.totalGrossDelta <= Decimal::ZERO
+            || batch.settlementStatus == RetroSettlementStatus::SETTLED_BY_OFFSET)
+        && payroll.gelirToplam == Decimal::ZERO
+        && payroll.kesintiToplam == Decimal::ZERO
+        && payroll.netOdeme == Decimal::ZERO
 }
 
 pub(crate) fn ensure_authoritative_payment_event(payroll: &BordroKaydi) -> Result<()> {
@@ -1486,7 +1546,7 @@ fn validate_prior_accruals_finalized(
         if order >= current_order {
             continue;
         }
-        if is_superseded_zero_payable_retro(dataset, payroll) {
+        if is_retired_retro_payment_event(dataset, payroll) {
             continue;
         }
         if payroll.status == BordroStatus::FINALIZED {
@@ -1742,7 +1802,12 @@ fn incoming_devreden_pek(
         if let Some(override_state) =
             carry_override_for_source_period(&retro_carry_overrides, &previous_accrual.donemId)
         {
-            return incoming_from_retro_source_carry(override_state, &current_order);
+            return incoming_from_retro_source_carry(
+                override_state,
+                &current_order,
+                dataset,
+                index,
+            );
         }
         if changed_overrides.iter().any(|override_state| {
             override_state.source_tax_ordinal <= current_order.tax_ordinal
@@ -1756,13 +1821,16 @@ fn incoming_devreden_pek(
                     .into(),
             ));
         }
-        return Ok(IncomingDevredenPekState {
-            records: previous_accrual
+        return incoming_from_payment_event(
+            dataset,
+            index,
+            previous_accrual,
+            previous_accrual
                 .sonrakiDevredenPek
                 .clone()
                 .unwrap_or_default(),
-            tax_months_elapsed: 0,
-        });
+            0,
+        );
     };
 
     let Some(previous_tax_ordinal) = ordered_prior
@@ -1771,12 +1839,14 @@ fn incoming_devreden_pek(
         .max()
     else {
         if let Some(override_state) = changed_overrides.last() {
-            return incoming_from_retro_source_carry(override_state, &current_order);
+            return incoming_from_retro_source_carry(
+                override_state,
+                &current_order,
+                dataset,
+                index,
+            );
         }
-        return Ok(IncomingDevredenPekState {
-            records: Vec::new(),
-            tax_months_elapsed: 0,
-        });
+        return Ok(empty_incoming_pek());
     };
     let previous_month: Vec<(AccrualOrder, &BordroKaydi)> = ordered_prior
         .iter()
@@ -1788,12 +1858,14 @@ fn incoming_devreden_pek(
     }
     let Some((previous_order, previous_payroll)) = previous_month.last() else {
         if let Some(override_state) = changed_overrides.last() {
-            return incoming_from_retro_source_carry(override_state, &current_order);
+            return incoming_from_retro_source_carry(
+                override_state,
+                &current_order,
+                dataset,
+                index,
+            );
         }
-        return Ok(IncomingDevredenPekState {
-            records: Vec::new(),
-            tax_months_elapsed: 0,
-        });
+        return Ok(empty_incoming_pek());
     };
     let tax_months_elapsed =
         tax_month_distance(current_order.tax_ordinal, previous_order.tax_ordinal)?;
@@ -1805,11 +1877,16 @@ fn incoming_devreden_pek(
     if let Some(override_state) =
         carry_override_for_source_period(&retro_carry_overrides, &previous_payroll.donemId)
     {
-        return incoming_from_retro_source_carry(override_state, &current_order);
+        return incoming_from_retro_source_carry(override_state, &current_order, dataset, index);
     }
     if let Some(override_state) = changed_overrides.last() {
         if override_state.source_tax_ordinal > previous_order.tax_ordinal {
-            return incoming_from_retro_source_carry(override_state, &current_order);
+            return incoming_from_retro_source_carry(
+                override_state,
+                &current_order,
+                dataset,
+                index,
+            );
         }
         if !retro_event_contains_carry_override(
             &retro_carry_overrides,
@@ -1821,13 +1898,16 @@ fn incoming_devreden_pek(
             ));
         }
     }
-    Ok(IncomingDevredenPekState {
-        records: previous_payroll
+    incoming_from_payment_event(
+        dataset,
+        index,
+        previous_payroll,
+        previous_payroll
             .sonrakiDevredenPek
             .clone()
             .unwrap_or_default(),
         tax_months_elapsed,
-    })
+    )
 }
 
 /// Replays the incoming carry for a historical payment event while retaining
@@ -1975,7 +2055,10 @@ fn previous_gv(
     }
     for payroll in index
         .payrolls_for_person(dataset, &person.id)
-        .filter(|payroll| matches!(payroll.status, BordroStatus::DRAFT | BordroStatus::STALE))
+        .filter(|payroll| {
+            matches!(payroll.status, BordroStatus::DRAFT | BordroStatus::STALE)
+                && !is_retired_retro_payment_event(dataset, payroll)
+        })
     {
         let period = index.period(dataset, &payroll.donemId).ok_or_else(|| {
             DomainError::InvalidData(format!(
@@ -2301,7 +2384,7 @@ fn previous_asgari_gv(
 fn historical_statutory_settings(
     dataset: &PayrollDatasetSnapshot,
     period: &BordroDonemi,
-) -> Result<DonemselKurumDegerleri> {
+) -> Result<PayrollPeriodInstitutionSettings> {
     let settings = dataset.institutionSettings.get(&period.id).ok_or_else(|| {
         DomainError::InvalidData(format!(
             "{} dönemi kurum ayarları bulunamadı; asgari GV kümülatifi hesaplanamaz.",
@@ -2385,7 +2468,10 @@ fn previous_insurance_gv(
     }
     for payroll in index
         .payrolls_for_person(dataset, personnel_id)
-        .filter(|payroll| matches!(payroll.status, BordroStatus::DRAFT | BordroStatus::STALE))
+        .filter(|payroll| {
+            matches!(payroll.status, BordroStatus::DRAFT | BordroStatus::STALE)
+                && !is_retired_retro_payment_event(dataset, payroll)
+        })
     {
         let Some(period) = index.period(dataset, &payroll.donemId) else {
             continue;
@@ -2469,6 +2555,22 @@ fn validate_tax_month_chain(
     person: &Personel,
     period: &BordroDonemi,
 ) -> Result<()> {
+    if let Some(tax_month) = missing_asgari_gv_reference_tax_month(dataset, index, person, period)?
+    {
+        return Err(DomainError::ValidationError(format!(
+            "{} vergi yılı asgari ücret GV referans zinciri eksik. Önce şu vergi ayına ait dönemi oluşturun veya uygun devir başlangıcını girin: {:02}.",
+            period.taxYear, tax_month
+        )));
+    }
+    Ok(())
+}
+
+fn missing_asgari_gv_reference_tax_month(
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
+    person: &Personel,
+    period: &BordroDonemi,
+) -> Result<Option<i32>> {
     let openings = resolve_tax_openings(dataset, index, person, period)?;
     let start_month = openings
         .asgari
@@ -2486,18 +2588,15 @@ fn validate_tax_month_chain(
             .next()
             .is_none()
         {
-            return Err(DomainError::ValidationError(format!(
-                "{} vergi yılı asgari ücret GV referans zinciri eksik. Önce şu vergi ayına ait dönemi oluşturun veya uygun devir başlangıcını girin: {:02}.",
-                period.taxYear, tax_month
-            )));
+            return Ok(Some(tax_month));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 fn validate_statutory_tax_month_reference(
     period: &BordroDonemi,
-    settings: &DonemselKurumDegerleri,
+    settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<()> {
     validate_statutory_segments_for_period(period, settings)?;
     let start = parse_period_date(&period.baslangicTarihi, &period.id, "başlangıç")?;
@@ -2678,6 +2777,13 @@ fn validate_devreden_pek_gap(
 /// production calculation. It does not mutate the supplied snapshot.
 pub fn validate_payroll_request(request: &PayrollCalculationRequest) -> Result<()> {
     let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType == AccrualType::NORMAL {
+        return validate_compensation_policy_payroll_request(request);
+    }
     validate_payroll_request_with_index(request, &index)
 }
 
@@ -2731,9 +2837,8 @@ fn validate_payroll_request_with_index(
             ))
         })?;
     let settings = effective_statutory_settings(raw_settings)?;
-    validate_kurum_degerleri_for_payroll(&settings)?;
+    crate::calculations::validate_period_institution_settings_for_payroll(&settings)?;
     validate_statutory_tax_month_reference(period, &settings)?;
-    crate::transport_rates::validate_transport_rates(period, &settings)?;
     validate_devreden_pek_gap(
         &request.dataset,
         index,
@@ -2768,14 +2873,27 @@ fn validate_payroll_request_with_index(
 /// source of truth.
 pub fn validate_payroll_finalization_request(request: &PayrollCalculationRequest) -> Result<()> {
     let index = PayrollDatasetIndex::build(&request.dataset);
-    validate_payroll_finalization_request_with_index(request, &index)
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    validate_payroll_finalization_request_with_index(
+        request,
+        &index,
+        accrual.accrualType == AccrualType::NORMAL,
+    )
 }
 
 fn validate_payroll_finalization_request_with_index(
     request: &PayrollCalculationRequest,
     index: &PayrollDatasetIndex,
+    use_compensation_policy: bool,
 ) -> Result<()> {
-    validate_payroll_request_with_index(request, index)?;
+    if use_compensation_policy {
+        validate_compensation_policy_payroll_request(request)?;
+    } else {
+        validate_payroll_request_with_index(request, index)?;
+    }
 
     let period = index
         .period(&request.dataset, &request.periodId)
@@ -2879,8 +2997,69 @@ fn validate_payroll_finalization_request_with_index(
 /// official transition. No persistence or invalidation is performed here.
 pub fn finalize_payroll(request: &PayrollCalculationRequest) -> Result<BordroKaydi> {
     let index = PayrollDatasetIndex::build(&request.dataset);
-    validate_payroll_finalization_request_with_index(request, &index)?;
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType == AccrualType::NORMAL {
+        return finalize_payroll_with_compensation_policy_checked(request);
+    }
+    validate_payroll_finalization_request_with_index(request, &index, false)?;
     let mut payroll = calculate_payroll_with_index(request, &index)?;
+    ensure_finalizable_statutory_snapshot(&payroll)?;
+    payroll.status = BordroStatus::FINALIZED;
+    Ok(payroll)
+}
+
+/// Recalculates and finalizes a schema-2 NORMAL payroll with the explicit
+/// compensation timeline. The same finalization guards as the legacy path
+/// apply before the policy-aware calculation is allowed to become official.
+pub fn finalize_payroll_with_compensation_policy_checked(
+    request: &PayrollCalculationRequest,
+) -> Result<BordroKaydi> {
+    let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType != AccrualType::NORMAL {
+        return Err(DomainError::InvalidData(
+            "Compensation-policy finalization yalnız NORMAL bordrolar içindir.".into(),
+        ));
+    }
+    let persisted = payroll_for_requested_accrual(
+        &request.dataset,
+        &index,
+        &request.personnelId,
+        &request.periodId,
+        Some(&accrual),
+    )
+    .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?;
+    if !persisted
+        .calculationMetadata
+        .as_ref()
+        .is_some_and(|metadata| {
+            metadata.provenance
+                == crate::models::PayrollCalculationProvenance::COMPENSATION_POLICY_ENGINE
+        })
+    {
+        return Err(DomainError::InvalidData(
+            "Compensation-policy finalization için schema-2 provenance gerekir.".into(),
+        ));
+    }
+    crate::validate_payroll_calculation_metadata_with_context(
+        persisted,
+        period,
+        &request.dataset.payrolls,
+        &request.dataset.periods,
+    )
+    .map_err(|error| {
+        DomainError::InvalidData(format!(
+            "Compensation-policy bordro snapshot'ı finalization öncesi doğrulanamadı: {error}"
+        ))
+    })?;
+    validate_payroll_finalization_request_with_index(request, &index, true)?;
+    let mut payroll = calculate_payroll_with_compensation_policy(request)?;
     ensure_finalizable_statutory_snapshot(&payroll)?;
     payroll.status = BordroStatus::FINALIZED;
     Ok(payroll)
@@ -2895,6 +3074,13 @@ pub fn finalize_payroll(request: &PayrollCalculationRequest) -> Result<BordroKay
 /// exercise the formula engine with a deliberately small snapshot.
 pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKaydi> {
     let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType == AccrualType::NORMAL {
+        return calculate_payroll_with_compensation_policy(request);
+    }
     calculate_payroll_with_index(request, &index)
 }
 
@@ -2903,14 +3089,249 @@ pub fn calculate_payroll(request: &PayrollCalculationRequest) -> Result<BordroKa
 /// and formula evaluation do not rebuild the same lookup structures.
 pub fn calculate_payroll_checked(request: &PayrollCalculationRequest) -> Result<BordroKaydi> {
     let index = PayrollDatasetIndex::build(&request.dataset);
-    validate_payroll_request_with_index(request, &index)?;
+    validate_payroll_request(request)?;
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType == AccrualType::NORMAL {
+        return calculate_payroll_with_compensation_policy(request);
+    }
     calculate_payroll_with_index(request, &index)
+}
+
+/// Import-only exact replay for pre-policy backups. The legacy money source
+/// and raise calendar stay outside `PayrollDatasetSnapshot` and are never
+/// available to ordinary native or WASM payroll requests.
+pub fn calculate_legacy_backup_payroll_checked(
+    request: &PayrollCalculationRequest,
+    legacy_input: &LegacyBackupPayrollInput,
+) -> Result<Option<BordroKaydi>> {
+    let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    if !legacy_input.institutionSettings.contains_key(&period.id) {
+        return Ok(None);
+    }
+    let Some(settings) = request.dataset.institutionSettings.get(&period.id) else {
+        return Ok(None);
+    };
+    if settings.sgkIsciOraniYuzde.is_none()
+        || settings.issizlikIsciOraniYuzde.is_none()
+        || settings.sendikaAidatiYuzde.is_none()
+        || settings.besOraniYuzde.is_none()
+        || settings.damgaVergisiOraniBinde.is_none()
+        || settings.gunlukAsgariUcret.is_none()
+        || settings.pekTavanKatsayisi.is_none()
+        || settings.gunlukYemekIstisnasiSGK.is_none()
+        || settings.gunlukYemekIstisnasiGV.is_none()
+        || settings.sgkIsverenOraniYuzde.is_none()
+        || settings.issizlikIsverenOraniYuzde.is_none()
+    {
+        return Ok(None);
+    }
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType == AccrualType::NORMAL
+        && (index
+            .attendances(&request.dataset, &request.personnelId, &request.periodId)
+            .next()
+            .is_none()
+            || index
+                .annual_parameters(&request.dataset, period.taxYear)
+                .is_none())
+    {
+        return Ok(None);
+    }
+    let person = request
+        .dataset
+        .personnel
+        .iter()
+        .find(|person| person.id == request.personnelId)
+        .ok_or_else(|| {
+            DomainError::NotFound(format!("Personel bulunamadı: {}", request.personnelId))
+        })?;
+    if missing_asgari_gv_reference_tax_month(&request.dataset, &index, person, period)?.is_some() {
+        // A missing historical minimum-wage reference makes only this exact
+        // legacy replay unavailable. Migration validates persisted payroll
+        // and retro snapshots independently before attempting this replay.
+        return Ok(None);
+    }
+    validate_payroll_request_with_index(request, &index)?;
+    match calculate_payroll_with_index_policy_override_mode(
+        request,
+        &index,
+        None,
+        None,
+        Some(legacy_input),
+    ) {
+        Ok(payroll) => Ok(Some(payroll)),
+        Err(error) => Err(error),
+    }
+}
+
+/// Validates a calculation against the explicit compensation timeline while
+/// keeping statutory settings and payment-event checks on their existing path.
+/// The active period's legacy compensation fields are replaced only in this
+/// owned validation copy; prior compensation settings are never consulted.
+pub fn validate_compensation_policy_payroll_request(
+    request: &PayrollCalculationRequest,
+) -> Result<()> {
+    let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType != AccrualType::NORMAL {
+        return validate_payroll_request_with_index(request, &index);
+    }
+    compensation::resolve_timeline_for_period(period, &request.dataset.compensationPolicyVersions)?;
+    validate_payroll_request_with_index(request, &index)
+}
+
+/// Calculates with the authoritative compensation timeline. The checked
+/// default NORMAL route uses this implementation after shared preflight.
+pub fn calculate_payroll_with_compensation_policy(
+    request: &PayrollCalculationRequest,
+) -> Result<BordroKaydi> {
+    let index = PayrollDatasetIndex::build(&request.dataset);
+    let period = index
+        .period(&request.dataset, &request.periodId)
+        .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?;
+    let accrual = resolve_accrual_input(request, period, &index)?;
+    if accrual.accrualType != AccrualType::NORMAL {
+        return calculate_payroll_with_index(request, &index);
+    }
+    let timeline = compensation::resolve_timeline_for_period(
+        period,
+        &request.dataset.compensationPolicyVersions,
+    )?;
+    calculate_payroll_with_index_policy_override(request, &index, Some(&timeline), None)
+}
+
+/// Checked new-path calculation used by the explicit native/browser adapter.
+pub fn calculate_payroll_with_compensation_policy_checked(
+    request: &PayrollCalculationRequest,
+) -> Result<BordroKaydi> {
+    validate_compensation_policy_payroll_request(request)?;
+    calculate_payroll_with_compensation_policy(request)
+}
+
+/// Replays the income-bearing part of a persisted schema-2 NORMAL payroll
+/// directly from its saved snapshot. This is the shared historical seam used
+/// by retro: callers may provide a derived target-state segment set, while all
+/// attendance, paid-sick, group, service-year, manual-income, statutory, and
+/// meal-tax inputs remain sourced from the original record.
+pub(crate) fn replay_saved_normal_compensation_income(
+    payroll: &BordroKaydi,
+    period: &BordroDonemi,
+    segments: &[ResolvedCompensationSegment],
+    source_payrolls: &[BordroKaydi],
+    source_periods: &[BordroDonemi],
+) -> Result<(GelirKalemleri, MealExemptionTotals, bool)> {
+    if payroll.accrualType != AccrualType::NORMAL
+        || !matches!(
+            payroll.status,
+            BordroStatus::CALCULATED | BordroStatus::FINALIZED
+        )
+    {
+        return Err(DomainError::ValidationError(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} is not an authoritative NORMAL source payroll.",
+            payroll.accrualId
+        )));
+    }
+    if payroll.statutorySnapshot.is_none() {
+        return Err(DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} has no saved statutory snapshot.",
+            payroll.accrualId
+        )));
+    }
+    if let Some(events) = payroll
+        .calculationMetadata
+        .as_ref()
+        .and_then(|metadata| metadata.snapshot.as_ref())
+        .map(|snapshot| &snapshot.usedInputs.taxHistory.previousPaymentEvents)
+    {
+        for event in events {
+            if let Some(source) = source_payrolls.iter().find(|row| {
+                row.personelId == payroll.personelId
+                    && row.donemId == event.periodId
+                    && effective_accrual_id(row) == event.accrualId
+            }) {
+                if source.statutorySnapshot.is_none() {
+                    return Err(DomainError::InvalidData(format!(
+                        "UNSUPPORTED_HISTORICAL_REPLAY: {} has no saved statutory snapshot.",
+                        event.accrualId
+                    )));
+                }
+            }
+        }
+    }
+    let disposition = crate::validate_payroll_calculation_metadata_with_context(
+        payroll,
+        period,
+        source_payrolls,
+        source_periods,
+    )
+    .map_err(|error| DomainError::InvalidData(format!("Historical snapshot rejected: {error}")))?;
+    if disposition != crate::PayrollCalculationSnapshotDisposition::CurrentSnapshotValidated {
+        return Err(DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} has no validated schema-2 compensation snapshot.",
+            payroll.accrualId
+        )));
+    }
+    let snapshot = payroll
+        .calculationMetadata
+        .as_ref()
+        .and_then(|metadata| metadata.snapshot.as_ref())
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "UNSUPPORTED_HISTORICAL_REPLAY: {} snapshot is missing.",
+                payroll.accrualId
+            ))
+        })?;
+    compensation::replay_snapshot_income(payroll, period, snapshot, segments)
 }
 
 fn calculate_payroll_with_index(
     request: &PayrollCalculationRequest,
     index: &PayrollDatasetIndex,
 ) -> Result<BordroKaydi> {
+    calculate_payroll_with_index_policy_override_mode(request, index, None, None, None)
+}
+
+mod compensation;
+#[cfg(test)]
+mod compensation_shadow;
+mod snapshot;
+mod snapshot_replay;
+
+pub(crate) use snapshot_replay::replay_saved_normal_financial_projection;
+
+fn calculate_payroll_with_index_policy_override(
+    request: &PayrollCalculationRequest,
+    index: &PayrollDatasetIndex,
+    compensation_timeline: Option<&compensation::CompensationTimeline>,
+    replay_snapshot: Option<&PayrollCalculationSnapshot>,
+) -> Result<BordroKaydi> {
+    calculate_payroll_with_index_policy_override_mode(
+        request,
+        index,
+        compensation_timeline,
+        replay_snapshot,
+        None,
+    )
+}
+
+fn calculate_payroll_with_index_policy_override_mode(
+    request: &PayrollCalculationRequest,
+    index: &PayrollDatasetIndex,
+    compensation_timeline: Option<&compensation::CompensationTimeline>,
+    replay_snapshot: Option<&PayrollCalculationSnapshot>,
+    legacy_backup_input: Option<&LegacyBackupPayrollInput>,
+) -> Result<BordroKaydi> {
+    let legacy_backup_replay = legacy_backup_input.is_some();
+
     let dataset = &request.dataset;
     let person = index
         .personnel(dataset, &request.personnelId)
@@ -2923,6 +3344,13 @@ fn calculate_payroll_with_index(
         .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {}", request.periodId)))?
         .clone();
     let accrual = resolve_accrual_input(request, &period, index)?;
+    let is_normal_accrual = accrual.accrualType == AccrualType::NORMAL;
+    if is_normal_accrual && compensation_timeline.is_none() && !legacy_backup_replay {
+        return Err(DomainError::NotFound(format!(
+            "{} dönemi için ücret politikası başlangıç state'i bulunamadı.",
+            period.id
+        )));
+    }
     validate_period(&period)?;
     if let Some(input) = request.manualIncome.as_ref() {
         validate_manual_payroll_income_input(input)?;
@@ -2942,7 +3370,6 @@ fn calculate_payroll_with_index(
     }
 
     crate::validate_personnel_for_payroll(&person)?;
-    let is_normal_accrual = accrual.accrualType == AccrualType::NORMAL;
     let is_retro_accrual = accrual.accrualType == AccrualType::RETRO_ADJUSTMENT;
     let retro_payment = if is_retro_accrual {
         Some(retro_payment_income_with_index(
@@ -3046,19 +3473,29 @@ fn calculate_payroll_with_index(
             ))
         })?
         .clone();
-    let raise_transition = if is_normal_accrual {
-        Some(resolve_raise_transition(dataset, &period)?)
+    let legacy_current_settings =
+        legacy_backup_input.and_then(|input| input.institutionSettings.get(&period.id));
+    let raise_transition = if legacy_backup_replay && is_normal_accrual {
+        let legacy_input = legacy_backup_input.expect("legacy replay input was checked above");
+        Some(resolve_raise_transition(
+            dataset,
+            &legacy_input.institutionSettings,
+            &legacy_input.raiseMonths,
+            &period,
+        )?)
     } else {
         None
     };
-    let income_settings = raise_transition
+    let legacy_income_settings = raise_transition
         .as_ref()
         .map(|transition| &transition.current)
-        .unwrap_or(&raw_settings);
-    let settings = effective_statutory_settings(income_settings)?;
-    validate_kurum_degerleri_for_payroll(&settings)?;
+        .or(legacy_current_settings);
+    let settings = effective_statutory_settings(&raw_settings)?;
+    crate::calculations::validate_period_institution_settings_for_payroll(&settings)?;
     validate_statutory_segments_for_period(&period, &settings)?;
-    crate::transport_rates::validate_transport_rates(&period, &settings)?;
+    if let Some(legacy_settings) = legacy_income_settings {
+        crate::transport_rates::validate_transport_rates(&period, legacy_settings)?;
+    }
 
     // Resolve prior payment-event state before calculating tax. This keeps a
     // DRAFT/STALE chain fail-closed with the generic payment-event error and
@@ -3066,8 +3503,28 @@ fn calculate_payroll_with_index(
     // event that has no attendance input.
     let prior_accruals =
         resolve_prior_accrual_state(dataset, index, &person.id, &period, &accrual)?;
-    let incoming_devreden_state =
-        incoming_devreden_pek(dataset, index, &person.id, &period, &accrual)?;
+    let incoming_devreden_state = if let Some(snapshot) = replay_snapshot {
+        let carry = &snapshot.usedInputs.incomingPekCarry;
+        IncomingDevredenPekState {
+            records: carry
+                .records
+                .iter()
+                .map(|item| DevredenPekKaydi {
+                    tutar: item.tutar,
+                    kalanAySayisi: item.kalanAySayisi,
+                    kaynakDonemId: item.kaynakDonemId.clone(),
+                })
+                .collect(),
+            tax_months_elapsed: carry.taxMonthsElapsed,
+            source: carry.source,
+            source_id: carry.sourceId.clone(),
+            source_period_id: carry.sourcePeriodId.clone(),
+            source_tax_year: carry.sourceTaxYear,
+            source_tax_month: carry.sourceTaxMonth,
+        }
+    } else {
+        incoming_devreden_pek(dataset, index, &person.id, &period, &accrual)?
+    };
     let statutory_snapshot = if is_normal_accrual {
         resolve_statutory_snapshot_for_period_with_paid_sick_dates(
             attendance
@@ -3109,18 +3566,52 @@ fn calculate_payroll_with_index(
         })?;
     crate::validate_annual_payroll_parameters(&annual_parameters)?;
     let (before_summary, after_summary, raise_date) = if let Some(attendance) = attendance {
-        split_puantaj_by_zam_tarihi(attendance, &period, &dataset.zamAylari)?
+        if !legacy_backup_replay {
+            (PuantajOzeti::default(), PuantajOzeti::default(), None)
+        } else {
+            split_puantaj_by_zam_tarihi(
+                attendance,
+                &period,
+                &legacy_backup_input
+                    .expect("legacy replay input was checked above")
+                    .raiseMonths,
+            )?
+        }
     } else {
         (PuantajOzeti::default(), PuantajOzeti::default(), None)
     };
     let mut retro_payment_pek_income = GelirKalemleri::default();
+    #[allow(unused_mut)]
     let (mut income, mut is_primi_detail) = if is_normal_accrual {
-        let (mut income, is_primi_detail) = auto_fill_gelirler_from_puantaj(
-            &summary,
-            &settings,
-            person.hizmetYili,
-            Some(&person.grup),
-        )?;
+        let (mut income, is_primi_detail) = if let Some(timeline) = compensation_timeline {
+            compensation::calculate_policy_income(
+                attendance
+                    .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
+                &period,
+                timeline,
+                &paid_sick_dates,
+                person.hizmetYili,
+                &person.grup,
+            )?
+        } else if legacy_backup_replay {
+            let legacy_settings = legacy_income_settings.ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} has no exact legacy settings source.",
+                    period.id
+                ))
+            })?;
+            auto_fill_gelirler_from_puantaj(
+                &summary,
+                legacy_settings,
+                person.hizmetYili,
+                Some(&person.grup),
+            )?
+        } else {
+            return Err(DomainError::NotFound(format!(
+                "{} dönemi için ücret politikası başlangıç state'i bulunamadı.",
+                period.id
+            )));
+        };
         apply_manual_payroll_income(&mut income, request.manualIncome.as_ref())?;
         (income, Some(is_primi_detail))
     } else if let Some((_, _, retro_income, payment_month_pek_income)) = retro_payment.as_ref() {
@@ -3146,7 +3637,7 @@ fn calculate_payroll_with_index(
     };
     let mut previous_settings_for_meal: Option<DonemselKurumDegerleri> = None;
 
-    if is_normal_accrual {
+    if legacy_backup_replay && is_normal_accrual {
         if let Some(cutoff) = raise_date {
             let transition = raise_transition
                 .as_ref()
@@ -3161,7 +3652,9 @@ fn calculate_payroll_with_index(
             // prior period settings were saved. Keep the historical group's
             // own definition when present; otherwise use the newly configured
             // group so the pre-raise attendance slice remains calculable.
-            if let Some(current_groups) = settings.isPrimiGruplari.as_ref() {
+            if let Some(current_groups) =
+                legacy_income_settings.and_then(|settings| settings.isPrimiGruplari.as_ref())
+            {
                 let previous_groups = previous_settings
                     .isPrimiGruplari
                     .get_or_insert_with(Vec::new);
@@ -3184,7 +3677,12 @@ fn calculate_payroll_with_index(
             )?;
             let (after_income, after_is_primi) = calculate_gunluk_gelirler_from_puantaj(
                 &after_summary,
-                &settings,
+                legacy_income_settings.ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "UNSUPPORTED_HISTORICAL_REPLAY: {} has no exact legacy settings source.",
+                        period.id
+                    ))
+                })?,
                 Some(&person.grup),
             )?;
             let paid_before = paid_sick_dates
@@ -3201,7 +3699,17 @@ fn calculate_payroll_with_index(
                 paid_before,
                 previous_settings.gunlukTabanUcret,
             );
-            add_paid_sick_wage(&mut base_wage, paid_after, settings.gunlukTabanUcret);
+            let current_legacy_settings = legacy_income_settings.ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} has no exact legacy settings source.",
+                    period.id
+                ))
+            })?;
+            add_paid_sick_wage(
+                &mut base_wage,
+                paid_after,
+                current_legacy_settings.gunlukTabanUcret,
+            );
             income.tabanBrutAylik = base_wage;
             income.yemek = sum_income_field(before_income.yemek, after_income.yemek);
             income.vasitaYol = sum_income_field(before_income.vasitaYol, after_income.vasitaYol);
@@ -3216,19 +3724,19 @@ fn calculate_payroll_with_index(
             );
             income.birlestirilmisSosyalYardim = Some(weighted_period_income_amount(
                 previous_settings.birlestirilmisSosyalYardim,
-                settings.birlestirilmisSosyalYardim,
+                current_legacy_settings.birlestirilmisSosyalYardim,
                 period_before_days,
                 period_after_days,
             )?);
             income.giyimYardimi = Some(weighted_period_income_amount(
                 previous_settings.giyimYardimi,
-                settings.giyimYardimi,
+                current_legacy_settings.giyimYardimi,
                 period_before_days,
                 period_after_days,
             )?);
             income.hizmetZammi = Some(weighted_period_income_amount(
                 Decimal::from(person.hizmetYili) * previous_settings.hizmetZammiBirimi,
-                Decimal::from(person.hizmetYili) * settings.hizmetZammiBirimi,
+                Decimal::from(person.hizmetYili) * current_legacy_settings.hizmetZammiBirimi,
                 period_before_days,
                 period_after_days,
             )?);
@@ -3236,35 +3744,87 @@ fn calculate_payroll_with_index(
 
             previous_settings_for_meal = Some(previous_settings);
         } else {
+            let legacy_settings = legacy_income_settings.ok_or_else(|| {
+                DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} has no exact legacy settings source.",
+                    period.id
+                ))
+            })?;
             add_paid_sick_wage(
                 &mut income.tabanBrutAylik,
                 paid_sick_days,
-                settings.gunlukTabanUcret,
+                legacy_settings.gunlukTabanUcret,
             );
         }
     }
 
-    if is_normal_accrual && settings.transportRateChanges.is_some() {
+    if legacy_backup_replay
+        && is_normal_accrual
+        && legacy_income_settings.is_some_and(|settings| settings.transportRateChanges.is_some())
+    {
+        let legacy_settings =
+            legacy_income_settings.expect("legacy transport settings checked above");
         income.vasitaYol = Some(crate::transport_rates::calculate_dated_transport(
-            &period, &settings, attendance.ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
+            &period,
+            legacy_settings,
+            attendance
+                .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
         )?);
     }
 
     let normal_meal_exemptions = if is_normal_accrual {
-        calculate_normal_meal_exemptions(
-            attendance
-                .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
-            &period,
-            &statutory_snapshot,
-            &settings,
-            previous_settings_for_meal.as_ref(),
-            raise_date,
-        )?
+        if let Some(timeline) = compensation_timeline {
+            compensation::calculate_policy_meal_exemptions(
+                attendance
+                    .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?,
+                &period,
+                &statutory_snapshot,
+                timeline,
+            )?
+        } else {
+            if legacy_backup_replay {
+                let legacy_settings = legacy_income_settings.ok_or_else(|| {
+                    DomainError::InvalidData(format!(
+                        "UNSUPPORTED_HISTORICAL_REPLAY: {} has no exact legacy settings source.",
+                        period.id
+                    ))
+                })?;
+                calculate_normal_meal_exemptions(
+                    attendance.ok_or_else(|| {
+                        DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into())
+                    })?,
+                    &period,
+                    &statutory_snapshot,
+                    legacy_settings,
+                    previous_settings_for_meal.as_ref(),
+                    raise_date,
+                )?
+            } else {
+                return Err(DomainError::NotFound(format!(
+                    "{} dönemi için ücret politikası başlangıç state'i bulunamadı.",
+                    period.id
+                )));
+            }
+        }
     } else {
         MealExemptionTotals::default()
     };
 
-    let persisted_month_to_date_pek = same_month_pek_used(&prior_accruals)?;
+    let persisted_month_to_date_pek = if let Some(snapshot) = replay_snapshot {
+        let replayed = same_month_pek_used(&prior_accruals)?;
+        let captured = snapshot.usedInputs.taxHistory.samePaymentMonthPekUsed;
+        if replayed != captured {
+            return Err(DomainError::InvalidData(format!(
+                "{} saved financial input mismatch: taxHistory.samePaymentMonthPekUsed ({} versus {}).",
+                accrual.accrualId,
+                captured,
+                replayed
+            )));
+        }
+        captured
+    } else {
+        same_month_pek_used(&prior_accruals)?
+    };
     let pek_reconciliation = reconcile_same_month_pek(
         &prior_accruals,
         &income,
@@ -3274,9 +3834,35 @@ fn calculate_payroll_with_index(
         persisted_month_to_date_pek,
     );
     let month_to_date_pek = pek_reconciliation.month_to_date_for_calculation;
-    let same_month_gv_used = same_month_gv_exemption_used(&prior_accruals)?;
-    let previous_cumulative_gv = previous_gv(dataset, index, &person, &period, &accrual)?;
-    let previous_cumulative_asgari_gv = previous_asgari_gv(dataset, index, &person, &period)?;
+    let same_month_gv_used = if let Some(snapshot) = replay_snapshot {
+        let replayed = same_month_gv_exemption_used(&prior_accruals)?;
+        let captured = snapshot
+            .usedInputs
+            .taxHistory
+            .samePaymentMonthGvExemptionUsed;
+        if replayed != captured {
+            return Err(DomainError::InvalidData(format!(
+                "saved financial input mismatch: taxHistory.samePaymentMonthGvExemptionUsed ({} versus {}).",
+                captured, replayed
+            )));
+        }
+        captured
+    } else {
+        same_month_gv_exemption_used(&prior_accruals)?
+    };
+    let previous_cumulative_gv = if let Some(snapshot) = replay_snapshot {
+        snapshot.usedInputs.taxHistory.previousCumulativeGv
+    } else {
+        previous_gv(dataset, index, &person, &period, &accrual)?
+    };
+    let previous_cumulative_asgari_gv = if let Some(snapshot) = replay_snapshot {
+        snapshot
+            .usedInputs
+            .taxHistory
+            .previousCumulativeMinimumWageGv
+    } else {
+        previous_asgari_gv(dataset, index, &person, &period)?
+    };
     let incoming_devreden = &incoming_devreden_state.records;
     let tax_inputs = StatutoryDeductionTaxInputs {
         previous_cumulative_gv,
@@ -3284,12 +3870,21 @@ fn calculate_payroll_with_index(
         previous_cumulative_asgari_gv,
         tax_brackets: &annual_parameters.gelirVergisiDilimleri,
     };
+    let daily_base_wage = compensation_timeline
+        .and_then(|timeline| {
+            timeline
+                .resolved_segments()
+                .last()
+                .map(|segment| segment.state.gunlukTabanUcret)
+        })
+        .or_else(|| legacy_income_settings.map(|settings| settings.gunlukTabanUcret));
     // Union dues use the current (raised) daily wage. Only earned income
     // is split across old/new attendance dates; the deduction basis is not averaged.
     let (mut deductions, mut pek_detail, mut next_devreden) = if is_normal_accrual {
         calculate_statutory_contributions_with_month_to_date_and_devreden_state(
             &income,
             Some(&settings),
+            daily_base_wage,
             Some(&person),
             Some(&summary),
             &tax_inputs,
@@ -3413,7 +4008,22 @@ fn calculate_payroll_with_index(
         .ok_or_else(|| DomainError::InvalidData("Damga vergisi oranı eksik.".into()))?
         / dec!(1000);
     let monthly_minimum = round2(statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30));
-    let same_month_stamp_used = same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?;
+    let same_month_stamp_used = if let Some(snapshot) = replay_snapshot {
+        let replayed = same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?;
+        let captured = snapshot
+            .usedInputs
+            .taxHistory
+            .samePaymentMonthStampExemptionUsed;
+        if replayed != captured {
+            return Err(DomainError::InvalidData(format!(
+                "saved financial input mismatch: taxHistory.samePaymentMonthStampExemptionUsed ({} versus {}).",
+                captured, replayed
+            )));
+        }
+        captured
+    } else {
+        same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?
+    };
     // The institution's selected payroll policy is separate from statutory
     // daily caps and must not change the SGK meal exemption or frozen snapshot.
     let normal_meal_tax_exemption = if is_normal_accrual {
@@ -3474,7 +4084,14 @@ fn calculate_payroll_with_index(
                 period.taxYear
             ))
         })?;
-    let insurance_used = previous_insurance_gv(dataset, index, &person.id, &period, &accrual)?;
+    let insurance_used = if let Some(snapshot) = replay_snapshot {
+        snapshot
+            .usedInputs
+            .taxHistory
+            .previousAnnualInsuranceGvDeduction
+    } else {
+        previous_insurance_gv(dataset, index, &person.id, &period, &accrual)?
+    };
     let insurance_wage_base =
         (income_total - income.yemek.unwrap_or_default() - income.vasitaYol.unwrap_or_default())
             .max(Decimal::ZERO);
@@ -3534,7 +4151,7 @@ fn calculate_payroll_with_index(
         });
     }
 
-    Ok(BordroKaydi {
+    let mut payroll = BordroKaydi {
         // Recalculating a legacy or imported NORMAL record must preserve its
         // primary key; the accrual identity is the separate stable chain key.
         id: existing
@@ -3577,7 +4194,39 @@ fn calculate_payroll_with_index(
         statutorySnapshot: Some(statutory_snapshot),
         odenenRaporluGun: Some(paid_sick_days),
         raporluGun: Some(summary.r),
-    })
+        // Legacy results remain marked as legacy. The explicit compensation
+        // entry point attaches schema-2 provenance from these exact inputs.
+        calculationMetadata: None,
+    };
+    if let Some(timeline) = compensation_timeline.filter(|_| replay_snapshot.is_none()) {
+        let attendance = attendance
+            .ok_or_else(|| DomainError::NotFound("Kayıtlı puantaj bulunamadı.".into()))?;
+        payroll.calculationMetadata = Some(PayrollCalculationMetadata {
+            provenance: PayrollCalculationProvenance::COMPENSATION_POLICY_ENGINE,
+            snapshot: Some(snapshot::build_compensation_policy_snapshot(
+                request,
+                index,
+                &person,
+                &period,
+                &accrual,
+                &settings,
+                attendance,
+                &sick_records,
+                &paid_sick_dates,
+                timeline,
+                &incoming_devreden_state,
+                persisted_month_to_date_pek,
+                &payroll,
+            )?),
+        });
+        crate::validate_payroll_calculation_metadata_structure(&payroll, &period)
+            .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+        crate::validate_compensation_snapshot_policy_links(
+            &payroll,
+            &dataset.compensationPolicyVersions,
+        )?;
+    }
+    Ok(payroll)
 }
 
 #[cfg(test)]
@@ -3645,6 +4294,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         }
     }
 
@@ -3769,11 +4419,22 @@ mod tests {
         }
     }
 
-    fn test_settings(period_id: &str, daily_minimum: Decimal) -> DonemselKurumDegerleri {
-        DonemselKurumDegerleri {
+    fn test_settings(period_id: &str, daily_minimum: Decimal) -> PayrollPeriodInstitutionSettings {
+        PayrollPeriodInstitutionSettings {
             donemId: period_id.into(),
+            sgkIsciOraniYuzde: Some(dec!(14)),
+            issizlikIsciOraniYuzde: Some(dec!(1)),
+            gelirVergisiOraniYuzde: Some(dec!(15)),
+            damgaVergisiOraniBinde: Some(dec!(7.59)),
+            sendikaAidatiYuzde: Some(Decimal::ZERO),
+            besOraniYuzde: Some(Decimal::ZERO),
+            gunlukYemekIstisnasiSGK: Some(Decimal::ZERO),
+            gunlukYemekIstisnasiGV: Some(Decimal::ZERO),
+            sgkIsverenOraniYuzde: Some(dec!(20.75)),
+            issizlikIsverenOraniYuzde: Some(dec!(2)),
+            pekTavanKatsayisi: Some(dec!(9)),
             gunlukAsgariUcret: Some(daily_minimum),
-            ..DonemselKurumDegerleri::default()
+            ..PayrollPeriodInstitutionSettings::default()
         }
     }
 
@@ -3816,7 +4477,7 @@ mod tests {
     fn test_dataset(
         periods: Vec<BordroDonemi>,
         person: Personel,
-        settings: Vec<DonemselKurumDegerleri>,
+        settings: Vec<PayrollPeriodInstitutionSettings>,
         tax_openings: Vec<PersonelTaxOpening>,
     ) -> PayrollDatasetSnapshot {
         PayrollDatasetSnapshot {
@@ -4555,11 +5216,11 @@ mod tests {
 
     #[test]
     fn devreden_carry_expires_after_the_exact_two_tax_month_distance() {
-        let settings = DonemselKurumDegerleri {
+        let settings = PayrollPeriodInstitutionSettings {
             gunlukAsgariUcret: Some(dec!(1000)),
             pekTavanKatsayisi: Some(Decimal::ONE),
             gunlukYemekIstisnasiSGK: Some(Decimal::ZERO),
-            ..DonemselKurumDegerleri::default()
+            ..PayrollPeriodInstitutionSettings::default()
         };
         let attendance = PuantajOzeti {
             c: 30,
@@ -4597,11 +5258,11 @@ mod tests {
 
     #[test]
     fn devreden_carry_is_not_used_after_its_tax_month_lifetime() {
-        let settings = DonemselKurumDegerleri {
+        let settings = PayrollPeriodInstitutionSettings {
             gunlukAsgariUcret: Some(dec!(1000)),
             pekTavanKatsayisi: Some(Decimal::ONE),
             gunlukYemekIstisnasiSGK: Some(Decimal::ZERO),
-            ..DonemselKurumDegerleri::default()
+            ..PayrollPeriodInstitutionSettings::default()
         };
         let attendance = PuantajOzeti {
             c: 30,

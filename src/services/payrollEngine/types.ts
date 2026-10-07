@@ -2,7 +2,7 @@ import {
   AnnualPayrollParameters,
   BordroDonemi,
   BordroKaydi,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   ManualPayrollIncomeInput,
   PayrollAccrualInput,
   Personel,
@@ -10,9 +10,11 @@ import {
   PersonelTaxOpening,
   CompensationRevision,
   CompensationRevisionOverride,
+  CompensationPolicyVersion,
   RetroAdjustmentBatch,
   RetroAllocation,
   SickLeaveRecord,
+  PayrollCalculationMetadata,
 } from '../../types/payroll';
 import { PayrollNotice } from '../../types/payrollNotice';
 import type { Exactify } from './decimalBoundary';
@@ -21,18 +23,22 @@ import type { Exactify } from './decimalBoundary';
 export interface PayrollDatasetSnapshotModel {
   personnel: Personel[];
   periods: BordroDonemi[];
-  institutionSettings: Record<string, DönemselKurumDegerleri>;
+  institutionSettings: Record<string, PayrollRuntimeInstitutionSettings>;
   attendances: PersonelPuantaj[];
   payrolls: BordroKaydi[];
   taxOpenings: PersonelTaxOpening[];
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
-  zamAylari: number[];
   compensationRevisions: CompensationRevision[];
   compensationRevisionOverrides: CompensationRevisionOverride[];
   retroBatches: RetroAdjustmentBatch[];
   retroAllocations: RetroAllocation[];
+  /** May be absent only in legacy dataset JSON; Rust deserialization treats that as an empty collection. */
+  compensationPolicyVersions: CompensationPolicyVersion[];
 }
+
+/** Period inputs allowed into calculation requests; NORMAL compensation comes only from the policy timeline. */
+export type PayrollRuntimeInstitutionSettings = PayrollPeriodInstitutionSettings;
 
 /** Presentation-only snapshot shape; never use it for WASM or persistence. */
 export type PayrollUiModel = PayrollDatasetSnapshotModel;
@@ -40,6 +46,7 @@ export type PayrollUiModel = PayrollDatasetSnapshotModel;
 /** Exact JSON shape sent to WASM and retained by browser persistence. */
 export type PayrollDatasetSnapshot = Exactify<PayrollDatasetSnapshotModel>;
 export type PayrollBoundaryPayroll = Exactify<BordroKaydi>;
+export type PayrollBoundaryCalculationMetadata = Exactify<PayrollCalculationMetadata>;
 export type PayrollBoundaryManualIncomeInput = Exactify<ManualPayrollIncomeInput>;
 export type PayrollBoundaryAccrualInput = Exactify<PayrollAccrualInput>;
 export type PayrollBoundaryPersonel = Exactify<Personel>;
@@ -89,6 +96,7 @@ export type PayrollMutation =
   | { kind: 'PERSON_TAX_YEAR'; personnelId: string; taxYear: number }
   | { kind: 'TAX_YEAR'; taxYear: number }
   | { kind: 'PERIOD'; periodId: string }
+  | { kind: 'COMPENSATION_POLICY'; effectiveFrom: string; throughInclusive: string | null }
   | { kind: 'PERIOD_FROM_POSITION'; startDate: string; taxYear: number; taxMonth: number }
   | { kind: 'PERIOD_INSERT'; startDate: string; taxYear: number; taxMonth: number }
   | { kind: 'PERSON_FROM_DATE'; personnelId: string; effectiveFrom: string }
@@ -122,11 +130,16 @@ export interface MutationImpact {
   blockedByFinalized: PayrollKey[];
   affectedRetroBatches: string[];
   blockedByFinalizedRetroBatches: string[];
+  payrollCauses?: Array<{ payroll: PayrollKey; causePeriodId: string }>;
 }
 
 export interface PayrollEngine {
   readonly kind: 'tauri' | 'wasm';
   calculatePayroll(request: PayrollCalculationRequest): Promise<PayrollBoundaryPayroll>;
+  /** Explicit policy API retained for compatibility; ordinary calculation uses the same policy resolver. */
+  calculatePayrollWithCompensationPolicy(
+    request: PayrollCalculationRequest
+  ): Promise<PayrollBoundaryPayroll>;
   calculateRetroPreview(request: RetroCalculationRequest): Promise<RetroCalculationResult>;
   validatePayroll(request: PayrollCalculationRequest): Promise<void>;
   getPayrollNotices(

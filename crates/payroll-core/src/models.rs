@@ -688,6 +688,10 @@ pub struct BordroKaydi {
     pub statutorySnapshot: Option<ResolvedStatutorySnapshot>,
     pub odenenRaporluGun: Option<i32>,
     pub raporluGun: Option<i32>,
+    /// Absent on legacy records and on the legacy calculation path. New-engine
+    /// provenance and its immutable input snapshot are introduced additively.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub calculationMetadata: Option<PayrollCalculationMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -726,6 +730,491 @@ pub struct IsPrimiGrupItem {
     /// iş primi oran kaynağı olarak kullanılamaz.
     #[serde(default = "default_is_primi_aktif")]
     pub aktif: bool,
+}
+
+/// Full, institution-wide normal compensation state for one policy version.
+/// Decimal values use strings on JSON boundaries so persistence and WASM do
+/// not pass through binary floating point or round to currency cents.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompensationPolicyState {
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gunlukTabanUcret: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gunlukYemek: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub birlestirilmisSosyalYardim: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gunlukVasitaYol: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub giyimYardimi: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub hizmetZammiBirimi: Decimal,
+    /// Required nullable legacy/global rate. The new engine does not fall
+    /// back to it when a personnel group is missing.
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub isPrimiYuzde: Option<Decimal>,
+    pub isPrimiGruplari: Vec<CompensationPolicyGroup>,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub geceCalismaPrimiYuzde: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub geceCalismaTatiliPrimiYuzde: Decimal,
+    /// Required nullable values: null means absent; "0" means explicit zero.
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub ekOdeme: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub digerGelirVarsayilan: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompensationPolicyGroup {
+    pub id: String,
+    pub ad: String,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub oran: Decimal,
+    pub aktif: bool,
+}
+
+/// Declares whether an effective policy date starts a new earning rounding
+/// slice or changes only the road amount. Tokens are part of the frozen JSON
+/// contract and intentionally have no default.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CompensationBoundaryScope {
+    FullEarning,
+    RoadOnly,
+}
+
+impl CompensationBoundaryScope {
+    pub const fn as_wire_token(self) -> &'static str {
+        match self {
+            Self::FullEarning => "FULL_EARNING",
+            Self::RoadOnly => "ROAD_ONLY",
+        }
+    }
+
+    pub fn parse_wire_token(value: &str) -> Option<Self> {
+        match value {
+            "FULL_EARNING" => Some(Self::FullEarning),
+            "ROAD_ONLY" => Some(Self::RoadOnly),
+            _ => None,
+        }
+    }
+}
+
+/// Declares the persisted road rounding boundary for one policy version.
+/// Every resolved active version in one payroll service period must agree.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RoadRoundingMode {
+    PerCompensationSlice,
+    PeriodTotal,
+}
+
+impl RoadRoundingMode {
+    pub const fn as_wire_token(self) -> &'static str {
+        match self {
+            Self::PerCompensationSlice => "PER_COMPENSATION_SLICE",
+            Self::PeriodTotal => "PERIOD_TOTAL",
+        }
+    }
+
+    pub fn parse_wire_token(value: &str) -> Option<Self> {
+        match value {
+            "PER_COMPENSATION_SLICE" => Some(Self::PerCompensationSlice),
+            "PERIOD_TOTAL" => Some(Self::PeriodTotal),
+            _ => None,
+        }
+    }
+}
+
+/// Immutable full-state policy record. Corrections append a new row at the
+/// same effective date and point to the previously active leaf.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompensationPolicyVersion {
+    pub id: String,
+    pub effectiveFrom: String,
+    pub state: CompensationPolicyState,
+    pub boundaryScope: CompensationBoundaryScope,
+    pub roadRoundingMode: RoadRoundingMode,
+    pub createdAt: String,
+    pub source: String,
+    pub reason: String,
+    pub supersedesVersionId: Option<String>,
+}
+
+/// Inclusive persisted range resolved from one immutable policy version.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedCompensationSegment {
+    pub versionId: String,
+    pub startDate: String,
+    pub endDate: String,
+    pub state: CompensationPolicyState,
+    pub boundaryScope: CompensationBoundaryScope,
+    pub roadRoundingMode: RoadRoundingMode,
+}
+
+/// Identifies records produced by the new compensation-policy calculation
+/// path. Missing metadata is deliberately interpreted as legacy provenance.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PayrollCalculationProvenance {
+    COMPENSATION_POLICY_ENGINE,
+}
+
+/// Optional envelope keeps legacy payroll JSON unchanged while allowing a
+/// current-engine record to be explicitly marked even before its snapshot is
+/// present (for example, while it is DRAFT).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollCalculationMetadata {
+    pub provenance: PayrollCalculationProvenance,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<PayrollCalculationSnapshot>,
+}
+
+/// Persisted calculation inputs and the resolved compensation timeline used
+/// by one BordroKaydi. Its person, service-period, tax-period, and accrual
+/// identity is owned by the parent BordroKaydi plus BordroDonemi context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollCalculationSnapshot {
+    pub snapshotSchemaVersion: u16,
+    /// Semantic formula/replay version; this is independent of a build hash.
+    pub calculationVersion: String,
+    pub compensation: ResolvedCompensationSnapshot,
+    pub usedInputs: PayrollUsedInputSnapshot,
+}
+
+/// The exact full-state compensation segments resolved for the payroll period.
+/// Reuses the domain segment model instead of maintaining a second state shape.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedCompensationSnapshot {
+    pub segments: Vec<ResolvedCompensationSegment>,
+}
+
+/// Exact scoped inputs consumed for one calculation. Optional source objects
+/// remain explicit; financial Option values use required-nullable string JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollUsedInputSnapshot {
+    pub personnelGroup: String,
+    pub serviceYear: i32,
+    pub personalDeductions: Option<PayrollPersonalDeductionInputsSnapshot>,
+    pub attendance: Option<PayrollAttendanceInputSnapshot>,
+    pub paidSickLeave: Option<PayrollPaidSickLeaveInputSnapshot>,
+    pub manualIncome: PayrollManualIncomeInputSnapshot,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub accrualGrossAmount: Option<Decimal>,
+    pub institutionDeductionSettings: PayrollInstitutionDeductionInputsSnapshot,
+    pub statutoryParameters: PayrollStatutoryInputsSnapshot,
+    pub annualParameters: PayrollAnnualParametersSnapshot,
+    pub taxHistory: PayrollTaxHistoryInputsSnapshot,
+    pub incomingPekCarry: PayrollIncomingPekCarrySnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollPersonalDeductionInputsSnapshot {
+    pub sendikaUyesi: Option<bool>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sabitSendikaAidati: Option<Decimal>,
+    pub besUyesi: Option<bool>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub oksOraniYuzde: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sabitBesTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub icraTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub nafakaTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub kisiBorcuTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub dogumAskerlikBorclanmasiTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub hayatSaglikSigortasiTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub digerKesintiTutar: Option<Decimal>,
+    pub gvIndirimleri: Option<PayrollGvDeductionInputsSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollGvDeductionInputsSnapshot {
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub dogumAskerlikGvIndirimTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub hayatSigortasiPrimiTutar: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub saglikSigortasiPrimiTutar: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PayrollAttendanceCoverage {
+    COMPLETE,
+    PARTIAL,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollAttendanceInputSnapshot {
+    /// Coverage is relative to the parent BordroDonemi inclusive date range.
+    pub coverage: PayrollAttendanceCoverage,
+    pub days: Vec<PayrollAttendanceDaySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollAttendanceDaySnapshot {
+    pub date: String,
+    pub code: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollPaidSickLeaveInputSnapshot {
+    /// Immutable policy id for the episode-to-paid-date rule.
+    pub ruleVersion: String,
+    pub sourceEpisodes: Vec<PayrollSickLeaveEpisodeSnapshot>,
+    pub paidDates: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollSickLeaveEpisodeSnapshot {
+    pub id: String,
+    pub startDate: String,
+    pub endDate: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollManualIncomeInputSnapshot {
+    /// Distinguishes no request object from an explicitly supplied empty input.
+    pub supplied: bool,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub tediye: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub tisIkramiyesi: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollInstitutionDeductionInputsSnapshot {
+    /// Resolved institution choice used for income-tax and stamp-tax treatment.
+    pub yemekTamGvIstisnaDamgaTabi: bool,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub damgaVergisiOraniBinde: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sendikaAidatiYuzde: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sabitSendikaAidati: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub besOraniYuzde: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sabitBesTutar: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollStatutoryInputsSnapshot {
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gunlukAsgariUcret: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub sgkIsciOraniYuzde: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub issizlikIsciOraniYuzde: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub pekTavanKatsayisi: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gunlukYemekIstisnasiSGK: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gunlukYemekIstisnasiGV: Decimal,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sgkIsverenOraniYuzde: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub issizlikIsverenOraniYuzde: Option<Decimal>,
+    pub statutoryParameterSegments: Vec<PayrollStatutoryInputSegmentSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollStatutoryInputSegmentSnapshot {
+    pub effectiveFrom: String,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub gunlukAsgariUcret: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub pekTavanKatsayisi: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub gunlukYemekIstisnasiSGK: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub gunlukYemekIstisnasiGV: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollAnnualParametersSnapshot {
+    pub year: i32,
+    pub gelirVergisiDilimleri: Vec<PayrollTaxBracketSnapshot>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub sigortaGvYillikBrutAsgariUcretTavani: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollTaxBracketSnapshot {
+    #[serde(with = "rust_decimal::serde::str")]
+    pub limit: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub oran: Decimal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PayrollTaxOpeningSource {
+    EXPLICIT_OPENING,
+    LEGACY_PERSONNEL_VALUE,
+    IMPLICIT_ZERO,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollTaxOpeningSnapshot {
+    pub source: PayrollTaxOpeningSource,
+    pub openingId: Option<String>,
+    pub effectiveFromTaxYear: i32,
+    pub effectiveFromTaxMonth: i32,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub amount: Decimal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollTaxHistoryInputsSnapshot {
+    pub normalGvOpening: PayrollTaxOpeningSnapshot,
+    pub minimumWageGvOpening: PayrollTaxOpeningSnapshot,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub previousCumulativeGv: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub previousCumulativeMinimumWageGv: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub previousAnnualInsuranceGvDeduction: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub samePaymentMonthPekUsed: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub samePaymentMonthGvExemptionUsed: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub samePaymentMonthStampExemptionUsed: Decimal,
+    pub previousPaymentEvents: Vec<PayrollPriorPaymentEventSnapshot>,
+    pub minimumWageMonthlyReferences: Vec<PayrollMinimumWageMonthInputSnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollPriorPaymentEventSnapshot {
+    pub periodId: String,
+    pub accrualId: String,
+    pub accrualType: AccrualType,
+    pub taxYear: i32,
+    pub taxMonth: i32,
+    pub paymentDate: String,
+    pub sequence: i32,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gvTaxableBase: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub insuranceGvDeductionUsed: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub gvExemptionUsed: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub stampExemptionUsed: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub pekPrimeBase: Decimal,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub monthPekConsumptionAfter: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub pekCeiling: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub mealSgkExemption: Decimal,
+    pub income: PayrollIncomeInputsSnapshot,
+    pub outgoingPekCarry: Vec<PayrollPekCarrySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollIncomeInputsSnapshot {
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub tabanBrutAylik: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub tediye: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub tisIkramiyesi: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub ekOdeme: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub yemek: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub birlestirilmisSosyalYardim: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub vasitaYol: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub giyimYardimi: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub isPrimi: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub geceCalismasiUcreti: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub geceCalismasiTatiliUcreti: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub hizmetZammi: Option<Decimal>,
+    #[serde(with = "rust_decimal::serde::str_option")]
+    pub digerGelir: Option<Decimal>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollMinimumWageMonthInputSnapshot {
+    pub periodId: String,
+    pub taxYear: i32,
+    pub taxMonth: i32,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub dailyMinimumWage: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub sgkWorkerRatePercent: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub unemploymentWorkerRatePercent: Decimal,
+    #[serde(with = "rust_decimal::serde::str")]
+    pub monthlyGvBase: Decimal,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PayrollPekCarrySource {
+    NONE,
+    PAYMENT_EVENT,
+    RETRO_OVERRIDE,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollIncomingPekCarrySnapshot {
+    pub source: PayrollPekCarrySource,
+    pub sourceId: Option<String>,
+    pub sourcePeriodId: Option<String>,
+    pub sourceTaxYear: Option<i32>,
+    pub sourceTaxMonth: Option<i32>,
+    pub taxMonthsElapsed: i32,
+    pub records: Vec<PayrollPekCarrySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollPekCarrySnapshot {
+    #[serde(with = "rust_decimal::serde::str")]
+    pub tutar: Decimal,
+    pub kalanAySayisi: i32,
+    pub kaynakDonemId: Option<String>,
 }
 
 /// Hesaplanan bordronun iş primi bölümünün denetlenebilir snapshot'ı.
@@ -888,7 +1377,7 @@ pub struct TransportRateChange {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct DonemselKurumDegerleri {
     pub donemId: String,
     pub gunlukTabanUcret: Decimal,
@@ -948,6 +1437,103 @@ pub struct DonemselKurumDegerleri {
         alias = "isverenIssizlikPrimOrani"
     )]
     pub issizlikIsverenOraniYuzde: Option<Decimal>,
+}
+
+/// Raw period-settings DTO retained for database and legacy-backup
+/// compatibility. It is not an input model for active payroll calculation.
+pub type LegacyInstitutionSettings = DonemselKurumDegerleri;
+
+/// Inputs that are allowed to cross the active payroll calculation boundary.
+/// Compensation rates live in `CompensationPolicyVersion`; the legacy
+/// `DonemselKurumDegerleri` DTO remains available only for persisted/imported
+/// period settings and compatibility adapters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PayrollPeriodInstitutionSettings {
+    pub donemId: String,
+    #[serde(default = "default_meal_payroll_tax_policy")]
+    pub yemekTamGvIstisnaDamgaTabi: bool,
+    pub tediyeListesi: Option<Vec<TediyeKalemi>>,
+    pub tisIkramiyeListesi: Option<Vec<TisIkramiyeKalemi>>,
+    pub tediyeTisNotu: Option<String>,
+    pub sgkIsciOraniYuzde: Option<Decimal>,
+    pub issizlikIsciOraniYuzde: Option<Decimal>,
+    pub gelirVergisiOraniYuzde: Option<Decimal>,
+    pub damgaVergisiOraniBinde: Option<Decimal>,
+    pub sendikaAidatiYuzde: Option<Decimal>,
+    pub sabitSendikaAidati: Option<Decimal>,
+    pub besOraniYuzde: Option<Decimal>,
+    pub sabitBesTutar: Option<Decimal>,
+    pub gunlukYemekIstisnasiSGK: Option<Decimal>,
+    pub gunlukYemekIstisnasiGV: Option<Decimal>,
+    pub statutoryParameterSegments: Option<Vec<StatutoryParameterSegment>>,
+    pub statutoryParameterSnapshot: Option<StatutoryParameterSnapshot>,
+    pub pekTavanKatsayisi: Option<Decimal>,
+    pub gunlukAsgariUcret: Option<Decimal>,
+    pub sgkIsverenOraniYuzde: Option<Decimal>,
+    pub issizlikIsverenOraniYuzde: Option<Decimal>,
+}
+
+impl Default for PayrollPeriodInstitutionSettings {
+    fn default() -> Self {
+        Self {
+            donemId: String::new(),
+            yemekTamGvIstisnaDamgaTabi: true,
+            tediyeListesi: None,
+            tisIkramiyeListesi: None,
+            tediyeTisNotu: None,
+            sgkIsciOraniYuzde: None,
+            issizlikIsciOraniYuzde: None,
+            gelirVergisiOraniYuzde: None,
+            damgaVergisiOraniBinde: None,
+            sendikaAidatiYuzde: None,
+            sabitSendikaAidati: None,
+            besOraniYuzde: None,
+            sabitBesTutar: None,
+            gunlukYemekIstisnasiSGK: None,
+            gunlukYemekIstisnasiGV: None,
+            statutoryParameterSegments: None,
+            statutoryParameterSnapshot: None,
+            pekTavanKatsayisi: None,
+            gunlukAsgariUcret: None,
+            sgkIsverenOraniYuzde: None,
+            issizlikIsverenOraniYuzde: None,
+        }
+    }
+}
+
+impl From<&DonemselKurumDegerleri> for PayrollPeriodInstitutionSettings {
+    fn from(value: &DonemselKurumDegerleri) -> Self {
+        Self {
+            donemId: value.donemId.clone(),
+            yemekTamGvIstisnaDamgaTabi: value.yemekTamGvIstisnaDamgaTabi,
+            tediyeListesi: value.tediyeListesi.clone(),
+            tisIkramiyeListesi: value.tisIkramiyeListesi.clone(),
+            tediyeTisNotu: value.tediyeTisNotu.clone(),
+            sgkIsciOraniYuzde: value.sgkIsciOraniYuzde,
+            issizlikIsciOraniYuzde: value.issizlikIsciOraniYuzde,
+            gelirVergisiOraniYuzde: value.gelirVergisiOraniYuzde,
+            damgaVergisiOraniBinde: value.damgaVergisiOraniBinde,
+            sendikaAidatiYuzde: value.sendikaAidatiYuzde,
+            sabitSendikaAidati: value.sabitSendikaAidati,
+            besOraniYuzde: value.besOraniYuzde,
+            sabitBesTutar: value.sabitBesTutar,
+            gunlukYemekIstisnasiSGK: value.gunlukYemekIstisnasiSGK,
+            gunlukYemekIstisnasiGV: value.gunlukYemekIstisnasiGV,
+            statutoryParameterSegments: value.statutoryParameterSegments.clone(),
+            statutoryParameterSnapshot: value.statutoryParameterSnapshot.clone(),
+            pekTavanKatsayisi: value.pekTavanKatsayisi,
+            gunlukAsgariUcret: value.gunlukAsgariUcret,
+            sgkIsverenOraniYuzde: value.sgkIsverenOraniYuzde,
+            issizlikIsverenOraniYuzde: value.issizlikIsverenOraniYuzde,
+        }
+    }
+}
+
+impl From<DonemselKurumDegerleri> for PayrollPeriodInstitutionSettings {
+    fn from(value: DonemselKurumDegerleri) -> Self {
+        Self::from(&value)
+    }
 }
 
 fn default_meal_payroll_tax_policy() -> bool {

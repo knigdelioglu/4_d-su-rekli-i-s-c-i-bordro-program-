@@ -13,7 +13,7 @@ import type {
   AnnualPayrollParameters,
   BordroDonemi,
   BordroKaydi,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
 } from '../../types/payroll';
@@ -24,7 +24,6 @@ import {
   formatDateTR,
   formatPeriodPaymentMonthLabel,
   hasCompleteAnnualPayrollParameters,
-  hasCompletePeriodIncomeParameters,
   hasCompletePeriodLegalParameters,
 } from '../../utils/payrollPresentation';
 import { PayrollNoticeCenter } from '../PayrollNoticeCenter';
@@ -35,7 +34,8 @@ interface PeriodSummaryProps {
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
-  activeKurumDegerleri?: DönemselKurumDegerleri;
+  activeKurumDegerleri?: PayrollPeriodInstitutionSettings;
+  compensationPolicyReady: boolean;
   annualPayrollParameters: AnnualPayrollParameters[];
   payrollNotices: PayrollNotice[];
   isRefreshingNotices: boolean;
@@ -62,6 +62,7 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
   puantajlar,
   bordrolar,
   activeKurumDegerleri,
+  compensationPolicyReady,
   annualPayrollParameters,
   payrollNotices,
   isRefreshingNotices,
@@ -85,10 +86,7 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
     const authoritativeNormal = normalPayrolls.filter(isAuthoritative);
     const calculatedNormal = normalPayrolls.filter((payroll) => payroll.status === 'CALCULATED');
     const staleNormal = normalPayrolls.filter((payroll) => payroll.status === 'STALE');
-    const incomeParametersReady = hasCompletePeriodIncomeParameters(
-      activeKurumDegerleri,
-      aktifDonem.id
-    );
+    const incomeParametersReady = compensationPolicyReady;
     const legalParametersReady = hasCompletePeriodLegalParameters(
       activeKurumDegerleri,
       aktifDonem
@@ -150,7 +148,7 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
       missingTis: activeTisReference ? Math.max(0, personeller.length - tisPeople.size) : 0,
       finalizedPending: calculatedNormal.length,
     };
-  }, [aktifDonem, activeKurumDegerleri, annualPayrollParameters, bordrolar, personeller, puantajlar]);
+  }, [aktifDonem, activeKurumDegerleri, annualPayrollParameters, bordrolar, compensationPolicyReady, personeller, puantajlar]);
 
   if (!aktifDonem || !summary) {
     return (
@@ -255,8 +253,8 @@ export const PeriodSummary: React.FC<PeriodSummaryProps> = ({
             <StatusRow
               tone={summary.incomeParametersReady ? 'success' : 'critical'}
               icon={summary.incomeParametersReady ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-              label={summary.incomeParametersReady ? 'Ücret ve yardım parametreleri hazır' : 'Ücret ve yardım parametreleri eksik'}
-              detail={summary.incomeParametersReady ? undefined : 'Ücretler bölümüne kayıt gerekli'}
+              label={summary.incomeParametersReady ? 'Başlangıç ücret politikası hazır' : 'Başlangıç ücret politikası eksik'}
+              detail={summary.incomeParametersReady ? undefined : 'NORMAL bordro için ücret politikası ekranında başlangıç sürümü kaydedin.'}
             />
             <StatusRow
               tone={summary.legalParametersReady ? 'success' : 'critical'}

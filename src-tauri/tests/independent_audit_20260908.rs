@@ -6,21 +6,33 @@ use bordro_programi_lib::{
     repositories::{
         attendance_repo::AttendanceRepository, payroll_repo::PayrollRepository,
         period_repo::PeriodRepository, personnel_repo::PersonnelRepository,
-        settings_repo::SettingsRepository,
+        settings_repo::SettingsRepository, tax_opening_repo::TaxOpeningRepository,
     },
     services::payroll_service::PayrollService,
 };
 use payroll_core::*;
 use rust_decimal_macros::dec;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn setup() -> rusqlite::Connection {
     let conn = create_in_memory_connection().unwrap();
     let req = support::request();
     PersonnelRepository::save(&conn, &req.dataset.personnel[0]).unwrap();
     PeriodRepository::save(&conn, &req.dataset.periods[0]).unwrap();
-    SettingsRepository::save_institution_settings(
+    let mut settings = req.dataset.institutionSettings[&req.periodId].clone();
+    settings.yemekTamGvIstisnaDamgaTabi = false;
+    SettingsRepository::save_active_institution_settings(&conn, &settings).unwrap();
+    let baseline = req
+        .dataset
+        .compensationPolicyVersions
+        .iter()
+        .find(|version| version.effectiveFrom == req.dataset.periods[0].baslangicTarihi)
+        .expect("request should carry explicit policy baseline");
+    compensation_policy_test_support::seed_period_policy_version(
         &conn,
-        &req.dataset.institutionSettings[&req.periodId],
+        &req.dataset.periods[0],
+        baseline,
     )
     .unwrap();
     AttendanceRepository::save(&conn, &req.dataset.attendances[0]).unwrap();
@@ -119,7 +131,7 @@ fn audit_native_roundtrip_and_same_month_chain() {
 #[test]
 fn audit_tax_snapshot_change_invalidates_following_event_even_if_net_is_same() {
     let conn = setup();
-    let mut normal = PayrollService::calculate_payroll_for_accrual_checked(
+    let normal = PayrollService::calculate_payroll_for_accrual_checked(
         &conn,
         "audit",
         "audit-jan",
@@ -136,13 +148,47 @@ fn audit_tax_snapshot_change_invalidates_following_event_even_if_net_is_same() {
         None,
     )
     .unwrap();
-    // The annual insurance balance is a dependency independently of this event's totals.
-    normal
-        .gvDetay
-        .as_mut()
-        .unwrap()
-        .uygulanabilirSigortaGvIndirimi = dec!(0.01);
-    PayrollRepository::save(&conn, &normal).unwrap();
+    // A one-kuruş opening changes the saved tax inputs while leaving this
+    // fixture's rounded payment unchanged. The authoritative mutation must
+    // stale the later same-month payment event.
+    TaxOpeningRepository::save(
+        &conn,
+        &PersonelTaxOpening {
+            id: "audit-opening-2026".into(),
+            personnelId: "audit".into(),
+            year: 2026,
+            gvCumulativeOpening: Some(dec!(0.01)),
+            effectiveFromPeriodId: Some("audit-jan".into()),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some("audit-jan".into()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )
+    .unwrap();
+    let recalculated = PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "audit",
+        "audit-jan",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(recalculated.netOdeme, normal.netOdeme);
+    assert_eq!(
+        recalculated
+            .calculationMetadata
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .usedInputs
+            .taxHistory
+            .normalGvOpening
+            .amount,
+        dec!(0.01)
+    );
     let records = PayrollRepository::get_all(&conn).unwrap();
     assert_eq!(
         records.iter().find(|p| p.id == extra.id).unwrap().status,

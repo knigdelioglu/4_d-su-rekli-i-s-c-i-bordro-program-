@@ -3,12 +3,12 @@ use bordro_programi_lib::domain::models::*;
 use bordro_programi_lib::domain::DomainError;
 use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
+use bordro_programi_lib::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
-use bordro_programi_lib::repositories::settings_repo::{
-    SettingsRepository, ZAM_AYLARI_SETTING_KEY,
-};
+use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
+use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
 use rust_decimal::Decimal;
@@ -62,8 +62,97 @@ fn settings(period_id: &str, daily_wage: Decimal) -> DonemselKurumDegerleri {
     }
 }
 
+fn policy_version(
+    id: &str,
+    effective_from: &str,
+    daily_wage: Decimal,
+    supersedes: Option<&str>,
+) -> CompensationPolicyVersion {
+    policy_version_with_rates(
+        id,
+        effective_from,
+        daily_wage,
+        dec!(100),
+        dec!(50),
+        supersedes,
+    )
+}
+
+fn policy_version_with_rates(
+    id: &str,
+    effective_from: &str,
+    daily_wage: Decimal,
+    daily_meal: Decimal,
+    daily_road: Decimal,
+    supersedes: Option<&str>,
+) -> CompensationPolicyVersion {
+    CompensationPolicyVersion {
+        id: id.into(),
+        effectiveFrom: effective_from.into(),
+        state: CompensationPolicyState {
+            gunlukTabanUcret: daily_wage,
+            gunlukYemek: daily_meal,
+            birlestirilmisSosyalYardim: dec!(0),
+            gunlukVasitaYol: daily_road,
+            giyimYardimi: dec!(0),
+            hizmetZammiBirimi: dec!(0),
+            isPrimiYuzde: None,
+            isPrimiGruplari: vec![CompensationPolicyGroup {
+                id: "1. Grup".into(),
+                ad: "1. Grup".into(),
+                oran: dec!(9),
+                aktif: true,
+            }],
+            geceCalismaPrimiYuzde: dec!(0),
+            geceCalismaTatiliPrimiYuzde: dec!(0),
+            ekOdeme: Some(dec!(0)),
+            digerGelirVarsayilan: Some(dec!(0)),
+        },
+        boundaryScope: CompensationBoundaryScope::FullEarning,
+        roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+        createdAt: "2026-01-01T00:00:00Z".into(),
+        source: "TEST_FIXTURE".into(),
+        reason: format!("{id} test policy"),
+        supersedesVersionId: supersedes.map(str::to_owned),
+    }
+}
+
+fn save_policy_baseline(
+    conn: &rusqlite::Connection,
+    effective_from: &str,
+    daily_wage: Decimal,
+) -> Result<(), Box<dyn std::error::Error>> {
+    CompensationPolicyRepository::insert_version(
+        conn,
+        &policy_version("paid-sick-baseline", effective_from, daily_wage, None),
+    )?;
+    Ok(())
+}
+
 fn save_annual_parameters(conn: &rusqlite::Connection) -> Result<(), Box<dyn std::error::Error>> {
     AnnualPayrollParametersRepository::save(conn, &AnnualPayrollParameters::default_for_2026())?;
+    Ok(())
+}
+
+fn save_tax_opening(
+    conn: &rusqlite::Connection,
+    personnel_id: &str,
+    period: &BordroDonemi,
+) -> Result<(), Box<dyn std::error::Error>> {
+    TaxOpeningRepository::save(
+        conn,
+        &PersonelTaxOpening {
+            id: format!("{personnel_id}_{}", period.taxYear),
+            personnelId: personnel_id.into(),
+            year: period.taxYear,
+            gvCumulativeOpening: Some(dec!(0)),
+            effectiveFromPeriodId: Some(period.id.clone()),
+            asgariGvCumulativeOpening: Some(dec!(0)),
+            asgariGvEffectiveFromPeriodId: Some(period.id.clone()),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
     Ok(())
 }
 
@@ -107,7 +196,9 @@ fn paid_sick_days_restore_base_wage_but_not_meal_road_or_work_premium(
     PersonnelRepository::save(&conn, &p)?;
     PeriodRepository::save(&conn, &period)?;
     SettingsRepository::save_institution_settings(&conn, &settings(&period.id, dec!(1000)))?;
+    save_policy_baseline(&conn, &period.baslangicTarihi, dec!(1000))?;
     save_annual_parameters(&conn)?;
+    save_tax_opening(&conn, &p.id, &period)?;
     AttendanceRepository::save(&conn, &attendance_28_work_2_sick(&p.id))?;
     SickLeaveRepository::save(
         &conn,
@@ -139,7 +230,9 @@ fn sixth_sick_episode_does_not_restore_base_wage() -> Result<(), Box<dyn std::er
     PersonnelRepository::save(&conn, &p)?;
     PeriodRepository::save(&conn, &period)?;
     SettingsRepository::save_institution_settings(&conn, &settings(&period.id, dec!(1000)))?;
+    save_policy_baseline(&conn, &period.baslangicTarihi, dec!(1000))?;
     save_annual_parameters(&conn)?;
+    save_tax_opening(&conn, &p.id, &period)?;
     AttendanceRepository::save(&conn, &attendance_28_work_2_sick(&p.id))?;
 
     for (idx, month) in [1, 2, 3, 4, 5].into_iter().enumerate() {
@@ -177,6 +270,7 @@ fn payable_sick_date_must_match_r_code_in_attendance() -> Result<(), Box<dyn std
 
     PersonnelRepository::save(&conn, &p)?;
     PeriodRepository::save(&conn, &period)?;
+    save_policy_baseline(&conn, &period.baslangicTarihi, dec!(1000))?;
 
     let mut gunler = HashMap::new();
     gunler.insert("2026-08-12".into(), "Ç".into());
@@ -239,8 +333,23 @@ fn paid_sick_wage_uses_correct_rate_on_each_side_of_raise_date(
     PeriodRepository::save(&conn, &active)?;
     SettingsRepository::save_institution_settings(&conn, &settings(&previous.id, dec!(1000)))?;
     SettingsRepository::save_institution_settings(&conn, &settings(&active.id, dec!(2000)))?;
-    SettingsRepository::set_app_setting(&conn, ZAM_AYLARI_SETTING_KEY, "[4]")?;
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &policy_version("paid-sick-baseline", "2026-02-15", dec!(1000), None),
+    )?;
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &policy_version_with_rates(
+            "paid-sick-april-rate",
+            "2026-04-01",
+            dec!(2000),
+            dec!(200),
+            dec!(50),
+            None,
+        ),
+    )?;
     save_annual_parameters(&conn)?;
+    save_tax_opening(&conn, &p.id, &active)?;
 
     let mut gunler = HashMap::new();
     gunler.insert("2026-03-30".into(), "Ç".into());

@@ -5,6 +5,7 @@
 
 #![allow(non_snake_case)]
 
+use crate::compensation_policy::parse_canonical_work_date;
 use crate::index::PayrollDatasetIndex;
 use crate::models::{
     BordroDonemi, BordroStatus, CompensationRevisionStatus, RetroAdjustmentBatch,
@@ -43,6 +44,15 @@ pub enum PayrollMutation {
     TaxYear { taxYear: i32 },
     #[serde(rename = "PERIOD")]
     Period { periodId: String },
+    /// A policy edit changes normal compensation for work days in this
+    /// inclusive service-date window. Direct roots are NORMAL payrolls whose
+    /// work periods intersect the window; downstream events are followed by
+    /// actual payment-event order and GV/PEK dependency rules.
+    #[serde(rename = "COMPENSATION_POLICY")]
+    CompensationPolicy {
+        effectiveFrom: String,
+        throughInclusive: Option<String>,
+    },
     #[serde(rename = "PERIOD_FROM_POSITION")]
     PeriodFromPosition {
         startDate: String,
@@ -116,6 +126,49 @@ pub struct MutationImpact {
     pub affectedRetroBatches: Vec<String>,
     #[serde(default)]
     pub blockedByFinalizedRetroBatches: Vec<String>,
+    /// Explains which direct NORMAL source period reaches each affected
+    /// payment event. Kept separate from `affectedPayrolls` so existing
+    /// mutation callers can ignore the causal detail.
+    #[serde(default)]
+    pub payrollCauses: Vec<PayrollMutationCause>,
+    /// Typed retro effects for COMPENSATION_POLICY changes. The adapter may
+    /// stale only `STALE_ELIGIBLE` entries and must reject every blocker in
+    /// the same transaction as the policy append.
+    #[serde(default)]
+    pub retroEffects: Vec<RetroMutationEffect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub struct PayrollMutationCause {
+    pub payroll: PayrollKey,
+    pub causePeriodId: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RetroMutationAction {
+    StaleEligible,
+    ImmutableBlocker,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RetroMutationBlockerReason {
+    FinalizedBatch,
+    SettledBatch,
+    FinalizedSource,
+    FinalizedPaymentEvent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetroMutationEffect {
+    pub batchId: String,
+    pub sourcePeriodIds: Vec<String>,
+    pub linkedPaymentEventIds: Vec<String>,
+    pub action: RetroMutationAction,
+    pub blockers: Vec<RetroMutationBlockerReason>,
 }
 
 fn period_for<'a>(
@@ -175,22 +228,7 @@ fn is_period_settings_dependent(
         .payrolls
         .iter()
         .any(|payroll| payroll.donemId == source.id);
-    source_has_events
-        || candidate.id == source.id
-        || candidate.taxYear == source.taxYear
-        || is_scheduled_income_history_dependent(dataset, candidate, &source.baslangicTarihi)
-}
-
-/// Stored rate equality determines whether an amount is explicit or inferred.
-/// An earlier edit can change that decision as well as the inferred amount,
-/// so scheduled compensation invalidation conservatively follows service
-/// chronology across tax years, independent of payment events.
-fn is_scheduled_income_history_dependent(
-    dataset: &PayrollDatasetSnapshot,
-    candidate: &BordroDonemi,
-    start_date: &str,
-) -> bool {
-    !dataset.zamAylari.is_empty() && candidate.baslangicTarihi.as_str() >= start_date
+    source_has_events || candidate.id == source.id || candidate.taxYear == source.taxYear
 }
 
 fn is_person_from_date(candidate: &BordroDonemi, effective_from: &str) -> Result<bool> {
@@ -307,6 +345,77 @@ fn affected_after_accrual(
         previous_date = date;
     }
     Ok(false)
+}
+
+fn compensation_policy_period_overlaps(
+    period: &BordroDonemi,
+    effective_from: &str,
+    through_inclusive: Option<&str>,
+) -> Result<bool> {
+    let start = parse_canonical_work_date(effective_from, "compensation effectiveFrom")?;
+    let period_start = parse_canonical_work_date(&period.baslangicTarihi, "period start")?;
+    let period_end = parse_canonical_work_date(&period.bitisTarihi, "period end")?;
+    let through = through_inclusive
+        .map(|date| parse_canonical_work_date(date, "compensation throughInclusive"))
+        .transpose()?
+        .unwrap_or(NaiveDate::MAX);
+    if through < start {
+        return Err(DomainError::ValidationError(
+            "Compensation policy date window ends before it starts.".into(),
+        ));
+    }
+    Ok(period_end >= start && period_start <= through)
+}
+
+fn compensation_policy_roots<'a>(
+    dataset: &'a PayrollDatasetSnapshot,
+    index: &'a PayrollDatasetIndex,
+    effective_from: &str,
+    through_inclusive: Option<&str>,
+) -> Result<Vec<&'a crate::models::BordroKaydi>> {
+    let mut roots = Vec::new();
+    for payroll in &dataset.payrolls {
+        if payroll.accrualType != crate::models::AccrualType::NORMAL {
+            continue;
+        }
+        let period = require_period(index, dataset, &payroll.donemId)?;
+        if compensation_policy_period_overlaps(period, effective_from, through_inclusive)? {
+            roots.push(payroll);
+        }
+    }
+    Ok(roots)
+}
+
+fn compensation_policy_causes_for<'a>(
+    index: &PayrollDatasetIndex,
+    dataset: &PayrollDatasetSnapshot,
+    payroll: &crate::models::BordroKaydi,
+    roots: &[&'a crate::models::BordroKaydi],
+) -> Result<Vec<&'a crate::models::BordroKaydi>> {
+    let mut causes = Vec::new();
+    for root in roots
+        .iter()
+        .copied()
+        .filter(|root| root.personelId == payroll.personelId)
+    {
+        if effective_accrual_id(root) == effective_accrual_id(payroll)
+            && root.donemId == payroll.donemId
+        {
+            causes.push(root);
+            continue;
+        }
+        if affected_after_accrual(
+            index,
+            dataset,
+            payroll,
+            &root.personelId,
+            &payroll_order(dataset, index, root)?,
+            payroll_effective_payment_date(index, dataset, root)?,
+        )? {
+            causes.push(root);
+        }
+    }
+    Ok(causes)
 }
 
 fn input_order(
@@ -427,13 +536,13 @@ fn affected_by_mutation(
             Ok(candidate
                 .is_some_and(|candidate| is_period_settings_dependent(dataset, candidate, source)))
         }
+        PayrollMutation::CompensationPolicy { .. } => Ok(false),
         PayrollMutation::PeriodInsert {
             startDate,
             taxYear,
             taxMonth,
         } => Ok(candidate.is_some_and(|candidate| {
             is_same_tax_year_from_position(candidate, startDate, *taxYear, *taxMonth)
-                || is_scheduled_income_history_dependent(dataset, candidate, startDate)
         })),
         PayrollMutation::PeriodFromPosition {
             startDate,
@@ -619,17 +728,15 @@ fn retro_batch_affected_by_mutation(
         }
         PayrollMutation::Period { periodId } => {
             let source = require_period(index, dataset, periodId)?;
-            if same_source_period(periodId) {
-                return Ok(true);
-            }
-            retro_batch_source_period_matches(index, dataset, batch, |period| {
-                Ok(is_scheduled_income_history_dependent(
-                    dataset,
-                    period,
-                    &source.baslangicTarihi,
-                ))
-            })
+            let _ = source;
+            Ok(same_source_period(periodId))
         }
+        PayrollMutation::CompensationPolicy {
+            effectiveFrom,
+            throughInclusive,
+        } => retro_batch_source_period_matches(index, dataset, batch, |period| {
+            compensation_policy_period_overlaps(period, effectiveFrom, throughInclusive.as_deref())
+        }),
         PayrollMutation::PeriodFromPosition {
             startDate,
             taxYear,
@@ -642,10 +749,9 @@ fn retro_batch_affected_by_mutation(
             taxYear,
             taxMonth,
         } => retro_batch_source_period_matches(index, dataset, batch, |period| {
-            Ok(
-                is_same_tax_year_from_position(period, startDate, *taxYear, *taxMonth)
-                    || is_scheduled_income_history_dependent(dataset, period, startDate),
-            )
+            Ok(is_same_tax_year_from_position(
+                period, startDate, *taxYear, *taxMonth,
+            ))
         }),
         PayrollMutation::PersonFromDate {
             personnelId,
@@ -718,16 +824,42 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
     let mut blocked = BTreeSet::new();
     let mut affected_retro_batches = BTreeSet::new();
     let mut blocked_retro_batches = BTreeSet::new();
+    let mut retro_effects = Vec::new();
+    let compensation_policy_mutation =
+        matches!(mutation, PayrollMutation::CompensationPolicy { .. });
+    let compensation_roots = match mutation {
+        PayrollMutation::CompensationPolicy {
+            effectiveFrom,
+            throughInclusive,
+        } => Some(compensation_policy_roots(
+            dataset,
+            index,
+            effectiveFrom,
+            throughInclusive.as_deref(),
+        )?),
+        _ => None,
+    };
+    let mut payroll_causes = BTreeSet::new();
 
     for payroll in &dataset.payrolls {
-        if !affected_by_mutation(
-            index,
-            dataset,
-            &payroll.personelId,
-            &payroll.donemId,
-            payroll,
-            mutation,
-        )? {
+        let roots = compensation_roots.as_deref();
+        let causes = match roots {
+            Some(roots) => compensation_policy_causes_for(index, dataset, payroll, roots)?,
+            None => Vec::new(),
+        };
+        let is_affected = if roots.is_some() {
+            !causes.is_empty()
+        } else {
+            affected_by_mutation(
+                index,
+                dataset,
+                &payroll.personelId,
+                &payroll.donemId,
+                payroll,
+                mutation,
+            )?
+        };
+        if !is_affected {
             continue;
         }
         let key = PayrollKey {
@@ -738,6 +870,12 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
         if payroll.status == BordroStatus::FINALIZED {
             blocked.insert(key.clone());
         }
+        for root in causes {
+            payroll_causes.insert(PayrollMutationCause {
+                payroll: key.clone(),
+                causePeriodId: root.donemId.clone(),
+            });
+        }
         affected.insert(key);
     }
 
@@ -745,9 +883,175 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
         if !retro_batch_affected_by_mutation(index, dataset, batch, mutation)? {
             continue;
         }
+        if compensation_policy_mutation && batch.status != CompensationRevisionStatus::STALE {
+            let allocations = index
+                .retro_allocations_for_batch(dataset, &batch.id)
+                .collect::<Vec<_>>();
+            if allocations.is_empty() {
+                return Err(DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} retro batch has no allocation provenance.",
+                    batch.id
+                )));
+            }
+            if !dataset
+                .compensationRevisions
+                .iter()
+                .any(|revision| revision.id == batch.revisionId)
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} retro batch references a missing revision.",
+                    batch.id
+                )));
+            }
+            if allocations.iter().any(|allocation| {
+                allocation.personnelId != batch.personnelId || allocation.batchId != batch.id
+            }) {
+                return Err(DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} retro allocation identity is inconsistent.",
+                    batch.id
+                )));
+            }
+            if allocations
+                .iter()
+                .any(|allocation| index.period(dataset, &allocation.sourcePeriodId).is_none())
+            {
+                return Err(DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} retro batch references a missing source period.",
+                    batch.id
+                )));
+            }
+        }
         affected_retro_batches.insert(batch.id.clone());
         if batch.status == CompensationRevisionStatus::FINALIZED {
             blocked_retro_batches.insert(batch.id.clone());
+        }
+        if compensation_policy_mutation {
+            let allocations = index
+                .retro_allocations_for_batch(dataset, &batch.id)
+                .collect::<Vec<_>>();
+            let mut source_period_ids = allocations
+                .iter()
+                .map(|allocation| allocation.sourcePeriodId.clone())
+                .collect::<Vec<_>>();
+            source_period_ids.sort();
+            source_period_ids.dedup();
+            let mut linked_payment_events = dataset
+                .payrolls
+                .iter()
+                .filter(|payroll| {
+                    payroll.personelId == batch.personnelId
+                        && payroll.accrualType == crate::models::AccrualType::RETRO_ADJUSTMENT
+                        && (payroll.accrualId == batch.id || payroll.id == batch.id)
+                })
+                .collect::<Vec<_>>();
+            linked_payment_events.sort_by(|left, right| left.id.cmp(&right.id));
+            let mut blockers = BTreeSet::new();
+            if batch.status == CompensationRevisionStatus::FINALIZED {
+                blockers.insert(RetroMutationBlockerReason::FinalizedBatch);
+            } else if batch.status != CompensationRevisionStatus::CALCULATED {
+                return Err(DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} retro batch is {:?}; only CALCULATED batches can be invalidated.",
+                    batch.id, batch.status
+                )));
+            }
+            if batch.settlementStatus != crate::models::RetroSettlementStatus::UNSETTLED {
+                blockers.insert(RetroMutationBlockerReason::SettledBatch);
+            }
+            if dataset.payrolls.iter().any(|payroll| {
+                payroll.personelId == batch.personnelId
+                    && source_period_ids
+                        .iter()
+                        .any(|period_id| period_id == &payroll.donemId)
+                    && payroll.accrualType == crate::models::AccrualType::NORMAL
+                    && payroll.status == BordroStatus::FINALIZED
+            }) {
+                blockers.insert(RetroMutationBlockerReason::FinalizedSource);
+            }
+            if linked_payment_events
+                .iter()
+                .any(|payroll| payroll.status == BordroStatus::FINALIZED)
+            {
+                blockers.insert(RetroMutationBlockerReason::FinalizedPaymentEvent);
+            }
+            if linked_payment_events.iter().any(|payroll| {
+                !matches!(
+                    payroll.status,
+                    BordroStatus::CALCULATED | BordroStatus::FINALIZED
+                )
+            }) {
+                return Err(DomainError::InvalidData(format!(
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} linked retro payment event is not an authoritative CALCULATED/FINALIZED record.",
+                    batch.id
+                )));
+            }
+            for source_period_id in &source_period_ids {
+                let authoritative_normals = dataset
+                    .payrolls
+                    .iter()
+                    .filter(|payroll| {
+                        payroll.personelId == batch.personnelId
+                            && payroll.donemId == *source_period_id
+                            && payroll.accrualType == crate::models::AccrualType::NORMAL
+                            && matches!(
+                                payroll.status,
+                                BordroStatus::CALCULATED | BordroStatus::FINALIZED
+                            )
+                    })
+                    .collect::<Vec<_>>();
+                if authoritative_normals.len() != 1 {
+                    return Err(DomainError::InvalidData(format!(
+                        "UNSUPPORTED_HISTORICAL_REPLAY: {} source period {} does not have exactly one authoritative NORMAL record.",
+                        batch.id, source_period_id
+                    )));
+                }
+                if authoritative_normals[0].status != BordroStatus::FINALIZED
+                    && authoritative_normals[0].status != BordroStatus::CALCULATED
+                {
+                    return Err(DomainError::InvalidData(format!(
+                        "UNSUPPORTED_HISTORICAL_REPLAY: {} source period {} is not CALCULATED.",
+                        batch.id, source_period_id
+                    )));
+                }
+            }
+            retro_effects.push(RetroMutationEffect {
+                batchId: batch.id.clone(),
+                sourcePeriodIds: source_period_ids,
+                linkedPaymentEventIds: linked_payment_events
+                    .iter()
+                    .map(|payroll| payroll.id.clone())
+                    .collect(),
+                action: if blockers.is_empty() {
+                    RetroMutationAction::StaleEligible
+                } else {
+                    RetroMutationAction::ImmutableBlocker
+                },
+                blockers: blockers.into_iter().collect(),
+            });
+        }
+    }
+
+    for effect in &retro_effects {
+        for payroll in dataset.payrolls.iter().filter(|payroll| {
+            effect
+                .linkedPaymentEventIds
+                .iter()
+                .any(|id| id == &payroll.id)
+        }) {
+            let key = PayrollKey {
+                personnelId: payroll.personelId.clone(),
+                periodId: payroll.donemId.clone(),
+                accrualId: effective_accrual_id(payroll),
+            };
+            if payroll.status == BordroStatus::FINALIZED {
+                blocked.insert(key.clone());
+            }
+            affected.insert(key.clone());
+            for causePeriodId in &effect.sourcePeriodIds {
+                payroll_causes.insert(PayrollMutationCause {
+                    payroll: key.clone(),
+                    causePeriodId: causePeriodId.clone(),
+                });
+            }
         }
     }
 
@@ -756,6 +1060,8 @@ pub(crate) fn evaluate_payroll_invalidation_with_index(
         blockedByFinalized: blocked.into_iter().collect(),
         affectedRetroBatches: affected_retro_batches.into_iter().collect(),
         blockedByFinalizedRetroBatches: blocked_retro_batches.into_iter().collect(),
+        payrollCauses: payroll_causes.into_iter().collect(),
+        retroEffects: retro_effects,
     })
 }
 
@@ -831,6 +1137,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         }
     }
 

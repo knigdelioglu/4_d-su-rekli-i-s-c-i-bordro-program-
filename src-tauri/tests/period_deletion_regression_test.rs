@@ -11,6 +11,8 @@ use bordro_programi_lib::services::{
 use chrono::{Duration, NaiveDate};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 fn period(id: &str, year: i32, month: i32, tax_year: i32, tax_month: i32) -> BordroDonemi {
     let (end_year, end_month) = if month == 12 {
         (year + 1, 1)
@@ -106,7 +108,10 @@ fn setup() -> rusqlite::Connection {
     for month in [1, 2] {
         let d = period(&format!("2026-{month:02}"), 2026, month, 2026, month);
         PeriodRepository::save(&conn, &d).unwrap();
-        SettingsRepository::save_institution_settings(&conn, &settings(&d.id, dec!(1000))).unwrap();
+        let period_settings = settings(&d.id, dec!(1000));
+        SettingsRepository::save_institution_settings(&conn, &period_settings).unwrap();
+        compensation_policy_test_support::seed_period_baseline(&conn, &d, &period_settings)
+            .unwrap();
         AttendanceRepository::save(&conn, &complete_attendance(&p.id, &d, "Ç")).unwrap();
     }
     conn

@@ -30,6 +30,9 @@ import {
 } from '../services/payrollEngine/decimalBoundary';
 
 function formatActionableParameterError(message: string): string {
+  if (isMissingCompensationPolicyBaseline(message)) {
+    return 'Ücret politikası başlangıç sürümü eksik. NORMAL bordro hesaplanmadan önce Ücret Politikası ekranında açıkça onaylanmış bir başlangıç sürümü kaydedin.';
+  }
   const annualYear = message.match(/\b(20\d{2})\b/)?.[1];
   if (isPayrollTaxOpeningConfigurationError(message)) {
     return 'Kümülatif gelir vergisi açılışının başlangıç dönemi eksik veya geçersiz. Bordro ekranındaki "Önceki Kümülatif Matrah Girişi" bölümünü açıp tutarı aktif dönemle kaydedin; ardından bordroyu yeniden hesaplayın.';
@@ -54,6 +57,10 @@ function formatActionableParameterError(message: string): string {
     return `${message} ${STALE_CHAIN_HINT}`;
   }
   return message;
+}
+
+export function isMissingCompensationPolicyBaseline(message: string): boolean {
+  return /(?:bu tarih için ücret politikası tanımlı değil|ücret politikası başlangıç state'i bulunamadı)/i.test(message);
 }
 
 export const STALE_CHAIN_HINT =
@@ -199,6 +206,7 @@ interface UseBordroCalculationControllerOptions {
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
   isSupplementaryView: boolean;
+  onOpenCompensationPolicy?: () => void;
   onSaveBordro: (
     bordro: PayrollBoundaryPayroll,
     calculationSnapshot?: PayrollDatasetSnapshot
@@ -360,6 +368,7 @@ export function useBordroCalculationController({
   puantajlar,
   isSupplementaryView,
   onSaveBordro,
+  onOpenCompensationPolicy,
 }: UseBordroCalculationControllerOptions) {
   const payrollEngine = getPayrollEngine();
   const authoritativeDatasetRef = useRef(authoritativeDataset);
@@ -416,6 +425,8 @@ export function useBordroCalculationController({
   const [isKumulatifModalOpen, setIsKumulatifModalOpen] = useState(false);
   const firstBatchCalculationErrorRef = useRef<string | null>(null);
   const batchCalculationErrorsRef = useRef<string[]>([]);
+  const isBatchProcessingRef = useRef(false);
+  const missingBaselineDuringBatchRef = useRef<string | null>(null);
 
   const getAccrualId = (payroll: BordroKaydi): string => payroll.accrualId || payroll.id;
 
@@ -498,6 +509,37 @@ export function useBordroCalculationController({
 
   const buildDataset = (): PayrollDatasetSnapshot => authoritativeDatasetRef.current;
 
+  const missingCompensationBaseline = async (
+    person: Personel,
+    dataset: PayrollDatasetSnapshot,
+    accrual: PayrollBoundaryAccrualInput = getNormalAccrualInput(person.id, dataset),
+    manualIncome: PayrollCalculationRequest['manualIncome'] = getLegacyManualIncomeInput(person.id, dataset)
+  ): Promise<string | null> => {
+    if (accrual.accrualType !== 'NORMAL') return null;
+    try {
+      await payrollEngine.validatePayroll({
+        personnelId: person.id,
+        periodId: aktifDonem.id,
+        calculatedAt: new Date().toISOString(),
+        manualIncome,
+        accrual,
+        dataset,
+      });
+      return null;
+    } catch (error) {
+      const raw = error && typeof error === 'object' && typeof (error as { message?: unknown }).message === 'string'
+        ? (error as { message: string }).message
+        : String(error);
+      return isMissingCompensationPolicyBaseline(raw) ? raw : null;
+    }
+  };
+
+  const showMissingCompensationBaseline = (message: string) => {
+    setSuccessMessage(null);
+    setErrorMessage(formatPayrollError(message));
+    onOpenCompensationPolicy?.();
+  };
+
   const calculateAndSaveForPerson = async (person: Personel): Promise<BordroKaydi | null> => {
     const calculationSnapshot = buildDataset();
     const pPuantaj = calculationSnapshot.attendances.find(
@@ -513,6 +555,13 @@ export function useBordroCalculationController({
     );
     if (existingBordro?.status === 'FINALIZED') {
       setErrorMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildiği için yeniden hesaplanamaz.`);
+      return null;
+    }
+
+    const baselineError = await missingCompensationBaseline(person, calculationSnapshot);
+    if (baselineError) {
+      if (isBatchProcessingRef.current) missingBaselineDuringBatchRef.current = baselineError;
+      else showMissingCompensationBaseline(baselineError);
       return null;
     }
 
@@ -535,6 +584,14 @@ export function useBordroCalculationController({
       return toPayrollUiModel(calculated) as unknown as BordroKaydi;
     } catch (err) {
       console.error('Payroll engine calculation failed:', err);
+      const raw = err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
+        ? (err as { message: string }).message
+        : String(err);
+      if (isMissingCompensationPolicyBaseline(raw)) {
+        if (isBatchProcessingRef.current) missingBaselineDuringBatchRef.current = raw;
+        else showMissingCompensationBaseline(raw);
+        return null;
+      }
       const formattedError = `Hesaplama hatası: ${formatPayrollError(err)}`;
       if (firstBatchCalculationErrorRef.current === null) {
         firstBatchCalculationErrorRef.current = formattedError;
@@ -705,6 +762,25 @@ export function useBordroCalculationController({
   const handleCalculateAll = async () => {
     firstBatchCalculationErrorRef.current = null;
     batchCalculationErrorsRef.current = [];
+    missingBaselineDuringBatchRef.current = null;
+    const preflightDataset = buildDataset();
+    const preflightPerson = personeller.find((person) => {
+      const hasAttendance = preflightDataset.attendances.some(
+        (item) => item.personelId === person.id && item.donemId === aktifDonem.id
+      );
+      const saved = preflightDataset.payrolls.find(
+        (item) => item.personelId === person.id && item.donemId === aktifDonem.id && item.accrualType === 'NORMAL'
+      );
+      return hasAttendance && saved?.status !== 'FINALIZED';
+    });
+    if (preflightPerson) {
+      const baselineError = await missingCompensationBaseline(preflightPerson, preflightDataset);
+      if (baselineError) {
+        showMissingCompensationBaseline(baselineError);
+        return;
+      }
+    }
+    isBatchProcessingRef.current = true;
     setIsBatchProcessing(true);
     const outcomes: BatchPayrollOutcome[] = [];
     const successPersons: Personel[] = [];
@@ -778,6 +854,11 @@ export function useBordroCalculationController({
         const chain = await replayStalePriorChain(person);
         replayedChainEvents += chain.replayed;
         if (!chain.ok) {
+          if (isMissingCompensationPolicyBaseline(chain.error ?? '')) {
+            missingBaselineDuringBatchRef.current = chain.error ?? '';
+            outcomes.push('calculation-error');
+            break;
+          }
           recordBatchError(person, `Hesaplama hatası: ${chain.error ?? 'önceki tahakkuk zinciri yeniden hesaplanamadı.'}`);
           outcomes.push('calculation-error');
           continue;
@@ -809,9 +890,15 @@ export function useBordroCalculationController({
         } else {
           outcomes.push('calculation-error');
         }
+        if (missingBaselineDuringBatchRef.current) break;
       }
     } finally {
+      isBatchProcessingRef.current = false;
       setIsBatchProcessing(false);
+    }
+    if (missingBaselineDuringBatchRef.current) {
+      showMissingCompensationBaseline(missingBaselineDuringBatchRef.current);
+      return;
     }
     // The summary must describe what is actually persisted, not what the loop
     // believed it saved: re-check every counted success against the final
@@ -919,25 +1006,31 @@ export function useBordroCalculationController({
     }
     try {
       const calculationSnapshot = buildDataset();
+      const accrualInput: PayrollBoundaryAccrualInput = {
+        accrualId: getAccrualId(accrual),
+        accrualType: accrual.accrualType,
+        paymentDate: accrual.paymentDate || getDefaultAccrualPaymentDate(aktifDonem),
+        sequence: accrual.sequence,
+        grossAmount: String(
+          accrual.accrualType === 'TEDIYE'
+            ? accrual.gelirler.tediye ?? 0
+            : accrual.accrualType === 'TIS_IKRAMIYE'
+              ? accrual.gelirler.tisIkramiyesi ?? 0
+              : accrual.gelirler.ekOdeme ?? 0
+        ),
+        description: accrual.accrualDescription ?? null,
+      };
+      const baselineError = await missingCompensationBaseline(person, calculationSnapshot, accrualInput, null);
+      if (baselineError) {
+        showMissingCompensationBaseline(baselineError);
+        return;
+      }
       const calculated = await payrollEngine.calculatePayroll({
         personnelId: person.id,
         periodId: aktifDonem.id,
         calculatedAt: new Date().toISOString(),
         manualIncome: null,
-        accrual: {
-          accrualId: getAccrualId(accrual),
-          accrualType: accrual.accrualType,
-          paymentDate: accrual.paymentDate || getDefaultAccrualPaymentDate(aktifDonem),
-          sequence: accrual.sequence,
-          grossAmount: String(
-            accrual.accrualType === 'TEDIYE'
-              ? accrual.gelirler.tediye ?? 0
-              : accrual.accrualType === 'TIS_IKRAMIYE'
-                ? accrual.gelirler.tisIkramiyesi ?? 0
-                : accrual.gelirler.ekOdeme ?? 0
-          ),
-          description: accrual.accrualDescription ?? null,
-        },
+        accrual: accrualInput,
         dataset: calculationSnapshot,
       });
       assertPayrollCalculationSnapshotCurrentForEngine(
@@ -950,6 +1043,13 @@ export function useBordroCalculationController({
       setErrorMessage(null);
       setTimeout(() => setSuccessMessage(null), 3500);
     } catch (err) {
+      const raw = err && typeof err === 'object' && typeof (err as { message?: unknown }).message === 'string'
+        ? (err as { message: string }).message
+        : String(err);
+      if (isMissingCompensationPolicyBaseline(raw)) {
+        showMissingCompensationBaseline(raw);
+        return;
+      }
       setErrorMessage(`Tahakkuk hesaplama hatası: ${formatPayrollError(err)}`);
     }
   };
@@ -1073,8 +1173,17 @@ export function useBordroCalculationController({
       setErrorMessage(`${person.ad} ${person.soyad} için ${aktifDonem.donemAdi} bordrosu hesaplanamaz: ${singleNotApplicable}.`);
       return;
     }
+    const baselineError = await missingCompensationBaseline(person, singleDataset);
+    if (baselineError) {
+      showMissingCompensationBaseline(baselineError);
+      return;
+    }
     const chain = await replayStalePriorChain(person);
     if (!chain.ok) {
+      if (isMissingCompensationPolicyBaseline(chain.error ?? '')) {
+        showMissingCompensationBaseline(chain.error ?? '');
+        return;
+      }
       setSuccessMessage(null);
       setErrorMessage(`Hesaplama hatası: ${chain.error ?? 'önceki tahakkuk zinciri yeniden hesaplanamadı.'}`);
       return;

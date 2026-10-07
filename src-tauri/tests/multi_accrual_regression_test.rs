@@ -11,6 +11,8 @@ use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn period(id: &str, month: i32, tax_month: i32) -> BordroDonemi {
     let (end_year, end_month) = if month == 12 {
@@ -126,9 +128,15 @@ fn native_multi_accrual_keeps_finalized_normal_immutable_and_continues_into_octo
     PeriodRepository::save(&conn, &prior)?;
     PeriodRepository::save(&conn, &active)?;
     PeriodRepository::save(&conn, &next)?;
-    SettingsRepository::save_institution_settings(&conn, &settings(&prior.id))?;
-    SettingsRepository::save_institution_settings(&conn, &settings(&active.id))?;
-    SettingsRepository::save_institution_settings(&conn, &settings(&next.id))?;
+    let prior_settings = settings(&prior.id);
+    let active_settings = settings(&active.id);
+    let next_settings = settings(&next.id);
+    SettingsRepository::save_institution_settings(&conn, &prior_settings)?;
+    SettingsRepository::save_institution_settings(&conn, &active_settings)?;
+    SettingsRepository::save_institution_settings(&conn, &next_settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &prior, &prior_settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &active, &active_settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &next, &next_settings)?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
     AttendanceRepository::save(&conn, &attendance(personnel_id, &active))?;
     AttendanceRepository::save(&conn, &attendance(personnel_id, &next))?;
@@ -241,7 +249,9 @@ fn payment_event_backdated_insert_delete_and_finalized_protection(
     let personnel_id = "payment-event-native";
     PersonnelRepository::save(&conn, &person(personnel_id))?;
     PeriodRepository::save(&conn, &active)?;
-    SettingsRepository::save_institution_settings(&conn, &settings(&active.id))?;
+    let active_settings = settings(&active.id);
+    SettingsRepository::save_institution_settings(&conn, &active_settings)?;
+    compensation_policy_test_support::seed_period_baseline(&conn, &active, &active_settings)?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
     AttendanceRepository::save(&conn, &attendance(personnel_id, &active))?;
     // Statutory reference months exist without requiring any salary event.
@@ -261,7 +271,13 @@ fn payment_event_backdated_insert_delete_and_finalized_protection(
             taxMonth: tax_month,
         };
         PeriodRepository::save(&conn, &previous)?;
-        SettingsRepository::save_institution_settings(&conn, &settings(&previous.id))?;
+        let previous_settings = settings(&previous.id);
+        SettingsRepository::save_institution_settings(&conn, &previous_settings)?;
+        compensation_policy_test_support::seed_period_baseline(
+            &conn,
+            &previous,
+            &previous_settings,
+        )?;
     }
     let input = |id: &str, kind, date: &str| PayrollAccrualInput {
         accrualId: id.into(),
@@ -321,8 +337,14 @@ fn payment_event_backdated_insert_delete_and_finalized_protection(
         "UPDATE payroll_deduction_items SET id = 'legacy-' || id, payroll_id = 'legacy-tediye-row' WHERE payroll_id = 'tediye'",
         [],
     )?;
-    conn.execute("UPDATE payroll_records SET id = 'legacy-tediye-row' WHERE id = 'tediye'", [])?;
-    conn.execute("UPDATE payroll_records SET id = 'tediye' WHERE id = 'normal'", [])?;
+    conn.execute(
+        "UPDATE payroll_records SET id = 'legacy-tediye-row' WHERE id = 'tediye'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE payroll_records SET id = 'tediye' WHERE id = 'normal'",
+        [],
+    )?;
     conn.execute(
         "UPDATE payroll_income_items SET id = replace(id, 'normal_', 'tediye_'), payroll_id = 'tediye' WHERE payroll_id = 'normal'",
         [],
@@ -333,14 +355,37 @@ fn payment_event_backdated_insert_delete_and_finalized_protection(
     )?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     let before_delete = PayrollRepository::get_all(&conn)?;
-    assert_eq!(before_delete.iter().find(|row| row.accrualId == "tediye").unwrap().id, "legacy-tediye-row");
-    assert_eq!(before_delete.iter().find(|row| row.accrualId == "normal").unwrap().id, "tediye");
+    assert_eq!(
+        before_delete
+            .iter()
+            .find(|row| row.accrualId == "tediye")
+            .unwrap()
+            .id,
+        "legacy-tediye-row"
+    );
+    assert_eq!(
+        before_delete
+            .iter()
+            .find(|row| row.accrualId == "normal")
+            .unwrap()
+            .id,
+        "tediye"
+    );
     PayrollRepository::delete_accrual(&conn, personnel_id, &active.id, "tediye")?;
     let records = PayrollRepository::get_all(&conn)?;
     assert_eq!(records.len(), 2);
     assert!(records.iter().all(|record| record.accrualId != "tediye"));
-    assert_eq!(records.iter().find(|row| row.accrualId == "normal").unwrap().id, "tediye");
-    assert!(records.iter().all(|record| record.status == BordroStatus::STALE));
+    assert_eq!(
+        records
+            .iter()
+            .find(|row| row.accrualId == "normal")
+            .unwrap()
+            .id,
+        "tediye"
+    );
+    assert!(records
+        .iter()
+        .all(|record| record.status == BordroStatus::STALE));
     // The first event can be created/calculated with no NORMAL at all.
     PayrollRepository::delete_accrual(&conn, personnel_id, &active.id, "normal")?;
     calculate(&tediye)?;

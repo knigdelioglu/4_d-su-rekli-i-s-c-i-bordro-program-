@@ -1,9 +1,13 @@
 use payroll_core::{
-    calculate_payroll_checked, evaluate_payroll_invalidation, finalize_payroll,
-    AnnualPayrollParameters, PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation,
-    Result as CoreResult, RetroCalculationRequest, RetroEntitlementEngine,
+    calculate_legacy_backup_payroll_checked, calculate_payroll_checked,
+    calculate_payroll_with_compensation_policy_checked, evaluate_payroll_invalidation,
+    finalize_payroll, finalize_payroll_with_compensation_policy_checked, AnnualPayrollParameters,
+    BordroDonemi, BordroKaydi, CompensationPolicyVersion, LegacyBackupPayrollInput,
+    PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollMutation, Result as CoreResult,
+    RetroCalculationRequest, RetroEntitlementEngine,
 };
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::collections::{BTreeSet, HashMap};
 use wasm_bindgen::prelude::*;
 
 #[derive(Debug, Deserialize)]
@@ -13,8 +17,35 @@ struct MutationPolicyRequest {
     mutation: PayrollMutation,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyBackupPayrollReplayRequest {
+    request: PayrollCalculationRequest,
+    legacy_input: LegacyBackupPayrollInput,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PayrollMetadataValidationPayload {
+    compensation_policy_versions: Vec<CompensationPolicyVersion>,
+    bordrolar: Vec<BordroKaydi>,
+    donemler: Vec<BordroDonemi>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompensationTimelineRequest {
+    start_inclusive: String,
+    end_inclusive: String,
+    versions: Vec<CompensationPolicyVersion>,
+}
+
+fn deserialize_contract_json<T: DeserializeOwned>(json: &str) -> Result<T, serde_json::Error> {
+    serde_json::from_str(json)
+}
+
 fn parse_request(request_json: &str) -> CoreResult<PayrollCalculationRequest> {
-    serde_json::from_str(request_json).map_err(|error| {
+    deserialize_contract_json(request_json).map_err(|error| {
         payroll_core::DomainError::InvalidData(format!(
             "WASM bordro isteği geçersiz JSON içeriyor: {}",
             error
@@ -22,11 +53,58 @@ fn parse_request(request_json: &str) -> CoreResult<PayrollCalculationRequest> {
     })
 }
 
+fn validate_payroll_backup_metadata_json_inner(payload_json: &str) -> CoreResult<()> {
+    let payload: PayrollMetadataValidationPayload = deserialize_contract_json(payload_json)
+        .map_err(|error| {
+            payroll_core::DomainError::InvalidData(format!(
+                "V6 bordro metadata isteği geçersiz JSON içeriyor: {error}"
+            ))
+        })?;
+    let ordered_versions =
+        payroll_core::validate_compensation_policy_timeline(&payload.compensation_policy_versions)?;
+    let periods: HashMap<&str, &BordroDonemi> = payload
+        .donemler
+        .iter()
+        .map(|period| (period.id.as_str(), period))
+        .collect();
+    if periods.len() != payload.donemler.len() {
+        return Err(payroll_core::DomainError::InvalidData(
+            "V6 payload yinelenen dönem kimliği içeriyor.".into(),
+        ));
+    }
+    let mut payroll_ids = BTreeSet::new();
+    for payroll in &payload.bordrolar {
+        if !payroll_ids.insert(payroll.id.as_str()) {
+            return Err(payroll_core::DomainError::InvalidData(format!(
+                "V6 payload yinelenen bordro kimliği içeriyor: {}.",
+                payroll.id
+            )));
+        }
+        let period = periods.get(payroll.donemId.as_str()).ok_or_else(|| {
+            payroll_core::DomainError::InvalidData(format!(
+                "V6 bordro {} için parent dönem bulunamadı: {}.",
+                payroll.id, payroll.donemId
+            ))
+        })?;
+        payroll_core::validate_payroll_calculation_metadata_with_context(
+            payroll,
+            period,
+            &payload.bordrolar,
+            &payload.donemler,
+        )
+        .map_err(|error| payroll_core::DomainError::InvalidData(error.to_string()))?;
+        payroll_core::validate_compensation_snapshot_policy_links(payroll, &ordered_versions)?;
+    }
+    Ok(())
+}
+
 fn error_to_js(error: payroll_core::DomainError) -> JsValue {
     serde_wasm_bindgen::to_value(&error).unwrap_or_else(|_| JsValue::from_str(&error.to_string()))
 }
 
-/// Calculates one payroll from a complete, JSON-serializable snapshot.
+/// Calculates one payroll from a complete, JSON-serializable snapshot. NORMAL
+/// payrolls use the authoritative compensation timeline through the default
+/// checked core entry point.
 ///
 /// Decimal inputs are expected as JSON strings. Returning JSON rather than
 /// `JsValue` keeps the boundary explicit and auditable; the UI converts the
@@ -39,17 +117,53 @@ pub fn calculate_payroll_json(request_json: &str) -> Result<String, JsValue> {
         .map_err(|error| JsValue::from_str(&format!("Bordro sonucu serileştirilemedi: {}", error)))
 }
 
+/// Import-only exact V1-V5 replay. Missing legacy sources return JSON null so
+/// callers can retain the historical snapshot without rejecting the import.
+#[wasm_bindgen]
+pub fn calculate_legacy_backup_payroll_json(replay_json: &str) -> Result<String, JsValue> {
+    let replay: LegacyBackupPayrollReplayRequest =
+        deserialize_contract_json(replay_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Legacy yedek replay isteği geçersiz JSON içeriyor: {error}"
+            )))
+        })?;
+    let payroll = calculate_legacy_backup_payroll_checked(&replay.request, &replay.legacy_input)
+        .map_err(error_to_js)?;
+    serde_json::to_string(&payroll).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Legacy yedek replay sonucu serileştirilemedi: {error}"
+        ))
+    })
+}
+
+/// Calculates one payroll through the explicit compensation-policy engine.
+/// Compatibility export for callers that explicitly select the policy API.
+/// The ordinary calculation export already uses the same resolver for NORMAL.
+#[wasm_bindgen]
+pub fn calculate_compensation_policy_payroll_json(request_json: &str) -> Result<String, JsValue> {
+    let request = parse_request(request_json).map_err(error_to_js)?;
+    let payroll =
+        calculate_payroll_with_compensation_policy_checked(&request).map_err(error_to_js)?;
+    serde_json::to_string(&payroll).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Politika bordro sonucu serileştirilemedi: {}",
+            error
+        ))
+    })
+}
+
 /// Replays historical service periods and returns an auditable retro batch
 /// preview. The function is pure; browser persistence happens in TypeScript
 /// after the result crosses the explicit Decimal JSON boundary.
 #[wasm_bindgen]
 pub fn calculate_retro_preview_json(request_json: &str) -> Result<String, JsValue> {
-    let request: RetroCalculationRequest = serde_json::from_str(request_json).map_err(|error| {
-        error_to_js(payroll_core::DomainError::InvalidData(format!(
-            "WASM retro hesap isteği geçersiz JSON içeriyor: {}",
-            error
-        )))
-    })?;
+    let request: RetroCalculationRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "WASM retro hesap isteği geçersiz JSON içeriyor: {}",
+                error
+            )))
+        })?;
     let result = RetroEntitlementEngine::calculate(&request).map_err(error_to_js)?;
     serde_json::to_string(&result).map_err(|error| {
         JsValue::from_str(&format!("Retro hesap sonucu serileştirilemedi: {}", error))
@@ -64,6 +178,20 @@ pub fn finalize_payroll_json(request_json: &str) -> Result<String, JsValue> {
     let payroll = finalize_payroll(&request).map_err(error_to_js)?;
     serde_json::to_string(&payroll)
         .map_err(|error| JsValue::from_str(&format!("Bordro sonucu serileştirilemedi: {}", error)))
+}
+
+/// Recalculates and finalizes a schema-2 NORMAL payroll through the explicit
+/// compensation-policy engine.
+#[wasm_bindgen]
+pub fn finalize_compensation_policy_payroll_json(request_json: &str) -> Result<String, JsValue> {
+    let request = parse_request(request_json).map_err(error_to_js)?;
+    let payroll =
+        finalize_payroll_with_compensation_policy_checked(&request).map_err(error_to_js)?;
+    serde_json::to_string(&payroll).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Politika bordro kesinleştirme sonucu serileştirilemedi: {error}"
+        ))
+    })
 }
 
 /// Validates and parses the same request boundary without persisting anything.
@@ -88,15 +216,50 @@ pub fn validate_annual_payroll_parameters_json(parameters_json: &str) -> Result<
     payroll_core::validate_annual_payroll_parameters(&parameters).map_err(error_to_js)
 }
 
+/// Validates V6 compensation policy graph links and every payroll envelope
+/// against its parent period with the same core authority as native restore.
+/// This checks structure and input consistency only; it does not replay payroll.
+#[wasm_bindgen]
+pub fn validate_payroll_backup_metadata_json(payload_json: &str) -> Result<(), JsValue> {
+    validate_payroll_backup_metadata_json_inner(payload_json).map_err(error_to_js)
+}
+
+/// Resolves the same typed compensation timeline used by the Rust payroll
+/// engine. Browser policy previews use this instead of duplicating the
+/// supersession graph or ROAD_ONLY validation rules in TypeScript.
+#[wasm_bindgen]
+pub fn resolve_compensation_policy_timeline_json(request_json: &str) -> Result<String, JsValue> {
+    let request: CompensationTimelineRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Ücret politikası timeline isteği geçersiz JSON içeriyor: {error}"
+            )))
+        })?;
+    let versions = payroll_core::validate_compensation_policy_timeline(&request.versions)
+        .map_err(error_to_js)?;
+    let segments = payroll_core::resolve_compensation_segments(
+        &request.start_inclusive,
+        &request.end_inclusive,
+        &versions,
+    )
+    .map_err(error_to_js)?;
+    serde_json::to_string(&segments).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Ücret politikası timeline sonucu serileştirilemedi: {error}"
+        ))
+    })
+}
+
 /// Returns the core-owned invalidation impact for one browser mutation.
 #[wasm_bindgen]
 pub fn evaluate_mutation_policy_json(request_json: &str) -> Result<String, JsValue> {
-    let request: MutationPolicyRequest = serde_json::from_str(request_json).map_err(|error| {
-        error_to_js(payroll_core::DomainError::InvalidData(format!(
-            "WASM mutation policy isteği geçersiz JSON içeriyor: {}",
-            error
-        )))
-    })?;
+    let request: MutationPolicyRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "WASM mutation policy isteği geçersiz JSON içeriyor: {}",
+                error
+            )))
+        })?;
     let impact =
         evaluate_payroll_invalidation(&request.dataset, &request.mutation).map_err(error_to_js)?;
     serde_json::to_string(&impact).map_err(|error| {
@@ -123,9 +286,11 @@ mod tests {
     use super::*;
     use payroll_core::{
         calculate_payroll, AnnualPayrollParameters, BordroDonemi, BordroKaydi, BordroStatus,
-        DevredenPekKaydi, DomainError, DonemselKurumDegerleri, ManualPayrollIncomeInput,
-        PayrollCalculationRequest, PayrollDatasetSnapshot, Personel, PersonelKesintileri,
-        PersonelPuantaj, SickLeaveRecord, StatutoryParameterSegment,
+        CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
+        CompensationPolicyVersion, DevredenPekKaydi, DomainError, DonemselKurumDegerleri,
+        ManualPayrollIncomeInput, PayrollCalculationRequest, PayrollDatasetSnapshot,
+        PayrollPeriodInstitutionSettings, Personel, PersonelKesintileri, PersonelPuantaj,
+        RoadRoundingMode, SickLeaveRecord, StatutoryParameterSegment,
     };
     use rust_decimal_macros::dec;
     use std::collections::HashMap;
@@ -142,10 +307,16 @@ mod tests {
             taxYear: 2026,
             taxMonth: 1,
         };
-        let settings = DonemselKurumDegerleri {
+        let legacy_settings = DonemselKurumDegerleri {
             donemId: period.id.clone(),
             ..Default::default()
         };
+        let settings = PayrollPeriodInstitutionSettings::from(&legacy_settings);
+        let baseline = policy_version(
+            "policy-baseline",
+            &period.baslangicTarihi,
+            policy_state_from_legacy_settings(&legacy_settings),
+        );
         let mut gunler = HashMap::new();
         let mut date = chrono::NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
         let end = chrono::NaiveDate::from_ymd_opt(2026, 2, 14).unwrap();
@@ -194,11 +365,11 @@ mod tests {
                 taxOpenings: Vec::new(),
                 sickLeaveRecords: Vec::new(),
                 annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
-                zamAylari: Vec::new(),
                 compensationRevisions: Vec::new(),
                 compensationRevisionOverrides: Vec::new(),
                 retroBatches: Vec::new(),
                 retroAllocations: Vec::new(),
+                compensationPolicyVersions: vec![baseline],
             },
         })
         .expect("fixture should serialize")
@@ -206,6 +377,85 @@ mod tests {
 
     fn standard_request() -> PayrollCalculationRequest {
         serde_json::from_str(&request_json()).expect("standard fixture should deserialize")
+    }
+
+    fn policy_state_from_legacy_settings(
+        settings: &DonemselKurumDegerleri,
+    ) -> CompensationPolicyState {
+        CompensationPolicyState {
+            gunlukTabanUcret: settings.gunlukTabanUcret,
+            gunlukYemek: settings.gunlukYemek,
+            birlestirilmisSosyalYardim: settings.birlestirilmisSosyalYardim,
+            gunlukVasitaYol: settings.gunlukVasitaYol,
+            giyimYardimi: settings.giyimYardimi,
+            hizmetZammiBirimi: settings.hizmetZammiBirimi,
+            isPrimiYuzde: settings.isPrimiYuzde,
+            isPrimiGruplari: settings
+                .isPrimiGruplari
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|group| CompensationPolicyGroup {
+                    id: group.id,
+                    ad: group.ad,
+                    oran: group.oran,
+                    aktif: group.aktif,
+                })
+                .collect(),
+            geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde.unwrap_or_default(),
+            geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
+            ekOdeme: settings.ekOdeme,
+            digerGelirVarsayilan: settings.digerGelirVarsayilan,
+        }
+    }
+
+    fn policy_version(
+        id: &str,
+        effective_from: &str,
+        state: CompensationPolicyState,
+    ) -> CompensationPolicyVersion {
+        CompensationPolicyVersion {
+            id: id.into(),
+            effectiveFrom: effective_from.into(),
+            state,
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PeriodTotal,
+            createdAt: "2026-09-03T00:00:00.000Z".into(),
+            source: "WASM_TEST".into(),
+            reason: "explicit policy export test".into(),
+            supersedesVersionId: None,
+        }
+    }
+
+    fn baseline_policy_from_settings(
+        request: &PayrollCalculationRequest,
+    ) -> CompensationPolicyVersion {
+        request
+            .dataset
+            .compensationPolicyVersions
+            .iter()
+            .find(|version| version.effectiveFrom == "2026-01-15")
+            .expect("period baseline policy should exist")
+            .clone()
+    }
+
+    fn set_active_base_wage(request: &mut PayrollCalculationRequest, wage: rust_decimal::Decimal) {
+        let start = request
+            .dataset
+            .periods
+            .iter()
+            .find(|period| period.id == request.periodId)
+            .expect("active period should exist")
+            .baslangicTarihi
+            .clone();
+        request
+            .dataset
+            .compensationPolicyVersions
+            .iter_mut()
+            .find(|version| version.effectiveFrom == start)
+            .expect("active period baseline should exist")
+            .state
+            .gunlukTabanUcret = wage;
     }
 
     fn fixture_period(
@@ -254,17 +504,37 @@ mod tests {
     ) {
         request.periodId = active.id.clone();
         request.dataset.periods = periods;
-        request.dataset.institutionSettings = request
+        let legacy_settings: Vec<DonemselKurumDegerleri> = request
             .dataset
             .periods
             .iter()
-            .map(|period| {
+            .map(|period| DonemselKurumDegerleri {
+                donemId: period.id.clone(),
+                ..Default::default()
+            })
+            .collect();
+        request.dataset.institutionSettings = legacy_settings
+            .iter()
+            .map(|settings| {
                 (
-                    period.id.clone(),
-                    DonemselKurumDegerleri {
-                        donemId: period.id.clone(),
-                        ..Default::default()
-                    },
+                    settings.donemId.clone(),
+                    PayrollPeriodInstitutionSettings::from(settings),
+                )
+            })
+            .collect();
+        request.dataset.compensationPolicyVersions = legacy_settings
+            .iter()
+            .map(|settings| {
+                let period = request
+                    .dataset
+                    .periods
+                    .iter()
+                    .find(|period| period.id == settings.donemId)
+                    .expect("matching period should exist");
+                policy_version(
+                    &format!("policy-baseline-{}", settings.donemId),
+                    &period.baslangicTarihi,
+                    policy_state_from_legacy_settings(settings),
                 )
             })
             .collect();
@@ -272,7 +542,6 @@ mod tests {
         request.dataset.payrolls.clear();
         request.dataset.sickLeaveRecords.clear();
         request.dataset.taxOpenings.clear();
-        request.dataset.zamAylari.clear();
     }
 
     fn configure_two_periods(
@@ -293,17 +562,7 @@ mod tests {
             tediye: Some(dec!(0)),
             tisIkramiyesi: Some(dec!(0)),
         });
-        prior_request.dataset.periods = vec![previous.clone()];
-        prior_request.dataset.institutionSettings = HashMap::from([(
-            previous.id.clone(),
-            DonemselKurumDegerleri {
-                donemId: previous.id.clone(),
-                ..Default::default()
-            },
-        )]);
-        prior_request.dataset.attendances = vec![fixture_attendance(previous, "Ç")];
-        prior_request.dataset.payrolls.clear();
-        prior_request.dataset.zamAylari.clear();
+        configure_active_period(&mut prior_request, vec![previous.clone()], previous);
         calculate_payroll(&prior_request).expect("prior fixture should calculate")
     }
 
@@ -479,7 +738,23 @@ mod tests {
         raise_segment.dataset.personnel[0].devirKumulatifAsgariGvMatrahi = Some(dec!(1));
         raise_segment.dataset.personnel[0].devirKumulatifAsgariGvMatrahiYili = Some(2026);
         raise_segment.dataset.personnel[0].devirKumulatifGvMatrahiBaslangicAyi = Some(2);
-        raise_segment.dataset.zamAylari = vec![2];
+        let mut raised_state = raise_segment
+            .dataset
+            .compensationPolicyVersions
+            .iter()
+            .find(|version| version.effectiveFrom == active.baslangicTarihi)
+            .expect("active baseline should exist")
+            .state
+            .clone();
+        raised_state.gunlukTabanUcret *= dec!(1.1);
+        raise_segment
+            .dataset
+            .compensationPolicyVersions
+            .push(policy_version(
+                "policy-raise-2026-02-01",
+                "2026-02-01",
+                raised_state,
+            ));
         raise_segment
             .dataset
             .institutionSettings
@@ -496,12 +771,7 @@ mod tests {
 
         // 8. Gelir vergisi dilimi geçişi.
         let mut bracket_transition = standard_request();
-        bracket_transition
-            .dataset
-            .institutionSettings
-            .get_mut("2026-01")
-            .expect("standard settings should exist")
-            .gunlukTabanUcret = dec!(8000);
+        set_active_base_wage(&mut bracket_transition, dec!(8000));
         fixtures.push(("income-tax-bracket-transition", bracket_transition, true));
 
         // 9. Kümülatif GV opening.
@@ -513,12 +783,7 @@ mod tests {
 
         // 10. Asgari ücret GV istisnası.
         let mut minimum_wage_exemption = standard_request();
-        minimum_wage_exemption
-            .dataset
-            .institutionSettings
-            .get_mut("2026-01")
-            .expect("standard settings should exist")
-            .gunlukTabanUcret = dec!(1101);
+        set_active_base_wage(&mut minimum_wage_exemption, dec!(1101));
         fixtures.push((
             "minimum-wage-income-tax-exemption",
             minimum_wage_exemption,
@@ -527,24 +792,19 @@ mod tests {
 
         // 11. PEK alt sınırı.
         let mut pek_floor = standard_request();
-        pek_floor
-            .dataset
-            .institutionSettings
-            .get_mut("2026-01")
-            .expect("standard settings should exist")
-            .gunlukTabanUcret = dec!(100);
+        set_active_base_wage(&mut pek_floor, dec!(100));
         set_manual_zero(&mut pek_floor);
         fixtures.push(("pek-floor", pek_floor, true));
 
         // 12. PEK üst sınırı.
         let mut pek_ceiling = standard_request();
-        let settings = pek_ceiling
+        set_active_base_wage(&mut pek_ceiling, dec!(10000));
+        pek_ceiling
             .dataset
             .institutionSettings
             .get_mut("2026-01")
-            .expect("standard settings should exist");
-        settings.gunlukTabanUcret = dec!(10000);
-        settings.pekTavanKatsayisi = Some(dec!(1));
+            .expect("standard settings should exist")
+            .pekTavanKatsayisi = Some(dec!(1));
         set_manual_zero(&mut pek_ceiling);
         fixtures.push(("pek-ceiling", pek_ceiling, true));
 
@@ -751,6 +1011,57 @@ mod tests {
     }
 
     #[wasm_bindgen_test]
+    fn adapter_finalizes_schema2_payroll_through_the_policy_engine() {
+        let mut request = standard_request();
+        let baseline = baseline_policy_from_settings(&request);
+        request.dataset.compensationPolicyVersions = vec![baseline];
+        let calculated = calculate_payroll_with_compensation_policy_checked(&request)
+            .expect("explicit policy fixture should calculate");
+        request.dataset.payrolls.push(calculated);
+        let json = serde_json::to_string(&request).expect("request should serialize");
+
+        let wasm_json = finalize_compensation_policy_payroll_json(&json)
+            .expect("schema-2 policy record should finalize");
+        let wasm_result: BordroKaydi = serde_json::from_str(&wasm_json).unwrap();
+        let native_result =
+            payroll_core::finalize_payroll_with_compensation_policy_checked(&request).unwrap();
+        assert_eq!(wasm_result.status, BordroStatus::FINALIZED);
+        assert_eq!(wasm_result.netOdeme, native_result.netOdeme);
+        assert_eq!(
+            serde_json::to_value(&wasm_result.calculationMetadata.as_ref().unwrap().snapshot)
+                .unwrap(),
+            serde_json::to_value(&native_result.calculationMetadata.as_ref().unwrap().snapshot)
+                .unwrap()
+        );
+
+        let mut blocked = request.clone();
+        let mut later_period = blocked.dataset.periods[0].clone();
+        later_period.id = "2026-02".into();
+        later_period.ay = 2;
+        later_period.baslangicTarihi = "2026-02-15".into();
+        later_period.bitisTarihi = "2026-03-14".into();
+        later_period.taxMonth = 2;
+        blocked.dataset.periods.push(later_period);
+        let mut later_payroll = blocked.dataset.payrolls[0].clone();
+        later_payroll.id = "person-1_2026-02".into();
+        later_payroll.donemId = "2026-02".into();
+        later_payroll.status = BordroStatus::FINALIZED;
+        blocked.dataset.payrolls.push(later_payroll);
+        let blocked_json = serde_json::to_string(&blocked).unwrap();
+        let wasm_error = finalize_compensation_policy_payroll_json(&blocked_json)
+            .expect_err("explicit policy finalization must reject immutable downstream payroll");
+        let wasm_error: DomainError = serde_wasm_bindgen::from_value(wasm_error).unwrap();
+        let native_error =
+            payroll_core::finalize_payroll_with_compensation_policy_checked(&blocked)
+                .expect_err("core should reject the explicit downstream dependency");
+        assert_eq!(wasm_error.to_string(), native_error.to_string());
+
+        request.dataset.payrolls[0].calculationMetadata = None;
+        let legacy_json = serde_json::to_string(&request).unwrap();
+        assert!(finalize_compensation_policy_payroll_json(&legacy_json).is_err());
+    }
+
+    #[wasm_bindgen_test]
     fn adapter_finalization_matches_core_downstream_finalized_blocker() {
         let mut request = standard_request();
         let current = calculate_payroll(&request).expect("fixture should calculate");
@@ -823,5 +1134,198 @@ mod tests {
 
         assert_eq!(wasm_impact, native_impact);
         assert_eq!(wasm_impact.blockedByFinalized.len(), 1);
+    }
+
+    #[test]
+    fn contract_boundary_uses_canonical_uppercase_snapshot_enum_tokens() {
+        fn assert_token<T>(token: &str, expected: T)
+        where
+            T: DeserializeOwned + serde::Serialize + PartialEq + std::fmt::Debug,
+        {
+            let json = serde_json::to_string(token).expect("enum literal should encode");
+            let decoded: T = deserialize_contract_json(&json)
+                .expect("canonical enum token should deserialize at the WASM boundary");
+            assert_eq!(decoded, expected);
+            assert_eq!(
+                serde_json::to_string(&decoded).expect("enum should serialize"),
+                json
+            );
+        }
+
+        assert_token(
+            "COMPENSATION_POLICY_ENGINE",
+            payroll_core::PayrollCalculationProvenance::COMPENSATION_POLICY_ENGINE,
+        );
+        assert_token(
+            "COMPLETE",
+            payroll_core::PayrollAttendanceCoverage::COMPLETE,
+        );
+        assert_token("PARTIAL", payroll_core::PayrollAttendanceCoverage::PARTIAL);
+        assert_token(
+            "EXPLICIT_OPENING",
+            payroll_core::PayrollTaxOpeningSource::EXPLICIT_OPENING,
+        );
+        assert_token(
+            "LEGACY_PERSONNEL_VALUE",
+            payroll_core::PayrollTaxOpeningSource::LEGACY_PERSONNEL_VALUE,
+        );
+        assert_token(
+            "IMPLICIT_ZERO",
+            payroll_core::PayrollTaxOpeningSource::IMPLICIT_ZERO,
+        );
+        assert_token("NONE", payroll_core::PayrollPekCarrySource::NONE);
+        assert_token(
+            "PAYMENT_EVENT",
+            payroll_core::PayrollPekCarrySource::PAYMENT_EVENT,
+        );
+        assert_token(
+            "RETRO_OVERRIDE",
+            payroll_core::PayrollPekCarrySource::RETRO_OVERRIDE,
+        );
+        assert_token(
+            "FULL_EARNING",
+            payroll_core::CompensationBoundaryScope::FullEarning,
+        );
+        assert_token(
+            "ROAD_ONLY",
+            payroll_core::CompensationBoundaryScope::RoadOnly,
+        );
+        assert_token(
+            "PER_COMPENSATION_SLICE",
+            payroll_core::RoadRoundingMode::PerCompensationSlice,
+        );
+        assert_token("PERIOD_TOTAL", payroll_core::RoadRoundingMode::PeriodTotal);
+    }
+
+    #[test]
+    fn metadata_wasm_boundary_accepts_and_round_trips_the_shared_current_snapshot_fixture() {
+        let json =
+            include_str!("../../payroll-core/tests/fixtures/v6-current-engine-snapshot.json");
+        let decoded: PayrollMetadataValidationPayload =
+            deserialize_contract_json(json).expect("canonical V6 snapshot should deserialize");
+        validate_payroll_backup_metadata_json_inner(json)
+            .expect("canonical V6 snapshot should pass full financial replay");
+
+        let fixture: serde_json::Value = serde_json::from_str(json).unwrap();
+        let encoded = serde_json::to_value(decoded).expect("typed V6 payload should serialize");
+        assert_eq!(
+            encoded["bordrolar"][0]["calculationMetadata"]["snapshot"]["usedInputs"],
+            fixture["bordrolar"][0]["calculationMetadata"]["snapshot"]["usedInputs"]
+        );
+        assert_eq!(
+            encoded["bordrolar"][0]["calculationMetadata"]["provenance"],
+            "COMPENSATION_POLICY_ENGINE"
+        );
+
+        let mut forged_financial_projection: serde_json::Value = fixture.clone();
+        let net: rust_decimal::Decimal = forged_financial_projection["bordrolar"][0]["netOdeme"]
+            .as_str()
+            .expect("decimal net should use canonical string JSON")
+            .parse()
+            .expect("canonical net decimal should parse");
+        forged_financial_projection["bordrolar"][0]["netOdeme"] =
+            serde_json::json!((net + rust_decimal::Decimal::ONE).to_string());
+        let error =
+            validate_payroll_backup_metadata_json_inner(&forged_financial_projection.to_string())
+                .expect_err("V6 boundary must reject a forged financial projection");
+        assert!(error.to_string().contains("netOdeme"));
+
+        let mut unsupported_schema: serde_json::Value = fixture.clone();
+        unsupported_schema["bordrolar"][0]["calculationMetadata"]["snapshot"]
+            ["snapshotSchemaVersion"] = serde_json::json!(1);
+        assert!(
+            validate_payroll_backup_metadata_json_inner(&unsupported_schema.to_string()).is_err()
+        );
+
+        let mut missing_flag: serde_json::Value = fixture.clone();
+        missing_flag["compensationPolicyVersions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("boundaryScope");
+        assert!(validate_payroll_backup_metadata_json_inner(&missing_flag.to_string()).is_err());
+
+        let mut invalid_enum: serde_json::Value = fixture.clone();
+        invalid_enum["bordrolar"][0]["calculationMetadata"]["snapshot"]["compensation"]
+            ["segments"][0]["roadRoundingMode"] = serde_json::json!("PER_POLICY_SLICE");
+        assert!(validate_payroll_backup_metadata_json_inner(&invalid_enum.to_string()).is_err());
+
+        let mut mismatched_policy_link: serde_json::Value = fixture;
+        mismatched_policy_link["bordrolar"][0]["calculationMetadata"]["snapshot"]["compensation"]
+            ["segments"][0]["boundaryScope"] = serde_json::json!("ROAD_ONLY");
+        assert!(
+            validate_payroll_backup_metadata_json_inner(&mismatched_policy_link.to_string())
+                .is_err()
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn metadata_wasm_export_accepts_the_shared_fixture_and_rejects_boundary_mismatch() {
+        let fixture =
+            include_str!("../../payroll-core/tests/fixtures/v6-current-engine-snapshot.json");
+        assert!(validate_payroll_backup_metadata_json(fixture).is_ok());
+
+        let mut forged_financial_projection: serde_json::Value =
+            serde_json::from_str(fixture).unwrap();
+        let net: rust_decimal::Decimal = forged_financial_projection["bordrolar"][0]["netOdeme"]
+            .as_str()
+            .expect("decimal net should use canonical string JSON")
+            .parse()
+            .expect("canonical net decimal should parse");
+        forged_financial_projection["bordrolar"][0]["netOdeme"] =
+            serde_json::json!((net + rust_decimal::Decimal::ONE).to_string());
+        assert!(
+            validate_payroll_backup_metadata_json(&forged_financial_projection.to_string())
+                .is_err()
+        );
+
+        let mut mismatched: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        mismatched["bordrolar"][0]["calculationMetadata"]["snapshot"]["compensation"]["segments"]
+            [0]["boundaryScope"] = serde_json::json!("ROAD_ONLY");
+        assert!(validate_payroll_backup_metadata_json(&mismatched.to_string()).is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn explicit_compensation_exports_resolve_and_calculate_with_policy_provenance() {
+        let mut request = standard_request();
+        let baseline = baseline_policy_from_settings(&request);
+        request.dataset.compensationPolicyVersions = vec![baseline];
+        let native = payroll_core::calculate_payroll_with_compensation_policy_checked(&request)
+            .expect("explicit compensation policy should calculate");
+        let request_json = serde_json::to_string(&request).expect("request should serialize");
+        let wasm_json = calculate_compensation_policy_payroll_json(&request_json)
+            .expect("WASM explicit policy export should calculate");
+        let wasm: BordroKaydi =
+            serde_json::from_str(&wasm_json).expect("WASM payroll should deserialize");
+        assert_eq!(
+            serde_json::to_value(&native).expect("native payroll should serialize"),
+            serde_json::to_value(&wasm).expect("WASM payroll should serialize")
+        );
+        let metadata = wasm
+            .calculationMetadata
+            .as_ref()
+            .expect("explicit policy calculation should persist provenance");
+        assert_eq!(
+            metadata.provenance,
+            payroll_core::PayrollCalculationProvenance::COMPENSATION_POLICY_ENGINE
+        );
+        assert_eq!(metadata.snapshot.as_ref().unwrap().snapshotSchemaVersion, 2);
+
+        let timeline_json = serde_json::json!({
+            "startInclusive": "2026-01-15",
+            "endInclusive": "2026-02-14",
+            "versions": &request.dataset.compensationPolicyVersions,
+        })
+        .to_string();
+        let resolved_json = resolve_compensation_policy_timeline_json(&timeline_json)
+            .expect("timeline export should resolve using the core resolver");
+        let resolved: serde_json::Value =
+            serde_json::from_str(&resolved_json).expect("resolved timeline should be JSON");
+        assert_eq!(resolved.as_array().unwrap().len(), 1);
+        assert_eq!(resolved[0]["versionId"], "policy-baseline");
+        assert_eq!(resolved[0]["endDate"], "2026-02-14");
+
+        request.dataset.compensationPolicyVersions.clear();
+        let missing_baseline = serde_json::to_string(&request).unwrap();
+        assert!(calculate_compensation_policy_payroll_json(&missing_baseline).is_err());
     }
 }

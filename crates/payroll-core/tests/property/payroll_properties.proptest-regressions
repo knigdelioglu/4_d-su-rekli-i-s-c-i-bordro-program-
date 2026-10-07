@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3090ec5f5d83963dc21453d51ae5cb4e69a46b994f900b64673eb03343c26a7c # shrinks to parameters = SimpleNormalParameters { daily_base: 1500.00, daily_meal: 0.00, daily_meal_sgk_capacity: 0.00, daily_meal_gv_capacity: 0.00, daily_minimum: 900.00, pek_multiplier: 1.00, worker_sgk_percent: 0.00, worker_unemployment_percent: 0.00, employer_sgk_percent: 0.00, employer_unemployment_percent: 0.00, stamp_rate_binde: 0.00 }, selected = false

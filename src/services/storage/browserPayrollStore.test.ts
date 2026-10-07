@@ -18,7 +18,11 @@ import {
   repairLegacyPersonTaxOpenings,
   verifyCurrentPayrollBackupReplay,
 } from './payrollPayload';
-import { serializePayrollStorage, type PayrollStorageDto } from '../payrollEngine/decimalBoundary';
+import {
+  parsePayrollStorage,
+  serializePayrollStorage,
+  type PayrollStorageDto,
+} from '../payrollEngine/decimalBoundary';
 import type { PayrollEngine } from '../payrollEngine/types';
 
 type TestRecord = Record<string, unknown>;
@@ -230,7 +234,7 @@ function makeRealisticSnapshot(): PayrollStorageDto {
   };
 
   return {
-    backupVersion: 5,
+    backupVersion: 6,
     exportedAt: '2026-02-14T10:00:00.000Z',
     donemler: [period],
     aktifDonemId: period.id,
@@ -274,6 +278,7 @@ function makeRealisticSnapshot(): PayrollStorageDto {
     compensationRevisionOverrides: [],
     retroBatches: [],
     retroAllocations: [],
+    compensationPolicyVersions: [],
   };
 }
 
@@ -424,7 +429,7 @@ describe('BrowserPayrollStore', () => {
     }
   });
 
-  test('current backup replay verifier accepts the canonical result and rejects a forged snapshot', async () => {
+  test('current backup replay verifier preserves historical rows when source tax history is unavailable', async () => {
     const payload = parseCurrentBrowserSnapshot(makeV2Snapshot('3000.00'));
     const canonicalResult = payload.bordrolar[0];
     const engine = {
@@ -441,16 +446,12 @@ describe('BrowserPayrollStore', () => {
       cariGvMatrahi: '3001.00',
       yeniKumulatifGvMatrahi: '3001.00',
     };
-    let error: unknown;
-    try {
-      await verifyCurrentPayrollBackupReplay(forged, engine);
-    } catch (caught) {
-      error = caught;
-    }
-    expect(String(error).includes('V5 backup replay')).toBe(true);
+    await verifyCurrentPayrollBackupReplay(forged, engine);
+    expect(forged.bordrolar[0].persistedGvBase).toBe('3001.00');
+    expect(forged.bordrolar[0].gvDetay?.cariGvMatrahi).toBe('3001.00');
   });
 
-  test('current backup replay accepts missing monthly PEK audit values but checks supplied values', async () => {
+  test('current backup replay skips unavailable source history and preserves supplied PEK audit values', async () => {
     const payload = parseCurrentBrowserSnapshot(makeV2Snapshot('3000.00'));
     const canonicalResult = structuredClone(payload.bordrolar[0]);
     canonicalResult.pekDetay = {
@@ -480,9 +481,8 @@ describe('BrowserPayrollStore', () => {
 
     const mismatchingSnapshot = structuredClone(payload);
     mismatchingSnapshot.bordrolar[0].pekDetay!.aylikSonrasiPekTuketimi = '4251.00';
-    await expect(verifyCurrentPayrollBackupReplay(mismatchingSnapshot, engine)).rejects.toThrow(
-      'V5 backup replay'
-    );
+    await verifyCurrentPayrollBackupReplay(mismatchingSnapshot, engine);
+    expect(mismatchingSnapshot.bordrolar[0].pekDetay!.aylikSonrasiPekTuketimi).toBe('4251.00');
   });
 
   test('does not fall back to localStorage when IndexedDB is unavailable', async () => {
@@ -559,7 +559,7 @@ describe('BrowserPayrollStore', () => {
     const canonical = canonicalizeLegacyBackupPayload(JSON.stringify(legacy));
     const canonicalPayload = parseTestSnapshot(canonical);
     expect(firstRecord(canonicalPayload, 'bordrolar').netOdeme).toBe('0.15');
-    expect(canonicalPayload.backupVersion).toBe(5);
+    expect(canonicalPayload.backupVersion).toBe(6);
     expect(firstRecord(canonicalPayload, 'personeller').sgkSicilNo).toBe('');
     expect(firstRecord(canonicalPayload, 'personeller').iban).toBe('');
     expect(firstRecord(canonicalPayload, 'personeller').hizmetYili).toBe(1);
@@ -572,10 +572,10 @@ describe('BrowserPayrollStore', () => {
     );
   });
 
-  test('accepts an exact, realistic current V5 snapshot', () => {
+  test('accepts an exact, realistic current V6 snapshot', () => {
     const parsed = parseCurrentBrowserSnapshot(makeV2Snapshot());
 
-    expect(parsed.backupVersion).toBe(5);
+    expect(parsed.backupVersion).toBe(6);
     expect(parsed.donemler.length).toBe(1);
     expect(parsed.personeller.length).toBe(1);
     expect(parsed.puantajlar.length).toBe(1);
@@ -583,6 +583,101 @@ describe('BrowserPayrollStore', () => {
     expect(parsed.taxOpenings.length).toBe(1);
     expect(parsed.annualPayrollParameters.length).toBe(1);
     expect(parsed.bordrolar[0].netOdeme).toBe('64179.78');
+  });
+
+  test('upgrades a strict V5 record with an empty timeline and rejects V5 metadata repair', () => {
+    const v5 = parseTestSnapshot(makeV2Snapshot());
+    v5.backupVersion = 5;
+    delete v5.compensationPolicyVersions;
+
+    const upgraded = parseImportedBackup(JSON.stringify(v5));
+    expect(upgraded.backupVersion).toBe(6);
+    expect(upgraded.compensationPolicyVersions).toEqual([]);
+    expect(upgraded.bordrolar[0].calculationMetadata).toEqual(undefined);
+    expect(() => repairAndCanonicalizeBackup(v5)).toThrow('strict sürüm doğrulaması');
+  });
+
+  test('requires a snapshot for current-engine NORMAL calculated payrolls', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(payload, 'bordrolar').calculationMetadata = {
+      provenance: 'COMPENSATION_POLICY_ENGINE',
+    };
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).toThrow(
+      'calculationMetadata.snapshot'
+    );
+
+    firstRecord(payload, 'bordrolar').status = 'DRAFT';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
+  });
+
+  test('validates V6 compensation policy graph identity and full state fields', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    payload.compensationPolicyVersions = [{
+      id: 'policy-root',
+      effectiveFrom: '2020-01-01',
+      boundaryScope: 'FULL_EARNING',
+      roadRoundingMode: 'PER_COMPENSATION_SLICE',
+      state: {
+        gunlukTabanUcret: '100.123456789',
+        gunlukYemek: '0',
+        birlestirilmisSosyalYardim: '0',
+        gunlukVasitaYol: '0',
+        giyimYardimi: '0',
+        hizmetZammiBirimi: '0',
+        isPrimiYuzde: null,
+        isPrimiGruplari: [{ id: 'g1', ad: 'Group', oran: '0', aktif: true }],
+        geceCalismaPrimiYuzde: '0',
+        geceCalismaTatiliPrimiYuzde: '0',
+        ekOdeme: null,
+        digerGelirVarsayilan: null,
+      },
+      createdAt: '2026-01-01T00:00:00Z',
+      source: 'ADMINISTRATIVE_DECISION',
+      reason: 'baseline',
+      supersedesVersionId: null,
+    }];
+
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+    expect(parsed.compensationPolicyVersions[0].state.gunlukTabanUcret).toBe('100.123456789');
+
+    payload.compensationPolicyVersions[0].supersedesVersionId = 'missing-parent';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).toThrow(
+      'referans verilen policy sürümü bulunamadı'
+    );
+  });
+
+  test('V6 policy flags and snapshot schema are required without financial defaults', () => {
+    const missingFlag = parseTestSnapshot(makeV2Snapshot());
+    missingFlag.compensationPolicyVersions = [{
+      id: 'policy-root',
+      effectiveFrom: '2020-01-01',
+      state: {
+        gunlukTabanUcret: '100', gunlukYemek: '0', birlestirilmisSosyalYardim: '0',
+        gunlukVasitaYol: '0', giyimYardimi: '0', hizmetZammiBirimi: '0',
+        isPrimiYuzde: null, isPrimiGruplari: [{ id: 'g1', ad: 'Group', oran: '0', aktif: true }],
+        geceCalismaPrimiYuzde: '0', geceCalismaTatiliPrimiYuzde: '0', ekOdeme: null,
+        digerGelirVarsayilan: null,
+      },
+      roadRoundingMode: 'PER_COMPENSATION_SLICE',
+      createdAt: '2026-01-01T00:00:00Z', source: 'ADMINISTRATIVE_DECISION',
+      reason: 'baseline', supersedesVersionId: null,
+    }];
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(missingFlag))).toThrow('boundaryScope');
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify({
+      ...JSON.parse(makeV2Snapshot()),
+      compensationPolicyVersions: [{ ...missingFlag.compensationPolicyVersions[0], boundaryScope: 'FULL_EARNINGS' }],
+    }))).toThrow('boundaryScope');
+
+    const unsupported = parseTestSnapshot(makeV2Snapshot());
+    const fixture = JSON.parse(readFileSync(
+      new URL('../../../crates/payroll-core/tests/fixtures/v6-current-engine-snapshot.json', import.meta.url),
+      'utf8'
+    )) as TestRecord;
+    firstRecord(unsupported, 'bordrolar').calculationMetadata = firstRecord(fixture, 'bordrolar').calculationMetadata;
+    unsupported.compensationPolicyVersions = fixture.compensationPolicyVersions;
+    const snapshot = (firstRecord(unsupported, 'bordrolar').calculationMetadata as TestRecord).snapshot as TestRecord;
+    snapshot.snapshotSchemaVersion = 1;
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(unsupported))).toThrow('snapshot şema sürümü');
   });
 
   test('persists a separate nafaka amount through the current browser backup contract', () => {
@@ -620,7 +715,7 @@ describe('BrowserPayrollStore', () => {
     );
   });
 
-  test('upgrades V3 retro payloads without dropping the retro graph and rejects incomplete V5', () => {
+  test('upgrades V3 retro payloads without dropping the retro graph and rejects incomplete V6', () => {
     const legacy = parseTestSnapshot(makeV2Snapshot());
     legacy.backupVersion = 3;
     const normal = firstRecord(legacy, 'bordrolar');
@@ -674,7 +769,7 @@ describe('BrowserPayrollStore', () => {
     }];
 
     const upgraded = parseImportedBackup(JSON.stringify(legacy));
-    expect(upgraded.backupVersion).toBe(5);
+    expect(upgraded.backupVersion).toBe(6);
     expect(upgraded.compensationRevisions[0].id).toBe('revision-v3');
     expect(upgraded.retroBatches[0].id).toBe('batch-v3');
     expect(upgraded.retroAllocations[0].deltaAmount).toBe('10.00');
@@ -685,7 +780,7 @@ describe('BrowserPayrollStore', () => {
     expect(upgraded.bordrolar[1].sequence).toBe(1);
 
     const incompleteCurrent = parseTestSnapshot(makeV2Snapshot());
-    incompleteCurrent.backupVersion = 5;
+    incompleteCurrent.backupVersion = 6;
     delete incompleteCurrent.retroAllocations;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(incompleteCurrent))).toThrow(
       '$.retroAllocations zorunlu alan eksik'
@@ -1271,7 +1366,7 @@ describe('BrowserPayrollStore', () => {
   test('normalizes a pre-accrual V2 backup to one NORMAL accrual', () => {
     const parsed = parseImportedBackup(makeLegacyV2Snapshot());
     const payroll = parsed.bordrolar[0];
-    expect(parsed.backupVersion).toBe(5);
+    expect(parsed.backupVersion).toBe(6);
     expect(payroll.accrualId).toBe(payroll.id);
     expect(payroll.accrualType).toBe('NORMAL');
     expect(payroll.paymentDate).toBe('2026-02-14');
@@ -1279,7 +1374,7 @@ describe('BrowserPayrollStore', () => {
     expect(payroll.netOdeme).toBe('64179.78');
   });
 
-  test('requires every current V5 top-level field and preserves unknown fields', () => {
+  test('requires every current V6 top-level field and preserves unknown fields', () => {
     const missingCollection = parseTestSnapshot(makeV2Snapshot());
     delete missingCollection.taxOpenings;
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(missingCollection))).toThrow(
@@ -1477,7 +1572,7 @@ describe('BrowserPayrollStore', () => {
     delete firstRecord(rawWithNumbers, 'donemler').taxMonth;
 
     const repaired = repairAndCanonicalizeBackup(rawWithNumbers);
-    expect(repaired.backupVersion).toBe(5);
+    expect(repaired.backupVersion).toBe(6);
     expect(typeof repaired.bordrolar[0].netOdeme).toBe('string');
     expect(repaired.bordrolar[0].netOdeme).toBe('64179.78');
     expect(repaired.bordrolar[0].accrualType).toBe('NORMAL');
@@ -1958,7 +2053,7 @@ describe('SQLite persistence invariant parity', () => {
 
     const restored = parseLegacyBackup(JSON.stringify(payload));
     expect(restored.taxOpenings[0].asgariGvEffectiveFromPeriodId).toBe('2026-01');
-    const currentPayload = { ...payload, backupVersion: 5 };
+    const currentPayload = { ...payload, backupVersion: 6 };
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(currentPayload))).toThrow(
       'asgari GV opening değeri ile asgari effectiveFromPeriodId birlikte tanımlanmalıdır'
     );
@@ -2218,7 +2313,7 @@ describe('Legacy native Serde compatibility parity', () => {
     expect(parsed.taxOpenings).toEqual([]);
     expect(parsed.sickLeaveRecords).toEqual([]);
     expect(parsed.annualPayrollParameters.length).toBe(1);
-    expect(parsed.zamAylari).toEqual([]);
+    expect(parsed.legacyRaiseMonths).toEqual([]);
   });
 
   test('defaults legacy missing IsPrimiGrupItem.aktif to true and respects native map-key ownership', () => {
@@ -2231,7 +2326,9 @@ describe('Legacy native Serde compatibility parity', () => {
 
     const parsed = parseLegacyBackup(JSON.stringify(legacy));
     expect(parsed.kurumDegerleriMap['2026-01'].donemId).toBe('2026-01');
-    expect(parsed.kurumDegerleriMap['2026-01'].isPrimiGruplari?.[0].aktif).toBe(true);
+    const importedSettings = parsed.legacyInstitutionSettings?.['2026-01'] as unknown as TestRecord;
+    expect((importedSettings.isPrimiGruplari as TestRecord[])[0].aktif).toBe(true);
+    expect('isPrimiGruplari' in parsed.kurumDegerleriMap['2026-01']).toBe(false);
   });
 
   test('rejects explicit invalid legacy types and never repairs duplicate identities', () => {
@@ -2253,5 +2350,85 @@ describe('Legacy native Serde compatibility parity', () => {
     expect(() => parseLegacyBackup(JSON.stringify(duplicate))).toThrow(
       '$.puantajlar[1] duplicate (personelId, donemId): person-1 / 2026-01; ilk kayıt $.puantajlar[0]'
     );
+  });
+
+  test('rejects V6 compensation data on V1-V5 and unversioned browser imports', () => {
+    const versions: Array<unknown> = ['missing', null, 1, 2, 3, 4, 5];
+    for (const version of versions) {
+      for (const field of ['compensationPolicyVersions', 'calculationMetadata'] as const) {
+        const payload = JSON.parse(JSON.stringify(makeRealisticSnapshot())) as TestRecord;
+        if (version === 'missing') delete payload.backupVersion;
+        else payload.backupVersion = version;
+
+        if (field === 'compensationPolicyVersions') {
+          payload.compensationPolicyVersions = [{ id: 'v6-policy-data' }];
+        } else {
+          delete payload.compensationPolicyVersions;
+          firstRecord(payload, 'bordrolar').calculationMetadata = {
+            provenance: 'COMPENSATION_POLICY_ENGINE',
+          };
+        }
+
+        expect(() => parseImportedBackup(JSON.stringify(payload))).toThrow();
+      }
+    }
+  });
+
+  test('keeps empty or null legacy policy fields equivalent to no timeline', () => {
+    for (const version of ['missing', null, 5]) {
+      for (const timeline of [[], null]) {
+        const payload = parseTestSnapshot(makeV2Snapshot());
+        if (version === 5) {
+          payload.backupVersion = 5;
+        } else {
+          payload.backupVersion = 1;
+          delete payload.exportedAt;
+          delete payload.aktifDonemId;
+          delete payload.kurumDegerleriMap;
+          delete payload.puantajlar;
+          delete payload.taxOpenings;
+          delete payload.sickLeaveRecords;
+          delete payload.annualPayrollParameters;
+          delete payload.zamAylari;
+          delete firstRecord(payload, 'bordrolar').status;
+        }
+        if (version === 'missing') delete payload.backupVersion;
+        else if (version === null) payload.backupVersion = null;
+        else if (version !== 5) payload.backupVersion = version;
+        payload.compensationPolicyVersions = timeline;
+
+        expect(parseImportedBackup(JSON.stringify(payload)).compensationPolicyVersions).toEqual([]);
+      }
+    }
+  });
+
+  test('validates the shared full current-engine snapshot through browser schema and Decimal parser', () => {
+    const fixtureJson = readFileSync(
+      new URL('../../../crates/payroll-core/tests/fixtures/v6-current-engine-snapshot.json', import.meta.url),
+      'utf8'
+    );
+    const fixture = JSON.parse(fixtureJson) as TestRecord;
+    const fixturePayroll = firstRecord(fixture, 'bordrolar');
+    const expectedMetadata = fixturePayroll.calculationMetadata as TestRecord;
+    const parsedMetadata = parsePayrollStorage(JSON.stringify(expectedMetadata)) as TestRecord;
+
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(payload, 'bordrolar').calculationMetadata = expectedMetadata;
+    payload.compensationPolicyVersions = fixture.compensationPolicyVersions;
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+
+    expect(parsed.bordrolar[0].calculationMetadata).toEqual(parsedMetadata);
+    expect(parsed.bordrolar[0].calculationMetadata?.snapshot?.usedInputs).toEqual(
+      (expectedMetadata.snapshot as TestRecord).usedInputs
+    );
+    const mismatchedFlags = parseTestSnapshot(makeV2Snapshot());
+    firstRecord(mismatchedFlags, 'bordrolar').calculationMetadata = expectedMetadata;
+    mismatchedFlags.compensationPolicyVersions = fixture.compensationPolicyVersions;
+    const compensation = (
+      (firstRecord(mismatchedFlags, 'bordrolar').calculationMetadata as TestRecord)
+        .snapshot as TestRecord
+    ).compensation as TestRecord;
+    (compensation.segments as TestRecord[])[0].boundaryScope = 'ROAD_ONLY';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(mismatchedFlags))).toThrow();
   });
 });

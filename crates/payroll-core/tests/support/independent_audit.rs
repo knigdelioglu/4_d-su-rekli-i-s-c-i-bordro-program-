@@ -3,6 +3,9 @@ use payroll_core::*;
 use rust_decimal_macros::dec;
 use serde_json::json;
 
+#[path = "compensation_policy.rs"]
+mod compensation_policy;
+
 pub fn request() -> PayrollCalculationRequest {
     let person: Personel = serde_json::from_value(json!({
         "id":"audit", "tcNo":"10000000000", "ad":"Audit", "soyad":"Fixture",
@@ -33,6 +36,32 @@ pub fn request() -> PayrollCalculationRequest {
     for group in settings.isPrimiGruplari.as_mut().unwrap() {
         group.oran = dec!(0);
     }
+    let policy_state = CompensationPolicyState {
+        gunlukTabanUcret: settings.gunlukTabanUcret,
+        gunlukYemek: settings.gunlukYemek,
+        birlestirilmisSosyalYardim: settings.birlestirilmisSosyalYardim,
+        gunlukVasitaYol: settings.gunlukVasitaYol,
+        giyimYardimi: settings.giyimYardimi,
+        hizmetZammiBirimi: settings.hizmetZammiBirimi,
+        isPrimiYuzde: settings.isPrimiYuzde,
+        isPrimiGruplari: settings
+            .isPrimiGruplari
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|group| group.aktif)
+            .map(|group| CompensationPolicyGroup {
+                id: group.id.clone(),
+                ad: group.ad.clone(),
+                oran: group.oran,
+                aktif: group.aktif,
+            })
+            .collect(),
+        geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde.unwrap_or_default(),
+        geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
+        ekOdeme: settings.ekOdeme,
+        digerGelirVarsayilan: settings.digerGelirVarsayilan,
+    };
     let mut attendance = PersonelPuantaj {
         id: "audit-attendance".into(),
         personelId: person.id.clone(),
@@ -53,9 +82,21 @@ pub fn request() -> PayrollCalculationRequest {
         dataset: PayrollDatasetSnapshot {
             personnel: vec![person],
             periods: vec![period.clone()],
-            institutionSettings: [(period.id, settings)].into(),
+            institutionSettings: [(period.id, PayrollPeriodInstitutionSettings::from(&settings))]
+                .into(),
             attendances: vec![attendance],
             annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
+            compensationPolicyVersions: vec![CompensationPolicyVersion {
+                id: "audit-baseline".into(),
+                effectiveFrom: "2026-01-15".into(),
+                state: policy_state,
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+                createdAt: "2026-01-14T00:00:00Z".into(),
+                source: "user-confirmed".into(),
+                reason: "explicit baseline in audit fixture".into(),
+                supersedesVersionId: None,
+            }],
             ..Default::default()
         },
     }
@@ -105,7 +146,7 @@ pub fn dated_request(year: i32, month: u32) -> PayrollCalculationRequest {
     req.periodId = id.clone();
     let attendance = &mut req.dataset.attendances[0];
     attendance.id = format!("attendance-{id}");
-    attendance.donemId = id;
+    attendance.donemId = id.clone();
     attendance.gunler.clear();
     let mut date = start;
     while date <= end {
@@ -113,5 +154,13 @@ pub fn dated_request(year: i32, month: u32) -> PayrollCalculationRequest {
         date += Duration::days(1);
     }
     req.dataset.annualPayrollParameters[0].year = year;
+    let baseline = req
+        .dataset
+        .compensationPolicyVersions
+        .first_mut()
+        .expect("the audit fixture has an explicit baseline");
+    baseline.id = format!("test-policy-{id}");
+    baseline.effectiveFrom = start.to_string();
+    compensation_policy::seed_zero_tax_openings(&mut req.dataset);
     req
 }

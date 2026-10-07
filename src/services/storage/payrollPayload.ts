@@ -1,18 +1,23 @@
 import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import {
   parseLegacyPayrollStorage,
+  toPayrollBoundaryDto,
   DECIMAL_KEYS,
   type DecimalKey,
   type PayrollStorageDto,
+  assertExactDecimalDto,
 } from '../payrollEngine/decimalBoundary';
+import { validatePayrollBackupMetadataWithWasm } from '../payrollEngine/wasmRuntime';
 import type {
   PayrollCalculationRequest,
   PayrollEngine,
   PayrollDatasetSnapshot,
 } from '../payrollEngine/types';
+import { getWasmRuntime } from '../payrollEngine/wasmRuntime';
 import {
   assertRecord,
   parseAndValidatePayrollPayload,
+  validateV5PayrollPayload,
 } from './payrollPayloadSchema';
 import { getDefaultAnnualPayrollParameters } from './payrollDefaults';
 import { describeError } from '../../utils/errorMessage';
@@ -76,6 +81,12 @@ function hasOwn(record: UnknownRecord, key: string): boolean {
 
 function isRecord(value: unknown): value is UnknownRecord {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasCompensationPolicyTimelineData(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
 }
 
 function parseJsonObject(json: string): UnknownRecord {
@@ -291,6 +302,88 @@ function canonicalizeLegacyInstitutionSettings(value: unknown): unknown {
       return [periodId, settings];
     })
   );
+}
+
+const ACTIVE_PERIOD_SETTING_KEYS = [
+  'donemId',
+  'yemekTamGvIstisnaDamgaTabi',
+  'tediyeListesi',
+  'tisIkramiyeListesi',
+  'tediyeTisNotu',
+  'sgkIsciOraniYuzde',
+  'issizlikIsciOraniYuzde',
+  'gelirVergisiOraniYuzde',
+  'damgaVergisiOraniBinde',
+  'sendikaAidatiYuzde',
+  'sabitSendikaAidati',
+  'besOraniYuzde',
+  'sabitBesTutar',
+  'gunlukYemekIstisnasiSGK',
+  'gunlukYemekIstisnasiGV',
+  'statutoryParameterSegments',
+  'statutoryParameterSnapshot',
+  'pekTavanKatsayisi',
+  'gunlukAsgariUcret',
+  'sgkIsverenOraniYuzde',
+  'issizlikIsverenOraniYuzde',
+] as const;
+
+function legacyInstitutionSettingsToActiveMap(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([periodId, rawSettings]) => {
+    if (!isRecord(rawSettings)) return [periodId, rawSettings];
+    const active: UnknownRecord = {};
+    for (const key of ACTIVE_PERIOD_SETTING_KEYS) {
+      if (hasOwn(rawSettings, key)) active[key] = rawSettings[key];
+    }
+    // Native migration assigns the map key as the period authority.
+    active.donemId = periodId;
+    return [periodId, active];
+  }));
+}
+
+const LEGACY_COMPENSATION_SETTING_KEYS = [
+  'gunlukTabanUcret',
+  'gunlukYemek',
+  'birlestirilmisSosyalYardim',
+  'gunlukVasitaYol',
+  'transportRateChanges',
+  'giyimYardimi',
+  'hizmetZammiBirimi',
+  'isPrimiYuzde',
+  'isPrimiGruplari',
+  'geceCalismaPrimiYuzde',
+  'geceCalismaTatiliPrimiYuzde',
+  'ekOdeme',
+  'digerGelirVarsayilan',
+] as const;
+
+function hasLegacyCompensationSettings(value: unknown): boolean {
+  return isRecord(value) && LEGACY_COMPENSATION_SETTING_KEYS.some((key) => hasOwn(value, key));
+}
+
+function prepareCurrentBrowserSnapshot(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const prepared: UnknownRecord = { ...raw };
+  const sourceSettings = raw.kurumDegerleriMap;
+  if (isRecord(sourceSettings)) {
+    const archived = isRecord(raw.legacyInstitutionSettings)
+      ? { ...raw.legacyInstitutionSettings }
+      : {};
+    const shouldProject = Object.values(sourceSettings).some(hasLegacyCompensationSettings);
+    if (shouldProject) {
+      for (const [periodId, settings] of Object.entries(sourceSettings)) {
+        if (hasLegacyCompensationSettings(settings)) archived[periodId] = settings;
+      }
+      prepared.kurumDegerleriMap = legacyInstitutionSettingsToActiveMap(sourceSettings);
+    }
+    if (Object.keys(archived).length > 0) prepared.legacyInstitutionSettings = archived;
+  }
+  if (Array.isArray(raw.zamAylari)) {
+    prepared.legacyRaiseMonths = raw.legacyRaiseMonths ?? raw.zamAylari;
+    delete prepared.zamAylari;
+  }
+  return prepared;
 }
 
 function canonicalizeLegacyAnnualParameter(value: unknown): unknown {
@@ -684,20 +777,56 @@ function toCanonicalLegacyPayload(
     donemler: periods,
     aktifDonemId,
     personeller: personnel,
-    kurumDegerleriMap: canonicalizeLegacyInstitutionSettings(
-      legacyValueOrDefault(parsed, 'kurumDegerleriMap', {})
+    kurumDegerleriMap: legacyInstitutionSettingsToActiveMap(
+      canonicalizeLegacyInstitutionSettings(legacyValueOrDefault(parsed, 'kurumDegerleriMap', {}))
     ),
     puantajlar,
     bordrolar: payrolls,
     taxOpenings,
     sickLeaveRecords,
     annualPayrollParameters,
-    zamAylari: legacyValueOrDefault(parsed, 'zamAylari', []),
+    legacyInstitutionSettings: canonicalizeLegacyInstitutionSettings(
+      legacyValueOrDefault(parsed, 'kurumDegerleriMap', {})
+    ),
+    legacyRaiseMonths: legacyValueOrDefault(parsed, 'zamAylari', []),
     compensationRevisions,
     compensationRevisionOverrides,
     retroBatches,
     retroAllocations,
+    compensationPolicyVersions: [],
   };
+}
+
+/** V5 was already strict and authoritative; adapt only its absent V6 fields. */
+export function canonicalizeV5BackupRecord(
+  raw: UnknownRecord,
+  options: { allowLegacyMissingGvBase?: boolean } = {}
+): PayrollStorageDto {
+  if (!Array.isArray(raw.bordrolar)) {
+    throw new Error('V5 yedek bordro koleksiyonunu içermelidir.');
+  }
+  if (hasCompensationPolicyTimelineData(raw.compensationPolicyVersions)) {
+    throw new Error('V5 yedek policy timeline taşıyamaz; compensationPolicyVersions V6 alanıdır.');
+  }
+  if (raw.bordrolar.some((item) => isRecord(item) && item.calculationMetadata != null)) {
+    throw new Error('V5 yedek calculationMetadata taşıyamaz; compensation snapshot V6 alanıdır.');
+  }
+  const v5Payload = raw.compensationPolicyVersions == null
+    ? { ...raw, compensationPolicyVersions: [] }
+    : raw;
+  validateV5PayrollPayload(v5Payload, options);
+  const { zamAylari, kurumDegerleriMap, ...v5ActiveFields } = v5Payload as UnknownRecord;
+  return parseAndValidatePayrollPayload(
+    {
+      ...v5ActiveFields,
+      backupVersion: BACKUP_FORMAT_VERSION,
+      kurumDegerleriMap: legacyInstitutionSettingsToActiveMap(kurumDegerleriMap),
+      legacyInstitutionSettings: canonicalizeLegacyInstitutionSettings(kurumDegerleriMap),
+      legacyRaiseMonths: zamAylari,
+      compensationPolicyVersions: [],
+    },
+    options
+  );
 }
 
 export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
@@ -709,6 +838,17 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
   // respect to V3/V4's accrual metadata, but it must not pass through the V1
   // numeric-repair adapter: a numeric V2 value is still an invalid Decimal.
   const version = getBackupVersion(raw);
+  if (hasCompensationPolicyTimelineData(raw.compensationPolicyVersions)) {
+    throw new Error('V1-V5 veya sürümsüz yedekler compensationPolicyVersions taşıyamaz; V6 gerekir.');
+  }
+  if (
+    version < BACKUP_FORMAT_VERSION &&
+    Array.isArray(raw.bordrolar) &&
+    raw.bordrolar.some((item) => isRecord(item) && item.calculationMetadata != null)
+  ) {
+    throw new Error('V1-V5 veya sürümsüz yedekler calculationMetadata taşıyamaz; V6 gerekir.');
+  }
+  if (version === 5) return canonicalizeV5BackupRecord(raw);
   if (version >= 2 && (!hasOwn(raw, 'bordrolar') || !hasOwn(raw, 'personeller'))) {
     throw new Error('Legacy yedek bordro ve personel koleksiyonlarını içermelidir.');
   }
@@ -744,6 +884,10 @@ export function parseLegacyBackupRecord(raw: UnknownRecord): PayrollStorageDto {
  * Coerces numbers into Decimal strings, fills missing fields, and prunes dangling references.
  */
 export function repairAndCanonicalizeBackup(raw: UnknownRecord): PayrollStorageDto {
+  const sourceVersion = getBackupVersion(raw);
+  if (sourceVersion >= 5) {
+    throw new Error('V5+ yedekler strict sürüm doğrulamasından geçmelidir; emergency repair kullanılamaz.');
+  }
   const converted = parseLegacyPayrollStorage<unknown>(JSON.stringify(raw));
   if (!isRecord(converted)) {
     throw new Error('Kurtarılacak veri geçerli bir nesne değil.');
@@ -880,11 +1024,25 @@ export function parseCurrentBrowserSnapshot(
   json: string,
   options: { allowLegacyMissingGvBase?: boolean } = {}
 ): PayrollStorageDto {
-  const parsed: unknown = JSON.parse(json);
+  const parsed: unknown = prepareCurrentBrowserSnapshot(JSON.parse(json));
   const validated = parseAndValidatePayrollPayload(parsed, options);
   const repaired = repairLegacyPersonTaxOpenings(validated);
   if (repaired === validated) return validated;
   return parseAndValidatePayrollPayload(repaired, options);
+}
+
+/** Runs the frozen payroll_core validator for V6 metadata before browser writes/adoption. */
+export async function validatePayrollMetadataThroughCore(
+  payload: PayrollStorageDto
+): Promise<void> {
+  if (payload.backupVersion !== BACKUP_FORMAT_VERSION) return;
+  const validationPayload = {
+    compensationPolicyVersions: payload.compensationPolicyVersions,
+    bordrolar: payload.bordrolar,
+    donemler: payload.donemler,
+  };
+  assertExactDecimalDto(validationPayload);
+  await validatePayrollBackupMetadataWithWasm(JSON.stringify(validationPayload));
 }
 
 /** Parses and canonicalizes a structurally supported legacy backup. */
@@ -922,10 +1080,12 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
   }
 
   if (version === BACKUP_FORMAT_VERSION) {
-    // A versioned V5 backup is current data. It must never reach the legacy
+    // A versioned V6 backup is current data. It must never reach the legacy
     // repair path, even when its malformed values resemble an older backup.
     return parseCurrentBrowserSnapshot(JSON.stringify(raw));
   }
+
+  if (version === 5) return canonicalizeV5BackupRecord(raw);
 
   return parseLegacyBackupRecord(raw);
 }
@@ -1010,7 +1170,7 @@ function assertCurrentReplayMatches(
   const replayedProjection = JSON.stringify(stableReplayValue(currentPayrollReplayProjection(replayed)));
   if (importedProjection !== replayedProjection) {
     throw new Error(
-      `V5 backup replay: ${imported.id} snapshotı canonical Rust replay ile eşleşmiyor.`
+      `V5/V6 legacy backup replay: ${imported.id} snapshotı canonical Rust replay ile eşleşmiyor.`
     );
   }
 }
@@ -1029,20 +1189,53 @@ export async function verifyCurrentPayrollBackupReplay(
   const datasetBase: Omit<PayrollDatasetSnapshot, 'payrolls'> = {
     personnel: payload.personeller,
     periods: payload.donemler,
-    institutionSettings: payload.kurumDegerleriMap,
+    institutionSettings: toPayrollBoundaryDto(payload.kurumDegerleriMap),
     attendances: payload.puantajlar,
     taxOpenings: payload.taxOpenings,
     sickLeaveRecords: payload.sickLeaveRecords,
     annualPayrollParameters: payload.annualPayrollParameters,
-    zamAylari: payload.zamAylari,
     compensationRevisions: payload.compensationRevisions,
     compensationRevisionOverrides: payload.compensationRevisionOverrides,
     retroBatches: payload.retroBatches,
     retroAllocations: payload.retroAllocations,
+    compensationPolicyVersions: payload.compensationPolicyVersions,
   };
+  const legacyInstitutionSettings = payload.legacyInstitutionSettings ?? {};
+  const legacyRaiseMonths = payload.legacyRaiseMonths ?? [];
+  const exactLegacySourceFields = [
+    'gunlukTabanUcret',
+    'gunlukYemek',
+    'birlestirilmisSosyalYardim',
+    'gunlukVasitaYol',
+    'giyimYardimi',
+    'hizmetZammiBirimi',
+    'isPrimiYuzde',
+    'isPrimiGruplari',
+    'geceCalismaPrimiYuzde',
+    'geceCalismaTatiliPrimiYuzde',
+    'ekOdeme',
+    'digerGelirVarsayilan',
+  ] as const;
+  const hasExactLegacySource = (periodId: string): boolean => {
+    const settings = legacyInstitutionSettings[periodId] as unknown as UnknownRecord | undefined;
+    return Boolean(settings && exactLegacySourceFields.every((field) => hasOwn(settings, field)));
+  };
+  const runtime = await getWasmRuntime();
 
   for (const imported of payload.bordrolar) {
     if (imported.status !== 'CALCULATED' && imported.status !== 'FINALIZED') continue;
+    // Schema-2 rows are checked against their frozen compensation input
+    // snapshot. Metadata-less V5/V6 rows stay on the historical path.
+    if (imported.calculationMetadata?.provenance === 'COMPENSATION_POLICY_ENGINE') continue;
+    // Retro settlement is represented by the retained retro graph; this
+    // payroll path does not independently replay its source entitlement.
+    if (imported.accrualType === 'RETRO_ADJUSTMENT') continue;
+    const targetPeriod = payload.donemler.find((period) => period.id === imported.donemId);
+    if (!targetPeriod || !hasExactLegacySource(imported.donemId)) continue;
+    const sourceHistoryComplete = legacyRaiseMonths.length === 0 || payload.donemler
+      .filter((period) => period.baslangicTarihi <= targetPeriod.baslangicTarihi)
+      .every((period) => hasExactLegacySource(period.id));
+    if (!sourceHistoryComplete) continue;
     const targetAccrualId = imported.accrualId || imported.id;
     const replayDataset: PayrollDatasetSnapshot = {
       ...datasetBase,
@@ -1054,11 +1247,6 @@ export async function verifyCurrentPayrollBackupReplay(
     if (imported.accrualType === 'TEDIYE') grossAmount = imported.gelirler.tediye ?? null;
     if (imported.accrualType === 'TIS_IKRAMIYE') grossAmount = imported.gelirler.tisIkramiyesi ?? null;
     if (imported.accrualType === 'SUPPLEMENTAL') grossAmount = imported.gelirler.ekOdeme ?? null;
-    if (imported.accrualType === 'RETRO_ADJUSTMENT') {
-      const batch = payload.retroBatches.find((candidate) => candidate.id === targetAccrualId);
-      if (!batch) throw new Error(`V5 backup replay: ${targetAccrualId} retro batch'i bulunamadı.`);
-      grossAmount = batch.payableSettlementAmount;
-    }
 
     const request: PayrollCalculationRequest = {
       personnelId: imported.personelId,
@@ -1078,12 +1266,20 @@ export async function verifyCurrentPayrollBackupReplay(
       dataset: replayDataset,
     };
 
-    let replayed: PayrollStorageDto['bordrolar'][number];
+    let replayed: PayrollStorageDto['bordrolar'][number] | null;
     try {
-      replayed = await engine.calculatePayroll(request);
+      const replayJson = runtime.calculate_legacy_backup_payroll_json(JSON.stringify({
+        request,
+        legacyInput: {
+          institutionSettings: legacyInstitutionSettings,
+          raiseMonths: legacyRaiseMonths,
+        },
+      }));
+      replayed = JSON.parse(replayJson) as PayrollStorageDto['bordrolar'][number] | null;
     } catch (error) {
-      throw new Error(`V5 backup replay: ${imported.id} canonical Rust replay ile doğrulanamadı: ${describeError(error)}`);
+      throw new Error(`V5/V6 legacy backup replay: ${imported.id} canonical Rust replay ile doğrulanamadı: ${describeError(error)}`);
     }
+    if (!replayed) continue;
     assertCurrentReplayMatches(imported, replayed);
   }
 }

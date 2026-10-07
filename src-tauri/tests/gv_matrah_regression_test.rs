@@ -11,6 +11,8 @@ use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 #[test]
 fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
@@ -45,9 +47,13 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
         &conn,
         &DonemselKurumDegerleri {
             donemId: period.id.clone(),
+            yemekTamGvIstisnaDamgaTabi: false,
             ..DonemselKurumDegerleri::default()
         },
     )?;
+    let saved_settings = SettingsRepository::get_institution_settings(&conn, &period.id)?
+        .expect("period settings should be saved");
+    compensation_policy_test_support::seed_period_baseline(&conn, &period, &saved_settings)?;
     AnnualPayrollParametersRepository::save(&conn, &AnnualPayrollParameters::default_for_2026())?;
 
     let person = Personel {

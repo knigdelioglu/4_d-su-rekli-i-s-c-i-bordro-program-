@@ -7,7 +7,7 @@ use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
-use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
+use crate::repositories::settings_repo::SettingsRepository;
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use chrono::{Datelike, NaiveDate};
 use rusqlite::Connection;
@@ -51,7 +51,10 @@ impl PayrollNoticeService {
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: PersonnelRepository::get_all(conn)?,
             periods: PeriodRepository::get_all(conn)?,
-            institutionSettings: SettingsRepository::get_all_institution_settings(conn)?,
+            institutionSettings: SettingsRepository::get_all_institution_settings(conn)?
+                .into_iter()
+                .map(|(period_id, settings)| (period_id, settings.into()))
+                .collect(),
             attendances: AttendanceRepository::get_all(conn)?,
             payrolls: PayrollRepository::get_all(conn)?,
             taxOpenings: crate::repositories::tax_opening_repo::TaxOpeningRepository::get_all(
@@ -59,11 +62,11 @@ impl PayrollNoticeService {
             )?,
             sickLeaveRecords: SickLeaveRepository::get_all(conn)?,
             annualPayrollParameters: AnnualPayrollParametersRepository::get_all(conn)?,
-            zamAylari: Self::get_zam_aylari(conn)?,
             compensationRevisions: crate::repositories::retro_repo::get_revisions(conn)?,
             compensationRevisionOverrides: crate::repositories::retro_repo::get_overrides(conn)?,
             retroBatches: crate::repositories::retro_repo::get_batches(conn)?,
             retroAllocations: crate::repositories::retro_repo::get_allocations(conn)?,
+            compensationPolicyVersions: Vec::new(),
         })
     }
 
@@ -416,98 +419,53 @@ impl PayrollNoticeService {
             }
         }
 
-        let current_settings = SettingsRepository::get_institution_settings(conn, &period.id)?;
-
-        let zam_aylari = Self::get_zam_aylari(conn)?;
-        if zam_aylari.is_empty() {
+        let versions = crate::repositories::compensation_policy_repo::CompensationPolicyRepository::get_versions_for_period(
+            conn,
+            &start.format("%Y-%m-%d").to_string(),
+            &end.format("%Y-%m-%d").to_string(),
+        )?;
+        let baseline = versions
+            .iter()
+            .filter(|version| version.effectiveFrom <= start.format("%Y-%m-%d").to_string())
+            .max_by(|left, right| left.effectiveFrom.cmp(&right.effectiveFrom));
+        let Some(baseline) = baseline else {
             notices.push(PayrollNotice {
-                code: "RAISE_MONTHS_NOT_CONFIGURED".into(),
+                code: "COMPENSATION_POLICY_BASELINE_MISSING".into(),
                 severity: PayrollNoticeSeverity::Warning,
                 scope: PayrollNoticeScope::Period,
                 personnel_id: None,
-                title: "Zam yürürlük ayları tanımlı değil".into(),
-                message: "Kurum genelinde zam yürürlük ayı seçilmedi. Bu durumda dönem bordrosu tek ücret setiyle hesaplanır; kurumunuzda dönem içi zam uygulanıyorsa ayları tanımlayın.".into(),
+                title: "Ücret politikası başlangıç sürümü eksik".into(),
+                message: format!(
+                    "{} döneminin başlangıç tarihinde geçerli ücret politikası yok. NORMAL bordro hesaplanmadan önce Ücret Politikası ekranından açıkça onaylanmış bir başlangıç sürümü kaydedin.",
+                    period.donemAdi
+                ),
                 details: Vec::new(),
-                action: Some("CHECK_RAISE_PARAMETERS".into()),
+                action: Some("OPEN_COMPENSATION_POLICY".into()),
             });
             return Ok(());
-        }
-
-        let Some(raise_date) = Self::find_raise_date(start, end, &zam_aylari) else {
-            return Ok(());
         };
-
-        let previous_period = PeriodRepository::get_previous_by_work_period(conn, period)?;
-        let mut details = vec![format!(
-            "Zam yürürlük tarihi: {}",
-            raise_date.format("%Y-%m-%d")
-        )];
-
-        if let Some(current) = current_settings.as_ref() {
-            details.push(format!(
-                "Yeni günlük taban: {} TL",
-                current.gunlukTabanUcret
-            ));
-        }
-
-        match previous_period {
-            None => notices.push(PayrollNotice {
-                code: "MISSING_PRE_RAISE_PERIOD".into(),
-                severity: PayrollNoticeSeverity::Critical,
+        let changes = versions
+            .iter()
+            .filter(|version| {
+                version.effectiveFrom > start.format("%Y-%m-%d").to_string()
+                    && version.effectiveFrom <= end.format("%Y-%m-%d").to_string()
+            })
+            .map(|version| format!("{} (sürüm {})", version.effectiveFrom, version.id))
+            .collect::<Vec<_>>();
+        if !changes.is_empty() {
+            notices.push(PayrollNotice {
+                code: "COMPENSATION_POLICY_CHANGE_ACTIVE".into(),
+                severity: PayrollNoticeSeverity::Info,
                 scope: PayrollNoticeScope::Period,
                 personnel_id: None,
-                title: "Zam öncesi dönem bulunamadı".into(),
-                message: format!(
-                    "{} dönemi {} tarihinde zam geçişi içeriyor ancak zam öncesi ücret setini sağlayacak önceki çalışma dönemi yok.",
-                    period.donemAdi,
-                    raise_date.format("%Y-%m-%d")
-                ),
-                details,
-                action: Some("CHECK_RAISE_PARAMETERS".into()),
-            }),
-            Some(previous) => {
-                let previous_settings =
-                    SettingsRepository::get_institution_settings(conn, &previous.id)?;
-                if let Some(previous_settings) = previous_settings {
-                    details.push(format!(
-                        "Eski günlük taban: {} TL ({})",
-                        previous_settings.gunlukTabanUcret, previous.donemAdi
-                    ));
-                    notices.push(PayrollNotice {
-                        code: "RAISE_TRANSITION_PERIOD".into(),
-                        severity: PayrollNoticeSeverity::Warning,
-                        scope: PayrollNoticeScope::Period,
-                        personnel_id: None,
-                        title: "Bu bordro zam geçişi içeriyor".into(),
-                        message: format!(
-                            "{} tarihinde ücret seti değişiyor. Motor zam öncesi günlerde {} döneminin, zam sonrası günlerde {} döneminin kurum değerlerini kullanacak; eski ve yeni tutarları kontrol edin.",
-                            raise_date.format("%Y-%m-%d"),
-                            previous.donemAdi,
-                            period.donemAdi
-                        ),
-                        details,
-                        action: Some("CHECK_RAISE_PARAMETERS".into()),
-                    });
-                } else {
-                    details.push(format!("Zam öncesi dönem: {}", previous.donemAdi));
-                    notices.push(PayrollNotice {
-                        code: "MISSING_PRE_RAISE_SETTINGS".into(),
-                        severity: PayrollNoticeSeverity::Critical,
-                        scope: PayrollNoticeScope::Period,
-                        personnel_id: None,
-                        title: "Zam öncesi ücret parametreleri eksik".into(),
-                        message: format!(
-                            "{} tarihinde zam geçişi var ancak {} döneminin kurum değerleri bulunamadı. Zam öncesi günlerin doğru hesaplanması için bu kayıt zorunludur.",
-                            raise_date.format("%Y-%m-%d"),
-                            previous.donemAdi
-                        ),
-                        details,
-                        action: Some("CHECK_RAISE_PARAMETERS".into()),
-                    });
-                }
-            }
+                title: "Dönem içinde ücret politikası değişikliği var".into(),
+                message: "Normal bordro, aşağıdaki tarihlerde geçerli olan kayıtlı tam durum sürümlerini kullanır.".into(),
+                details: changes,
+                action: Some("OPEN_COMPENSATION_POLICY".into()),
+            });
         }
 
+        let _ = baseline;
         Ok(())
     }
 
@@ -540,32 +498,6 @@ impl PayrollNoticeService {
             }
         }
 
-        result
-    }
-
-    fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
-        let Some(raw) = SettingsRepository::get_app_setting(conn, ZAM_AYLARI_SETTING_KEY)? else {
-            return Ok(Vec::new());
-        };
-        let months: Vec<i32> = serde_json::from_str(&raw).map_err(|e| {
-            DomainError::InvalidData(format!("Kurum zam ayarı bozuk JSON içeriyor: {e}"))
-        })?;
-        SettingsRepository::normalize_zam_aylari(&months)
-    }
-
-    fn find_raise_date(start: NaiveDate, end: NaiveDate, zam_aylari: &[i32]) -> Option<NaiveDate> {
-        let mut result = None;
-        for year in (start.year() - 1)..=(end.year() + 1) {
-            for month in zam_aylari {
-                let Some(candidate) = NaiveDate::from_ymd_opt(year, *month as u32, 1) else {
-                    continue;
-                };
-                if candidate >= start && candidate <= end {
-                    result =
-                        Some(result.map_or(candidate, |current: NaiveDate| current.min(candidate)));
-                }
-            }
-        }
         result
     }
 

@@ -3,6 +3,7 @@
  * Source of truth: crates/payroll-core/src/models.rs
  */
 export const RUST_DECIMAL_KEYS = [
+  "accrualGrossAmount",
   "adjustedPek",
   "altSinirTamamlamaFarki",
   "amount",
@@ -21,6 +22,7 @@ export const RUST_DECIMAL_KEYS = [
   "brutDamgaVergisi",
   "brutGelirVergisi",
   "cariGvMatrahi",
+  "dailyMinimumWage",
   "damgaVergisi",
   "damgaVergisiOraniBinde",
   "deltaAmount",
@@ -59,7 +61,9 @@ export const RUST_DECIMAL_KEYS = [
   "gunlukYemekIstisnasiGV",
   "gunlukYemekIstisnasiSGK",
   "gvCumulativeOpening",
+  "gvExemptionUsed",
   "gvReferansGunlukAsgariUcret",
+  "gvTaxableBase",
   "gvYemekIstisnasiToplam",
   "hamPek",
   "hayatSaglikSigortasi",
@@ -70,6 +74,7 @@ export const RUST_DECIMAL_KEYS = [
   "hizmetZammiBirimi",
   "icra",
   "icraTutar",
+  "insuranceGvDeductionUsed",
   "isciIssizlikPrimi",
   "isciSgkPrimi",
   "isPrimi",
@@ -88,6 +93,9 @@ export const RUST_DECIMAL_KEYS = [
   "kisiBorcuTutar",
   "limit",
   "manuelKumulatifGvMatrahi",
+  "mealSgkExemption",
+  "monthlyGvBase",
+  "monthPekConsumptionAfter",
   "nafaka",
   "nafakaTutar",
   "netOdeme",
@@ -103,10 +111,15 @@ export const RUST_DECIMAL_KEYS = [
   "payableSettlementAmount",
   "pekAltSinir",
   "pekAltSinirTamamlamaIsverenPrimi",
+  "pekCeiling",
+  "pekPrimeBase",
   "pekTavanKatsayisi",
   "pekUstSinir",
   "persistedGvBase",
+  "previousAnnualInsuranceGvDeduction",
   "previousAuthoritativeRetroAmount",
+  "previousCumulativeGv",
+  "previousCumulativeMinimumWageGv",
   "primMatrahi",
   "recoverableAmount",
   "recoveredAmount",
@@ -115,15 +128,20 @@ export const RUST_DECIMAL_KEYS = [
   "sabitSendikaAidati",
   "sabitTutar",
   "saglikSigortasiPrimiTutar",
+  "samePaymentMonthGvExemptionUsed",
+  "samePaymentMonthPekUsed",
+  "samePaymentMonthStampExemptionUsed",
   "sendikaAidati",
   "sendikaAidatiYuzde",
   "sgkIsciOraniYuzde",
   "sgkIsverenOraniYuzde",
+  "sgkWorkerRatePercent",
   "sgkYemekIstisnasiToplam",
   "sigortaGvAylikLimiti",
   "sigortaGvIndirimAdayi",
   "sigortaGvYillikBrutAsgariUcretTavani",
   "sigortaGvYillikKalanLimiti",
+  "stampExemptionUsed",
   "tabanBrutAylik",
   "tahakkukOncesiKalanGvIstisnasi",
   "tahakkukSonrasiKalanGvIstisnasi",
@@ -133,6 +151,7 @@ export const RUST_DECIMAL_KEYS = [
   "tisIkramiyesi",
   "totalGrossDelta",
   "tutar",
+  "unemploymentWorkerRatePercent",
   "uygulanabilirSigortaGvIndirimi",
   "uygulananDamgaIstisnasi",
   "uygulananGvIstisnasi",
@@ -223,6 +242,31 @@ export const RUST_ENUM_VALUES = {
     "CALCULATED",
     "STALE",
     "FINALIZED"
+  ],
+  "CompensationBoundaryScope": [
+    "FULL_EARNING",
+    "ROAD_ONLY"
+  ],
+  "RoadRoundingMode": [
+    "PER_COMPENSATION_SLICE",
+    "PERIOD_TOTAL"
+  ],
+  "PayrollCalculationProvenance": [
+    "COMPENSATION_POLICY_ENGINE"
+  ],
+  "PayrollAttendanceCoverage": [
+    "COMPLETE",
+    "PARTIAL"
+  ],
+  "PayrollTaxOpeningSource": [
+    "EXPLICIT_OPENING",
+    "LEGACY_PERSONNEL_VALUE",
+    "IMPLICIT_ZERO"
+  ],
+  "PayrollPekCarrySource": [
+    "NONE",
+    "PAYMENT_EVENT",
+    "RETRO_OVERRIDE"
   ],
   "StatutorySnapshotSource": [
     "ATTENDANCE_BACKED",
@@ -2520,6 +2564,17 @@ export const RUST_STRUCT_CONTRACT = {
         "nullable": true,
         "decimal": false,
         "nestedTypes": []
+      },
+      "calculationMetadata": {
+        "rustName": "calculationMetadata",
+        "rustType": "Option<PayrollCalculationMetadata>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollCalculationMetadata"
+        ]
       }
     }
   },
@@ -2680,6 +2735,1727 @@ export const RUST_STRUCT_CONTRACT = {
         "required": false,
         "optional": true,
         "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      }
+    }
+  },
+  "CompensationPolicyState": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "gunlukTabanUcret": {
+        "rustName": "gunlukTabanUcret",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemek": {
+        "rustName": "gunlukYemek",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "birlestirilmisSosyalYardim": {
+        "rustName": "birlestirilmisSosyalYardim",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukVasitaYol": {
+        "rustName": "gunlukVasitaYol",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "giyimYardimi": {
+        "rustName": "giyimYardimi",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "hizmetZammiBirimi": {
+        "rustName": "hizmetZammiBirimi",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "isPrimiYuzde": {
+        "rustName": "isPrimiYuzde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "isPrimiGruplari": {
+        "rustName": "isPrimiGruplari",
+        "rustType": "Vec<CompensationPolicyGroup>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "CompensationPolicyGroup"
+        ]
+      },
+      "geceCalismaPrimiYuzde": {
+        "rustName": "geceCalismaPrimiYuzde",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "geceCalismaTatiliPrimiYuzde": {
+        "rustName": "geceCalismaTatiliPrimiYuzde",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "ekOdeme": {
+        "rustName": "ekOdeme",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "digerGelirVarsayilan": {
+        "rustName": "digerGelirVarsayilan",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "CompensationPolicyGroup": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "id": {
+        "rustName": "id",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "ad": {
+        "rustName": "ad",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "oran": {
+        "rustName": "oran",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "aktif": {
+        "rustName": "aktif",
+        "rustType": "bool",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      }
+    }
+  },
+  "CompensationPolicyVersion": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "id": {
+        "rustName": "id",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "effectiveFrom": {
+        "rustName": "effectiveFrom",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "state": {
+        "rustName": "state",
+        "rustType": "CompensationPolicyState",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "CompensationPolicyState"
+        ]
+      },
+      "boundaryScope": {
+        "rustName": "boundaryScope",
+        "rustType": "CompensationBoundaryScope",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "CompensationBoundaryScope"
+        ]
+      },
+      "roadRoundingMode": {
+        "rustName": "roadRoundingMode",
+        "rustType": "RoadRoundingMode",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "RoadRoundingMode"
+        ]
+      },
+      "createdAt": {
+        "rustName": "createdAt",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "source": {
+        "rustName": "source",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "reason": {
+        "rustName": "reason",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "supersedesVersionId": {
+        "rustName": "supersedesVersionId",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      }
+    }
+  },
+  "ResolvedCompensationSegment": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "versionId": {
+        "rustName": "versionId",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "startDate": {
+        "rustName": "startDate",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "endDate": {
+        "rustName": "endDate",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "state": {
+        "rustName": "state",
+        "rustType": "CompensationPolicyState",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "CompensationPolicyState"
+        ]
+      },
+      "boundaryScope": {
+        "rustName": "boundaryScope",
+        "rustType": "CompensationBoundaryScope",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "CompensationBoundaryScope"
+        ]
+      },
+      "roadRoundingMode": {
+        "rustName": "roadRoundingMode",
+        "rustType": "RoadRoundingMode",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "RoadRoundingMode"
+        ]
+      }
+    }
+  },
+  "PayrollCalculationMetadata": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "provenance": {
+        "rustName": "provenance",
+        "rustType": "PayrollCalculationProvenance",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollCalculationProvenance"
+        ]
+      },
+      "snapshot": {
+        "rustName": "snapshot",
+        "rustType": "Option<PayrollCalculationSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollCalculationSnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollCalculationSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "snapshotSchemaVersion": {
+        "rustName": "snapshotSchemaVersion",
+        "rustType": "u16",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "calculationVersion": {
+        "rustName": "calculationVersion",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "compensation": {
+        "rustName": "compensation",
+        "rustType": "ResolvedCompensationSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "ResolvedCompensationSnapshot"
+        ]
+      },
+      "usedInputs": {
+        "rustName": "usedInputs",
+        "rustType": "PayrollUsedInputSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollUsedInputSnapshot"
+        ]
+      }
+    }
+  },
+  "ResolvedCompensationSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "segments": {
+        "rustName": "segments",
+        "rustType": "Vec<ResolvedCompensationSegment>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "ResolvedCompensationSegment"
+        ]
+      }
+    }
+  },
+  "PayrollUsedInputSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "personnelGroup": {
+        "rustName": "personnelGroup",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "serviceYear": {
+        "rustName": "serviceYear",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "personalDeductions": {
+        "rustName": "personalDeductions",
+        "rustType": "Option<PayrollPersonalDeductionInputsSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollPersonalDeductionInputsSnapshot"
+        ]
+      },
+      "attendance": {
+        "rustName": "attendance",
+        "rustType": "Option<PayrollAttendanceInputSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollAttendanceInputSnapshot"
+        ]
+      },
+      "paidSickLeave": {
+        "rustName": "paidSickLeave",
+        "rustType": "Option<PayrollPaidSickLeaveInputSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollPaidSickLeaveInputSnapshot"
+        ]
+      },
+      "manualIncome": {
+        "rustName": "manualIncome",
+        "rustType": "PayrollManualIncomeInputSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollManualIncomeInputSnapshot"
+        ]
+      },
+      "accrualGrossAmount": {
+        "rustName": "accrualGrossAmount",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "institutionDeductionSettings": {
+        "rustName": "institutionDeductionSettings",
+        "rustType": "PayrollInstitutionDeductionInputsSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollInstitutionDeductionInputsSnapshot"
+        ]
+      },
+      "statutoryParameters": {
+        "rustName": "statutoryParameters",
+        "rustType": "PayrollStatutoryInputsSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollStatutoryInputsSnapshot"
+        ]
+      },
+      "annualParameters": {
+        "rustName": "annualParameters",
+        "rustType": "PayrollAnnualParametersSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollAnnualParametersSnapshot"
+        ]
+      },
+      "taxHistory": {
+        "rustName": "taxHistory",
+        "rustType": "PayrollTaxHistoryInputsSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollTaxHistoryInputsSnapshot"
+        ]
+      },
+      "incomingPekCarry": {
+        "rustName": "incomingPekCarry",
+        "rustType": "PayrollIncomingPekCarrySnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollIncomingPekCarrySnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollPersonalDeductionInputsSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "sendikaUyesi": {
+        "rustName": "sendikaUyesi",
+        "rustType": "Option<bool>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sabitSendikaAidati": {
+        "rustName": "sabitSendikaAidati",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "besUyesi": {
+        "rustName": "besUyesi",
+        "rustType": "Option<bool>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "oksOraniYuzde": {
+        "rustName": "oksOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sabitBesTutar": {
+        "rustName": "sabitBesTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "icraTutar": {
+        "rustName": "icraTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "nafakaTutar": {
+        "rustName": "nafakaTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "kisiBorcuTutar": {
+        "rustName": "kisiBorcuTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "dogumAskerlikBorclanmasiTutar": {
+        "rustName": "dogumAskerlikBorclanmasiTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "hayatSaglikSigortasiTutar": {
+        "rustName": "hayatSaglikSigortasiTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "digerKesintiTutar": {
+        "rustName": "digerKesintiTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gvIndirimleri": {
+        "rustName": "gvIndirimleri",
+        "rustType": "Option<PayrollGvDeductionInputsSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollGvDeductionInputsSnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollGvDeductionInputsSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "dogumAskerlikGvIndirimTutar": {
+        "rustName": "dogumAskerlikGvIndirimTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "hayatSigortasiPrimiTutar": {
+        "rustName": "hayatSigortasiPrimiTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "saglikSigortasiPrimiTutar": {
+        "rustName": "saglikSigortasiPrimiTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollAttendanceInputSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "coverage": {
+        "rustName": "coverage",
+        "rustType": "PayrollAttendanceCoverage",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollAttendanceCoverage"
+        ]
+      },
+      "days": {
+        "rustName": "days",
+        "rustType": "Vec<PayrollAttendanceDaySnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollAttendanceDaySnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollAttendanceDaySnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "date": {
+        "rustName": "date",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "code": {
+        "rustName": "code",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollPaidSickLeaveInputSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "ruleVersion": {
+        "rustName": "ruleVersion",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sourceEpisodes": {
+        "rustName": "sourceEpisodes",
+        "rustType": "Vec<PayrollSickLeaveEpisodeSnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollSickLeaveEpisodeSnapshot"
+        ]
+      },
+      "paidDates": {
+        "rustName": "paidDates",
+        "rustType": "Vec<String>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollSickLeaveEpisodeSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "id": {
+        "rustName": "id",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "startDate": {
+        "rustName": "startDate",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "endDate": {
+        "rustName": "endDate",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollManualIncomeInputSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "supplied": {
+        "rustName": "supplied",
+        "rustType": "bool",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "tediye": {
+        "rustName": "tediye",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "tisIkramiyesi": {
+        "rustName": "tisIkramiyesi",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollInstitutionDeductionInputsSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "yemekTamGvIstisnaDamgaTabi": {
+        "rustName": "yemekTamGvIstisnaDamgaTabi",
+        "rustType": "bool",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "damgaVergisiOraniBinde": {
+        "rustName": "damgaVergisiOraniBinde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sendikaAidatiYuzde": {
+        "rustName": "sendikaAidatiYuzde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sabitSendikaAidati": {
+        "rustName": "sabitSendikaAidati",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "besOraniYuzde": {
+        "rustName": "besOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sabitBesTutar": {
+        "rustName": "sabitBesTutar",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollStatutoryInputsSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "gunlukAsgariUcret": {
+        "rustName": "gunlukAsgariUcret",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sgkIsciOraniYuzde": {
+        "rustName": "sgkIsciOraniYuzde",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "issizlikIsciOraniYuzde": {
+        "rustName": "issizlikIsciOraniYuzde",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "pekTavanKatsayisi": {
+        "rustName": "pekTavanKatsayisi",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiSGK": {
+        "rustName": "gunlukYemekIstisnasiSGK",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiGV": {
+        "rustName": "gunlukYemekIstisnasiGV",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sgkIsverenOraniYuzde": {
+        "rustName": "sgkIsverenOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "issizlikIsverenOraniYuzde": {
+        "rustName": "issizlikIsverenOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "statutoryParameterSegments": {
+        "rustName": "statutoryParameterSegments",
+        "rustType": "Vec<PayrollStatutoryInputSegmentSnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollStatutoryInputSegmentSnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollStatutoryInputSegmentSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "effectiveFrom": {
+        "rustName": "effectiveFrom",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "gunlukAsgariUcret": {
+        "rustName": "gunlukAsgariUcret",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "pekTavanKatsayisi": {
+        "rustName": "pekTavanKatsayisi",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiSGK": {
+        "rustName": "gunlukYemekIstisnasiSGK",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiGV": {
+        "rustName": "gunlukYemekIstisnasiGV",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollAnnualParametersSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "year": {
+        "rustName": "year",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "gelirVergisiDilimleri": {
+        "rustName": "gelirVergisiDilimleri",
+        "rustType": "Vec<PayrollTaxBracketSnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollTaxBracketSnapshot"
+        ]
+      },
+      "sigortaGvYillikBrutAsgariUcretTavani": {
+        "rustName": "sigortaGvYillikBrutAsgariUcretTavani",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollTaxBracketSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "limit": {
+        "rustName": "limit",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "oran": {
+        "rustName": "oran",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollTaxOpeningSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "source": {
+        "rustName": "source",
+        "rustType": "PayrollTaxOpeningSource",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollTaxOpeningSource"
+        ]
+      },
+      "openingId": {
+        "rustName": "openingId",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "effectiveFromTaxYear": {
+        "rustName": "effectiveFromTaxYear",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "effectiveFromTaxMonth": {
+        "rustName": "effectiveFromTaxMonth",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "amount": {
+        "rustName": "amount",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollTaxHistoryInputsSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "normalGvOpening": {
+        "rustName": "normalGvOpening",
+        "rustType": "PayrollTaxOpeningSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollTaxOpeningSnapshot"
+        ]
+      },
+      "minimumWageGvOpening": {
+        "rustName": "minimumWageGvOpening",
+        "rustType": "PayrollTaxOpeningSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollTaxOpeningSnapshot"
+        ]
+      },
+      "previousCumulativeGv": {
+        "rustName": "previousCumulativeGv",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "previousCumulativeMinimumWageGv": {
+        "rustName": "previousCumulativeMinimumWageGv",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "previousAnnualInsuranceGvDeduction": {
+        "rustName": "previousAnnualInsuranceGvDeduction",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "samePaymentMonthPekUsed": {
+        "rustName": "samePaymentMonthPekUsed",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "samePaymentMonthGvExemptionUsed": {
+        "rustName": "samePaymentMonthGvExemptionUsed",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "samePaymentMonthStampExemptionUsed": {
+        "rustName": "samePaymentMonthStampExemptionUsed",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "previousPaymentEvents": {
+        "rustName": "previousPaymentEvents",
+        "rustType": "Vec<PayrollPriorPaymentEventSnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollPriorPaymentEventSnapshot"
+        ]
+      },
+      "minimumWageMonthlyReferences": {
+        "rustName": "minimumWageMonthlyReferences",
+        "rustType": "Vec<PayrollMinimumWageMonthInputSnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollMinimumWageMonthInputSnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollPriorPaymentEventSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "periodId": {
+        "rustName": "periodId",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "accrualId": {
+        "rustName": "accrualId",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "accrualType": {
+        "rustName": "accrualType",
+        "rustType": "AccrualType",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "AccrualType"
+        ]
+      },
+      "taxYear": {
+        "rustName": "taxYear",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "taxMonth": {
+        "rustName": "taxMonth",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "paymentDate": {
+        "rustName": "paymentDate",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sequence": {
+        "rustName": "sequence",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "gvTaxableBase": {
+        "rustName": "gvTaxableBase",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "insuranceGvDeductionUsed": {
+        "rustName": "insuranceGvDeductionUsed",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gvExemptionUsed": {
+        "rustName": "gvExemptionUsed",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "stampExemptionUsed": {
+        "rustName": "stampExemptionUsed",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "pekPrimeBase": {
+        "rustName": "pekPrimeBase",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "monthPekConsumptionAfter": {
+        "rustName": "monthPekConsumptionAfter",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "pekCeiling": {
+        "rustName": "pekCeiling",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "mealSgkExemption": {
+        "rustName": "mealSgkExemption",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "income": {
+        "rustName": "income",
+        "rustType": "PayrollIncomeInputsSnapshot",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollIncomeInputsSnapshot"
+        ]
+      },
+      "outgoingPekCarry": {
+        "rustName": "outgoingPekCarry",
+        "rustType": "Vec<PayrollPekCarrySnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollPekCarrySnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollIncomeInputsSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "tabanBrutAylik": {
+        "rustName": "tabanBrutAylik",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "tediye": {
+        "rustName": "tediye",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "tisIkramiyesi": {
+        "rustName": "tisIkramiyesi",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "ekOdeme": {
+        "rustName": "ekOdeme",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "yemek": {
+        "rustName": "yemek",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "birlestirilmisSosyalYardim": {
+        "rustName": "birlestirilmisSosyalYardim",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "vasitaYol": {
+        "rustName": "vasitaYol",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "giyimYardimi": {
+        "rustName": "giyimYardimi",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "isPrimi": {
+        "rustName": "isPrimi",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "geceCalismasiUcreti": {
+        "rustName": "geceCalismasiUcreti",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "geceCalismasiTatiliUcreti": {
+        "rustName": "geceCalismasiTatiliUcreti",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "hizmetZammi": {
+        "rustName": "hizmetZammi",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "digerGelir": {
+        "rustName": "digerGelir",
+        "rustType": "Option<Decimal>",
+        "required": true,
+        "optional": false,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollMinimumWageMonthInputSnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "periodId": {
+        "rustName": "periodId",
+        "rustType": "String",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "taxYear": {
+        "rustName": "taxYear",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "taxMonth": {
+        "rustName": "taxMonth",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "dailyMinimumWage": {
+        "rustName": "dailyMinimumWage",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sgkWorkerRatePercent": {
+        "rustName": "sgkWorkerRatePercent",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "unemploymentWorkerRatePercent": {
+        "rustName": "unemploymentWorkerRatePercent",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "monthlyGvBase": {
+        "rustName": "monthlyGvBase",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollIncomingPekCarrySnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "source": {
+        "rustName": "source",
+        "rustType": "PayrollPekCarrySource",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollPekCarrySource"
+        ]
+      },
+      "sourceId": {
+        "rustName": "sourceId",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sourcePeriodId": {
+        "rustName": "sourcePeriodId",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sourceTaxYear": {
+        "rustName": "sourceTaxYear",
+        "rustType": "Option<i32>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sourceTaxMonth": {
+        "rustName": "sourceTaxMonth",
+        "rustType": "Option<i32>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "taxMonthsElapsed": {
+        "rustName": "taxMonthsElapsed",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "records": {
+        "rustName": "records",
+        "rustType": "Vec<PayrollPekCarrySnapshot>",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "PayrollPekCarrySnapshot"
+        ]
+      }
+    }
+  },
+  "PayrollPekCarrySnapshot": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "tutar": {
+        "rustName": "tutar",
+        "rustType": "Decimal",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "kalanAySayisi": {
+        "rustName": "kalanAySayisi",
+        "rustType": "i32",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "kaynakDonemId": {
+        "rustName": "kaynakDonemId",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
         "decimal": false,
         "nestedTypes": []
       }
@@ -3290,13 +5066,13 @@ export const RUST_STRUCT_CONTRACT = {
   },
   "DonemselKurumDegerleri": {
     "renameAll": "camelCase",
-    "default": false,
+    "default": true,
     "fields": {
       "donemId": {
         "rustName": "donemId",
         "rustType": "String",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": false,
         "nestedTypes": []
@@ -3304,8 +5080,8 @@ export const RUST_STRUCT_CONTRACT = {
       "gunlukTabanUcret": {
         "rustName": "gunlukTabanUcret",
         "rustType": "Decimal",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
@@ -3313,8 +5089,8 @@ export const RUST_STRUCT_CONTRACT = {
       "gunlukYemek": {
         "rustName": "gunlukYemek",
         "rustType": "Decimal",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
@@ -3331,8 +5107,8 @@ export const RUST_STRUCT_CONTRACT = {
       "birlestirilmisSosyalYardim": {
         "rustName": "birlestirilmisSosyalYardim",
         "rustType": "Decimal",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
@@ -3340,8 +5116,8 @@ export const RUST_STRUCT_CONTRACT = {
       "gunlukVasitaYol": {
         "rustName": "gunlukVasitaYol",
         "rustType": "Decimal",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
@@ -3360,8 +5136,8 @@ export const RUST_STRUCT_CONTRACT = {
       "giyimYardimi": {
         "rustName": "giyimYardimi",
         "rustType": "Decimal",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
@@ -3369,8 +5145,8 @@ export const RUST_STRUCT_CONTRACT = {
       "hizmetZammiBirimi": {
         "rustName": "hizmetZammiBirimi",
         "rustType": "Decimal",
-        "required": true,
-        "optional": false,
+        "required": false,
+        "optional": true,
         "nullable": false,
         "decimal": true,
         "nestedTypes": []
@@ -3429,6 +5205,209 @@ export const RUST_STRUCT_CONTRACT = {
         "optional": true,
         "nullable": true,
         "decimal": true,
+        "nestedTypes": []
+      },
+      "tediyeListesi": {
+        "rustName": "tediyeListesi",
+        "rustType": "Option<Vec<TediyeKalemi>>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "TediyeKalemi"
+        ]
+      },
+      "tisIkramiyeListesi": {
+        "rustName": "tisIkramiyeListesi",
+        "rustType": "Option<Vec<TisIkramiyeKalemi>>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "TisIkramiyeKalemi"
+        ]
+      },
+      "tediyeTisNotu": {
+        "rustName": "tediyeTisNotu",
+        "rustType": "Option<String>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "sgkIsciOraniYuzde": {
+        "rustName": "sgkIsciOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "issizlikIsciOraniYuzde": {
+        "rustName": "issizlikIsciOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gelirVergisiOraniYuzde": {
+        "rustName": "gelirVergisiOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "damgaVergisiOraniBinde": {
+        "rustName": "damgaVergisiOraniBinde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sendikaAidatiYuzde": {
+        "rustName": "sendikaAidatiYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sabitSendikaAidati": {
+        "rustName": "sabitSendikaAidati",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "besOraniYuzde": {
+        "rustName": "besOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sabitBesTutar": {
+        "rustName": "sabitBesTutar",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiSGK": {
+        "rustName": "gunlukYemekIstisnasiSGK",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukYemekIstisnasiGV": {
+        "rustName": "gunlukYemekIstisnasiGV",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "statutoryParameterSegments": {
+        "rustName": "statutoryParameterSegments",
+        "rustType": "Option<Vec<StatutoryParameterSegment>>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "StatutoryParameterSegment"
+        ]
+      },
+      "statutoryParameterSnapshot": {
+        "rustName": "statutoryParameterSnapshot",
+        "rustType": "Option<StatutoryParameterSnapshot>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "StatutoryParameterSnapshot"
+        ]
+      },
+      "pekTavanKatsayisi": {
+        "rustName": "pekTavanKatsayisi",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "gunlukAsgariUcret": {
+        "rustName": "gunlukAsgariUcret",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "sgkIsverenOraniYuzde": {
+        "rustName": "sgkIsverenOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      },
+      "issizlikIsverenOraniYuzde": {
+        "rustName": "issizlikIsverenOraniYuzde",
+        "rustType": "Option<Decimal>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": true,
+        "nestedTypes": []
+      }
+    }
+  },
+  "PayrollPeriodInstitutionSettings": {
+    "renameAll": "camelCase",
+    "default": true,
+    "fields": {
+      "donemId": {
+        "rustName": "donemId",
+        "rustType": "String",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "yemekTamGvIstisnaDamgaTabi": {
+        "rustName": "yemekTamGvIstisnaDamgaTabi",
+        "rustType": "bool",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
         "nestedTypes": []
       },
       "tediyeListesi": {

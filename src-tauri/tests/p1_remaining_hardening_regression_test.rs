@@ -17,6 +17,8 @@ use rusqlite::params;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+#[path = "common/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 fn period(id: &str, yil: i32, ay: i32, tax_year: i32, tax_month: i32) -> BordroDonemi {
     let start = NaiveDate::from_ymd_opt(yil, ay as u32, 15).unwrap();
@@ -106,6 +108,7 @@ fn setup_payroll_inputs(
         ..DonemselKurumDegerleri::default()
     };
     SettingsRepository::save_institution_settings(conn, &settings)?;
+    compensation_policy_test_support::seed_period_baseline(conn, p, &settings)?;
     let mut annual = AnnualPayrollParameters::default_for_2026();
     annual.year = p.taxYear;
     if p.taxYear != 2026 {
@@ -360,6 +363,7 @@ fn payroll_record(
         statutorySnapshot: None,
         odenenRaporluGun: Some(0),
         raporluGun: Some(0),
+        calculationMetadata: None,
     }
 }
 

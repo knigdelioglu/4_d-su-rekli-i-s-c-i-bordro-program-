@@ -3,6 +3,8 @@ mod support;
 use payroll_core::*;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
+#[path = "support/compensation_policy.rs"]
+mod compensation_policy_test_support;
 
 #[test]
 fn audit_meal_is_exempt_from_stamp_as_well_as_income_tax() {
@@ -152,6 +154,9 @@ fn audit_twelve_month_cumulatives_and_year_reset() {
             req.dataset.periods = history.periods.clone();
             req.dataset.institutionSettings = history.institutionSettings.clone();
             req.dataset.payrolls = history.payrolls.clone();
+            if month > 1 {
+                req.dataset.taxOpenings.clear();
+            }
             let p = calculate_payroll_checked(&req).unwrap();
             let days = p.puantajOzeti.c;
             let base = Decimal::from(days) * dec!(2000);
@@ -177,6 +182,7 @@ fn audit_twelve_month_cumulatives_and_year_reset() {
 #[test]
 fn audit_opening_components_and_supplementary_exemption_budget() {
     let mut req = support::dated_request(2026, 7);
+    req.dataset.taxOpenings.clear();
     req.dataset.taxOpenings.push(PersonelTaxOpening {
         id: "opening".into(),
         personnelId: req.personnelId.clone(),
@@ -241,12 +247,9 @@ fn audit_pek_ceiling_and_nonwage_carry_conservation() {
 #[test]
 fn audit_retro_source_wage_premiums_and_oks_reach_payment() {
     let mut source = support::request();
-    source
-        .dataset
-        .institutionSettings
-        .get_mut(&source.periodId)
-        .unwrap()
-        .gunlukYemek = dec!(0);
+    source.dataset.compensationPolicyVersions[0]
+        .state
+        .gunlukYemek = Decimal::ZERO;
     let original = calculate_payroll_checked(&source).unwrap();
     let mut req = support::dated_request(2026, 2);
     req.dataset.periods.extend(source.dataset.periods.clone());
@@ -256,6 +259,7 @@ fn audit_retro_source_wage_premiums_and_oks_reach_payment() {
     req.dataset
         .attendances
         .extend(source.dataset.attendances.clone());
+    req.dataset.taxOpenings.clear();
     req.dataset.payrolls.push(original);
     let revision: CompensationRevision = serde_json::from_value(serde_json::json!({
         "id":"audit-revision","reason":"COLLECTIVE_AGREEMENT","title":"Audit wage revision",
@@ -325,20 +329,38 @@ fn audit_retro_source_wage_premiums_and_oks_reach_payment() {
 #[test]
 fn audit_retro_noop_after_split_raise_does_not_create_phantom_wages() {
     let mut source = support::request();
-    let mut previous = support::dated_request(2025, 12);
-    previous
-        .dataset
-        .institutionSettings
-        .values_mut()
-        .next()
-        .unwrap()
-        .gunlukTabanUcret = dec!(1000);
+    let previous = support::dated_request(2025, 12);
     source.dataset.periods.extend(previous.dataset.periods);
     source
         .dataset
         .institutionSettings
         .extend(previous.dataset.institutionSettings);
-    source.dataset.zamAylari = vec![2];
+    let active_period = source.dataset.periods[0].clone();
+    let mut active_state = source.dataset.compensationPolicyVersions[0].state.clone();
+    active_state.gunlukTabanUcret = dec!(1000);
+    active_state.gunlukYemek = dec!(200);
+    compensation_policy_test_support::replace_period_baseline_from_state(
+        &mut source.dataset,
+        &active_period,
+        active_state,
+    );
+    let mut raised_state = source.dataset.compensationPolicyVersions[0].state.clone();
+    raised_state.gunlukTabanUcret = dec!(2000);
+    raised_state.gunlukYemek = dec!(400);
+    source
+        .dataset
+        .compensationPolicyVersions
+        .push(CompensationPolicyVersion {
+            id: "audit-explicit-february-raise".into(),
+            effectiveFrom: "2026-02-01".into(),
+            state: raised_state,
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2026-02-01T00:00:00Z".into(),
+            source: "TEST_FIXTURE".into(),
+            reason: "Explicit February policy change".into(),
+            supersedesVersionId: None,
+        });
     let original = calculate_payroll_checked(&source).unwrap();
     assert_eq!(original.gelirler.tabanBrutAylik, Some(dec!(45000)));
     source.dataset.payrolls.push(original);
@@ -430,10 +452,10 @@ fn audit_sick_leave_quota_dedup_and_unpaid_days() {
     req.dataset
         .sickLeaveRecords
         .push(req.dataset.sickLeaveRecords[0].clone());
-    let p = calculate_payroll_checked(&req).unwrap();
-    assert_eq!(p.odenenRaporluGun, Some(1));
-    assert_eq!(p.gelirler.tabanBrutAylik, Some(dec!(62000)));
-    assert_eq!(p.gelirler.yemek, Some(dec!(6000)));
+    req.dataset.sickLeaveRecords.last_mut().unwrap().id = "sick-duplicate-dates".into();
+    let error = calculate_payroll_checked(&req)
+        .expect_err("overlapping duplicate sick-leave episodes must fail closed");
+    assert!(error.to_string().contains("Rapor tarihleri çakışıyor"));
 }
 
 #[test]
@@ -448,14 +470,16 @@ fn audit_night_and_group_premiums_use_independent_days() {
     req.dataset.attendances[0]
         .gunler
         .insert("2026-01-16".into(), "GÇT".into());
-    let k = req
-        .dataset
-        .institutionSettings
-        .get_mut(&req.periodId)
-        .unwrap();
-    k.geceCalismaPrimiYuzde = Some(dec!(20));
-    k.geceCalismaTatiliPrimiYuzde = Some(dec!(30));
-    k.isPrimiGruplari.as_mut().unwrap()[0].oran = dec!(9);
+    let period = req.dataset.periods[0].clone();
+    let mut state = req.dataset.compensationPolicyVersions[0].state.clone();
+    state.geceCalismaPrimiYuzde = dec!(20);
+    state.geceCalismaTatiliPrimiYuzde = dec!(30);
+    state.isPrimiGruplari[0].oran = dec!(9);
+    compensation_policy_test_support::replace_period_baseline_from_state(
+        &mut req.dataset,
+        &period,
+        state,
+    );
     let p = calculate_payroll_checked(&req).unwrap();
     assert_eq!(p.gelirler.geceCalismasiUcreti, Some(dec!(400)));
     assert_eq!(p.gelirler.geceCalismasiTatiliUcreti, Some(dec!(600)));

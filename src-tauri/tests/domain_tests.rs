@@ -7,6 +7,7 @@ mod tests {
     use bordro_programi_lib::domain::DomainError;
     use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
     use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
+    use bordro_programi_lib::repositories::compensation_policy_repo::CompensationPolicyRepository;
     use bordro_programi_lib::repositories::payroll_repo::PayrollRepository;
     use bordro_programi_lib::repositories::period_repo::PeriodRepository;
     use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
@@ -62,7 +63,149 @@ mod tests {
                 ..DonemselKurumDegerleri::default()
             };
             SettingsRepository::save_institution_settings(conn, &settings)?;
+            let period = PeriodRepository::get_by_id(conn, period_id)?
+                .expect("test period must be saved before its settings");
+            let versions = CompensationPolicyRepository::get_versions_for_period(
+                conn,
+                &period.baslangicTarihi,
+                &period.bitisTarihi,
+            )?;
+            if !versions
+                .iter()
+                .any(|version| version.effectiveFrom == period.baslangicTarihi)
+            {
+                let state = CompensationPolicyState {
+                    gunlukTabanUcret: settings.gunlukTabanUcret,
+                    gunlukYemek: settings.gunlukYemek,
+                    birlestirilmisSosyalYardim: settings.birlestirilmisSosyalYardim,
+                    gunlukVasitaYol: settings.gunlukVasitaYol,
+                    giyimYardimi: settings.giyimYardimi,
+                    hizmetZammiBirimi: settings.hizmetZammiBirimi,
+                    isPrimiYuzde: settings.isPrimiYuzde,
+                    isPrimiGruplari: settings
+                        .isPrimiGruplari
+                        .clone()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|group| CompensationPolicyGroup {
+                            id: group.id,
+                            ad: group.ad,
+                            oran: group.oran,
+                            aktif: group.aktif,
+                        })
+                        .collect(),
+                    geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde.unwrap_or_default(),
+                    geceCalismaTatiliPrimiYuzde: settings
+                        .geceCalismaTatiliPrimiYuzde
+                        .unwrap_or_default(),
+                    ekOdeme: settings.ekOdeme,
+                    digerGelirVarsayilan: settings.digerGelirVarsayilan,
+                };
+                CompensationPolicyRepository::insert_version(
+                    conn,
+                    &CompensationPolicyVersion {
+                        id: format!("test-policy-{}", period.id),
+                        effectiveFrom: period.baslangicTarihi,
+                        state,
+                        boundaryScope: CompensationBoundaryScope::FullEarning,
+                        roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+                        createdAt: "2026-01-01T00:00:00Z".into(),
+                        source: "TEST_FIXTURE".into(),
+                        reason: "Domain regression policy baseline".into(),
+                        supersedesVersionId: None,
+                    },
+                )?;
+            }
         }
+        Ok(())
+    }
+
+    fn ensure_test_policy_for_period(
+        conn: &rusqlite::Connection,
+        period_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let period = PeriodRepository::get_by_id(conn, period_id)?
+            .expect("test period must be saved before its policy baseline");
+        if CompensationPolicyRepository::get_versions_for_period(
+            conn,
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+        )?
+        .iter()
+        .any(|version| version.effectiveFrom == period.baslangicTarihi)
+        {
+            return Ok(());
+        }
+        let settings = SettingsRepository::get_institution_settings(conn, period_id)?
+            .unwrap_or_else(|| DonemselKurumDegerleri {
+                donemId: period_id.into(),
+                ..DonemselKurumDegerleri::default()
+            });
+        let state = CompensationPolicyState {
+            gunlukTabanUcret: settings.gunlukTabanUcret,
+            gunlukYemek: settings.gunlukYemek,
+            birlestirilmisSosyalYardim: settings.birlestirilmisSosyalYardim,
+            gunlukVasitaYol: settings.gunlukVasitaYol,
+            giyimYardimi: settings.giyimYardimi,
+            hizmetZammiBirimi: settings.hizmetZammiBirimi,
+            isPrimiYuzde: settings.isPrimiYuzde,
+            isPrimiGruplari: settings
+                .isPrimiGruplari
+                .unwrap_or_default()
+                .into_iter()
+                .map(|group| CompensationPolicyGroup {
+                    id: group.id,
+                    ad: group.ad,
+                    oran: group.oran,
+                    aktif: group.aktif,
+                })
+                .collect(),
+            geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde.unwrap_or_default(),
+            geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
+            ekOdeme: settings.ekOdeme,
+            digerGelirVarsayilan: settings.digerGelirVarsayilan,
+        };
+        CompensationPolicyRepository::insert_version(
+            conn,
+            &CompensationPolicyVersion {
+                id: format!("test-policy-{}", period.id),
+                effectiveFrom: period.baslangicTarihi,
+                state,
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+                createdAt: "2026-01-01T00:00:00Z".into(),
+                source: "TEST_FIXTURE".into(),
+                reason: "Explicit policy state for the test period".into(),
+                supersedesVersionId: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn ensure_test_tax_opening(
+        conn: &rusqlite::Connection,
+        personnel_id: &str,
+        period: &BordroDonemi,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if TaxOpeningRepository::get_by_personnel_and_year(conn, personnel_id, period.taxYear)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        TaxOpeningRepository::save(
+            conn,
+            &PersonelTaxOpening {
+                id: format!("{personnel_id}_{}", period.taxYear),
+                personnelId: personnel_id.into(),
+                year: period.taxYear,
+                gvCumulativeOpening: Some(dec!(0)),
+                effectiveFromPeriodId: Some(period.id.clone()),
+                asgariGvCumulativeOpening: Some(dec!(0)),
+                asgariGvEffectiveFromPeriodId: Some(period.id.clone()),
+                createdAt: None,
+                updatedAt: None,
+            },
+        )?;
         Ok(())
     }
 
@@ -197,6 +340,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         };
         PayrollRepository::save_legacy_in_transaction(&conn, &mayis_bordro)?;
 
@@ -245,6 +389,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         };
         PayrollRepository::save_legacy_in_transaction(&conn, &haziran_bordro)?;
 
@@ -310,6 +455,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         };
         PayrollRepository::save_legacy_in_transaction(&conn, &ocak_bordro)?;
 
@@ -344,6 +490,8 @@ mod tests {
             taxMonth: 9,
         };
         PeriodRepository::save(&conn, &donem)?;
+        ensure_test_institution_settings(&conn, &[donem.id.as_str()])?;
+        ensure_test_tax_opening(&conn, &person.id, &donem)?;
 
         let bordro = BordroKaydi {
             id: "test-finalize_2026-08".into(),
@@ -383,6 +531,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         };
         PayrollRepository::save_legacy_in_transaction(&conn, &bordro)?;
 
@@ -1206,6 +1355,7 @@ mod tests {
             };
             PeriodRepository::save(&conn, &donem)?;
             ensure_test_institution_settings(&conn, &["2026-12"])?;
+            ensure_test_tax_opening(&conn, "p-yc-persistence", &donem)?;
 
             let rec = SickLeaveRecord {
                 id: "sick_yc_p".into(),
@@ -1225,6 +1375,14 @@ mod tests {
             gunler.insert("2027-01-01".to_string(), "R".to_string());
             gunler.insert("2027-01-02".to_string(), "R".to_string());
             gunler.insert("2027-01-03".to_string(), "R".to_string());
+            let mut date = chrono::NaiveDate::parse_from_str(&donem.baslangicTarihi, "%Y-%m-%d")?;
+            let end = chrono::NaiveDate::parse_from_str(&donem.bitisTarihi, "%Y-%m-%d")?;
+            while date <= end {
+                gunler
+                    .entry(date.format("%Y-%m-%d").to_string())
+                    .or_insert_with(|| "G".to_string());
+                date += chrono::Duration::days(1);
+            }
 
             let puantaj = PersonelPuantaj {
                 id: "p-yc-persistence_2026-12".into(),
@@ -1519,12 +1677,16 @@ mod tests {
             };
             PeriodRepository::save(&conn, &donem)?;
             ensure_test_institution_settings(&conn, &["2026-05"])?;
+            ensure_test_tax_opening(&conn, "p-rapor-test", &donem)?;
 
             // 6 days of "R" + 24 days of "Ç" = 30 days
             let mut gunler = thirty_work_days(&donem);
             for d in 25..=30 {
                 gunler.insert(format!("2026-05-{d:02}"), "R".to_string());
             }
+            gunler
+                .entry("2026-06-14".into())
+                .or_insert_with(|| "G".into());
 
             let puantaj = PersonelPuantaj {
                 id: "p-rapor-test_2026-05".into(),
@@ -1884,22 +2046,12 @@ mod tests {
     #[test]
     fn test_legacy_db_missing_sick_leave_table_is_repaired(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut conn = create_in_memory_connection()?;
+        let mut conn = rusqlite::Connection::open_in_memory()?;
+        bordro_programi_lib::db::migrations::get_migrations().to_version(&mut conn, 5)?;
 
         // Simulate a database that reached migration 5 before the table was
         // added to the initial schema definition.
         conn.execute("DROP TABLE sick_leave_records", [])?;
-        for column in [
-            "devir_kumulatif_gv_matrahi",
-            "devir_kumulatif_gv_matrahi_yili",
-            "devir_kumulatif_gv_matrahi_baslangic_ayi",
-            "devir_kumulatif_asgari_gv_matrahi",
-            "devir_kumulatif_asgari_gv_matrahi_yili",
-        ] {
-            conn.execute(&format!("ALTER TABLE personnel DROP COLUMN {column}"), [])?;
-        }
-        conn.execute("ALTER TABLE payroll_records DROP COLUMN notlar", [])?;
-        conn.pragma_update(None, "user_version", 5u32)?;
 
         bordro_programi_lib::db::migrations::initialize_db(&mut conn)?;
 
@@ -2302,6 +2454,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         };
         PayrollRepository::save(&conn, &kall)?;
 
@@ -2366,6 +2519,16 @@ mod tests {
                 taxMonth: m + 1,
             };
             PeriodRepository::save(&conn, &donem)?;
+        }
+        for period_id in [
+            "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05",
+        ] {
+            let legacy_settings = DonemselKurumDegerleri {
+                donemId: period_id.into(),
+                ..DonemselKurumDegerleri::default()
+            };
+            let active_settings: PayrollPeriodInstitutionSettings = legacy_settings.into();
+            SettingsRepository::save_active_institution_settings(&conn, &active_settings)?;
         }
 
         // Aktif dönem: 15.06–14.07 (ay=6). Vergi yılı/ayı seçimine göre referans kümülatif:
@@ -2483,7 +2646,7 @@ mod tests {
     }
 
     #[test]
-    fn test_asgari_only_opening_keeps_legacy_normal_and_matches_core(
+    fn test_asgari_only_opening_blocks_normal_with_legacy_payment_without_provenance(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
         let periods = [
@@ -2569,22 +2732,13 @@ mod tests {
         assert_eq!(native_normal, dec!(150000));
         assert_eq!(native_asgari, dec!(100000));
 
-        let dataset =
-            PayrollService::build_calculation_snapshot_for(&conn, &person.id, &periods[2].id)?;
-        let core_result =
-            payroll_core::calculate_payroll(&payroll_core::PayrollCalculationRequest {
-                personnelId: person.id.clone(),
-                periodId: periods[2].id.clone(),
-                calculatedAt: "2026-09-08T00:00:00Z".into(),
-                manualIncome: None,
-                accrual: None,
-                dataset,
-            })?;
-        assert_eq!(core_result.oncekiKumulatifGvMatrahi, Some(native_normal));
-        assert_eq!(
-            core_result.oncekiKumulatifAsgariGvMatrahi,
-            Some(native_asgari)
-        );
+        let result =
+            PayrollService::calculate_payroll_for_personnel(&conn, &person.id, &periods[2].id);
+        assert!(matches!(
+            result,
+            Err(DomainError::InvalidData(message))
+                if message.contains("prior payment event GV provenance eksik")
+        ));
         Ok(())
     }
 
@@ -2985,6 +3139,7 @@ mod tests {
                 statutorySnapshot: None,
                 odenenRaporluGun: None,
                 raporluGun: None,
+                calculationMetadata: None,
             };
             PayrollRepository::save(&conn, &bordro)?;
 
@@ -3057,6 +3212,7 @@ mod tests {
             statutorySnapshot: None,
             odenenRaporluGun: None,
             raporluGun: None,
+            calculationMetadata: None,
         }
     }
 
@@ -3168,6 +3324,10 @@ mod tests {
             dec!(9.00),
         );
         SettingsRepository::save_institution_settings(&conn, &ocak_settings)?;
+
+        ensure_test_policy_for_period(&conn, &aralik2026.id)?;
+        ensure_test_policy_for_period(&conn, &ocak2027.id)?;
+        ensure_test_tax_opening(&conn, &person.id, &aralik2026)?;
 
         AttendanceRepository::save(
             &conn,
@@ -3318,6 +3478,11 @@ mod tests {
             ),
         )?;
 
+        for p in &periods {
+            ensure_test_policy_for_period(&conn, &p.id)?;
+        }
+        ensure_test_tax_opening(&conn, &person.id, &periods[0])?;
+
         let b1 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-b", "2026-12")?;
         assert_eq!(
             b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar,
@@ -3424,6 +3589,10 @@ mod tests {
             ),
         )?;
 
+        ensure_test_policy_for_period(&conn, &aralik2026.id)?;
+        ensure_test_policy_for_period(&conn, &ocak2027.id)?;
+        ensure_test_tax_opening(&conn, &person.id, &aralik2026)?;
+
         PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2026-12")?;
         let b_ocak = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-c", "2027-01")?;
 
@@ -3525,6 +3694,11 @@ mod tests {
             ),
         )?;
 
+        for p in &periods {
+            ensure_test_policy_for_period(&conn, &p.id)?;
+        }
+        ensure_test_tax_opening(&conn, &person.id, &periods[0])?;
+
         let b1 = PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-d", "2026-06")?;
         assert_eq!(
             b1.sonrakiDevredenPek.as_ref().unwrap()[0].tutar,
@@ -3624,6 +3798,10 @@ mod tests {
             ),
         )?;
 
+        ensure_test_policy_for_period(&conn, &aralik2026.id)?;
+        ensure_test_policy_for_period(&conn, &ocak2027.id)?;
+        ensure_test_tax_opening(&conn, &person.id, &aralik2026)?;
+
         PayrollService::calculate_payroll_for_personnel(&conn, "p-pek-e", "2026-12")?;
 
         let devreden_gelen =
@@ -3722,6 +3900,7 @@ mod tests {
         };
         PeriodRepository::save(&conn, &donem)?;
         ensure_test_institution_settings(&conn, &["2026-05"])?;
+        ensure_test_tax_opening(&conn, "test-att-a", &donem)?;
 
         let gunler = thirty_work_days(&donem);
         AttendanceRepository::save(
@@ -3781,6 +3960,7 @@ mod tests {
             };
             PeriodRepository::save(&conn, &donem)?;
             ensure_test_institution_settings(&conn, &["2026-06"])?;
+            ensure_test_tax_opening(&conn, "test-att-b", &donem)?;
 
             let gunler = thirty_work_days(&donem);
             AttendanceRepository::save(
@@ -3852,6 +4032,7 @@ mod tests {
         PeriodRepository::save(&conn, &donem_a)?;
         PeriodRepository::save(&conn, &donem_b)?;
         ensure_test_institution_settings(&conn, &["2026-05", "2026-06"])?;
+        ensure_test_tax_opening(&conn, "test-att-c", &donem_a)?;
 
         // Puantaj yalnız A'ya kaydedildi; B kendi period_id'si için puantajsız.
         let gunler = thirty_work_days(&donem_a);

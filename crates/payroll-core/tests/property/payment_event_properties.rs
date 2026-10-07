@@ -11,6 +11,7 @@ fn cross_year_request(opening: Decimal) -> payroll_core::PayrollCalculationReque
     request.dataset.periods[0].taxYear = 2025;
     request.dataset.periods[0].taxMonth = 12;
     request.dataset.periods[1].taxMonth = 1;
+    request.dataset.taxOpenings.clear();
     let mut previous_year = AnnualPayrollParameters::default_for_2026();
     previous_year.year = 2025;
     request.dataset.annualPayrollParameters.push(previous_year);
@@ -22,6 +23,17 @@ fn cross_year_request(opening: Decimal) -> payroll_core::PayrollCalculationReque
         effectiveFromPeriodId: Some("source".into()),
         asgariGvCumulativeOpening: Some(opening),
         asgariGvEffectiveFromPeriodId: Some("source".into()),
+        createdAt: None,
+        updatedAt: None,
+    });
+    request.dataset.taxOpenings.push(PersonelTaxOpening {
+        id: "property-current-year-opening".into(),
+        personnelId: "audit".into(),
+        year: 2026,
+        gvCumulativeOpening: Some(Decimal::ZERO),
+        effectiveFromPeriodId: Some("payment".into()),
+        asgariGvCumulativeOpening: Some(Decimal::ZERO),
+        asgariGvEffectiveFromPeriodId: Some("payment".into()),
         createdAt: None,
         updatedAt: None,
     });

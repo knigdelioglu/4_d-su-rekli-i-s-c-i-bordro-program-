@@ -1,7 +1,11 @@
 import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
-import { serializePayrollStorage } from '../payrollEngine/decimalBoundary';
+import {
+  serializePayrollStorage,
+  type PayrollStorageDto,
+} from '../payrollEngine/decimalBoundary';
 import {
   isSupportedLegacyBackupPayload,
+  canonicalizeV5BackupRecord,
   parseCurrentBrowserSnapshot,
   parseImportedBackup,
   parseLegacyBackup,
@@ -23,6 +27,10 @@ export interface BrowserPayrollSnapshot {
   /** `unknown` keeps pre-marker envelopes on the compatibility path. */
   sourceFormat?: BrowserSnapshotSourceFormat;
 }
+
+export type BrowserSnapshotMutation = (
+  current: PayrollStorageDto
+) => PayrollStorageDto;
 
 /** A delayed load must never move a tab behind a snapshot it has already seen. */
 export function meetsSnapshotRevisionFloor(
@@ -152,6 +160,40 @@ function decodeStoredSnapshot(value: unknown): BrowserPayrollSnapshot | null {
   };
 }
 
+function stableJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, stableJsonValue((value as Record<string, unknown>)[key])])
+    );
+  }
+  return value;
+}
+
+function assertPolicyHistoryPreserved(
+  existing: PayrollStorageDto,
+  incoming: PayrollStorageDto
+): void {
+  const incomingById = new Map(
+    incoming.compensationPolicyVersions.map((version) => [version.id, version])
+  );
+  for (const version of existing.compensationPolicyVersions) {
+    const restored = incomingById.get(version.id);
+    if (!restored) {
+      throw new Error(
+        `Immutable policy restore çakışması: mevcut sürüm ${version.id} silinemez.`
+      );
+    }
+    if (JSON.stringify(stableJsonValue(version)) !== JSON.stringify(stableJsonValue(restored))) {
+      throw new Error(
+        `Immutable policy restore çakışması: ${version.id} farklı full-state, boundary flag veya supersession içeriyor.`
+      );
+    }
+  }
+}
+
 function readSnapshotFromDatabase(database: IDBDatabase): Promise<BrowserPayrollSnapshot | null> {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(OBJECT_STORE, 'readonly');
@@ -210,6 +252,15 @@ function writeSnapshotToDatabase(
           return;
         }
 
+        if (current) {
+          const existing = JSON.parse(parseStoredSnapshotPayload(current).payload) as PayrollStorageDto;
+          const incoming = parseCurrentBrowserSnapshot(
+            payload,
+            sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }
+          );
+          assertPolicyHistoryPreserved(existing, incoming);
+        }
+
         const sameSnapshot = current?.payload === payload
           && current?.sourceFormat === sourceFormat;
         nextRevision = sameSnapshot
@@ -262,6 +313,17 @@ function parseStoredSnapshotPayload(
   stored: BrowserPayrollSnapshot
 ): { payload: string; sourceFormat: BrowserSnapshotSourceFormat } {
   const raw = JSON.parse(stored.payload) as { backupVersion?: unknown };
+  if (raw.backupVersion === 5) {
+    const canonical = canonicalizeV5BackupRecord(
+      raw as Record<string, unknown>,
+      stored.sourceFormat === 'current' ? {} : { allowLegacyMissingGvBase: true }
+    );
+    return {
+      payload: serializePayrollStorage(canonical),
+      // V5 already promises replayable legacy payroll and finalized retro authority.
+      sourceFormat: 'current',
+    };
+  }
   if (stored.sourceFormat === 'current') {
     return {
       payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload)),
@@ -269,25 +331,9 @@ function parseStoredSnapshotPayload(
     };
   }
   if (raw.backupVersion === BACKUP_FORMAT_VERSION) {
-    // V5 envelopes written before the source marker may still be either a
-    // complete current snapshot or an older sparse shape. Promote only the
-    // former after the strict parser succeeds; keep the latter on the
-    // explicit legacy compatibility path.
-    try {
-      return {
-        payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload)),
-        sourceFormat: 'current',
-      };
-    } catch {
-      // The compatibility parser below is intentionally limited to the
-      // missing persisted-GV authority that predates this marker. Any other
-      // malformed/current financial data still fails there.
-    }
     return {
-      payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload, {
-        allowLegacyMissingGvBase: true,
-      })),
-      sourceFormat: 'legacy',
+      payload: serializePayrollStorage(parseCurrentBrowserSnapshot(stored.payload)),
+      sourceFormat: 'current',
     };
   }
   return {
@@ -340,7 +386,7 @@ export class BrowserPayrollStore {
       // current parser validates it and throws instead of silently replacing
       // it with a legacy localStorage copy.
       if (stored !== null) {
-        // Current V5 snapshots may still contain person-level legacy opening
+        // V5/V6 snapshots may still contain person-level legacy opening
         // fields from before taxOpenings became authoritative. The parser
         // repairs only an exact, unambiguous period match; persist that repair
         // under the same CAS revision before exposing the snapshot to App.
@@ -423,7 +469,7 @@ export class BrowserPayrollStore {
     }
 
     // Do not let a caller turn an unvalidated string into authoritative state.
-    // The same current V5 schema used on load protects every normal browser
+    // The same current V6 schema used on load protects every normal browser
     // write; legacy conversion writes only its already-validated canonical form.
     parseCurrentBrowserSnapshot(
       payload,
@@ -442,6 +488,51 @@ export class BrowserPayrollStore {
         this.knownRevision = revision;
         this.channel?.postMessage({ payload, revision, sourceFormat });
         return revision;
+      } finally {
+        database.close();
+      }
+    });
+  }
+
+  /**
+   * Re-reads the authoritative snapshot, applies one synchronous domain
+   * mutation, then commits with the same IndexedDB revision CAS used by full
+   * snapshot writes. A competing tab causes a conflict; the updater is never
+   * replayed against an unreviewed revision.
+   */
+  async mutateSnapshot(mutate: BrowserSnapshotMutation): Promise<BrowserPayrollSnapshot> {
+    if (!hasIndexedDb()) {
+      throw new Error(
+        'Tarayıcı bordro verisi kaydedilemedi: IndexedDB desteği bulunamadı. Payroll persistence devre dışı bırakıldı.'
+      );
+    }
+
+    return this.writeQueue.enqueue(async () => {
+      const database = await openDatabase();
+      try {
+        const stored = await readSnapshotFromDatabase(database);
+        if (!stored) {
+          throw new Error('Yetkili tarayıcı bordro snapshotı bulunamadı.');
+        }
+        const canonical = parseStoredSnapshotPayload(stored);
+        const current = parseCurrentBrowserSnapshot(canonical.payload);
+        const next = mutate(current);
+        const payload = serializePayrollStorage(next);
+        parseCurrentBrowserSnapshot(payload);
+        const revision = await writeAndVerify(
+          database,
+          payload,
+          stored.revision,
+          'current'
+        );
+        const snapshot: BrowserPayrollSnapshot = {
+          payload,
+          revision,
+          sourceFormat: 'current',
+        };
+        this.knownRevision = revision;
+        this.channel?.postMessage(snapshot);
+        return snapshot;
       } finally {
         database.close();
       }

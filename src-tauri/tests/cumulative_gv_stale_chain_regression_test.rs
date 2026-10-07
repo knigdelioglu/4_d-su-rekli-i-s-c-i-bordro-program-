@@ -143,6 +143,7 @@ fn payroll(
         statutorySnapshot: None,
         odenenRaporluGun: None,
         raporluGun: None,
+        calculationMetadata: None,
     }
 }
 

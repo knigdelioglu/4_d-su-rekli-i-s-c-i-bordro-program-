@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 const DEVIR_MIGRATION_VERSION: u32 = 7;
 const NOTLAR_MIGRATION_VERSION: u32 = 8;
 const DEVIR_MIGRATION_PREVIOUS_VERSION: u32 = 5;
+pub const CALCULATION_METADATA_MIGRATION_VERSION: u32 = 22;
+pub const COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION: u32 = 23;
 
 fn migration_invalid_data(message: impl Into<String>) -> HookError {
     HookError::RusqliteError(rusqlite::Error::ToSqlConversionFailure(Box::new(
@@ -131,8 +133,23 @@ fn ensure_multi_accrual_schema(conn: &Connection) -> Result<(), Box<dyn std::err
     } else {
         "NULL"
     };
+    let calculation_metadata_column = if columns.contains("calculation_metadata_json") {
+        ", calculation_metadata_json TEXT"
+    } else {
+        ""
+    };
+    let calculation_metadata_insert = if columns.contains("calculation_metadata_json") {
+        ", calculation_metadata_json"
+    } else {
+        ""
+    };
+    let calculation_metadata_select = if columns.contains("calculation_metadata_json") {
+        ", pr.calculation_metadata_json"
+    } else {
+        ""
+    };
 
-    conn.execute_batch(
+    conn.execute_batch(&format!(
         "CREATE TABLE payroll_income_items__multi_backup AS
              SELECT id, payroll_id, item_type, description, amount, source
              FROM payroll_income_items;
@@ -172,9 +189,9 @@ fn ensure_multi_accrual_schema(conn: &Connection) -> Result<(), Box<dyn std::err
              gv_snapshot_json TEXT,
              statutory_snapshot_json TEXT,
              damga_snapshot_json TEXT,
-             notlar TEXT
+             notlar TEXT{calculation_metadata_column}
          );",
-    )?;
+    ))?;
     let insert_sql = format!(
         "INSERT INTO payroll_records__multi (
              id, personnel_id, period_id, accrual_id, accrual_type, payment_date, sequence,
@@ -183,7 +200,7 @@ fn ensure_multi_accrual_schema(conn: &Connection) -> Result<(), Box<dyn std::err
              puantaj_summary_json, pek_detail_json, devreden_pek_gelen_json,
              sonraki_devreden_pek_json, calculated_at, updated_at, raporlu_gun,
              odenen_raporlu_gun, is_primi_snapshot_json, gv_snapshot_json,
-             statutory_snapshot_json, damga_snapshot_json, notlar
+             statutory_snapshot_json, damga_snapshot_json, notlar{calculation_metadata_insert}
          )
          SELECT pr.id, pr.personnel_id, pr.period_id, {accrual_id_expr}, {accrual_type_expr},
                 {payment_date_expr}, {sequence_expr}, {description_expr}, pr.gross_total,
@@ -192,7 +209,7 @@ fn ensure_multi_accrual_schema(conn: &Connection) -> Result<(), Box<dyn std::err
                 pr.puantaj_summary_json, pr.pek_detail_json, pr.devreden_pek_gelen_json,
                 pr.sonraki_devreden_pek_json, pr.calculated_at, pr.updated_at, pr.raporlu_gun,
                 pr.odenen_raporlu_gun, pr.is_primi_snapshot_json, pr.gv_snapshot_json,
-                pr.statutory_snapshot_json, {damga_snapshot_expr}, pr.notlar
+                pr.statutory_snapshot_json, {damga_snapshot_expr}, pr.notlar{calculation_metadata_select}
            FROM payroll_records pr
            JOIN payroll_periods pp ON pp.id = pr.period_id;"
     );
@@ -957,6 +974,96 @@ pub fn get_migrations() -> Migrations<'static> {
             }
             Ok(())
         }),
+        // Independent, institution-wide immutable normal-compensation timeline.
+        // It deliberately has no payroll-period FK or settings cascade.
+        M::up(
+            r#"
+            CREATE TABLE compensation_policy_versions (
+                id TEXT PRIMARY KEY NOT NULL CHECK (length(trim(id)) > 0),
+                effective_from TEXT NOT NULL CHECK (
+                    length(effective_from) = 10
+                    AND effective_from GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+                    AND date(effective_from) = effective_from
+                ),
+                state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+                created_at TEXT NOT NULL CHECK (length(trim(created_at)) > 0),
+                source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+                reason TEXT NOT NULL CHECK (length(trim(reason)) > 0),
+                supersedes_version_id TEXT UNIQUE
+                    REFERENCES compensation_policy_versions(id) ON DELETE RESTRICT,
+                CHECK (supersedes_version_id IS NULL OR supersedes_version_id <> id)
+            );
+
+            CREATE INDEX idx_compensation_policy_effective_from
+                ON compensation_policy_versions(effective_from, id);
+
+            CREATE TRIGGER compensation_policy_validate_insert
+            BEFORE INSERT ON compensation_policy_versions
+            BEGIN
+                SELECT CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM compensation_policy_versions
+                        WHERE id = NEW.id
+                    )
+                    THEN RAISE(ABORT, 'compensation policy version id already exists')
+                    WHEN NEW.supersedes_version_id IS NULL
+                         AND EXISTS (
+                             SELECT 1 FROM compensation_policy_versions
+                             WHERE effective_from = NEW.effective_from
+                         )
+                    THEN RAISE(ABORT, 'same-date policy correction must supersede active leaf')
+                    WHEN NEW.supersedes_version_id IS NOT NULL
+                         AND NOT EXISTS (
+                             SELECT 1 FROM compensation_policy_versions parent
+                             WHERE parent.id = NEW.supersedes_version_id
+                               AND parent.effective_from = NEW.effective_from
+                               AND NOT EXISTS (
+                                   SELECT 1 FROM compensation_policy_versions child
+                                   WHERE child.supersedes_version_id = parent.id
+                               )
+                         )
+                    THEN RAISE(ABORT, 'policy correction must supersede same-date active leaf')
+                END;
+            END;
+
+            CREATE TRIGGER compensation_policy_immutable_update
+            BEFORE UPDATE ON compensation_policy_versions
+            BEGIN
+                SELECT RAISE(ABORT, 'compensation policy versions are immutable');
+            END;
+
+            CREATE TRIGGER compensation_policy_immutable_delete
+            BEFORE DELETE ON compensation_policy_versions
+            BEGIN
+                SELECT RAISE(ABORT, 'compensation policy history cannot be deleted');
+            END;
+            "#,
+        ),
+        // Migration 22 preserves the complete calculation provenance envelope
+        // as exact JSON. Legacy rows stay NULL; live settings are never read.
+        M::up("ALTER TABLE payroll_records ADD COLUMN calculation_metadata_json TEXT;"),
+        // Migration 23 keeps pre-release flagless policy rows quarantined.
+        // New inserts must provide both canonical tokens; no financial
+        // interpretation is inferred for rows already in the table.
+        M::up(
+            r#"
+            ALTER TABLE compensation_policy_versions ADD COLUMN boundary_scope TEXT;
+            ALTER TABLE compensation_policy_versions ADD COLUMN road_rounding_mode TEXT;
+
+            CREATE TRIGGER compensation_policy_validate_boundary_flags
+            BEFORE INSERT ON compensation_policy_versions
+            BEGIN
+                SELECT CASE
+                    WHEN NEW.boundary_scope IS NULL
+                         OR NEW.boundary_scope NOT IN ('FULL_EARNING', 'ROAD_ONLY')
+                    THEN RAISE(ABORT, 'compensation policy boundary_scope is missing or invalid')
+                    WHEN NEW.road_rounding_mode IS NULL
+                         OR NEW.road_rounding_mode NOT IN ('PER_COMPENSATION_SLICE', 'PERIOD_TOTAL')
+                    THEN RAISE(ABORT, 'compensation policy road_rounding_mode is missing or invalid')
+                END;
+            END;
+            "#,
+        ),
     ])
 }
 
@@ -1162,6 +1269,7 @@ fn ensure_optional_columns(conn: &mut Connection) -> Result<(), Box<dyn std::err
         ("statutory_snapshot_json", "TEXT"),
         ("damga_snapshot_json", "TEXT"),
         ("notlar", "TEXT"),
+        ("calculation_metadata_json", "TEXT"),
     ] {
         add_column_if_missing(
             &tx,

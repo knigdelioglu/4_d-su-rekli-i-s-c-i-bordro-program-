@@ -29,7 +29,7 @@ import {
   BordroDonemi,
   BordroKaydi,
   AnnualPayrollParameters,
-  DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
   PersonelTaxOpening,
@@ -73,13 +73,12 @@ interface BordroHesaplamaProps {
   aktifDonem: BordroDonemi;
   donemler: BordroDonemi[];
   personeller: Personel[];
-  kurumDegerleriMap: Record<string, DönemselKurumDegerleri>;
+  kurumDegerleriMap: Record<string, PayrollPeriodInstitutionSettings>;
   puantajlar: PersonelPuantaj[];
   bordrolar: BordroKaydi[];
   taxOpenings: PersonelTaxOpening[];
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
-  zamAylari: number[];
   activePayrollView: PayrollViewType;
   authoritativeDataset: PayrollDatasetSnapshot;
   onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
@@ -93,6 +92,7 @@ interface BordroHesaplamaProps {
   ) => Promise<void> | void;
   initialPersonelId?: string;
   onGoToPuantaj?: (personelId?: string) => void;
+  onOpenCompensationPolicy?: () => void;
 }
 
 export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
@@ -105,13 +105,13 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   taxOpenings,
   sickLeaveRecords,
   annualPayrollParameters,
-  zamAylari,
   activePayrollView,
   authoritativeDataset,
   onSaveBordro,
   onDeleteBordro,
   onSavePersonelAndTaxOpening,
   onGoToPuantaj,
+  onOpenCompensationPolicy,
 }) => {
   const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
 
@@ -180,6 +180,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     puantajlar,
     isSupplementaryView,
     onSaveBordro,
+    onOpenCompensationPolicy,
   });
 
   const rowFilters: Array<{ id: PayrollRowFilter; label: string }> = [

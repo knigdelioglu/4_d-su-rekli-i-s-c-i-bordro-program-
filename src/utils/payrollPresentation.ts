@@ -10,6 +10,7 @@ import type {
   AnnualPayrollParameters,
   BordroDonemi,
   DönemselKurumDegerleri,
+  PayrollPeriodInstitutionSettings,
   IsPrimiGrubu,
   IsPrimiGrupItem,
   PuantajKodu,
@@ -98,8 +99,6 @@ const REQUIRED_PERIOD_LEGAL_NON_NEGATIVE_FIELDS = [
   'issizlikIsciOraniYuzde',
   'sendikaAidatiYuzde',
   'besOraniYuzde',
-  'geceCalismaPrimiYuzde',
-  'geceCalismaTatiliPrimiYuzde',
   'gunlukYemekIstisnasiSGK',
   'gunlukYemekIstisnasiGV',
   'gunlukAsgariUcret',
@@ -113,8 +112,6 @@ const PERIOD_PERCENTAGE_FIELDS = [
   'issizlikIsciOraniYuzde',
   'sendikaAidatiYuzde',
   'besOraniYuzde',
-  'geceCalismaPrimiYuzde',
-  'geceCalismaTatiliPrimiYuzde',
   'sgkIsverenOraniYuzde',
   'issizlikIsverenOraniYuzde',
 ] as const;
@@ -186,9 +183,9 @@ export function hasCompletePeriodIncomeParameters(
  * submit `undefined` and fail the authoritative payroll validation.
  */
 export function withVisiblePeriodLegalDefaults(
-  settings: DönemselKurumDegerleri,
+  settings: PayrollPeriodInstitutionSettings,
   donemId: string
-): DönemselKurumDegerleri {
+): PayrollPeriodInstitutionSettings {
   const defaults = DEFAULT_PRODUCTION_KURUM_DEGERLERI;
   return {
     ...settings,
@@ -201,9 +198,6 @@ export function withVisiblePeriodLegalDefaults(
     sabitSendikaAidati: settings.sabitSendikaAidati ?? defaults.sabitSendikaAidati,
     besOraniYuzde: settings.besOraniYuzde ?? defaults.besOraniYuzde,
     sabitBesTutar: settings.sabitBesTutar ?? defaults.sabitBesTutar,
-    geceCalismaPrimiYuzde: settings.geceCalismaPrimiYuzde ?? defaults.geceCalismaPrimiYuzde,
-    geceCalismaTatiliPrimiYuzde:
-      settings.geceCalismaTatiliPrimiYuzde ?? defaults.geceCalismaTatiliPrimiYuzde,
     gunlukYemekIstisnasiSGK:
       settings.gunlukYemekIstisnasiSGK ?? defaults.gunlukYemekIstisnasiSGK,
     gunlukYemekIstisnasiGV:
@@ -215,47 +209,12 @@ export function withVisiblePeriodLegalDefaults(
     sgkIsverenOraniYuzde: settings.sgkIsverenOraniYuzde ?? defaults.sgkIsverenOraniYuzde,
     issizlikIsverenOraniYuzde:
       settings.issizlikIsverenOraniYuzde ?? defaults.issizlikIsverenOraniYuzde,
-    isPrimiGruplari: settings.isPrimiGruplari ?? defaults.isPrimiGruplari,
     statutoryParameterSegments: settings.statutoryParameterSegments ?? [],
   };
 }
 
-function hasCompleteIsPrimiGroups(groups: unknown): boolean {
-  if (!Array.isArray(groups) || groups.length === 0) return false;
-
-  const activeIds = new Set<string>();
-  const activeNames = new Set<string>();
-
-  for (const group of groups) {
-    if (!group || typeof group !== 'object' || Array.isArray(group)) return false;
-    const candidate = group as Partial<IsPrimiGrupItem>;
-    const trimmedId = typeof candidate.id === 'string' ? candidate.id.trim() : '';
-    const trimmedName = typeof candidate.ad === 'string' ? candidate.ad.trim() : '';
-    if (
-      trimmedId.length === 0 ||
-      trimmedName.length === 0 ||
-      !isFiniteNumber(candidate.oran) ||
-      candidate.oran < 0 ||
-      candidate.oran > 100 ||
-      (candidate.aktif !== undefined && typeof candidate.aktif !== 'boolean')
-    ) {
-      return false;
-    }
-
-    // Rust serde defaults a missing `aktif` field to true; only explicit false
-    // is inactive and excluded from the duplicate-active identity sets.
-    if (candidate.aktif !== false) {
-      if (activeIds.has(trimmedId) || activeNames.has(trimmedName)) return false;
-      activeIds.add(trimmedId);
-      activeNames.add(trimmedName);
-    }
-  }
-
-  return true;
-}
-
 function hasValidStatutoryParameterSegments(
-  kurumDegerleri: Partial<DönemselKurumDegerleri>,
+  kurumDegerleri: Partial<PayrollPeriodInstitutionSettings>,
   aktifDonem: BordroDonemi
 ): boolean {
   const periodStart = parseCalendarDate(aktifDonem.baslangicTarihi);
@@ -319,7 +278,7 @@ function hasValidStatutoryParameterSegments(
  * apply form defaults: a fallback value is not a saved/current value.
  */
 export function hasCompletePeriodLegalParameters(
-  kurumDegerleri: Partial<DönemselKurumDegerleri> | undefined,
+  kurumDegerleri: Partial<PayrollPeriodInstitutionSettings> | undefined,
   aktifDonem: BordroDonemi | undefined
 ): boolean {
   if (
@@ -372,8 +331,6 @@ export function hasCompletePeriodLegalParameters(
     ![
       'sabitSendikaAidati',
       'sabitBesTutar',
-      'ekOdeme',
-      'digerGelirVarsayilan',
     ].every((field) =>
       isOptionalConstrainedNumber(kurumDegerleri[field], (value) => value >= 0)
     )
@@ -381,10 +338,7 @@ export function hasCompletePeriodLegalParameters(
     return false;
   }
 
-  return (
-    hasCompleteIsPrimiGroups(kurumDegerleri.isPrimiGruplari) &&
-    hasValidStatutoryParameterSegments(kurumDegerleri, aktifDonem)
-  );
+  return hasValidStatutoryParameterSegments(kurumDegerleri, aktifDonem);
 }
 
 function isValidTaxBracket(bracket: unknown): bracket is TaxBracket {

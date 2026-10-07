@@ -4,8 +4,12 @@ use rust_decimal_macros::dec;
 use serde_json::json;
 use std::collections::HashMap;
 
+#[path = "compensation_policy.rs"]
+mod compensation_policy;
+
 pub fn request() -> PayrollCalculationRequest {
     let mut dataset = PayrollDatasetSnapshot::default();
+    let mut legacy_settings_by_period: HashMap<String, DonemselKurumDegerleri> = HashMap::new();
     dataset.personnel.push(
         serde_json::from_value(json!({
             "id":"audit", "tcNo":"10000000000", "ad":"Audit", "soyad":"Fixture",
@@ -50,8 +54,19 @@ pub fn request() -> PayrollCalculationRequest {
             ..Default::default()
         };
         settings.gunlukYemekIstisnasiGV = Some(dec!(300));
-        dataset.institutionSettings.insert(id.into(), settings);
+        dataset
+            .institutionSettings
+            .insert(id.into(), PayrollPeriodInstitutionSettings::from(&settings));
+        legacy_settings_by_period.insert(id.into(), settings);
     }
+    for period in &dataset.periods {
+        if let Some(settings) = legacy_settings_by_period.get(&period.id) {
+            dataset
+                .compensationPolicyVersions
+                .push(compensation_policy::baseline_version(period, settings));
+        }
+    }
+    compensation_policy::seed_zero_tax_openings(&mut dataset);
     PayrollCalculationRequest {
         personnelId: "audit".into(),
         periodId: "source".into(),

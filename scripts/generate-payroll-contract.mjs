@@ -98,13 +98,21 @@ function splitTopLevel(value) {
 }
 
 function serdeAttributes(value) {
-  const result = { renameAll: null, rename: null, default: false };
+  const result = {
+    renameAll: null,
+    rename: null,
+    default: false,
+    requiredNullable: false,
+  };
   for (const [, content] of value.matchAll(/#\[serde\(([^\]]*)\)\]/gu)) {
     const renameAll = content.match(/\brename_all\s*=\s*"([^"]+)"/u);
     const rename = content.match(/\brename\s*=\s*"([^"]+)"/u);
     if (renameAll) result.renameAll = renameAll[1];
     if (rename) result.rename = rename[1];
     if (/\bdefault\b/u.test(content)) result.default = true;
+    if (/\bwith\s*=\s*"rust_decimal::serde::str_option"/u.test(content)) {
+      result.requiredNullable = true;
+    }
   }
   return result;
 }
@@ -127,17 +135,18 @@ function rustToSerdeName(name, renameAll) {
   throw new Error(`Rust contract parser: desteklenmeyen serde rename_all: ${renameAll}`);
 }
 
-function typeMetadata(typeText, optionalByDefault) {
+function typeMetadata(typeText, optionalByDefault, requiredNullable = false) {
   const normalized = typeText.replace(/\s+/gu, ' ').trim();
   const isOption = /^Option\s*</u.test(normalized);
   const isDecimal = /\bDecimal\b/u.test(normalized);
+  const isRequiredNullable = requiredNullable && !optionalByDefault;
   const nestedTypes = [...normalized.matchAll(/\b([A-Z][A-Za-z0-9_]*)\b/gu)]
     .map(([, name]) => name)
     .filter((name) => !['Option', 'Vec', 'HashMap', 'String', 'Decimal'].includes(name));
   return {
     rustType: normalized,
-    required: !isOption && !optionalByDefault,
-    optional: isOption || optionalByDefault,
+    required: isRequiredNullable || (!isOption && !optionalByDefault),
+    optional: !isRequiredNullable && (isOption || optionalByDefault),
     nullable: isOption,
     decimal: isDecimal,
     nestedTypes: [...new Set(nestedTypes)],
@@ -157,7 +166,11 @@ function parseStructFields(body, structDefault, renameAll) {
     return {
       rustName,
       name,
-      ...typeMetadata(rustType, structDefault || attributes.default),
+      ...typeMetadata(
+        rustType,
+        structDefault || attributes.default,
+        attributes.requiredNullable
+      ),
     };
   });
 }

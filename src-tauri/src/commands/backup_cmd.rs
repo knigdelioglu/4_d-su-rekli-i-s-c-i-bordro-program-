@@ -1,5 +1,24 @@
+use crate::db::DbState;
+use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
+use rusqlite::Connection;
+use serde_json::Value;
 use std::fs;
 use std::path::Path;
+use tauri::State;
+
+fn attach_native_policy_timeline(conn: &Connection, payload_json: &str) -> Result<String, String> {
+    let mut payload: Value = serde_json::from_str(payload_json)
+        .map_err(|error| format!("Yedek payload JSON olarak okunamadı: {error}"))?;
+    if payload.get("backupVersion").and_then(Value::as_u64) != Some(6) {
+        return Err("Native yedek dışa aktarımı V6 payload gerektirir.".into());
+    }
+    let versions = CompensationPolicyRepository::get_all_versions(conn)
+        .map_err(|error| format!("Policy timeline yedek için okunamadı: {error}"))?;
+    payload["compensationPolicyVersions"] = serde_json::to_value(versions)
+        .map_err(|error| format!("Policy timeline yedek JSON'una çevrilemedi: {error}"))?;
+    serde_json::to_string_pretty(&payload)
+        .map_err(|error| format!("V6 yedek JSON'u üretilemedi: {error}"))
+}
 use tauri_plugin_dialog::DialogExt;
 
 fn write_backup_file(path: &Path, payload_json: &str) -> Result<(), String> {
@@ -28,6 +47,7 @@ fn write_pdf_file(path: &Path, pdf_bytes: &[u8]) -> Result<(), String> {
 #[tauri::command]
 pub async fn export_backup<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
+    db: State<'_, DbState>,
     payload_json: String,
     file_name: String,
 ) -> Result<bool, String> {
@@ -45,6 +65,12 @@ pub async fn export_backup<R: tauri::Runtime>(
     let path = file_path
         .into_path()
         .map_err(|error| format!("Seçilen yedek yolu kullanılamadı: {error}"))?;
+    let payload_json = {
+        let conn = db
+            .lock()
+            .map_err(|error| format!("SQLite bağlantı kilidi alınamadı: {error}"))?;
+        attach_native_policy_timeline(&conn, &payload_json)?
+    };
     write_backup_file(&path, &payload_json)?;
     Ok(true)
 }
@@ -99,7 +125,14 @@ pub async fn export_pdf<R: tauri::Runtime>(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_excel_path, write_backup_file, write_excel_file, write_pdf_file};
+    use super::{
+        attach_native_policy_timeline, validate_excel_path, write_backup_file, write_excel_file,
+        write_pdf_file,
+    };
+    use crate::db::create_in_memory_connection;
+    use crate::domain::CompensationPolicyVersion;
+    use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
+    use serde_json::{json, Value};
     use std::{fs, path::Path, time::SystemTime};
 
     #[test]
@@ -119,6 +152,55 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         assert_eq!(saved, payload);
+    }
+
+    #[test]
+    fn native_v6_export_reads_the_exact_immutable_policy_timeline() {
+        let conn = create_in_memory_connection().expect("in-memory schema should migrate");
+        let version: CompensationPolicyVersion = serde_json::from_value(json!({
+            "id": "policy-export",
+            "effectiveFrom": "2026-09-15",
+            "state": {
+                "gunlukTabanUcret": "1234.567890123",
+                "gunlukYemek": "0",
+                "birlestirilmisSosyalYardim": "0",
+                "gunlukVasitaYol": "0",
+                "giyimYardimi": "0",
+                "hizmetZammiBirimi": "0",
+                "isPrimiYuzde": null,
+                "isPrimiGruplari": [{"id":"g","ad":"Grup","oran":"0","aktif":false}],
+                "geceCalismaPrimiYuzde": "0",
+                "geceCalismaTatiliPrimiYuzde": "0",
+                "ekOdeme": null,
+                "digerGelirVarsayilan": "0"
+            },
+            "boundaryScope": "FULL_EARNING",
+            "roadRoundingMode": "PER_COMPENSATION_SLICE",
+            "createdAt": "2026-09-01T00:00:00Z",
+            "source": "user-confirmed",
+            "reason": "initial baseline",
+            "supersedesVersionId": null
+        }))
+        .expect("exact policy model should deserialize");
+        CompensationPolicyRepository::insert_version(&conn, &version)
+            .expect("immutable policy should persist");
+
+        let exported = attach_native_policy_timeline(
+            &conn,
+            r#"{"backupVersion":6,"exportedAt":"2026-10-06T00:00:00Z","bordrolar":[]}"#,
+        )
+        .expect("native V6 export should add the DB timeline");
+        let payload: Value = serde_json::from_str(&exported).expect("export should be JSON");
+        assert_eq!(
+            payload["compensationPolicyVersions"][0]["id"],
+            "policy-export"
+        );
+        assert_eq!(
+            payload["compensationPolicyVersions"][0]["state"]["gunlukTabanUcret"],
+            "1234.567890123"
+        );
+        assert!(payload.get("zamAylari").is_none());
+        assert!(attach_native_policy_timeline(&conn, r#"{"backupVersion":5}"#).is_err());
     }
 
     #[test]

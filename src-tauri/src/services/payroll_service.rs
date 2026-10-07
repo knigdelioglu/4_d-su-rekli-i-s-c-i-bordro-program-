@@ -1,5 +1,5 @@
 use crate::domain::models::{
-    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
     ManualPayrollIncomeInput, PayrollAccrualInput, RetroAdjustmentBatch, RetroAllocation,
 };
 use crate::domain::{DomainError, Result};
@@ -8,7 +8,7 @@ use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
-use crate::repositories::settings_repo::{SettingsRepository, ZAM_AYLARI_SETTING_KEY};
+use crate::repositories::settings_repo::SettingsRepository;
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use chrono::Utc;
@@ -20,19 +20,18 @@ pub use payroll_core::payroll_engine::{
     resolve_statutory_snapshot_for_period_with_paid_sick_dates,
 };
 
-fn get_zam_aylari(conn: &Connection) -> Result<Vec<i32>> {
-    let Some(raw) = SettingsRepository::get_app_setting(conn, ZAM_AYLARI_SETTING_KEY)? else {
-        return Ok(Vec::new());
-    };
-    let months: Vec<i32> = serde_json::from_str(&raw).map_err(|error| {
-        DomainError::InvalidData(format!("Kurum zam ayarı bozuk JSON içeriyor: {}", error))
-    })?;
-    SettingsRepository::normalize_zam_aylari(&months)
-}
-
 pub struct PayrollService;
 
 impl PayrollService {
+    fn active_institution_settings(
+        settings: std::collections::HashMap<String, DonemselKurumDegerleri>,
+    ) -> std::collections::HashMap<String, payroll_core::PayrollPeriodInstitutionSettings> {
+        settings
+            .into_iter()
+            .map(|(period_id, settings)| (period_id, settings.into()))
+            .collect()
+    }
+
     pub fn calculate_payroll_for_personnel(
         conn: &Connection,
         personnel_id: &str,
@@ -60,8 +59,24 @@ impl PayrollService {
         period_id: &str,
         accrual: Option<&PayrollAccrualInput>,
     ) -> Result<()> {
+        Self::validate_payroll_request_for_accrual_with_manual_income(
+            conn,
+            personnel_id,
+            period_id,
+            accrual,
+            None,
+        )
+    }
+
+    pub fn validate_payroll_request_for_accrual_with_manual_income(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+    ) -> Result<()> {
         let request =
-            Self::build_calculation_request(conn, personnel_id, period_id, accrual, None)?;
+            Self::build_calculation_request(conn, personnel_id, period_id, accrual, manual_income)?;
         payroll_core::validate_payroll_request(&request)
     }
 
@@ -111,6 +126,175 @@ impl PayrollService {
             manual_income,
             true,
         )
+    }
+
+    /// Compatibility entry point retained for existing callers. All NORMAL
+    /// calculation now uses the authoritative compensation timeline.
+    pub fn calculate_payroll_for_accrual_with_compensation_policy_checked(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+    ) -> Result<BordroKaydi> {
+        crate::repositories::transaction::with_transaction(conn, |tx| {
+            let request = Self::build_compensation_policy_calculation_request(
+                tx,
+                personnel_id,
+                period_id,
+                accrual,
+                manual_income,
+            )?;
+            let calculated =
+                payroll_core::calculate_payroll_with_compensation_policy_checked(&request)?;
+            SettingsRepository::persist_statutory_snapshot_if_missing(tx, period_id)?;
+            PayrollRepository::save_with_policy_in_transaction(tx, &calculated)?;
+            Ok(calculated)
+        })
+    }
+
+    fn build_compensation_policy_calculation_request(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+        accrual: Option<&PayrollAccrualInput>,
+        manual_income: Option<&ManualPayrollIncomeInput>,
+    ) -> Result<payroll_core::PayrollCalculationRequest> {
+        let dataset = Self::build_compensation_policy_calculation_snapshot_for(
+            conn,
+            personnel_id,
+            period_id,
+        )?;
+        Ok(payroll_core::PayrollCalculationRequest {
+            personnelId: personnel_id.to_string(),
+            periodId: period_id.to_string(),
+            calculatedAt: Utc::now().to_rfc3339(),
+            manualIncome: manual_income.cloned(),
+            accrual: accrual.cloned(),
+            dataset,
+        })
+    }
+
+    /// Loads only the records consumed by the explicit compensation-policy
+    /// calculation. Legacy compensation settings and global raise-month data
+    /// are intentionally absent; the active policy timeline owns compensation.
+    pub fn build_compensation_policy_calculation_snapshot_for(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<payroll_core::PayrollDatasetSnapshot> {
+        let personnel = PersonnelRepository::get_by_id(conn, personnel_id)?
+            .ok_or_else(|| DomainError::NotFound(format!("Personel bulunamadı: {personnel_id}")))?;
+        let active_period = PeriodRepository::get_by_id(conn, period_id)?
+            .ok_or_else(|| DomainError::NotFound(format!("Dönem bulunamadı: {period_id}")))?;
+        let payrolls = PayrollRepository::get_for_personnel(conn, personnel_id)?;
+        let retro_batches =
+            crate::repositories::retro_repo::get_batches_for_personnel(conn, personnel_id)?;
+        let retro_allocations =
+            crate::repositories::retro_repo::get_allocations_for_personnel(conn, personnel_id)?;
+
+        let mut period_ids = std::collections::BTreeSet::from([active_period.id.clone()]);
+        for payroll in &payrolls {
+            period_ids.insert(payroll.donemId.clone());
+        }
+        for allocation in &retro_allocations {
+            period_ids.insert(allocation.sourcePeriodId.clone());
+        }
+        if let Some(previous) = PeriodRepository::get_previous_by_work_period(conn, &active_period)?
+        {
+            period_ids.insert(previous.id);
+        }
+        if let Some(next) = PeriodRepository::get_next_by_work_period(conn, &active_period)? {
+            period_ids.insert(next.id);
+        }
+
+        let tax_opening = TaxOpeningRepository::get_by_personnel_and_year(
+            conn,
+            personnel_id,
+            active_period.taxYear,
+        )?;
+        let opening_period_id = tax_opening
+            .as_ref()
+            .and_then(|opening| opening.asgariGvEffectiveFromPeriodId.as_deref());
+        let mut minimum_gv_start_month = if let Some(opening_period_id) = opening_period_id {
+            let opening_period =
+                PeriodRepository::get_by_id(conn, opening_period_id)?.ok_or_else(|| {
+                    DomainError::NotFound(format!(
+                        "Asgari GV opening dönemi bulunamadı: {opening_period_id}"
+                    ))
+                })?;
+            period_ids.insert(opening_period.id.clone());
+            opening_period.taxMonth
+        } else if personnel
+            .devirKumulatifAsgariGvMatrahi
+            .is_some_and(|value| value > rust_decimal::Decimal::ZERO)
+            && personnel
+                .devirKumulatifAsgariGvMatrahiYili
+                .unwrap_or(active_period.taxYear)
+                == active_period.taxYear
+        {
+            // Legacy month mapping depends on the historical work-period rows.
+            1
+        } else {
+            1
+        };
+        minimum_gv_start_month = minimum_gv_start_month.clamp(1, active_period.taxMonth);
+        let minimum_gv_periods = PeriodRepository::get_by_tax_year_before_month(
+            conn,
+            active_period.taxYear,
+            active_period.taxMonth,
+        )?
+        .into_iter()
+        .filter(|period| period.taxMonth >= minimum_gv_start_month)
+        .collect::<Vec<_>>();
+        for period in &minimum_gv_periods {
+            period_ids.insert(period.id.clone());
+        }
+
+        let period_ids = period_ids.into_iter().collect::<Vec<_>>();
+        let periods = PeriodRepository::get_by_ids(conn, &period_ids)?;
+        let loaded_period_ids = minimum_gv_periods
+            .iter()
+            .map(|period| period.id.clone())
+            .chain(std::iter::once(active_period.id.clone()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let versions = crate::repositories::compensation_policy_repo::CompensationPolicyRepository::
+            get_versions_for_period(
+                conn,
+                &active_period.baslangicTarihi,
+                &active_period.bitisTarihi,
+            )?;
+
+        Ok(payroll_core::PayrollDatasetSnapshot {
+            personnel: vec![personnel],
+            periods,
+            institutionSettings: Self::active_institution_settings(
+                SettingsRepository::get_for_periods(conn, &loaded_period_ids)?,
+            ),
+            attendances: AttendanceRepository::get_by_personnel_and_period(
+                conn,
+                personnel_id,
+                period_id,
+            )?
+            .into_iter()
+            .collect(),
+            payrolls,
+            taxOpenings: tax_opening.into_iter().collect(),
+            sickLeaveRecords: SickLeaveRepository::get_by_personnel(conn, personnel_id)?,
+            annualPayrollParameters: AnnualPayrollParametersRepository::get_by_year(
+                conn,
+                active_period.taxYear,
+            )?
+            .into_iter()
+            .collect(),
+            compensationRevisions: Vec::new(),
+            compensationRevisionOverrides: Vec::new(),
+            retroBatches: retro_batches,
+            retroAllocations: retro_allocations,
+            compensationPolicyVersions: versions,
+        })
     }
 
     fn calculate_payroll_for_accrual_internal(
@@ -603,13 +787,24 @@ impl PayrollService {
         } else {
             None
         };
-        let request = Self::build_calculation_request(
-            &tx,
-            personnel_id,
-            period_id,
-            Some(&accrual),
-            manual_income.as_ref(),
-        )?;
+        let is_normal = saved.accrualType == AccrualType::NORMAL;
+        let request = if is_normal {
+            Self::build_compensation_policy_calculation_request(
+                &tx,
+                personnel_id,
+                period_id,
+                Some(&accrual),
+                manual_income.as_ref(),
+            )?
+        } else {
+            Self::build_calculation_request(
+                &tx,
+                personnel_id,
+                period_id,
+                Some(&accrual),
+                manual_income.as_ref(),
+            )?
+        };
         let finalized = payroll_core::finalize_payroll(&request)?;
         let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::
             assert_mutation_allowed(
@@ -657,12 +852,19 @@ impl PayrollService {
         // and supplementary payment events only use the person/tax/payment
         // dependency scope assembled below; mutation-policy snapshots remain
         // full by design and are never routed through this loader.
-        let dataset =
-            if accrual.is_some_and(|input| input.accrualType == AccrualType::RETRO_ADJUSTMENT) {
-                Self::build_dataset_snapshot(conn)?
-            } else {
-                Self::build_calculation_snapshot_for(conn, personnel_id, period_id)?
-            };
+        let dataset = match accrual.map(|input| input.accrualType) {
+            Some(AccrualType::RETRO_ADJUSTMENT) => Self::build_dataset_snapshot(conn)?,
+            Some(AccrualType::TEDIYE | AccrualType::TIS_IKRAMIYE | AccrualType::SUPPLEMENTAL) => {
+                Self::build_payment_event_calculation_snapshot_for(conn, personnel_id, period_id)?
+            }
+            Some(AccrualType::NORMAL) | None => {
+                Self::build_compensation_policy_calculation_snapshot_for(
+                    conn,
+                    personnel_id,
+                    period_id,
+                )?
+            }
+        };
         Ok(payroll_core::PayrollCalculationRequest {
             personnelId: personnel_id.to_string(),
             periodId: period_id.to_string(),
@@ -673,11 +875,8 @@ impl PayrollService {
         })
     }
 
-    /// Loads the dependency closure for one normal/supplementary calculation.
-    /// The core still receives its explicit immutable snapshot contract; this
-    /// adapter only avoids materializing unrelated personnel, attendance, and
-    /// payroll rows. Retro payment replay deliberately uses the full loader
-    /// above because its source-month graph is broader than one target event.
+    /// Compatibility loader used by older repository fixtures. New NORMAL
+    /// commands and preflight use the scoped compensation-policy loader above.
     pub fn build_calculation_snapshot_for(
         conn: &Connection,
         personnel_id: &str,
@@ -695,9 +894,6 @@ impl PayrollService {
 
         let mut period_ids = std::collections::BTreeSet::new();
         period_ids.insert(active_period.id.clone());
-        for period in PeriodRepository::get_before_by_work_period(conn, &active_period)? {
-            period_ids.insert(period.id);
-        }
         for payroll in &payrolls {
             period_ids.insert(payroll.donemId.clone());
         }
@@ -744,13 +940,14 @@ impl PayrollService {
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: vec![personnel],
             periods,
-            institutionSettings: SettingsRepository::get_for_periods(conn, &loaded_period_ids)?,
+            institutionSettings: Self::active_institution_settings(
+                SettingsRepository::get_for_periods(conn, &loaded_period_ids)?,
+            ),
             attendances,
             payrolls,
             taxOpenings: tax_openings,
             sickLeaveRecords: SickLeaveRepository::get_by_personnel(conn, personnel_id)?,
             annualPayrollParameters: annual_payroll_parameters,
-            zamAylari: get_zam_aylari(conn)?,
             // Revisions themselves are not read by normal/supplementary
             // calculation. The person-scoped retro ledger is retained because
             // payment-event carry replay consumes its authoritative batches.
@@ -758,7 +955,20 @@ impl PayrollService {
             compensationRevisionOverrides: Vec::new(),
             retroBatches: retro_batches,
             retroAllocations: retro_allocations,
+            compensationPolicyVersions: Vec::new(),
         })
+    }
+
+    /// Payment events retain their saved event/tax history, but do not load
+    /// NORMAL compensation policy as a required input.
+    fn build_payment_event_calculation_snapshot_for(
+        conn: &Connection,
+        personnel_id: &str,
+        period_id: &str,
+    ) -> Result<payroll_core::PayrollDatasetSnapshot> {
+        let mut dataset = Self::build_calculation_snapshot_for(conn, personnel_id, period_id)?;
+        dataset.compensationPolicyVersions.clear();
+        Ok(dataset)
     }
 
     pub fn build_dataset_snapshot(
@@ -767,17 +977,19 @@ impl PayrollService {
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: PersonnelRepository::get_all(conn)?,
             periods: PeriodRepository::get_all(conn)?,
-            institutionSettings: SettingsRepository::get_all_institution_settings(conn)?,
+            institutionSettings: Self::active_institution_settings(
+                SettingsRepository::get_all_institution_settings(conn)?,
+            ),
             attendances: AttendanceRepository::get_all(conn)?,
             payrolls: PayrollRepository::get_all(conn)?,
             taxOpenings: TaxOpeningRepository::get_all(conn)?,
             sickLeaveRecords: SickLeaveRepository::get_all(conn)?,
             annualPayrollParameters: AnnualPayrollParametersRepository::get_all(conn)?,
-            zamAylari: get_zam_aylari(conn)?,
             compensationRevisions: crate::repositories::retro_repo::get_revisions(conn)?,
             compensationRevisionOverrides: crate::repositories::retro_repo::get_overrides(conn)?,
             retroBatches: crate::repositories::retro_repo::get_batches(conn)?,
             retroAllocations: crate::repositories::retro_repo::get_allocations(conn)?,
+            compensationPolicyVersions: Vec::new(),
         })
     }
 

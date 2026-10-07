@@ -1,5 +1,6 @@
 use payroll_core::{
     evaluate_payroll_invalidation, AccrualType, BordroDonemi, BordroKaydi, BordroStatus,
+    CompensationRevision, CompensationRevisionReason, CompensationRevisionScope,
     CompensationRevisionStatus, DevredenPekKaydi, GelirKalemleri, KesintiKalemleri, MutationImpact,
     PayrollDatasetSnapshot, PayrollMutation, PuantajOzeti, ResolvedStatutorySnapshot,
     RetroAdjustmentBatch, RetroAllocation, RetroEarningCode, RetroSettlementStatus,
@@ -75,6 +76,7 @@ fn payroll_for(
         }),
         odenenRaporluGun: None,
         raporluGun: None,
+        calculationMetadata: None,
     }
 }
 
@@ -157,6 +159,25 @@ fn retro_fixture(
         metadata: None,
     };
     (batch, allocation)
+}
+
+fn revision_for(id: &str) -> CompensationRevision {
+    CompensationRevision {
+        id: id.into(),
+        reason: CompensationRevisionReason::OTHER,
+        title: "revision".into(),
+        effectiveFrom: "2026-03-15".into(),
+        effectiveTo: None,
+        decisionDate: None,
+        signedAt: None,
+        description: None,
+        status: CompensationRevisionStatus::CALCULATED,
+        scope: CompensationRevisionScope::ALL_PERSONNEL,
+        personnelIds: Vec::new(),
+        personnelGroup: None,
+        createdAt: None,
+        updatedAt: None,
+    }
 }
 
 #[test]
@@ -434,6 +455,94 @@ fn attendance_mutation_ignores_unrelated_person_and_preserves_legacy_dependency(
     .unwrap();
     assert!(affected(&impact, "legacy"));
     assert!(!affected(&impact, "other"));
+}
+
+#[test]
+fn compensation_policy_uses_normal_roots_and_actual_payment_event_closure() {
+    let source = period_custom("source", "2026-03-15", "2026-04-14", 2026, 3);
+    let next = period_custom("next", "2026-04-15", "2026-05-14", 2026, 4);
+    let after_gap = period_custom("gap", "2027-01-15", "2027-02-14", 2027, 1);
+    let mut early_finalized = payroll_for(
+        "p",
+        "source",
+        "early-finalized-supplemental",
+        BordroStatus::FINALIZED,
+        AccrualType::TEDIYE,
+        "2026-03-19",
+        0,
+        StatutorySnapshotSource::AttendanceBacked,
+    );
+    early_finalized.accrualDescription = Some("paid before policy source event".into());
+    let root = payroll_for(
+        "p",
+        "source",
+        "normal-root",
+        BordroStatus::CALCULATED,
+        AccrualType::NORMAL,
+        "2026-03-20",
+        0,
+        StatutorySnapshotSource::AttendanceBacked,
+    );
+    let downstream = payroll_for(
+        "p",
+        "next",
+        "downstream-event",
+        BordroStatus::CALCULATED,
+        AccrualType::TEDIYE,
+        "2026-04-20",
+        0,
+        StatutorySnapshotSource::AttendanceBacked,
+    );
+    let beyond_carry_cutoff = payroll_for(
+        "p",
+        "gap",
+        "beyond-gap",
+        BordroStatus::CALCULATED,
+        AccrualType::NORMAL,
+        "2027-02-20",
+        0,
+        StatutorySnapshotSource::AttendanceBacked,
+    );
+    let (retro, allocation) = retro_fixture(
+        "p",
+        "source",
+        "source-retro",
+        CompensationRevisionStatus::CALCULATED,
+    );
+    let mut data = dataset(
+        vec![source, next, after_gap],
+        vec![early_finalized, root, downstream, beyond_carry_cutoff],
+    );
+    data.compensationRevisions
+        .push(revision_for("revision-source-retro"));
+    data.retroBatches.push(retro);
+    data.retroAllocations.push(allocation);
+
+    let impact = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::CompensationPolicy {
+            effectiveFrom: "2026-03-21".into(),
+            throughInclusive: Some("2026-04-10".into()),
+        },
+    )
+    .unwrap();
+
+    assert!(affected(&impact, "normal-root"));
+    assert!(affected(&impact, "downstream-event"));
+    assert!(!affected(&impact, "early-finalized-supplemental"));
+    assert!(!affected(&impact, "beyond-gap"));
+    assert!(impact.blockedByFinalized.is_empty());
+    assert_eq!(impact.affectedRetroBatches, vec!["source-retro"]);
+    assert_eq!(impact.retroEffects.len(), 1);
+    assert_eq!(impact.retroEffects[0].batchId, "source-retro");
+    assert_eq!(
+        impact.retroEffects[0].action,
+        payroll_core::RetroMutationAction::StaleEligible
+    );
+    assert!(impact.retroEffects[0].blockers.is_empty());
+    assert!(impact.payrollCauses.iter().any(|cause| {
+        cause.payroll.accrualId == "downstream-event" && cause.causePeriodId == "source"
+    }));
 }
 
 #[test]

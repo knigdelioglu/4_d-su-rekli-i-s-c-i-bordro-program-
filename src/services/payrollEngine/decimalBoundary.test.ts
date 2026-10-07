@@ -29,6 +29,30 @@ const exactFixtures = [
 ] as const;
 
 describe('WASM Decimal boundary', () => {
+  test('preserves canonical compensation provenance at the typed boundary', () => {
+    const request = {
+      personnelId: 'p1',
+      periodId: '2026-05',
+      calculatedAt: '2026-06-10T00:00:00Z',
+      dataset: {
+        payrolls: [{
+          calculationMetadata: { provenance: 'COMPENSATION_POLICY_ENGINE' },
+        }],
+      },
+    } as unknown as Parameters<typeof serializePayrollRequestForWasm>[0];
+    const wasmRequest = JSON.parse(serializePayrollRequestForWasm(request));
+    expect(wasmRequest.dataset.payrolls[0].calculationMetadata.provenance).toBe('COMPENSATION_POLICY_ENGINE');
+
+    const parsed = parseWasmPayrollBoundaryResult<{ calculationMetadata: { provenance: string } }>(
+      JSON.stringify({
+        calculationMetadata: {
+          provenance: 'COMPENSATION_POLICY_ENGINE',
+        },
+      })
+    );
+    expect(parsed.calculationMetadata.provenance).toBe('COMPENSATION_POLICY_ENGINE');
+  });
+
   test('covers every direct Decimal field declared by the shared Rust models', () => {
     expect(RUST_DECIMAL_KEYS.length).toBeGreaterThan(0);
     const missing = RUST_DECIMAL_KEYS.filter((key) => !isDecimalBoundaryKey(key));
@@ -47,6 +71,89 @@ describe('WASM Decimal boundary', () => {
 
     expect(() => assertExactDecimalDto(nestedDto)).not.toThrow();
     expect(JSON.parse(serializePayrollStorage(nestedDto))).toEqual(nestedDto);
+  });
+
+  test('keeps compensation policy state exact through the generated string boundary', () => {
+    const uiPolicy = {
+      compensationPolicyVersions: [{
+        id: 'baseline',
+        effectiveFrom: '2026-01-15',
+        boundaryScope: 'FULL_EARNING',
+        roadRoundingMode: 'PER_COMPENSATION_SLICE',
+        state: {
+          gunlukTabanUcret: 123.456789,
+          gunlukYemek: 10.12345,
+          isPrimiYuzde: null,
+          isPrimiGruplari: [{ id: 'g1', ad: '1. Grup', oran: 9.125, aktif: true }],
+          geceCalismaPrimiYuzde: 0,
+          geceCalismaTatiliPrimiYuzde: 0,
+          ekOdeme: null,
+          digerGelirVarsayilan: 0,
+        },
+      }],
+    };
+    const boundary = toPayrollBoundaryDto(uiPolicy);
+    expect(boundary.compensationPolicyVersions[0].state.gunlukTabanUcret).toBe('123.456789');
+    expect(boundary.compensationPolicyVersions[0].state.isPrimiGruplari[0].oran).toBe('9.125');
+    expect(() => assertExactDecimalDto(uiPolicy)).toThrow('JS number kabul edilmez');
+    assertExactDecimalDto(boundary);
+  });
+
+  test('keeps payroll calculation snapshot inputs exact across the typed boundary', () => {
+    const uiSnapshot = {
+      calculationMetadata: {
+        provenance: 'COMPENSATION_POLICY_ENGINE',
+        snapshot: {
+          snapshotSchemaVersion: 2,
+          calculationVersion: 'compensation-engine-v1',
+          compensation: {
+            segments: [{
+              versionId: 'policy-v1',
+              startDate: '2026-05-15',
+              endDate: '2026-06-14',
+              boundaryScope: 'FULL_EARNING',
+              roadRoundingMode: 'PER_COMPENSATION_SLICE',
+              state: {
+                gunlukTabanUcret: 2443.281234567,
+                gunlukYemek: 0,
+                birlestirilmisSosyalYardim: 0,
+                gunlukVasitaYol: 0,
+                giyimYardimi: 0,
+                hizmetZammiBirimi: 0,
+                isPrimiYuzde: null,
+                isPrimiGruplari: [{ id: 'g1', ad: '1. Grup', oran: 10, aktif: true }],
+                geceCalismaPrimiYuzde: 0,
+                geceCalismaTatiliPrimiYuzde: 0,
+                ekOdeme: null,
+                digerGelirVarsayilan: null,
+              },
+            }],
+          },
+          usedInputs: {
+            personnelGroup: 'g1',
+            serviceYear: 4,
+            manualIncome: { supplied: true, tediye: 0, tisIkramiyesi: null },
+            accrualGrossAmount: 0.123456789012345678901,
+            statutoryParameters: { gunlukAsgariUcret: 1000 },
+          },
+        },
+      },
+    };
+    const boundary = toPayrollBoundaryDto(uiSnapshot);
+    expect(boundary.calculationMetadata.snapshot.usedInputs.manualIncome.tediye).toBe('0');
+    expect(boundary.calculationMetadata.snapshot.usedInputs.accrualGrossAmount).toBe(
+      '0.12345678901234568'
+    );
+    expect(boundary.calculationMetadata.snapshot.compensation.segments[0].state.gunlukTabanUcret)
+      .toBe('2443.281234567');
+    expect(() => assertExactDecimalDto(boundary)).not.toThrow();
+
+    const exactBoundaryInput = {
+      accrualGrossAmount: '0.123456789012345678901',
+    };
+    expect(toPayrollBoundaryDto(exactBoundaryInput).accrualGrossAmount).toBe(
+      '0.123456789012345678901'
+    );
   });
 
   test('serializes a schema-derived representative DTO with string Decimals', () => {
@@ -95,7 +202,6 @@ describe('WASM Decimal boundary', () => {
           taxOpenings: [],
           sickLeaveRecords: [],
           annualPayrollParameters: [],
-          zamAylari: [],
         },
       } as never);
       expect(JSON.parse(requestJson).manualIncome.tediye).toBe(fixture);
