@@ -2,7 +2,7 @@
  * Section 3: Puantaj (15-14 Period Attendance Grid)
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
@@ -72,6 +72,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const [bulkApplyRequest, setBulkApplyRequest] = useState<BulkApplyRequest | null>(null);
   const [isApplyingBulkCode, setIsApplyingBulkCode] = useState(false);
   const [quickEntryDates, setQuickEntryDates] = useState<string[]>([]);
+  const [isQuickCalendarOpen, setIsQuickCalendarOpen] = useState(false);
+  const quickCalendarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setRangeStart(periodDays[0]?.dateStr || '');
@@ -79,6 +81,24 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     setQuickEntryDates([]);
     setBulkApplyRequest(null);
   }, [aktifDonem.id, aktifDonem.baslangicTarihi, aktifDonem.bitisTarihi]);
+
+  useEffect(() => {
+    if (!isQuickCalendarOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!quickCalendarRef.current?.contains(event.target as Node)) {
+        setIsQuickCalendarOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsQuickCalendarOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isQuickCalendarOpen]);
 
   const activePersonel = personeller.find((p) => p.id === selectedPersonelId);
 
@@ -182,6 +202,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       code: activeBulkCode,
       personnelCount: personeller.length,
     });
+    setIsQuickCalendarOpen(false);
   };
 
   const handleConfirmBulkApply = async () => {
@@ -376,7 +397,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
 
       <section
         data-testid="quick-attendance-entry"
-        className="rounded-2xl border border-indigo-200 bg-white p-4 shadow-2xs"
+        ref={quickCalendarRef}
+        className="relative rounded-2xl border border-indigo-200 bg-white p-4 shadow-2xs"
         aria-labelledby="quick-attendance-entry-title"
       >
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -390,7 +412,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
               <span className="font-medium text-slate-500">({aktifDonem.donemAdi})</span>
             </h3>
             <p className="mt-1 text-xs leading-relaxed text-slate-600">
-              Üstten kodu seçin, takvimde günleri işaretleyin. Seçtiğiniz kod bu tarihlerde tüm personellere uygulanır.
+              Bir puantaj kodu ve tarihleri seçin; kayıt öncesinde tüm personel için onayınız istenir.
             </p>
           </div>
           <div className="flex items-center gap-3 text-xs text-slate-600">
@@ -400,84 +422,117 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
             </span>
             <button
               type="button"
-              onClick={() => setQuickEntryDates([])}
-              disabled={quickEntryDates.length === 0 || isApplyingBulkCode}
-              className="font-semibold text-indigo-700 hover:text-indigo-900 disabled:cursor-not-allowed disabled:opacity-40"
+              data-testid="open-quick-attendance-calendar"
+              aria-expanded={isQuickCalendarOpen}
+              aria-controls="quick-attendance-calendar"
+              onClick={() => setIsQuickCalendarOpen((open) => !open)}
+              disabled={personeller.length === 0 || isApplyingBulkCode}
+              className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Seçimi Temizle
+              <Calendar className="h-3.5 w-3.5" aria-hidden="true" />
+              Hızlı Puantaj Girişi
+              {quickEntryDates.length > 0 && (
+                <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">
+                  {quickEntryDates.length}
+                </span>
+              )}
+              <ChevronDown className={`h-3.5 w-3.5 transition-transform ${isQuickCalendarOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
             </button>
           </div>
         </div>
 
-        <div
-          role="group"
-          aria-label="Tüm personele uygulanacak puantaj tarihleri"
-          className="mt-4 grid grid-cols-7 gap-1.5 sm:gap-2"
-        >
-          {['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'].map((weekday) => (
-            <div key={weekday} className="pb-1 text-center text-[10px] font-bold text-slate-500">
-              {weekday}
-            </div>
-          ))}
-          {Array.from({ length: leadingWeekdaySlots }, (_, index) => (
-            <div key={`quick-empty-${index}`} aria-hidden="true" />
-          ))}
-          {periodDays.map((day) => {
-            const isSelected = quickEntryDates.includes(day.dateStr);
-            return (
-              <button
-                key={day.dateStr}
-                type="button"
-                data-testid={`quick-attendance-day-${day.dateStr}`}
-                aria-pressed={isSelected}
-                aria-label={`${day.dateStr}, ${day.dayNameShort}${isSelected ? ', seçili' : ''}`}
-                onClick={() =>
-                  setQuickEntryDates((current) =>
-                    isSelected
-                      ? current.filter((dateStr) => dateStr !== day.dateStr)
-                      : [...current, day.dateStr]
-                  )
-                }
-                disabled={isApplyingBulkCode}
-                className={`relative flex min-h-14 flex-col items-center justify-center rounded-xl border px-1 py-1.5 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-wait disabled:opacity-60 ${
-                  isSelected
-                    ? `${PUANTAJ_KODLARI[activeBulkCode].bgRenk} ring-2 ring-indigo-500 ring-offset-1`
-                    : day.isWeekend
-                      ? 'border-slate-200 bg-slate-50 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
-                      : 'border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50'
-                }`}
-              >
-                <span className="text-[10px] font-semibold opacity-75">{day.dayNameShort}</span>
-                <span className="font-bold font-mono">{day.dayNumber}</span>
-                {isSelected && (
-                  <CheckCircle2 className="absolute right-1 top-1 h-3 w-3" aria-hidden="true" />
-                )}
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs text-slate-600">
-            Seçili kod:{' '}
-            <strong className="font-mono text-slate-900">
-              {activeBulkCode} — {PUANTAJ_KODLARI[activeBulkCode].tanim}
-            </strong>
-            <span className="ml-2">· {quickEntryDates.length} gün seçildi</span>
-          </p>
-          <button
-            type="button"
-            data-testid="apply-quick-attendance-to-all"
-            onClick={handleApplyQuickEntryToPersonnel}
-            disabled={
-              personeller.length === 0 || quickEntryDates.length === 0 || isApplyingBulkCode
-            }
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+        {isQuickCalendarOpen && (
+          <div
+            id="quick-attendance-calendar"
+            data-testid="quick-attendance-calendar"
+            role="dialog"
+            aria-label={`${aktifDonem.donemAdi} dönemi hızlı puantaj takvimi`}
+            className="absolute right-0 top-full z-40 mt-2 w-[min(42rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl"
           >
-            <Users className="h-3.5 w-3.5" aria-hidden="true" />
-            Seçili Tarihleri Tüm Personele Uygula
-          </button>
-        </div>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">Tarihleri seçin</h4>
+                <p className="mt-1 text-xs text-slate-600">
+                  Seçili kod: <strong className="font-mono">{activeBulkCode} — {PUANTAJ_KODLARI[activeBulkCode].tanim}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuickEntryDates([])}
+                disabled={quickEntryDates.length === 0}
+                className="shrink-0 text-xs font-semibold text-indigo-700 hover:text-indigo-900 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Seçimi Temizle
+              </button>
+            </div>
+
+            <div
+              role="group"
+              aria-label="Tüm personele uygulanacak puantaj tarihleri"
+              className="mt-3 grid grid-cols-7 gap-1.5 sm:gap-2"
+            >
+              {['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'].map((weekday) => (
+                <div key={weekday} className="pb-1 text-center text-[10px] font-bold text-slate-500">
+                  {weekday}
+                </div>
+              ))}
+              {Array.from({ length: leadingWeekdaySlots }, (_, index) => (
+                <div key={`quick-empty-${index}`} aria-hidden="true" />
+              ))}
+              {periodDays.map((day) => {
+                const isSelected = quickEntryDates.includes(day.dateStr);
+                return (
+                  <button
+                    key={day.dateStr}
+                    type="button"
+                    data-testid={`quick-attendance-day-${day.dateStr}`}
+                    aria-pressed={isSelected}
+                    aria-label={`${day.dateStr}, ${day.dayNameShort}${isSelected ? ', seçili' : ''}`}
+                    onClick={() =>
+                      setQuickEntryDates((current) =>
+                        isSelected
+                          ? current.filter((dateStr) => dateStr !== day.dateStr)
+                          : [...current, day.dateStr]
+                      )
+                    }
+                    disabled={isApplyingBulkCode}
+                    className={`relative flex min-h-12 flex-col items-center justify-center rounded-xl border px-1 py-1 text-xs transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-wait disabled:opacity-60 ${
+                      isSelected
+                        ? `${PUANTAJ_KODLARI[activeBulkCode].bgRenk} ring-2 ring-indigo-500 ring-offset-1`
+                        : day.isWeekend
+                          ? 'border-slate-200 bg-slate-50 text-slate-600 hover:border-indigo-300 hover:bg-indigo-50'
+                          : 'border-slate-200 bg-white text-slate-700 hover:border-indigo-300 hover:bg-indigo-50'
+                    }`}
+                  >
+                    <span className="text-[10px] font-semibold opacity-75">{day.dayNameShort}</span>
+                    <span className="font-bold font-mono">{day.dayNumber}</span>
+                    {isSelected && (
+                      <CheckCircle2 className="absolute right-1 top-1 h-3 w-3" aria-hidden="true" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-slate-600" aria-live="polite">
+                {quickEntryDates.length} gün seçildi
+              </p>
+              <button
+                type="button"
+                data-testid="apply-quick-attendance-to-all"
+                onClick={handleApplyQuickEntryToPersonnel}
+                disabled={
+                  personeller.length === 0 || quickEntryDates.length === 0 || isApplyingBulkCode
+                }
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                Seçili Tarihleri Tüm Personele Uygula
+              </button>
+            </div>
+          </div>
+        )}
       </section>
 
       {/* Main Interactive Matrix Area */}
@@ -850,10 +905,10 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                 <p id="bulk-apply-confirm-description" className="mt-2 text-sm leading-relaxed text-slate-700">
                   {bulkApplyRequest.scope === 'personnel' ? (
                     <>
-                      Takvimden seçtiğiniz {bulkApplyRequest.dates.length} tarih, hafta sonlarını seçtiyseniz onlar da dahil olmak üzere,{' '}
+                      Takvimden seçtiğiniz tarihlerde, hafta sonları dahil, tüm{' '}
                       {bulkApplyRequest.personnelCount} personelin puantajına{' '}
                       <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
-                      olarak uygulanacak. Puantajı olmayan personeller için de kayıt oluşturulacak.
+                      girilecek. Puantajı olmayan personeller için de kayıt oluşturulacak.
                     </>
                   ) : (
                     <>
@@ -866,6 +921,13 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                   )}{' '}
                   Seçilen günlerdeki mevcut puantaj kodları değiştirilecek.
                 </p>
+                {bulkApplyRequest.scope === 'personnel' && (
+                  <p className="mt-2 rounded-lg bg-white/80 px-3 py-2 text-xs font-semibold text-slate-700">
+                    Tarihler: {bulkApplyRequest.dates
+                      .map((dateStr) => dateStr.split('-').reverse().join('.'))
+                      .join(', ')}
+                  </p>
+                )}
               </div>
             </div>
             <div className="flex justify-end gap-2 bg-slate-50 p-4">

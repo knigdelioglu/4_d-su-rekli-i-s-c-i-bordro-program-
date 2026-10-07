@@ -530,6 +530,46 @@ test('bulk attendance confirmation traps keyboard focus and closes with Escape',
   await expect(dialog).toHaveCount(0);
 });
 
+test('quick attendance uses a floating calendar and confirms dates before applying to everyone', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  await page.getByTestId('nav-puantaj').click();
+
+  await page.getByTestId('attendance-code-İ').click();
+  const openCalendar = page.getByTestId('open-quick-attendance-calendar');
+  await expect(openCalendar).toBeVisible();
+  await expect(page.getByTestId('quick-attendance-calendar')).toHaveCount(0);
+  await openCalendar.click();
+
+  const calendar = page.getByTestId('quick-attendance-calendar');
+  await expect(calendar).toBeVisible();
+  const dateButton = calendar.locator('[data-testid^="quick-attendance-day-"]').first();
+  const dateTestId = await dateButton.getAttribute('data-testid');
+  expect(dateTestId).toBeTruthy();
+  const selectedDate = dateTestId!.replace('quick-attendance-day-', '');
+  await dateButton.click();
+
+  const beforeConfirmation = await readStoredSnapshot(page);
+  await calendar.getByTestId('apply-quick-attendance-to-all').click();
+
+  const confirmation = page.getByTestId('bulk-apply-confirmation');
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toContainText('tüm 5 personelin puantajına');
+  await expect(confirmation).toContainText('İ — Ücretli İzin');
+  await expect(confirmation).toContainText(selectedDate.split('-').reverse().join('.'));
+  expect(await readStoredSnapshot(page)).toEqual(beforeConfirmation);
+
+  await confirmation.getByTestId('bulk-apply-confirm').click();
+  await expect(confirmation).toHaveCount(0);
+  const appliedSnapshot = await readStoredSnapshot(page);
+  const activePeriodId = await page.getByTestId('active-period-selector').inputValue();
+  const activePeriodAttendance = appliedSnapshot?.puantajlar.filter(
+    (attendance) => attendance.donemId === activePeriodId
+  );
+  expect(activePeriodAttendance).toHaveLength(5);
+  expect(activePeriodAttendance?.every((attendance) => attendance.gunler[selectedDate] === 'İ')).toBe(true);
+});
+
 test('normal payroll table keeps core columns and moves secondary details to the payslip', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
