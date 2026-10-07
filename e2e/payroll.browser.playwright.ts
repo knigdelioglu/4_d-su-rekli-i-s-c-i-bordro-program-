@@ -509,6 +509,27 @@ test('first opening uses the period summary and a valid saved tab survives reloa
   await expect(page.getByTestId('nav-puantaj')).toHaveAttribute('aria-current', 'page');
 });
 
+test('bulk attendance confirmation traps keyboard focus and closes with Escape', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  await page.getByTestId('nav-puantaj').click();
+
+  await page.getByRole('button', { name: 'Tüm Günlere Uygula' }).click();
+  const dialog = page.getByRole('alertdialog');
+  const cancel = dialog.getByRole('button', { name: 'Vazgeç' });
+  const confirm = dialog.getByTestId('bulk-apply-confirm');
+  await expect(dialog).toBeVisible();
+  await expect(cancel).toBeFocused();
+
+  await confirm.focus();
+  await page.keyboard.press('Tab');
+  await expect(cancel).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(confirm).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+});
+
 test('normal payroll table keeps core columns and moves secondary details to the payslip', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);

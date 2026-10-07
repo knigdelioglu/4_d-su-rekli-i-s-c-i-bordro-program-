@@ -143,6 +143,8 @@ Ortak contract değişirse implementer ortak dosyaya paralel patch atmaz. Propos
 
 ## Production activation checklist
 
+**Commit/push öncesi ayrı lint işi (2026-10-07):** Kullanıcı isteğiyle GPT-6 Luna / XHigh local thread `01a115e9-593e-7343-b1a7-f14d225cbbfe` açıldı. Bun matcher tipleri, PuantajGrid event/DOM tiplemesi ve fresh lint'in gösterdiği dar TS hataları kökünden düzeltilir; CI/tsconfig/type-check kapıları gevşetilmez. Owner kendi `docs/lint-ci-handoff.md` dosyasını yazar; migration/Rust/formüller ve canlı veri değişmez. Son lint, Bun, build, contract/freshness kanıtı orchestrator tarafından incelenmeden temiz CI iddiası yapılmaz. Commit/push kullanıcıya aittir.
+
 | Gate | Gerekli kanıt |
 |---|---|
 | Legacy parity + independent formula goldens | Tam Decimal output; B-RND-01 legacy rounding kararının test kanıtı; N-segment manual golden |

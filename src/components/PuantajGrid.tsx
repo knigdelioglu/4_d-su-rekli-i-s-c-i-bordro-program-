@@ -816,7 +816,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
               setBulkApplyRequest(null);
             }
           }}
-          onKeyDown={(event) => {
+          onKeyDown={(event: React.KeyboardEvent<HTMLDivElement>) => {
             if (event.key === 'Escape') {
               event.preventDefault();
               if (!isApplyingBulkCode) setBulkApplyRequest(null);

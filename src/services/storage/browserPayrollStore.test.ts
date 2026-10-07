@@ -273,7 +273,6 @@ function makeRealisticSnapshot(): PayrollStorageDto {
         sigortaGvYillikBrutAsgariUcretTavani: '396360.00',
       },
     ],
-    zamAylari: [1, 7],
     compensationRevisions: [],
     compensationRevisionOverrides: [],
     retroBatches: [],
@@ -295,7 +294,7 @@ function makeV2Snapshot(netOdeme: unknown = '64179.78'): string {
 
 function makeLegacyV2Snapshot(netOdeme: unknown = '64179.78'): string {
   const snapshot = parseTestSnapshot(makeV2Snapshot(netOdeme));
-  snapshot.backupVersion = 2;
+  downgradeSnapshotVersion(snapshot, 2);
   const payroll = firstRecord(snapshot, 'bordrolar');
   delete payroll.accrualId;
   delete payroll.accrualType;
@@ -313,6 +312,11 @@ function makeLegacyV2Snapshot(netOdeme: unknown = '64179.78'): string {
 
 function parseTestSnapshot(json: string): TestRecord {
   return JSON.parse(json) as TestRecord;
+}
+
+function downgradeSnapshotVersion(snapshot: TestRecord, version: number): void {
+  snapshot.backupVersion = version;
+  snapshot.zamAylari = [1, 7];
 }
 
 function firstRecord(snapshot: TestRecord, collection: string): TestRecord {
@@ -389,7 +393,7 @@ function retroAllocationSettlement(delta: string): TestRecord {
 
 function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
   const legacy = parseTestSnapshot(makeV2Snapshot(netOdeme));
-  legacy.backupVersion = 1;
+  downgradeSnapshotVersion(legacy, 1);
   return legacy;
 }
 
@@ -541,7 +545,7 @@ describe('BrowserPayrollStore', () => {
 
   test('canonicalizes valid legacy JSON and rejects malformed Decimal before any write', () => {
     const legacy = parseTestSnapshot(makeV2Snapshot(0.15));
-    legacy.backupVersion = 1;
+    downgradeSnapshotVersion(legacy, 1);
     delete legacy.exportedAt;
     delete legacy.aktifDonemId;
     delete legacy.kurumDegerleriMap;
@@ -566,7 +570,7 @@ describe('BrowserPayrollStore', () => {
     expect(firstRecord(canonicalPayload, 'bordrolar').status).toBe('CALCULATED');
 
     const malformed = parseTestSnapshot(makeV2Snapshot('not-a-decimal'));
-    malformed.backupVersion = 1;
+    downgradeSnapshotVersion(malformed, 1);
     expect(() => canonicalizeLegacyBackupPayload(JSON.stringify(malformed))).toThrow(
       'Geçersiz Decimal metni'
     );
@@ -587,7 +591,7 @@ describe('BrowserPayrollStore', () => {
 
   test('upgrades a strict V5 record with an empty timeline and rejects V5 metadata repair', () => {
     const v5 = parseTestSnapshot(makeV2Snapshot());
-    v5.backupVersion = 5;
+    downgradeSnapshotVersion(v5, 5);
     delete v5.compensationPolicyVersions;
 
     const upgraded = parseImportedBackup(JSON.stringify(v5));
@@ -717,7 +721,7 @@ describe('BrowserPayrollStore', () => {
 
   test('upgrades V3 retro payloads without dropping the retro graph and rejects incomplete V6', () => {
     const legacy = parseTestSnapshot(makeV2Snapshot());
-    legacy.backupVersion = 3;
+    downgradeSnapshotVersion(legacy, 3);
     const normal = firstRecord(legacy, 'bordrolar');
     (legacy.bordrolar as TestRecord[]).push({
       ...normal,
@@ -1196,7 +1200,7 @@ describe('BrowserPayrollStore', () => {
     );
 
     const legacyFinalizedWithoutPayment = JSON.parse(JSON.stringify(valid)) as TestRecord;
-    legacyFinalizedWithoutPayment.backupVersion = 3;
+    downgradeSnapshotVersion(legacyFinalizedWithoutPayment, 3);
     legacyFinalizedWithoutPayment.bordrolar = [normal];
     (legacyFinalizedWithoutPayment.retroBatches as TestRecord[])[0].status = 'FINALIZED';
     (legacyFinalizedWithoutPayment.retroBatches as TestRecord[])[0].settlementStatus = 'PAID';
@@ -1488,7 +1492,7 @@ describe('BrowserPayrollStore', () => {
 
   test('keeps legacy migration and import compatibility only after full validation', () => {
     const legacyV1 = parseTestSnapshot(makeV2Snapshot(64179.78));
-    legacyV1.backupVersion = 1;
+    downgradeSnapshotVersion(legacyV1, 1);
     delete legacyV1.exportedAt;
     delete legacyV1.aktifDonemId;
     delete legacyV1.kurumDegerleriMap;
@@ -1566,7 +1570,7 @@ describe('BrowserPayrollStore', () => {
 
   test('repairAndCanonicalizeBackup repairs a payload with numeric fields and missing accrual info', () => {
     const rawWithNumbers = parseTestSnapshot(makeV2Snapshot(64179.78));
-    rawWithNumbers.backupVersion = 2;
+    downgradeSnapshotVersion(rawWithNumbers, 2);
     delete firstRecord(rawWithNumbers, 'bordrolar').accrualId;
     delete firstRecord(rawWithNumbers, 'donemler').taxYear;
     delete firstRecord(rawWithNumbers, 'donemler').taxMonth;
@@ -2046,7 +2050,7 @@ describe('SQLite persistence invariant parity', () => {
 
   test('legacy shared asgari effective period is normalized only in restore', () => {
     const payload = parseTestSnapshot(makeV2Snapshot());
-    payload.backupVersion = 4;
+    downgradeSnapshotVersion(payload, 4);
     const opening = firstRecord(payload, 'taxOpenings');
     opening.asgariGvCumulativeOpening = '100000.00';
     delete opening.asgariGvEffectiveFromPeriodId;
@@ -2358,7 +2362,9 @@ describe('Legacy native Serde compatibility parity', () => {
       for (const field of ['compensationPolicyVersions', 'calculationMetadata'] as const) {
         const payload = JSON.parse(JSON.stringify(makeRealisticSnapshot())) as TestRecord;
         if (version === 'missing') delete payload.backupVersion;
-        else payload.backupVersion = version;
+        else if (typeof version === 'number' && version < 6) {
+          downgradeSnapshotVersion(payload, version);
+        } else payload.backupVersion = version;
 
         if (field === 'compensationPolicyVersions') {
           payload.compensationPolicyVersions = [{ id: 'v6-policy-data' }];
@@ -2379,9 +2385,9 @@ describe('Legacy native Serde compatibility parity', () => {
       for (const timeline of [[], null]) {
         const payload = parseTestSnapshot(makeV2Snapshot());
         if (version === 5) {
-          payload.backupVersion = 5;
+          downgradeSnapshotVersion(payload, 5);
         } else {
-          payload.backupVersion = 1;
+          downgradeSnapshotVersion(payload, 1);
           delete payload.exportedAt;
           delete payload.aktifDonemId;
           delete payload.kurumDegerleriMap;
