@@ -419,6 +419,8 @@ export interface BackupPayload {
   taxOpenings: PersonelTaxOpening[];
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
+  /** Kurum genelindeki gruplar; eski yedeklerde bu alan bulunmayabilir. */
+  isPrimiGruplari?: IsPrimiGrupItem[];
   /** V5 retro graph; V4 and earlier are adapted through the compatibility path. */
   compensationRevisions: CompensationRevision[];
   compensationRevisionOverrides: CompensationRevisionOverride[];

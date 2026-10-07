@@ -10,6 +10,7 @@ import type {
   CompensationPolicyVersionWire,
   CompensationPolicyWriteOperation,
 } from '../../services/compensationPolicy/contract';
+import { INITIAL_BASELINE_DECISIONS } from '../../services/compensationPolicy/contract';
 import { AppViewportFrame } from '../AppViewportFrame';
 import { CompensationPolicyPage } from './CompensationPolicyPage';
 import { TopBar } from '../TopBar';
@@ -133,15 +134,14 @@ function draftForBaseline(data: CompensationPolicyLoadData = initialLoad()): Com
     ...(state ? compensationPolicyStateToDraft(state) : {}),
     operationKind: 'INITIAL_BASELINE',
     effectiveFrom: '2026-09-15',
-    boundaryScope: 'FULL_EARNING',
-    roadRoundingMode: 'PER_COMPENSATION_SLICE',
+    ...INITIAL_BASELINE_DECISIONS,
     reason: '',
     supersedesVersionId: null,
   };
 }
 
 function roadOnlyPolicyLoad(): CompensationPolicyLoadData {
-  const version = makeVersion('saved-road-only', precisionState, null, '2026-09-15', 'Kayıtlı yol politikası', 'ROAD_ONLY', 'PERIOD_TOTAL');
+  const version = makeVersion('saved-road-only', precisionState, null, '2026-09-15', 'Kayıtlı yol politikası', 'ROAD_ONLY', 'PER_COMPENSATION_SLICE');
   return {
     scope,
     timeline: {
@@ -503,7 +503,6 @@ const Harness: React.FC = () => {
   };
 
   return <CompensationPolicyPage
-    groupsOnly={Boolean((window as Window & { __groupsOnly?: boolean }).__groupsOnly)}
     scope={scope}
     loadState={loadState}
     draft={draft}

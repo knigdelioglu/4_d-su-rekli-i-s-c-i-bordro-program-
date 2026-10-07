@@ -57,6 +57,8 @@ describe('draftForCompensationPolicyLoad', () => {
     expect(draft.operationKind).toBe('INITIAL_BASELINE');
     expect(draft.effectiveFrom).toBe(scope.periodStartInclusive);
     expect(draft.reason).toBe('');
+    expect(draft.boundaryScope).toBe('FULL_EARNING');
+    expect(draft.roadRoundingMode).toBe('PERIOD_TOTAL');
     expect(draft.gunlukTabanUcret).toBe('2616,26');
     expect(draft.gunlukYemek).toBe('300,75');
     expect(draft.birlestirilmisSosyalYardim).toBe('5089,7');
@@ -77,6 +79,8 @@ describe('draftForCompensationPolicyLoad', () => {
     expect(draft.gunlukYemek).toBe('');
     expect(draft.isPrimiGruplari).toEqual([]);
     expect(draft.ekOdeme).toEqual({ kind: 'ABSENT' });
+    expect(draft.boundaryScope).toBe('FULL_EARNING');
+    expect(draft.roadRoundingMode).toBe('PERIOD_TOTAL');
   });
 
   test('does not coerce numeric amounts or groups with missing active state', () => {
@@ -96,7 +100,7 @@ describe('draftForCompensationPolicyLoad', () => {
       effectiveFrom: scope.periodStartInclusive,
       state: savedState,
       boundaryScope: 'ROAD_ONLY',
-      roadRoundingMode: 'PERIOD_TOTAL',
+      roadRoundingMode: 'PER_COMPENSATION_SLICE',
       createdAt: '2026-09-15T00:00:00.000Z',
       source: 'TEST',
       reason: 'Saved policy',
@@ -111,6 +115,6 @@ describe('draftForCompensationPolicyLoad', () => {
     expect(draft.operationKind).toBe('NEW_EFFECTIVE_DATE');
     expect(draft.gunlukTabanUcret).toBe('3000,00');
     expect(draft.boundaryScope).toBe('ROAD_ONLY');
-    expect(draft.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(draft.roadRoundingMode).toBe('PER_COMPENSATION_SLICE');
   });
 });

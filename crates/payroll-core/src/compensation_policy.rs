@@ -278,7 +278,9 @@ pub fn validate_compensation_policy_timeline(
 
 /// Validates historical snapshot links against immutable policy versions.
 /// Superseded versions remain valid historical references; comparison is by
-/// exact ID/date/state/flags, never by the current active leaf.
+/// ID/date, dated compensation state, and flags, never by the current active
+/// leaf. Institution-wide premium groups are validated with the saved payroll
+/// snapshot because they are not dated policy state.
 pub fn validate_compensation_snapshot_policy_links(
     payroll: &BordroKaydi,
     versions: &[CompensationPolicyVersion],
@@ -309,8 +311,14 @@ pub fn validate_compensation_snapshot_policy_links(
                     payroll.id, segment.versionId
                 ))
             })?;
+        let mut expected_state = version.state.clone();
+        // Group values are retained in old policy rows for compatibility, but
+        // they are not dated policy fields. A payroll snapshot keeps the
+        // institution-wide values that were used when that payroll was made.
+        expected_state.isPrimiGruplari = segment.state.isPrimiGruplari.clone();
+        let state_matches = expected_state == segment.state;
         if version.effectiveFrom > segment.startDate
-            || version.state != segment.state
+            || !state_matches
             || version.boundaryScope != segment.boundaryScope
             || version.roadRoundingMode != segment.roadRoundingMode
         {

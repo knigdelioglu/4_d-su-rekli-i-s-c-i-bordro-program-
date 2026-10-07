@@ -29,6 +29,7 @@ import {
   BordroDonemi,
   BordroKaydi,
   AnnualPayrollParameters,
+  IsPrimiGrupItem,
   PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
@@ -79,6 +80,7 @@ interface BordroHesaplamaProps {
   taxOpenings: PersonelTaxOpening[];
   sickLeaveRecords: SickLeaveRecord[];
   annualPayrollParameters: AnnualPayrollParameters[];
+  isPrimiGruplari: IsPrimiGrupItem[];
   activePayrollView: PayrollViewType;
   authoritativeDataset: PayrollDatasetSnapshot;
   onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
@@ -105,6 +107,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   taxOpenings,
   sickLeaveRecords,
   annualPayrollParameters,
+  isPrimiGruplari,
   activePayrollView,
   authoritativeDataset,
   onSaveBordro,
@@ -1316,7 +1319,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
           personel={activePaySlip.personel}
           bordro={activePaySlip.bordro}
           donem={aktifDonem}
-          isPrimiGruplari={activeKurumDegerleri?.isPrimiGruplari}
+          isPrimiGruplari={isPrimiGruplari}
           engine={payrollEngine}
           dataset={buildDataset()}
         />

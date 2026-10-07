@@ -1,6 +1,7 @@
 import type { ChangeEvent } from 'react';
 import { BACKUP_FORMAT_VERSION } from '../types/payroll';
 import { getInitialDataset } from '../utils/sampleData';
+import { DEFAULT_IS_PRIMI_GRUPLARI } from '../services/storage/payrollDefaults';
 import { tauriBridge } from '../services/tauriBridge';
 import type { PayrollEngine, PayrollMutation } from '../services/payrollEngine';
 import { formatPayrollError } from '../components/useBordroCalculationController';
@@ -47,6 +48,9 @@ function makeBackupPayload<T extends object>(dataset: T): PayrollStorageDto {
     backupVersion: BACKUP_FORMAT_VERSION,
     exportedAt: new Date().toISOString(),
     ...toPayrollBoundaryDto(datasetWithTimeline),
+    isPrimiGruplari: toPayrollBoundaryDto(
+      (dataset as { isPrimiGruplari?: unknown }).isPrimiGruplari ?? DEFAULT_IS_PRIMI_GRUPLARI
+    ),
   } as unknown as PayrollStorageDto;
 }
 
@@ -68,6 +72,7 @@ function currentBackupExportPayload(payload: PayrollStorageDto): PayrollStorageD
     retroBatches: payload.retroBatches,
     retroAllocations: payload.retroAllocations,
     compensationPolicyVersions: payload.compensationPolicyVersions,
+    isPrimiGruplari: payload.isPrimiGruplari,
   };
 }
 

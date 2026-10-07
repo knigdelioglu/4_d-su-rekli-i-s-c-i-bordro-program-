@@ -13,7 +13,10 @@ import {
   DEFAULT_PRODUCTION_KURUM_DEGERLERI,
   generateDefaultPuantajGunler,
 } from './payrollPresentation';
-import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
+import {
+  DEFAULT_IS_PRIMI_GRUPLARI,
+  getDefaultAnnualPayrollParameters,
+} from '../services/storage/payrollDefaults';
 
 export const INITIAL_PERSONELLER: Personel[] = [
   {
@@ -178,5 +181,6 @@ export function getInitialDataset() {
     taxOpenings: [],
     sickLeaveRecords: [],
     annualPayrollParameters: annualDefaults ? [annualDefaults] : [],
+    isPrimiGruplari: DEFAULT_IS_PRIMI_GRUPLARI.map((group) => ({ ...group })),
   };
 }

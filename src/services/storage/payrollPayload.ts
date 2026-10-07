@@ -19,7 +19,7 @@ import {
   parseAndValidatePayrollPayload,
   validateV5PayrollPayload,
 } from './payrollPayloadSchema';
-import { getDefaultAnnualPayrollParameters } from './payrollDefaults';
+import { DEFAULT_IS_PRIMI_GRUPLARI, getDefaultAnnualPayrollParameters } from './payrollDefaults';
 import { describeError } from '../../utils/errorMessage';
 
 type UnknownRecord = Record<string, unknown>;
@@ -384,6 +384,31 @@ function prepareCurrentBrowserSnapshot(raw: unknown): unknown {
     delete prepared.zamAylari;
   }
   return prepared;
+}
+
+function materializeGlobalPremiumGroups(payload: PayrollStorageDto): PayrollStorageDto {
+  if (payload.isPrimiGruplari?.length) return payload;
+
+  const policyVersions = [...(payload.compensationPolicyVersions ?? [])].sort((left, right) =>
+    left.effectiveFrom.localeCompare(right.effectiveFrom) || left.createdAt.localeCompare(right.createdAt)
+  );
+  const legacySettings = payload.legacyInstitutionSettings ?? {};
+  const settingsByPeriod = payload.kurumDegerleriMap as unknown as Record<string, UnknownRecord>;
+  const candidates: unknown[] = [
+    ...policyVersions.reverse().map((version) => version.state.isPrimiGruplari),
+    legacySettings[payload.aktifDonemId]?.isPrimiGruplari,
+    settingsByPeriod[payload.aktifDonemId]?.isPrimiGruplari,
+    ...Object.values(legacySettings).map((settings) => settings.isPrimiGruplari),
+    ...Object.values(settingsByPeriod).map((settings) => settings?.isPrimiGruplari),
+  ];
+  const groups = candidates.find((candidate): candidate is NonNullable<PayrollStorageDto['isPrimiGruplari']> =>
+    Array.isArray(candidate) && candidate.length > 0
+  );
+
+  return {
+    ...payload,
+    isPrimiGruplari: toPayrollBoundaryDto(groups ?? DEFAULT_IS_PRIMI_GRUPLARI),
+  };
 }
 
 function canonicalizeLegacyAnnualParameter(value: unknown): unknown {
@@ -1027,8 +1052,9 @@ export function parseCurrentBrowserSnapshot(
   const parsed: unknown = prepareCurrentBrowserSnapshot(JSON.parse(json));
   const validated = parseAndValidatePayrollPayload(parsed, options);
   const repaired = repairLegacyPersonTaxOpenings(validated);
-  if (repaired === validated) return validated;
-  return parseAndValidatePayrollPayload(repaired, options);
+  const withGlobalGroups = materializeGlobalPremiumGroups(repaired);
+  if (withGlobalGroups === validated) return validated;
+  return parseAndValidatePayrollPayload(withGlobalGroups, options);
 }
 
 /** Runs the frozen payroll_core validator for V6 metadata before browser writes/adoption. */
@@ -1085,9 +1111,9 @@ export function parseImportedBackup(json: string): PayrollStorageDto {
     return parseCurrentBrowserSnapshot(JSON.stringify(raw));
   }
 
-  if (version === 5) return canonicalizeV5BackupRecord(raw);
+  if (version === 5) return materializeGlobalPremiumGroups(canonicalizeV5BackupRecord(raw));
 
-  return parseLegacyBackupRecord(raw);
+  return materializeGlobalPremiumGroups(parseLegacyBackupRecord(raw));
 }
 
 function normalizeReplayDecimal(value: string): string {

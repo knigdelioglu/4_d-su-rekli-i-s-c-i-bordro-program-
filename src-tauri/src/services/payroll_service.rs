@@ -1,5 +1,6 @@
 use crate::domain::models::{
-    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, CompensationPolicyGroup,
+    CompensationPolicyVersion, DevredenPekKaydi, DonemselKurumDegerleri, IsPrimiGrupItem,
     ManualPayrollIncomeInput, PayrollAccrualInput, RetroAdjustmentBatch, RetroAllocation,
 };
 use crate::domain::{DomainError, Result};
@@ -23,6 +24,34 @@ pub use payroll_core::payroll_engine::{
 pub struct PayrollService;
 
 impl PayrollService {
+    fn apply_global_premium_groups(
+        conn: &Connection,
+        versions: &mut [CompensationPolicyVersion],
+    ) -> Result<()> {
+        let Some(serialized) = SettingsRepository::get_app_setting(conn, "is_primi_gruplari")? else {
+            return Ok(());
+        };
+        let groups: Vec<IsPrimiGrupItem> = serde_json::from_str(&serialized).map_err(|error| {
+            DomainError::InvalidData(format!("İş primi grupları ayarı okunamadı: {error}"))
+        })?;
+        if groups.is_empty() {
+            return Ok(());
+        }
+        let policy_groups = groups
+            .into_iter()
+            .map(|group| CompensationPolicyGroup {
+                id: group.id,
+                ad: group.ad,
+                oran: group.oran,
+                aktif: group.aktif,
+            })
+            .collect::<Vec<_>>();
+        for version in versions {
+            version.state.isPrimiGruplari = policy_groups.clone();
+        }
+        Ok(())
+    }
+
     fn active_institution_settings(
         settings: std::collections::HashMap<String, DonemselKurumDegerleri>,
     ) -> std::collections::HashMap<String, payroll_core::PayrollPeriodInstitutionSettings> {
@@ -260,12 +289,13 @@ impl PayrollService {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let versions = crate::repositories::compensation_policy_repo::CompensationPolicyRepository::
+        let mut versions = crate::repositories::compensation_policy_repo::CompensationPolicyRepository::
             get_versions_for_period(
                 conn,
                 &active_period.baslangicTarihi,
                 &active_period.bitisTarihi,
             )?;
+        Self::apply_global_premium_groups(conn, &mut versions)?;
 
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: vec![personnel],

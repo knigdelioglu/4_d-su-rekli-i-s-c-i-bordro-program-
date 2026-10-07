@@ -60,10 +60,9 @@ afterAll(async () => {
   else process.env.DISABLE_HMR = previousDisableHmr;
 }, 30_000);
 
-async function openPolicyPage(groupsOnly = false): Promise<Page> {
+async function openPolicyPage(): Promise<Page> {
   pageUnderTest = await browser.newPage();
   pageUnderTest.setDefaultTimeout(5_000);
-  await pageUnderTest.addInitScript((value) => { (window as Window & { __groupsOnly?: boolean }).__groupsOnly = value; }, groupsOnly);
   await pageUnderTest.setContent(`<!doctype html><html lang="tr"><body><div id="root"></div></body></html>`);
   await pageUnderTest.addStyleTag({ url: `${viteOrigin}/src/index.css` });
   await pageUnderTest.addScriptTag({ content: harnessBundle });
@@ -87,7 +86,9 @@ async function openAdvancedValues(page: Page): Promise<void> {
 }
 
 async function prepareValidInitialBaseline(page: Page, scope = 'FULL_EARNING', roadMode = 'PERIOD_TOTAL'): Promise<void> {
-  await selectBaselinePolicyFlags(page, scope, roadMode);
+  if (scope !== 'FULL_EARNING' || roadMode !== 'PERIOD_TOTAL') {
+    await selectBaselinePolicyFlags(page, scope, roadMode);
+  }
   await page.locator('#policy-reason').fill('Eylül 2026 başlangıç ücretleri');
 }
 
@@ -110,18 +111,10 @@ async function prepareExistingDateCorrection(page: Page): Promise<void> {
 }
 
 describe('rendered CompensationPolicyPage interactions with frozen props', () => {
-  test('keeps the group editor out of the full policy form and exposes it in the dedicated view', async () => {
-    const policyPage = await openPolicyPage();
-    expect(await policyPage.getByTestId('policy-premium-group-table').count()).toBe(0);
-    await policyPage.close();
-    pageUnderTest = null;
-
-    const groupsPage = await openPolicyPage(true);
-    await groupsPage.evaluate(() => window.__compensationPolicyTest.useEylulPrefill());
-    expect(await groupsPage.getByTestId('policy-premium-group-table').count()).toBe(1);
-    expect(await groupsPage.locator('#policy-group-name-3').inputValue()).toBe('UX Deneme Grubu');
-    expect(await groupsPage.locator('#policy-base-wage').count()).toBe(0);
-    expect(await groupsPage.locator('#policy-calculation-details').count()).toBe(1);
+  test('keeps global work-premium group controls out of dated policy editing', async () => {
+    const page = await openPolicyPage();
+    expect(await page.getByTestId('policy-premium-group-table').count()).toBe(0);
+    expect(await page.locator('#policy-group-name-0').count()).toBe(0);
   });
 
   test('shows a quarantine error in user language and retries loading the period', async () => {
@@ -157,8 +150,9 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(await page.locator('#policy-reason').inputValue()).toBe('');
     expect(await page.getByRole('alert').count()).toBe(0);
 
-    await selectBaselinePolicyFlags(page);
     await page.locator('#policy-reason').fill('Başlangıç ücretleri');
+    expect(await page.locator('input[name="policy-boundary-scope"][value="FULL_EARNING"]').isChecked()).toBe(true);
+    expect(await page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]').isChecked()).toBe(true);
     await requestPreview(page);
     expect(await page.getByRole('button', { name: 'Başlangıç ücretini kaydet' }).count()).toBe(0);
     await page.getByRole('button', { name: 'Başlangıç ücretini onayla' }).click();
@@ -190,8 +184,11 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(await page.locator('#policy-global-premium').inputValue()).toBe('0');
     expect(await page.locator('#policy-extra-payment').inputValue()).toBe('0');
     expect(await page.locator('#policy-other-income').inputValue()).toBe('0');
-    expect(await page.locator('input[name="policy-boundary-scope"]:checked').count()).toBe(0);
-    expect(await page.locator('input[name="policy-road-rounding"]:checked').count()).toBe(0);
+    await page.locator('#policy-calculation-details').evaluate((node) => { (node as HTMLDetailsElement).open = true; });
+    expect(await page.locator('input[name="policy-boundary-scope"][value="FULL_EARNING"]').isChecked()).toBe(true);
+    expect(await page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]').isChecked()).toBe(true);
+    expect(await page.locator('#policy-calculation-details-summary').innerText()).toContain('Tüm ücretler · Dönem toplamı');
+    expect(await page.locator('#policy-calculation-details-summary').innerText()).not.toContain('Seçim gerekli');
     expect(await page.getByRole('button', { name: 'Başlangıç ücretini onayla' }).count()).toBe(0);
     expect((await events(page)).filter((entry) => entry.type === 'confirm-baseline').length).toBe(0);
     const visibleText = await page.locator('body').innerText();
@@ -200,6 +197,11 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
       expect(visibleText.includes(internalLabel)).toBe(false);
     }
     expect((await events(page)).filter((entry) => entry.type === 'save').length).toBe(0);
+    if (process.env.CAPTURE_COMPENSATION_POLICY_SCREENSHOTS === '1') {
+      await page.setViewportSize({ width: 1366, height: 768 });
+      await page.locator('#policy-calculation-details').scrollIntoViewIfNeeded();
+      await page.screenshot({ path: '/private/tmp/compensation-policy-ux-baseline-defaults.png' });
+    }
 
   });
 
@@ -306,79 +308,22 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     }
   });
 
-  test('keeps the four premium groups editable and readable at laptop and narrow widths', async () => {
-    const page = await openPolicyPage(true);
-    await page.evaluate(() => window.__compensationPolicyTest.useEylulPrefill());
-    const viewports = [
-      { label: 'desktop', width: 1366, height: 768 },
-      { label: 'narrow', width: 390, height: 844 },
-    ] as const;
-
-    for (const viewport of viewports) {
-      await page.setViewportSize({ width: viewport.width, height: viewport.height });
-      const table = page.getByTestId('policy-premium-group-table');
-      await table.scrollIntoViewIfNeeded();
-      const rows = page.getByTestId('policy-premium-group-row');
-      if (viewport.label === 'narrow') await page.locator('#policy-group-rate-0').fill('9');
-      expect(await rows.count()).toBe(4);
-      expect(await page.locator('#policy-group-name-0').inputValue()).toBe('1. Grup');
-      expect(await page.locator('#policy-group-rate-0').inputValue()).toBe('9');
-      expect(await page.locator('#policy-group-name-3').inputValue()).toBe('UX Deneme Grubu');
-      expect(await page.locator('#policy-group-rate-3').inputValue()).toBe('6');
-
-      await page.locator('#policy-group-rate-0').fill('9,5');
-      expect(await page.locator('#policy-group-rate-0').inputValue()).toBe('9,5');
-      const layout = await page.evaluate(() => {
-        const region = document.querySelector<HTMLElement>('[data-testid="compensation-policy-scroll-region"]');
-        const tableElement = document.querySelector<HTMLElement>('[data-testid="policy-premium-group-table"]');
-        const rect = (element: Element) => {
-          const bounds = element.getBoundingClientRect();
-          return { top: bounds.top, bottom: bounds.bottom, left: bounds.left, right: bounds.right };
-        };
-        if (!region || !tableElement) throw new Error('The group table viewport fixture is incomplete.');
-        return {
-          region: rect(region),
-          table: rect(tableElement),
-          scrollWidth: region.scrollWidth,
-          clientWidth: region.clientWidth,
-        };
-      });
-
-      if (process.env.CAPTURE_COMPENSATION_POLICY_SCREENSHOTS === '1') {
-        console.log(`[groups-layout] ${viewport.label} ${JSON.stringify(layout)}`);
-      }
-      expect(layout.table.top >= layout.region.top - 1).toBe(true);
-      expect(layout.table.bottom <= layout.region.bottom + 1).toBe(true);
-      expect(layout.scrollWidth <= layout.clientWidth + 1).toBe(true);
-      expect(await page.getByRole('button', { name: 'UX Deneme Grubu grubunu kaldır' }).isVisible()).toBe(true);
-      expect(await page.locator('details summary').filter({ hasText: 'Kod' }).count()).toBe(4);
-      expect((await page.locator('body').innerText()).includes('grup_1791176163314')).toBe(false);
-
-      if (process.env.CAPTURE_COMPENSATION_POLICY_SCREENSHOTS === '1') {
-        const path = viewport.label === 'desktop'
-          ? '/private/tmp/compensation-policy-ux-groups-desktop.png'
-          : '/private/tmp/compensation-policy-ux-groups-narrow.png';
-        await page.screenshot({ path });
-      }
-    }
-  });
-
-  test('reopens and restores a saved ROAD_ONLY and PERIOD_TOTAL policy without asking for new selections', async () => {
+  test('reopens and restores a saved ROAD_ONLY and PER_COMPENSATION_SLICE policy without asking for new selections', async () => {
     const page = await openPolicyPage();
     await page.evaluate(() => window.__compensationPolicyTest.usePersistedRoadOnlyPolicy());
     await page.locator('#policy-calculation-details').evaluate((node) => { (node as HTMLDetailsElement).open = true; });
     const roadOnly = page.locator('input[name="policy-boundary-scope"][value="ROAD_ONLY"]');
-    const periodTotal = page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]');
+    const perSlice = page.locator('input[name="policy-road-rounding"][value="PER_COMPENSATION_SLICE"]');
     expect(await roadOnly.isChecked()).toBe(true);
-    expect(await periodTotal.isChecked()).toBe(true);
+    expect(await perSlice.isChecked()).toBe(true);
     expect(await page.locator('#policy-base-wage').inputValue()).toBe('9007199254740993,12');
 
     await page.locator('input[name="policy-boundary-scope"][value="FULL_EARNING"]').check();
-    await page.locator('input[name="policy-road-rounding"][value="PER_COMPENSATION_SLICE"]').check();
+    await page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]').check();
     await page.locator('#policy-base-wage').fill('9007199254740994');
     await page.getByRole('button', { name: 'Etkin ücretleri ve seçimleri taslağa geri al' }).click();
     expect(await roadOnly.isChecked()).toBe(true);
-    expect(await periodTotal.isChecked()).toBe(true);
+    expect(await perSlice.isChecked()).toBe(true);
     expect(await page.locator('#policy-base-wage').inputValue()).toBe('9007199254740993,12');
 
     await requestPreview(page);
@@ -388,7 +333,7 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
       state: { gunlukTabanUcret: string };
     };
     expect(operation.boundaryScope).toBe('ROAD_ONLY');
-    expect(operation.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(operation.roadRoundingMode).toBe('PER_COMPENSATION_SLICE');
     expect(operation.state.gunlukTabanUcret).toBe('9007199254740993.12');
   });
 
@@ -420,10 +365,10 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(operation.state.gunlukVasitaYol).toBe('175.25');
   });
 
-  test('applies an exact percentage helper, keeps the source state intact, and previews a full ROAD_ONLY baseline', async () => {
+  test('applies an exact percentage helper, keeps the source state intact, and previews an overridden ROAD_ONLY baseline', async () => {
     const page = await openPolicyPage();
     await page.evaluate(() => window.__compensationPolicyTest.usePrecisionPrefill());
-    await prepareValidInitialBaseline(page, 'ROAD_ONLY', 'PERIOD_TOTAL');
+    await prepareValidInitialBaseline(page, 'ROAD_ONLY', 'PER_COMPENSATION_SLICE');
     await page.getByText('Günlük taban ücret ve yemeği yüzdeyle artır', { exact: true }).click();
     await page.locator('#policy-percentage-helper').fill('10');
     await page.getByRole('button', { name: 'Artışı uygula' }).click();
@@ -452,7 +397,7 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     };
     expect(operation.kind).toBe('INITIAL_BASELINE');
     expect(operation.boundaryScope).toBe('ROAD_ONLY');
-    expect(operation.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(operation.roadRoundingMode).toBe('PER_COMPENSATION_SLICE');
     expect('changeIntent' in operation).toBe(false);
     expect(operation.state).toEqual({
       gunlukTabanUcret: '9907919180215092.432',
@@ -473,7 +418,12 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     await page.getByRole('button', { name: 'Başlangıç ücretini kaydet' }).click();
     expect((await events(page)).filter((entry) => entry.type === 'save').length).toBe(1);
     const saveEvent = (await events(page)).filter((entry) => entry.type === 'save').at(-1);
-    const saveRequest = saveEvent?.value as { initialBaselineConfirmation?: { confirmed: boolean; effectiveFrom: string } };
+    const saveRequest = saveEvent?.value as {
+      operation: { boundaryScope: string; roadRoundingMode: string };
+      initialBaselineConfirmation?: { confirmed: boolean; effectiveFrom: string };
+    };
+    expect(saveRequest.operation.boundaryScope).toBe('ROAD_ONLY');
+    expect(saveRequest.operation.roadRoundingMode).toBe('PER_COMPENSATION_SLICE');
     expect(saveRequest.initialBaselineConfirmation).toEqual({ confirmed: true, effectiveFrom: '2026-09-15' });
     await page.getByText('Kayıt tamamlandı; ücret bilgileri yeniden yükleniyor…').waitFor({ state: 'visible' });
     expect(await page.getByText('Ücret değişikliği kaydedildi.').count()).toBe(0);
@@ -524,29 +474,40 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(await page.locator('#policy-base-wage').getAttribute('aria-invalid')).toBe('true');
   });
 
-  test('opens calculation details and focuses the first missing decision when preview is requested', async () => {
+  test('uses the approved initial defaults for preview and save without requiring reselection', async () => {
     const page = await openPolicyPage();
     await page.evaluate(() => window.__compensationPolicyTest.useEylulPrefill());
     await page.locator('#policy-reason').fill('Başlangıç ücretleri');
+    await page.locator('#policy-calculation-details').evaluate((node) => { (node as HTMLDetailsElement).open = true; });
 
-    expect(await page.locator('#policy-calculation-details-summary').innerText()).toContain('Seçim gerekli');
-    await page.getByRole('button', { name: /Etkileri önizle/ }).click();
+    expect(await page.locator('#policy-calculation-details-summary').innerText()).toContain('Tüm ücretler · Dönem toplamı');
+    expect(await page.locator('#policy-calculation-details-summary').innerText()).not.toContain('Seçim gerekli');
+    expect(await page.locator('input[name="policy-boundary-scope"][value="FULL_EARNING"]').isChecked()).toBe(true);
+    expect(await page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]').isChecked()).toBe(true);
+    expect((await events(page)).filter((entry) => entry.type === 'save').length).toBe(0);
+    expect((await events(page)).filter((entry) => entry.type === 'confirm-baseline').length).toBe(0);
 
-    await page.waitForFunction(() => (document.getElementById('policy-calculation-details') as HTMLDetailsElement | null)?.open === true);
-    await page.waitForFunction(() => document.activeElement?.id === 'policy-boundary-scope-full');
-    expect(await page.locator('#policy-boundary-scope-error').isVisible()).toBe(true);
-    expect((await events(page)).filter((entry) => entry.type === 'preview').length).toBe(0);
-    const focusLayout = await page.evaluate(() => {
-      const target = document.getElementById('policy-boundary-scope-full')?.getBoundingClientRect();
-      const region = document.querySelector('[data-testid="compensation-policy-scroll-region"]')?.getBoundingClientRect();
-      return target && region ? { targetTop: target.top, targetBottom: target.bottom, regionTop: region.top, regionBottom: region.bottom } : null;
-    });
-    expect(focusLayout).toBeTruthy();
-    expect(focusLayout!.targetTop >= focusLayout!.regionTop).toBe(true);
-    expect(focusLayout!.targetBottom <= focusLayout!.regionBottom).toBe(true);
-    if (process.env.CAPTURE_COMPENSATION_POLICY_SCREENSHOTS === '1') {
-      await page.screenshot({ path: '/private/tmp/compensation-policy-ux-validation.png' });
-    }
+    await requestPreview(page);
+    const preview = (await events(page)).filter((entry) => entry.type === 'preview').at(-1)?.value as {
+      kind: string;
+      boundaryScope: string;
+      roadRoundingMode: string;
+    };
+    expect(preview.kind).toBe('INITIAL_BASELINE');
+    expect(preview.boundaryScope).toBe('FULL_EARNING');
+    expect(preview.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(await page.getByRole('button', { name: 'Başlangıç ücretini kaydet' }).count()).toBe(0);
+
+    await page.getByRole('button', { name: 'Başlangıç ücretini onayla' }).click();
+    await page.getByRole('button', { name: 'Başlangıç ücretini kaydet' }).click();
+    const saveRequest = (await events(page)).filter((entry) => entry.type === 'save').at(-1)?.value as {
+      operation: { kind: string; boundaryScope: string; roadRoundingMode: string };
+      initialBaselineConfirmation: { confirmed: boolean; effectiveFrom: string };
+    };
+    expect(saveRequest.operation.kind).toBe('INITIAL_BASELINE');
+    expect(saveRequest.operation.boundaryScope).toBe('FULL_EARNING');
+    expect(saveRequest.operation.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(saveRequest.initialBaselineConfirmation).toEqual({ confirmed: true, effectiveFrom: '2026-09-15' });
   });
 
   test('shows a fresh read-only preview before separate baseline consent and save', async () => {

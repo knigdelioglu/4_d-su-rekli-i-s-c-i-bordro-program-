@@ -1064,6 +1064,28 @@ pub fn get_migrations() -> Migrations<'static> {
             END;
             "#,
         ),
+        // Work-premium groups are institution-wide settings, not dated policy fields.
+        M::up(
+            r#"
+            INSERT OR IGNORE INTO app_settings (key, value, updated_at)
+            SELECT
+                'is_primi_gruplari',
+                COALESCE(
+                    (SELECT json_extract(state_json, '$.isPrimiGruplari')
+                     FROM compensation_policy_versions
+                     ORDER BY effective_from DESC, created_at DESC
+                     LIMIT 1),
+                    (SELECT json_extract(settings_json, '$.isPrimiGruplari')
+                     FROM institution_settings
+                     WHERE json_valid(settings_json)
+                       AND json_type(settings_json, '$.isPrimiGruplari') = 'array'
+                     ORDER BY period_id DESC
+                     LIMIT 1),
+                    '[]'
+                ),
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now');
+            "#,
+        ),
     ])
 }
 

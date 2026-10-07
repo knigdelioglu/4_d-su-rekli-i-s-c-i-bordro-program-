@@ -101,6 +101,12 @@ export interface InitialCompensationPolicyBaselineOperation
   boundaryScope: CompensationBoundaryScope;
 }
 
+/** Approved choices for the first baseline when no policy version exists. */
+export const INITIAL_BASELINE_DECISIONS = {
+  boundaryScope: 'FULL_EARNING',
+  roadRoundingMode: 'PERIOD_TOTAL',
+} as const satisfies Pick<InitialCompensationPolicyBaselineOperation, 'boundaryScope' | 'roadRoundingMode'>;
+
 export type NewCompensationPolicyEffectiveDateOperation =
   CompensationPolicyOperationFields &
     CompensationPolicyBoundaryIntent & {

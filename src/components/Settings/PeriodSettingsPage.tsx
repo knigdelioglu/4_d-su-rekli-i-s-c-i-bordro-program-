@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import type {
   AnnualPayrollParameters,
   BordroDonemi,
+  IsPrimiGrupItem,
   PayrollPeriodInstitutionSettings,
   Personel,
   PersonelPuantaj,
@@ -35,8 +36,7 @@ import { TediyeTisSection } from './TediyeTisSection';
 import { formatPeriodSettingsSaveError, savePeriodSettings } from './periodSettingsSave';
 import { findPeriodSettingsInheritanceSource } from './periodInheritance';
 import { describeError } from '../../utils/errorMessage';
-import { CompensationPolicyPage } from './CompensationPolicyPage';
-import type { CompensationPolicyPageProps } from '../../services/compensationPolicy/contract';
+import { IsPrimiGruplariSection } from './IsPrimiGruplariSection';
 
 export interface PeriodSettingsPageProps {
   activeSection: ParametreSection;
@@ -60,7 +60,8 @@ export interface PeriodSettingsPageProps {
   onSaveSickLeaveRecord: (record: SickLeaveRecord) => Promise<void> | void;
   onDeleteSickLeaveRecord: (id: string) => Promise<void> | void;
   onOpenCompensationPolicy: () => void;
-  compensationPolicyProps?: CompensationPolicyPageProps | null;
+  isPrimiGruplari: IsPrimiGrupItem[];
+  onSaveIsPrimiGruplari: (groups: IsPrimiGrupItem[]) => Promise<void> | void;
 }
 
 const sanitizeTediyeList = (list?: TediyeKalemi[]) =>
@@ -133,7 +134,8 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
   onSaveSickLeaveRecord,
   onDeleteSickLeaveRecord,
   onOpenCompensationPolicy,
-  compensationPolicyProps,
+  isPrimiGruplari,
+  onSaveIsPrimiGruplari,
 }) => {
   const currentYear = new Date().getFullYear();
   const configuredYears = [
@@ -475,13 +477,10 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
     if (activeSection === 'license') return <LicenseSettingsSection />;
 
     if (activeSection === 'isPrimiGruplari') {
-      return compensationPolicyProps ? (
-        <CompensationPolicyPage {...compensationPolicyProps} groupsOnly />
-      ) : (
-        <MissingPeriodSection
-          testId="period-settings-is-primi-gruplari"
-          title="İş Primi Grupları"
-          onOpenNewPeriod={openNewPeriod}
+      return (
+        <IsPrimiGruplariSection
+          groups={isPrimiGruplari}
+          onSave={onSaveIsPrimiGruplari}
         />
       );
     }

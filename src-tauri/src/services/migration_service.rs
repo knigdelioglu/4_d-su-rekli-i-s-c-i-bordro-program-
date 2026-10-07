@@ -16,7 +16,7 @@ use crate::services::payroll_service::PayrollService;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 pub const CURRENT_BACKUP_VERSION: u32 = 6;
 const MULTI_ACCRUAL_BACKUP_VERSION: u32 = 3;
@@ -89,6 +89,9 @@ pub struct LegacyPayload {
     pub retroAllocations: Option<Vec<RetroAllocation>>,
     #[serde(default)]
     pub compensationPolicyVersions: Option<Vec<CompensationPolicyVersion>>,
+    /// V6 additive field: institution-wide groups, independent from policy dates.
+    #[serde(default)]
+    pub isPrimiGruplari: Option<Vec<IsPrimiGrupItem>>,
     /// Periods whose original legacy money fields were all present in the
     /// incoming JSON. This is import-only provenance and is never persisted.
     #[serde(skip)]
@@ -207,6 +210,9 @@ fn validate_v6_payload(payload: &mut LegacyPayload) -> Result<()> {
         payroll_core::validate_compensation_policy_timeline(versions).map_err(|error| {
             DomainError::InvalidData(format!("V6 policy timeline geçersiz: {error}"))
         })?;
+    if let Some(groups) = payload.isPrimiGruplari.as_ref() {
+        validate_global_premium_groups(groups)?;
+    }
     let periods = payload.donemler.as_ref().ok_or_else(|| {
         DomainError::InvalidData("V6 yedek payload'ı donemler koleksiyonunu içermelidir.".into())
     })?;
@@ -263,6 +269,34 @@ fn validate_v6_payload(payload: &mut LegacyPayload) -> Result<()> {
         }
     }
     payload.compensationPolicyVersions = Some(ordered_versions);
+    Ok(())
+}
+
+fn validate_global_premium_groups(groups: &[IsPrimiGrupItem]) -> Result<()> {
+    if groups.is_empty() {
+        return Err(DomainError::InvalidData(
+            "V6 iş primi grupları listesi boş olamaz.".into(),
+        ));
+    }
+    let mut ids = HashSet::new();
+    let mut names = HashSet::new();
+    for group in groups {
+        let normalized_id = group.id.trim().to_lowercase();
+        let normalized_name = group.ad.trim().to_lowercase();
+        if normalized_id.is_empty()
+            || normalized_id != group.id.to_lowercase()
+            || normalized_name.is_empty()
+            || normalized_name != group.ad.to_lowercase()
+            || group.oran < rust_decimal::Decimal::ZERO
+            || group.oran > rust_decimal::Decimal::from(100)
+            || !ids.insert(normalized_id)
+            || !names.insert(normalized_name)
+        {
+            return Err(DomainError::InvalidData(
+                "V6 iş primi grupları kod, ad ve %0–%100 oran bakımından geçersiz veya yinelenen değer içeriyor.".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1465,10 +1499,50 @@ impl MigrationService {
             retroBatches,
             retroAllocations,
             compensationPolicyVersions,
+            isPrimiGruplari,
             exactLegacyCompensationSourcePeriods: exact_source_periods,
         } = payload;
         let compensation_policy_versions = compensationPolicyVersions.unwrap_or_default();
         restore_policy_timeline_in_transaction(conn, &compensation_policy_versions)?;
+        let global_premium_groups = isPrimiGruplari
+            .or_else(|| {
+                compensation_policy_versions
+                    .iter()
+                    .max_by(|left, right| {
+                        left.effectiveFrom.cmp(&right.effectiveFrom)
+                            .then_with(|| left.createdAt.cmp(&right.createdAt))
+                    })
+                    .map(|version| {
+                        version.state.isPrimiGruplari.iter().map(|group| IsPrimiGrupItem {
+                            id: group.id.clone(),
+                            ad: group.ad.clone(),
+                            oran: group.oran,
+                            aktif: group.aktif,
+                        }).collect::<Vec<_>>()
+                    })
+            })
+            .or_else(|| {
+                let legacy = legacyInstitutionSettings.as_ref()?;
+                let active_id = aktifDonemId.as_deref();
+                let mut entries = legacy.iter().collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| right.cmp(left));
+                if let Some(active_id) = active_id {
+                    entries.sort_by_key(|(period_id, _)| if period_id.as_str() == active_id { 0 } else { 1 });
+                }
+                entries.into_iter().find_map(|(_, settings)| {
+                    serde_json::from_value::<Vec<IsPrimiGrupItem>>(
+                        settings.get("isPrimiGruplari")?.clone(),
+                    ).ok().filter(|groups| !groups.is_empty())
+                })
+            })
+            .unwrap_or_default();
+        let global_groups_json = serde_json::to_string(&global_premium_groups)
+            .map_err(|error| DomainError::InvalidData(format!("İş primi grupları JSON'a çevrilemedi: {error}")))?;
+        SettingsRepository::set_app_setting_in_transaction(
+            conn,
+            "is_primi_gruplari",
+            &global_groups_json,
+        )?;
         // V3 already introduced independent payment-event/accrual metadata.
         // Only V1/V2 backups may be normalized to the single legacy NORMAL
         // node; treating V3 as pre-accrual would erase retro/TEDIYE ordering.

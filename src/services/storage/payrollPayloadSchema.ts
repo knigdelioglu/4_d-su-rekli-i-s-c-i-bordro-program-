@@ -10,6 +10,10 @@ import { annualPayrollParameterSemanticIssue } from './annualPayrollParametersVa
 
 type UnknownRecord = Record<string, unknown>;
 
+function isRecord(value: unknown): value is UnknownRecord {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
 export interface PayrollPayloadValidationOptions {
   /**
    * V1 snapshots may contain only aggregate payroll totals. Their missing
@@ -960,6 +964,13 @@ function stablePolicyStateValue(value: unknown): unknown {
   );
 }
 
+function stablePolicyLinkStateValue(value: unknown): unknown {
+  if (!isRecord(value)) return stablePolicyStateValue(value);
+  const state = { ...value };
+  delete state.isPrimiGruplari;
+  return stablePolicyStateValue(state);
+}
+
 function samePolicyStateExceptRoad(left: UnknownRecord, right: UnknownRecord): boolean {
   return compensationPolicyStateEqualsExceptRoad(
     left as unknown as PayrollStorageDto['compensationPolicyVersions'][number]['state'],
@@ -1005,8 +1016,8 @@ function assertV6SnapshotPolicyLinks(payload: PayrollStorageDto): void {
         fail(`${segmentPath}.versionId`, 'policy sürümü segment başlangıcında henüz etkin değil.');
       }
       if (
-        JSON.stringify(stablePolicyStateValue(policy.state)) !==
-        JSON.stringify(stablePolicyStateValue(segment.state))
+        JSON.stringify(stablePolicyLinkStateValue(policy.state)) !==
+        JSON.stringify(stablePolicyLinkStateValue(segment.state))
       ) {
         fail(`${segmentPath}.state`, 'snapshot full-state referans verilen policy sürümüyle eşleşmiyor.');
       }
@@ -1890,6 +1901,33 @@ function validatePayrollPayloadVersion(
   assertRecord(required(value, 'kurumDegerleriMap', '$'), '$.kurumDegerleriMap');
   const isV6 = expectedVersion >= 6;
   validateTopLevelArrays(value, expectedVersion);
+  if (hasOwn(value, 'isPrimiGruplari')) {
+    assertArray(value.isPrimiGruplari, '$.isPrimiGruplari');
+    if (value.isPrimiGruplari.length === 0) {
+      fail('$.isPrimiGruplari', 'en az bir iş primi grubu içermelidir.');
+    }
+    const groupIds = new Set<string>();
+    const groupNames = new Set<string>();
+    value.isPrimiGruplari.forEach((group, index) =>
+      {
+        const path = `$.isPrimiGruplari[${index}]`;
+        validateIsPrimiGrupItem(group, path);
+        if (!isRecord(group)) return;
+        const id = group.id as string;
+        const name = group.ad as string;
+        const normalizedId = id.trim().toLocaleLowerCase('tr');
+        const normalizedName = name.trim().toLocaleLowerCase('tr');
+        const rate = Number(group.oran);
+        if (id !== id.trim() || name !== name.trim() || !normalizedId || !normalizedName
+          || !Number.isFinite(rate) || rate < 0 || rate > 100
+          || groupIds.has(normalizedId) || groupNames.has(normalizedName)) {
+          fail(path, 'kod, ad ve %0–%100 oran bakımından geçersiz veya yinelenen değer içeriyor.');
+        }
+        groupIds.add(normalizedId);
+        groupNames.add(normalizedName);
+      }
+    );
+  }
 
   const periods = value.donemler as unknown[];
   periods.forEach((item, index) => validateBordroDonemi(item, `$.donemler[${index}]`));

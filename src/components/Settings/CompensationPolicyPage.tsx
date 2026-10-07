@@ -28,7 +28,7 @@ const errorBoxClass = 'rounded-md border border-rose-300 bg-rose-50 p-3 text-sm 
 const warningBoxClass = 'rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950';
 const successBoxClass = 'rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-900';
 
-type Props = CompensationPolicyPageProps & { groupsOnly?: boolean };
+type Props = CompensationPolicyPageProps;
 type Draft = Props['draft'];
 
 function stableValue(value: unknown): string {
@@ -150,18 +150,6 @@ const PolicyStateDetails: React.FC<{ state: CompensationPolicyStateWire }> = ({ 
         <dd className="break-all text-right font-mono font-semibold text-slate-900">{value}{unit ? ` ${unit}` : ''}</dd>
       </div>
     ))}
-    <div className="sm:col-span-2 xl:col-span-3">
-      <dt className="mb-1 text-slate-600">İş primi grupları</dt>
-      <dd>
-        {state.isPrimiGruplari.map((group) => (
-          <span key={`${group.id}:${group.ad}`} className="mr-3 inline-flex items-center gap-1 text-xs text-slate-800">
-            <span className="font-semibold">{group.ad}</span>
-            <span className="font-mono">{formatCompensationPolicyDecimalForUser(group.oran)}%</span>
-            <span>{group.aktif ? 'etkin' : 'kapalı'}</span>
-          </span>
-        ))}
-      </dd>
-    </div>
   </dl>
 );
 
@@ -174,13 +162,14 @@ function operationFieldLabels(fields: CompensationPolicyDirectEffect['changedFie
     giyimYardimi: 'Giyim yardımı',
     hizmetZammiBirimi: 'Hizmet zammı birimi',
     isPrimiYuzde: 'İş primi yüzdesi',
-    isPrimiGruplari: 'İş primi grupları',
     geceCalismaPrimiYuzde: 'Gece çalışma primi',
     geceCalismaTatiliPrimiYuzde: 'Gece çalışma tatili primi',
     ekOdeme: 'Ek ödeme',
     digerGelirVarsayilan: 'Diğer gelir varsayılanı',
   };
-  return fields.map((field) => labels[field] ?? field);
+  return fields
+    .filter((field) => field !== 'isPrimiGruplari')
+    .map((field) => labels[field] ?? field);
 }
 
 function windowEndLabel(throughInclusive: string | null, nextDate: string | null): string {
@@ -366,7 +355,7 @@ function policySelectionSource(
   return load.activePolicyProjection.kind === 'ACTIVE' ? load.activePolicyProjection.version : null;
 }
 
-export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ...props }) => {
+export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const succeededLoad = props.saveState.status === 'succeeded' ? props.saveState.authoritativeLoad : null;
   const readyLoad = props.loadState.status === 'ready' ? props.loadState.value : null;
   const candidateAuthoritativeLoad = succeededLoad && stableValue(succeededLoad.scope) === stableValue(props.scope)
@@ -375,11 +364,21 @@ export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ..
   const scopeMatches = Boolean(candidateAuthoritativeLoad && stableValue(candidateAuthoritativeLoad.scope) === stableValue(props.scope));
   const authoritativeLoad = scopeMatches ? candidateAuthoritativeLoad : null;
   const selectionSource = policySelectionSource(authoritativeLoad, props.draft);
-  const selectionSourceKey = selectionSource
-    ? stableValue({ id: selectionSource.id, boundaryScope: selectionSource.boundaryScope, roadRoundingMode: selectionSource.roadRoundingMode, state: selectionSource.state })
-    : '';
-  const [scopeSelection, setScopeSelection] = useState<Props['draft']['boundaryScope'] | null>(selectionSource?.boundaryScope ?? null);
-  const [roundingSelection, setRoundingSelection] = useState<Props['draft']['roadRoundingMode'] | null>(selectionSource?.roadRoundingMode ?? null);
+  const initialBaselineSelections = props.draft.operationKind === 'INITIAL_BASELINE'
+    ? { boundaryScope: props.draft.boundaryScope, roadRoundingMode: props.draft.roadRoundingMode }
+    : null;
+  const selectionSourceKey = stableValue({
+    scope: props.scope,
+    operationKind: props.draft.operationKind,
+    selectionSource: selectionSource
+      ? { id: selectionSource.id, boundaryScope: selectionSource.boundaryScope, roadRoundingMode: selectionSource.roadRoundingMode, state: selectionSource.state }
+      : null,
+    initialBaselineSelections,
+  });
+  const initialScopeSelection = selectionSource?.boundaryScope ?? initialBaselineSelections?.boundaryScope ?? null;
+  const initialRoundingSelection = selectionSource?.roadRoundingMode ?? initialBaselineSelections?.roadRoundingMode ?? null;
+  const [scopeSelection, setScopeSelection] = useState<Props['draft']['boundaryScope'] | null>(initialScopeSelection);
+  const [roundingSelection, setRoundingSelection] = useState<Props['draft']['roadRoundingMode'] | null>(initialRoundingSelection);
   const [baselineConfirmation, setBaselineConfirmation] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [callbackError, setCallbackError] = useState<string | null>(null);
@@ -414,8 +413,8 @@ export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ..
     && (savedOperationFingerprint === null || savedOperationFingerprint === currentFingerprint);
 
   useEffect(() => {
-    setScopeSelection(selectionSource?.boundaryScope ?? null);
-    setRoundingSelection(selectionSource?.roadRoundingMode ?? null);
+    setScopeSelection(initialScopeSelection);
+    setRoundingSelection(initialRoundingSelection);
   }, [selectionSourceKey]);
   useEffect(() => {
     if (props.loadState.status !== 'idle' && props.loadState.status !== 'error') setLoadPending(false);
@@ -529,7 +528,7 @@ export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ..
   const saveHint = finalizedBlockers.length > 0
     ? 'Kesinleştirilmiş bordro engeli çözülmeden bu değişiklik kaydedilemez.'
     : !formReady
-      ? 'Tutarları tamamlayın ve Hesaplama ayrıntıları içindeki seçimleri yapın.'
+      ? 'Tutarları ve gerekli politika bilgilerini tamamlayın.'
       : !previewFresh
         ? 'Kaydetmeden önce bu taslağın etkilerini önizleyin.'
         : null;
@@ -721,8 +720,8 @@ export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ..
       <div data-testid="compensation-policy-scroll-region" className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h1 id="compensation-policy-title" className="text-xl font-bold tracking-tight">{groupsOnly ? 'İş Primi Grupları' : showInitialBaselineCard ? 'Başlangıç ücretlerini oluştur' : 'Ücret politikası'}</h1>
-          <p className="mt-1 text-sm text-slate-600">{groupsOnly ? 'Personel kartlarında seçilebilen grupları ve oranlarını düzenleyin. Değişiklikler ücret politikası önizlemesiyle kaydedilir.' : showInitialBaselineCard ? 'Dönem başlangıç ücretlerini kontrol edin ve etkileri inceleyin.' : 'Ücretleri gözden geçirin, etkileri önizleyin ve kaydedin.'}</p>
+          <h1 id="compensation-policy-title" className="text-xl font-bold tracking-tight">{showInitialBaselineCard ? 'Başlangıç ücretlerini oluştur' : 'Ücret politikası'}</h1>
+          <p className="mt-1 text-sm text-slate-600">{showInitialBaselineCard ? 'Dönem başlangıç ücretlerini kontrol edin ve etkileri inceleyin.' : 'Ücretleri gözden geçirin, etkileri önizleyin ve kaydedin.'}</p>
           <p className="mt-2 text-xs font-medium text-slate-700">{periodName(props.scope.periodId)} · {shortDate(props.scope.periodStartInclusive)}–{shortDate(props.scope.periodEndInclusive)}</p>
         </div>
         {props.loadState.status === 'idle' && (
@@ -815,7 +814,6 @@ export const CompensationPolicyPage: React.FC<Props> = ({ groupsOnly = false, ..
             onSelectRoadRoundingMode={selectRoadMode}
             onCopyActiveState={copyActivePolicyDraft}
             canApplyPercentageIncrease={validation.fullState.status === 'VALID' && !disabledForm}
-            groupsOnly={groupsOnly}
           />
 
           {props.previewState.status === 'error' && showApiError(props.previewState.error, 'preview')}

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BordroDonemi } from '../types/payroll';
+import { INITIAL_BASELINE_DECISIONS } from '../services/compensationPolicy/contract';
 import type {
   CompensationPolicyApiError,
   CompensationPolicyAsyncState,
@@ -41,8 +42,8 @@ function draftForScope(
     ...createEmptyCompensationPolicyStateDraft(),
     operationKind: initialBaselineRequired ? 'INITIAL_BASELINE' : 'NEW_EFFECTIVE_DATE',
     effectiveFrom: scope.periodStartInclusive,
-    boundaryScope: 'FULL_EARNING',
-    roadRoundingMode: 'PER_COMPENSATION_SLICE',
+    boundaryScope: initialBaselineRequired ? INITIAL_BASELINE_DECISIONS.boundaryScope : 'FULL_EARNING',
+    roadRoundingMode: initialBaselineRequired ? INITIAL_BASELINE_DECISIONS.roadRoundingMode : 'PER_COMPENSATION_SLICE',
     reason: '',
     supersedesVersionId: null,
   };

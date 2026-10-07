@@ -398,6 +398,17 @@ function makeLegacyV1Snapshot(netOdeme: unknown = '64179.78'): TestRecord {
 }
 
 describe('BrowserPayrollStore', () => {
+  test('materializes global premium groups from legacy settings when an older V6 snapshot omits them', () => {
+    const snapshot = parseTestSnapshot(makeV2Snapshot());
+    delete snapshot.isPrimiGruplari;
+
+    const parsed = parseCurrentBrowserSnapshot(JSON.stringify(snapshot));
+
+    expect(parsed.isPrimiGruplari).toEqual([
+      { id: 'group-1', ad: '1. Grup', oran: '9.00', aktif: true },
+    ]);
+  });
+
   test('accepts and preserves the exported CALCULATED batch with a stale linked payment event', () => {
     const referenceJson = readFileSync(
       new URL('../../../tests/fixtures/session3-reference.json', import.meta.url),

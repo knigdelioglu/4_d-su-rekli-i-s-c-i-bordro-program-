@@ -28,6 +28,7 @@ import { KesintiListesi } from './components/Listeler/KesintiListesi';
 import {
   BACKUP_FORMAT_VERSION,
   BackupPayload,
+  IsPrimiGrupItem,
   PayrollPeriodInstitutionSettings,
 } from './types/payroll';
 import { tauriBridge } from './services/tauriBridge';
@@ -51,6 +52,7 @@ import { CheckCircle2, RotateCcw } from 'lucide-react';
 import { formatPayrollError } from './components/useBordroCalculationController';
 import { importConfirmedBackupFile } from './services/storage/confirmedBackupImport';
 import { describeError } from './utils/errorMessage';
+import { DEFAULT_IS_PRIMI_GRUPLARI } from './services/storage/payrollDefaults';
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
@@ -77,6 +79,7 @@ type UiDatasetFields = Omit<
       | 'compensationRevisionOverrides'
       | 'retroBatches'
       | 'retroAllocations'
+      | 'isPrimiGruplari'
     >
   >;
 
@@ -86,8 +89,65 @@ function makeBackupPayload(data: DatasetFields): PayrollStorageDto {
     exportedAt: new Date().toISOString(),
     ...data,
     kurumDegerleriMap: toPayrollBoundaryDto(data.kurumDegerleriMap),
+    isPrimiGruplari: toPayrollBoundaryDto(resolvePremiumGroups(data)),
     compensationPolicyVersions: data.compensationPolicyVersions ?? [],
   };
+}
+
+function normalizePremiumGroups(value: unknown): IsPrimiGrupItem[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  const groups: IsPrimiGrupItem[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null;
+    const candidate = item as Record<string, unknown>;
+    const rate = typeof candidate.oran === 'number'
+      ? candidate.oran
+      : typeof candidate.oran === 'string' && /^(?:\d+)(?:\.\d+)?$/.test(candidate.oran)
+        ? Number(candidate.oran)
+        : NaN;
+    if (typeof candidate.id !== 'string' || !candidate.id.trim()
+      || typeof candidate.ad !== 'string' || !candidate.ad.trim()
+      || !Number.isFinite(rate) || rate < 0 || rate > 100
+      || (candidate.aktif !== undefined && typeof candidate.aktif !== 'boolean')) return null;
+    groups.push({
+      id: candidate.id,
+      ad: candidate.ad,
+      oran: rate,
+      aktif: typeof candidate.aktif === 'boolean' ? candidate.aktif : true,
+    });
+  }
+  return groups;
+}
+
+function resolvePremiumGroups(data: DatasetFields): IsPrimiGrupItem[] {
+  const candidates: unknown[] = [data.isPrimiGruplari];
+  const versions = [...(data.compensationPolicyVersions ?? [])].sort((left, right) =>
+    left.effectiveFrom.localeCompare(right.effectiveFrom) || left.createdAt.localeCompare(right.createdAt)
+  );
+  candidates.push(...versions.reverse().map((version) => version.state.isPrimiGruplari));
+  const archived = data.legacyInstitutionSettings ?? {};
+  candidates.push(archived[data.aktifDonemId]?.isPrimiGruplari);
+  candidates.push((data.kurumDegerleriMap as Record<string, unknown>)[data.aktifDonemId]
+    && ((data.kurumDegerleriMap as Record<string, Record<string, unknown>>)[data.aktifDonemId]).isPrimiGruplari);
+  candidates.push(...Object.values(archived).map((settings) => settings.isPrimiGruplari));
+  candidates.push(...Object.values(data.kurumDegerleriMap as Record<string, Record<string, unknown>>)
+    .map((settings) => settings?.isPrimiGruplari));
+  for (const candidate of candidates) {
+    const groups = normalizePremiumGroups(candidate);
+    if (groups) return groups;
+  }
+  return DEFAULT_IS_PRIMI_GRUPLARI.map((group) => ({ ...group }));
+}
+
+function parsePremiumGroupsSetting(serialized: string | null): IsPrimiGrupItem[] | null {
+  if (serialized === null) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new Error('İş primi grupları ayarı geçerli JSON değil.');
+  }
+  return normalizePremiumGroups(value);
 }
 
 function getErrorMessage(error: unknown): string {
@@ -156,6 +216,7 @@ const EMPTY_UI_DATASET: UiDatasetFields = {
   taxOpenings: [],
   sickLeaveRecords: [],
   annualPayrollParameters: [],
+  isPrimiGruplari: DEFAULT_IS_PRIMI_GRUPLARI.map((group) => ({ ...group })),
   compensationRevisions: [],
   compensationRevisionOverrides: [],
   retroBatches: [],
@@ -250,6 +311,7 @@ export default function App() {
     compensationRevisionOverrides,
     retroBatches,
     retroAllocations,
+    isPrimiGruplari,
   } = uiDataset;
 
   useEffect(() => {
@@ -321,7 +383,7 @@ export default function App() {
         }
         if (!isLatestLoad()) return false;
 
-        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations] =
+        const [fetchedPeriods, fetchedPersonnel, fetchedAttendance, fetchedPayrolls, fetchedSettings, fetchedTaxOpenings, fetchedSickLeaves, fetchedAnnualParameters, savedActivePeriodId, fetchedRevisions, fetchedRevisionOverrides, fetchedRetroBatches, fetchedRetroAllocations, savedPremiumGroups] =
           await Promise.all([
             tauriBridge.getPeriods(),
             tauriBridge.getPersonnelList(),
@@ -336,8 +398,16 @@ export default function App() {
             tauriBridge.getCompensationRevisionOverrides(),
             tauriBridge.getRetroAdjustmentBatches(),
             tauriBridge.getRetroAdjustmentAllocations(),
+            tauriBridge.getAppSetting('is_primi_gruplari'),
           ]);
 
+        if (!isLatestLoad()) return false;
+        const configuredPremiumGroups = parsePremiumGroupsSetting(savedPremiumGroups);
+        const globalPremiumGroups = configuredPremiumGroups
+          ?? DEFAULT_IS_PRIMI_GRUPLARI.map((group) => ({ ...group }));
+        if (!configuredPremiumGroups) {
+          await tauriBridge.setAppSetting('is_primi_gruplari', JSON.stringify(toPayrollBoundaryDto(globalPremiumGroups)));
+        }
         if (!isLatestLoad()) return false;
         applyDataset(toPayrollBoundaryDto({
           donemler: fetchedPeriods,
@@ -353,6 +423,7 @@ export default function App() {
           compensationRevisionOverrides: fetchedRevisionOverrides,
           retroBatches: fetchedRetroBatches,
           retroAllocations: fetchedRetroAllocations,
+          isPrimiGruplari: globalPremiumGroups,
         }));
         setIsDataLoaded(true);
         return true;
@@ -377,6 +448,7 @@ export default function App() {
           compensationRevisionOverrides: [],
           retroBatches: [],
           retroAllocations: [],
+          isPrimiGruplari: DEFAULT_IS_PRIMI_GRUPLARI.map((group) => ({ ...group })),
         }));
       }
       setIsDataLoaded(true);
@@ -418,6 +490,16 @@ export default function App() {
     }
   };
 
+  const handleSaveIsPrimiGruplari = async (groups: IsPrimiGrupItem[]) => {
+    const normalized = normalizePremiumGroups(groups);
+    if (!normalized) throw new Error('İş primi grupları geçerli değil.');
+    const exactGroups = toPayrollBoundaryDto(normalized);
+    if (tauriBridge.isTauriAvailable()) {
+      await tauriBridge.setAppSetting('is_primi_gruplari', JSON.stringify(exactGroups));
+    }
+    updateAuthoritativePayload((current) => ({ ...current, isPrimiGruplari: exactGroups }));
+  };
+
   const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
   const compensationPolicyProps = useCompensationPolicyController(aktifDonem, loadData);
   const payrollDataset = useMemo<PayrollDatasetSnapshot>(() => {
@@ -435,6 +517,14 @@ export default function App() {
         compensationRevisionOverrides: authoritativePayload.compensationRevisionOverrides ?? [],
         retroBatches: authoritativePayload.retroBatches ?? [],
         retroAllocations: authoritativePayload.retroAllocations ?? [],
+        compensationPolicyVersions: (authoritativePayload.compensationPolicyVersions ?? []).map((version) => ({
+          ...version,
+          state: {
+            ...version.state,
+            isPrimiGruplari: (authoritativePayload.isPrimiGruplari ?? toPayrollBoundaryDto(DEFAULT_IS_PRIMI_GRUPLARI))
+              .map((group) => ({ ...group, aktif: group.aktif ?? true })),
+          },
+        })),
       };
     }
     return toPayrollBoundaryDto(EMPTY_UI_DATASET) as unknown as PayrollDatasetSnapshot;
@@ -707,11 +797,7 @@ export default function App() {
                     onSavePersonel={handleSavePersonel}
                     onDeletePersonel={handleDeletePersonel}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}
-                    isPrimiGruplari={compensationPolicyProps?.loadState.status === 'ready'
-                      ? compensationPolicyProps.loadState.value.activePolicyProjection.kind === 'ACTIVE'
-                        ? compensationPolicyProps.loadState.value.activePolicyProjection.version.state.isPrimiGruplari
-                        : undefined
-                      : undefined}
+                    isPrimiGruplari={isPrimiGruplari}
                     gunlukTabanUcret={compensationPolicyProps?.loadState.status === 'ready'
                       ? compensationPolicyProps.loadState.value.activePolicyProjection.kind === 'ACTIVE'
                         ? compensationPolicyProps.loadState.value.activePolicyProjection.version.state.gunlukTabanUcret
@@ -796,6 +882,7 @@ export default function App() {
                     aktifDonem={aktifDonem}
                     donemler={donemler}
                     personeller={personeller}
+                    isPrimiGruplari={isPrimiGruplari}
                     kurumDegerleriMap={kurumDegerleriMap}
                     puantajlar={puantajlar}
                     bordrolar={bordrolar}
@@ -813,7 +900,6 @@ export default function App() {
                       setActiveTab('puantaj');
                     }}
                     onOpenCompensationPolicy={() => setActiveTab('compensationPolicy')}
-                    compensationPolicyProps={compensationPolicyProps}
                   />
                 )}
 
@@ -857,6 +943,8 @@ export default function App() {
                     onSaveSickLeaveRecord={handleSaveSickLeaveRecord}
                     onDeleteSickLeaveRecord={handleDeleteSickLeaveRecord}
                     onOpenCompensationPolicy={() => setActiveTab('compensationPolicy')}
+                    isPrimiGruplari={isPrimiGruplari}
+                    onSaveIsPrimiGruplari={handleSaveIsPrimiGruplari}
                   />
                 )}
 

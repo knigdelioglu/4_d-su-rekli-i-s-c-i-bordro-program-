@@ -29,11 +29,9 @@ export interface CompensationPolicyFormProps {
   onSelectRoadRoundingMode(mode: RoadRoundingMode): void;
   onCopyActiveState(): void;
   canApplyPercentageIncrease: boolean;
-  groupsOnly?: boolean;
 }
 
 const inputClassName = 'min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 font-mono focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100';
-const compactGroupInputClassName = inputClassName.replace('min-h-10', 'min-h-8 sm:min-h-10').replace('px-3 py-2', 'px-2 py-1 sm:px-3 sm:py-2');
 const errorClassName = 'mt-1 text-xs font-medium text-rose-700';
 
 interface TextDecimalInputProps {
@@ -136,7 +134,6 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
   onSelectRoadRoundingMode,
   onCopyActiveState,
   canApplyPercentageIncrease,
-  groupsOnly = false,
 }) => {
   const [percentageRaw, setPercentageRaw] = useState('');
   const [percentageFeedback, setPercentageFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
@@ -144,7 +141,6 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
   const required = (field: keyof CompensationPolicyStateDraft): string | undefined => showValidation ? fieldErrors[field] : undefined;
   const effectiveDateError = showValidation ? validation.operationErrors.find((error) => error.includes('tarihi')) : undefined;
   const reasonError = showValidation ? validation.operationErrors.find((error) => error.includes('gerekçesi')) : undefined;
-  const groupListError = required('isPrimiGruplari');
   const selectedVersionId = draft.operationKind === 'SAME_DATE_CORRECTION'
     ? findScopedSameDateActiveLeaf(loadData.timeline.versions, draft.effectiveFrom)
     : null;
@@ -284,7 +280,6 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           </section>
         )}
 
-        {!groupsOnly && <>
         <section aria-labelledby="policy-money-heading" data-testid="compensation-policy-core-fields" className="space-y-3 border-t border-slate-200 pt-3">
           <div>
             <h3 id="policy-money-heading" className="text-sm font-bold text-slate-900">Ücretler ve yan haklar</h3>
@@ -300,122 +295,6 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           </div>
         </section>
 
-        </>}
-
-        {groupsOnly && <>
-        <section aria-labelledby="policy-premium-heading" className="space-y-2 border-t border-slate-200 pt-3">
-          <div>
-            <h3 id="policy-premium-heading" className="text-sm font-bold text-slate-900">İş primi grupları</h3>
-            <p className="mt-1 text-xs text-slate-600">Personel kartındaki grup ve oran aynı satırda gösterilir.</p>
-          </div>
-          {groupListError && <p id="policy-group-error" role="alert" className={errorClassName}>{groupListError}</p>}
-          {showValidation && draft.isPrimiGruplari.length === 0 && <p id="policy-groups-error" role="alert" className={errorClassName}>En az bir iş primi grubu ekleyin.</p>}
-          <table data-testid="policy-premium-group-table" className="block w-full border-collapse text-left text-sm sm:table sm:table-fixed">
-            <caption className="sr-only">İş primi grupları, oranları ve etkinlik durumları</caption>
-            <colgroup className="hidden sm:table-column-group">
-              <col className="sm:w-[55%]" />
-              <col className="sm:w-[20%]" />
-              <col className="sm:w-[13%]" />
-              <col className="sm:w-[12%]" />
-            </colgroup>
-            <thead className="hidden border-b border-slate-200 text-xs font-semibold text-slate-600 sm:table-header-group">
-              <tr>
-                <th scope="col" className="px-2 py-2">Grup adı</th>
-                <th scope="col" className="px-2 py-2">Oran (%)</th>
-                <th scope="col" className="px-2 py-2">Etkin</th>
-                <th scope="col" className="px-2 py-2 text-right">İşlemler</th>
-              </tr>
-            </thead>
-            <tbody className="block w-full sm:table-row-group">
-              {draft.isPrimiGruplari.map((group, index) => {
-                const nameInvalid = showValidation && (!group.ad.trim() || group.ad.trim() !== group.ad || groupListError?.toLocaleLowerCase('tr').includes('yinelenen'));
-                const idInvalid = showValidation && (!group.id.trim() || group.id.trim() !== group.id || groupListError?.toLocaleLowerCase('tr').includes('yinelenen'));
-                const rateInvalid = Boolean(groupListError && showValidation);
-                const updateGroup = (patch: Partial<Draft['isPrimiGruplari'][number]>) => change({
-                  isPrimiGruplari: draft.isPrimiGruplari.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
-                });
-                return (
-                  <React.Fragment key={`${group.id}:${index}`}>
-                    <tr data-testid="policy-premium-group-row" className="grid grid-cols-[minmax(0,1fr)_6rem] gap-x-2 border-b border-slate-200 px-2 py-2 sm:table-row sm:border-0 sm:px-0 sm:py-0">
-                      <td className="block min-w-0 py-1 sm:table-cell sm:px-2 sm:py-2">
-                        <label htmlFor={`policy-group-name-${index}`} className="mb-1 block text-[11px] font-medium text-slate-600 sm:sr-only">Grup adı</label>
-                        <input
-                          id={`policy-group-name-${index}`}
-                          value={group.ad}
-                          aria-invalid={Boolean(nameInvalid)}
-                          aria-describedby={groupListError ? 'policy-group-error' : undefined}
-                          className={compactGroupInputClassName.replace('font-mono', '')}
-                          disabled={disabled}
-                          onChange={(event) => updateGroup({ ad: event.target.value })}
-                        />
-                      </td>
-                      <td className="block min-w-0 py-1 sm:table-cell sm:px-2 sm:py-2">
-                        <label htmlFor={`policy-group-rate-${index}`} className="mb-1 block text-[11px] font-medium text-slate-600 sm:sr-only">Oran (%)</label>
-                        <input
-                          id={`policy-group-rate-${index}`}
-                          type="text"
-                          inputMode="decimal"
-                          autoComplete="off"
-                          spellCheck={false}
-                          value={group.oran}
-                          aria-invalid={rateInvalid}
-                          aria-describedby={groupListError ? 'policy-group-error' : undefined}
-                          className={`${compactGroupInputClassName} ${rateInvalid ? 'border-rose-500 focus:border-rose-600 focus:ring-rose-100' : ''}`}
-                          disabled={disabled}
-                          onChange={(event) => updateGroup({ oran: event.target.value })}
-                        />
-                      </td>
-                      <td className="block min-w-0 py-1 sm:table-cell sm:px-2 sm:py-2">
-                        <div className="flex items-center justify-between gap-2 sm:flex-col sm:items-start sm:justify-start">
-                          <label className="inline-flex min-h-7 items-center gap-2 text-sm font-medium text-slate-800">
-                            <input
-                              type="checkbox"
-                              checked={group.aktif}
-                              aria-label={`${group.ad || `Grup ${index + 1}`} etkin`}
-                              disabled={disabled}
-                              className="h-4 w-4 accent-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                              onChange={(event) => updateGroup({ aktif: event.target.checked })}
-                            />
-                            Etkin
-                          </label>
-                          <details open={Boolean(idInvalid)} className="min-w-0 text-[11px] text-slate-600 sm:text-xs">
-                            <summary className="cursor-pointer whitespace-nowrap rounded py-1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">Kod</summary>
-                            <label htmlFor={`policy-group-id-${index}`} className="mt-1 block font-semibold text-slate-700">Personel eşleştirme kodu</label>
-                            <input
-                              id={`policy-group-id-${index}`}
-                              value={group.id}
-                              aria-invalid={Boolean(idInvalid)}
-                              aria-describedby={groupListError ? 'policy-group-error' : undefined}
-                              className={`${compactGroupInputClassName.replace('font-mono', '')} mt-1`}
-                              disabled={disabled}
-                              onChange={(event) => updateGroup({ id: event.target.value })}
-                            />
-                            <p className="mt-1">Personel kartında seçilen grupla eşleşir.</p>
-                          </details>
-                        </div>
-                      </td>
-                      <td className="flex items-center justify-end py-2 sm:table-cell sm:px-2 sm:text-right">
-                        <button
-                          type="button"
-                          className="rounded px-2 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-rose-600"
-                          aria-label={`${group.ad || `Grup ${index + 1}`} grubunu kaldır`}
-                          disabled={disabled}
-                          onClick={() => change({ isPrimiGruplari: draft.isPrimiGruplari.filter((_, itemIndex) => itemIndex !== index) })}
-                        >
-                          Kaldır
-                        </button>
-                      </td>
-                    </tr>
-                  </React.Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-          <button type="button" className="min-h-8 rounded px-2 py-1 text-xs font-semibold text-indigo-800 underline underline-offset-2 hover:bg-indigo-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600" disabled={disabled} onClick={() => change({ isPrimiGruplari: [...draft.isPrimiGruplari, { id: '', ad: '', oran: '', aktif: false }] })}>Grup ekle</button>
-        </section>
-        </>}
-
-        {!groupsOnly && <>
         <details className="border-t border-slate-200 pt-3">
           <summary className="cursor-pointer py-1 text-sm font-semibold text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
             Gece ve tatil çalışması · gece %{formatCompensationPolicyDecimalForUser(draft.geceCalismaPrimiYuzde)} · tatil %{formatCompensationPolicyDecimalForUser(draft.geceCalismaTatiliPrimiYuzde)}
@@ -460,8 +339,6 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
           )}
           {!canApplyPercentageIncrease && <p className="mt-2 text-xs text-slate-500">Tutarlar geçerli olduğunda kullanılabilir.</p>}
         </details>
-        </>}
-
         <details id="policy-calculation-details" className="border-t border-slate-200 pt-3">
           <summary id="policy-calculation-details-summary" className="flex cursor-pointer flex-wrap items-center justify-between gap-2 rounded-md py-2 text-sm font-semibold text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
             <span>2. Hesaplama ayrıntıları</span>
