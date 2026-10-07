@@ -103,6 +103,41 @@ async function openMissingBaselineUiTab(): Promise<Page> {
 }
 
 describe('browser CompensationPolicyApi IndexedDB integration', () => {
+  test('loads the archived September compensation values exactly without writing a policy', async () => {
+    const page = await openPolicyApiTab();
+    const loaded = await page.evaluate(() =>
+      window.__compensationPolicyBrowserApiTest.loadArchivedSeptemberPrefill());
+    expect(loaded.result.ok).toBe(true);
+    if (loaded.result.ok === false) throw new Error(loaded.result.error.message);
+    expect(loaded.result.value.initialBaselineRequired).toBe(true);
+    expect(loaded.result.value.timeline.versions).toEqual([]);
+    expect(loaded.result.value.nonAuthoritativePrefill.kind).toBe('AVAILABLE');
+    if (loaded.result.value.nonAuthoritativePrefill.kind !== 'AVAILABLE') {
+      throw new Error('The archived September settings were not returned as a draft.');
+    }
+    expect(loaded.result.value.nonAuthoritativePrefill.sourcePeriodId).toBe('2026-09');
+    expect(loaded.result.value.nonAuthoritativePrefill.state).toMatchObject({
+      gunlukTabanUcret: '2616.26',
+      gunlukYemek: '300.75',
+      birlestirilmisSosyalYardim: '5089.7',
+      gunlukVasitaYol: '128.93',
+      giyimYardimi: '269.7',
+      hizmetZammiBirimi: '24.67',
+      isPrimiYuzde: '0',
+      geceCalismaPrimiYuzde: '0',
+      geceCalismaTatiliPrimiYuzde: '0',
+      ekOdeme: '0',
+      digerGelirVarsayilan: '0',
+      isPrimiGruplari: [
+        { id: '1. Grup', ad: '1. Grup', oran: '9', aktif: true },
+        { id: '2. Grup', ad: '2. Grup', oran: '8', aktif: true },
+        { id: '3. Grup', ad: '3. Grup', oran: '7', aktif: true },
+        { id: 'grup_1791176163314', ad: 'UX Deneme Grubu', oran: '6', aktif: true },
+      ],
+    });
+    expect(loaded.beforeRevision).toBe(loaded.afterRevision);
+  });
+
   testWithTimeout('single and batch NORMAL UI routes navigate to policy without saving when baseline is missing', async () => {
     const singlePage = await openMissingBaselineUiTab();
     const personId = await singlePage.locator('[data-testid="missing-baseline-ui-app"]').getAttribute('data-person-id');

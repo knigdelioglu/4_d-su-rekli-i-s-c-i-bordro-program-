@@ -6,6 +6,7 @@ import type {
   CompensationPolicyDraftValidation,
   CompensationPolicyLoadData,
   CompensationPolicyPageProps,
+  CompensationPolicyStateWire,
   CompensationPolicyOperationResult,
   CompensationPolicyPreviewData,
   CompensationPolicySaveReceipt,
@@ -14,6 +15,7 @@ import type {
 } from '../services/compensationPolicy/contract';
 import { getCompensationPolicyApi } from '../services/compensationPolicy/api';
 import {
+  compensationPolicyStateToDraft,
   createEmptyCompensationPolicyStateDraft,
   validateCompensationPolicyDraft,
 } from '../components/Settings/compensationPolicyDecimal';
@@ -44,6 +46,73 @@ function draftForScope(
     reason: '',
     supersedesVersionId: null,
   };
+}
+
+const requiredPrefillFields = [
+  'gunlukTabanUcret',
+  'gunlukYemek',
+  'birlestirilmisSosyalYardim',
+  'gunlukVasitaYol',
+  'giyimYardimi',
+  'hizmetZammiBirimi',
+  'geceCalismaPrimiYuzde',
+  'geceCalismaTatiliPrimiYuzde',
+] as const;
+const nullablePrefillFields = ['isPrimiYuzde', 'ekOdeme', 'digerGelirVarsayilan'] as const;
+
+function isCompletePrefill(
+  state: Partial<CompensationPolicyStateWire>
+): boolean {
+  const source = state as Record<string, unknown>;
+  if (!requiredPrefillFields.every((field) => typeof source[field] === 'string')) return false;
+  if (!nullablePrefillFields.every((field) =>
+    Object.prototype.hasOwnProperty.call(source, field) &&
+    (source[field] === null || typeof source[field] === 'string')
+  )) return false;
+  const groups = source.isPrimiGruplari;
+  return Array.isArray(groups) && groups.length > 0 && groups.every((group) =>
+    Boolean(group) &&
+    typeof group === 'object' &&
+    typeof (group as Record<string, unknown>).id === 'string' &&
+    typeof (group as Record<string, unknown>).ad === 'string' &&
+    typeof (group as Record<string, unknown>).oran === 'string' &&
+    typeof (group as Record<string, unknown>).aktif === 'boolean'
+  );
+}
+
+/** Builds the first editable draft from the best verified source without writing policy authority. */
+export function draftForCompensationPolicyLoad(
+  scope: CompensationPolicyPageProps['scope'],
+  loaded: CompensationPolicyLoadData
+): Draft {
+  const draft = draftForScope(scope, loaded.initialBaselineRequired);
+  const state = loaded.activePolicyProjection.kind === 'ACTIVE'
+    ? loaded.activePolicyProjection.version.state
+    : loaded.initialBaselineRequired && loaded.nonAuthoritativePrefill.kind === 'AVAILABLE'
+      ? loaded.nonAuthoritativePrefill.state
+      : null;
+  if (!state) return draft;
+  if (
+    loaded.activePolicyProjection.kind !== 'ACTIVE' &&
+    !isCompletePrefill(state)
+  ) return draft;
+
+  try {
+    const activeVersion = loaded.activePolicyProjection.kind === 'ACTIVE'
+      ? loaded.activePolicyProjection.version
+      : null;
+    return {
+      ...draft,
+      ...compensationPolicyStateToDraft(state),
+      ...(activeVersion ? {
+        boundaryScope: activeVersion.boundaryScope,
+        roadRoundingMode: activeVersion.roadRoundingMode,
+      } : {}),
+    };
+  } catch {
+    // An unreadable prefill remains a blank draft; never invent a financial value.
+    return draft;
+  }
 }
 
 function unavailable(message: string): CompensationPolicyApiError {
@@ -119,7 +188,7 @@ export function useCompensationPolicyController(
     setLoadState({ status: 'loading' });
     void load().then((loaded) => {
       if (!loaded || loadedScopeKey.current !== scopeKey) return;
-      const nextDraft = draftForScope(scope, loaded.initialBaselineRequired);
+      const nextDraft = draftForCompensationPolicyLoad(scope, loaded);
       setDraft(nextDraft);
       setDraftValidation(validateCompensationPolicyDraft(nextDraft));
     });
@@ -157,7 +226,7 @@ export function useCompensationPolicyController(
     ) {
       setSaveState({
         status: 'error',
-        error: { code: 'INVALID_REQUEST', message: 'Başlangıç baseline tarihi sayfada ayrıca onaylanmalıdır.' },
+        error: { code: 'INVALID_REQUEST', message: 'Başlangıç ücreti ekrandan ayrıca onaylanmalıdır.' },
       });
       return;
     }

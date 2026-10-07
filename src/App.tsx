@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
+import { AppViewportFrame } from './components/AppViewportFrame';
 import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
 import { CompensationPolicyPage } from './components/Settings/CompensationPolicyPage';
 import {
@@ -567,8 +568,10 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
-      {isDataLoaded && (
+    <>
+      <AppViewportFrame
+        viewportBounded={activeTab === 'compensationPolicy'}
+        header={isDataLoaded && (
         <TopBar
           donemler={donemler}
           aktifDonemId={aktifDonemId}
@@ -581,10 +584,8 @@ export default function App() {
           isSidebarOpen={isSidebarOpen}
           onToggleSidebar={() => setIsSidebarOpen((current) => !current)}
         />
-      )}
-
-      <div className="flex min-h-0 flex-1">
-        {isDataLoaded && (
+        )}
+        navigation={isDataLoaded && (
           <Sidebar
             activeTab={activeTab}
             activeKesintiType={activeKesintiType}
@@ -598,9 +599,7 @@ export default function App() {
             onClose={() => setIsSidebarOpen(false)}
           />
         )}
-
-        <main className="min-w-0 flex-1 px-4 py-4 sm:px-5 sm:py-5 lg:px-6">
-          <div className="mx-auto w-full max-w-[1600px]">
+      >
             {globalSuccess && (
               <div
                 role="status"
@@ -886,9 +885,7 @@ export default function App() {
                 )}
               </>
             )}
-          </div>
-        </main>
-      </div>
+      </AppViewportFrame>
 
       {pendingBackupFile && (
         <div
@@ -977,6 +974,6 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

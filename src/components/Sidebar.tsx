@@ -183,7 +183,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <aside
         id="main-sidebar"
         aria-label="Ana navigasyon"
-        className={`fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col border-r border-slate-200 bg-white shadow-xl transition-transform duration-200 ease-out lg:static lg:z-auto lg:flex lg:h-auto lg:translate-x-0 lg:shadow-none ${
+        className={`fixed inset-y-0 left-0 z-50 flex w-60 shrink-0 flex-col overflow-hidden border-r border-slate-200 bg-white shadow-xl transition-transform duration-200 ease-out lg:static lg:z-auto lg:flex lg:h-full lg:min-h-0 lg:translate-x-0 lg:shadow-none ${
           isOpen ? 'translate-x-0' : 'hidden -translate-x-full'
         }`}
       >
@@ -200,7 +200,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
 
-          <nav className="flex-1 space-y-1 overflow-y-auto p-3" aria-label="Ana menü">
+          <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3" aria-label="Ana menü">
             <div className="px-3 pb-1 pt-1 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-400">
               Dönem
             </div>

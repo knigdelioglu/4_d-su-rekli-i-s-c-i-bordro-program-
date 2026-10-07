@@ -568,54 +568,64 @@ impl CompensationPolicyService {
         settings: &serde_json::Value,
         period_id: &str,
     ) -> CompensationPolicyPrefill {
-        let decimal = |field: &str| {
-            settings.get(field).and_then(|value| match value {
-                serde_json::Value::String(value) => Some(value.clone()),
-                serde_json::Value::Number(value) => Some(value.to_string()),
-                _ => None,
-            })
-        };
-        let money_fields = [
+        let required_decimal_fields = [
             "gunlukTabanUcret",
             "gunlukYemek",
             "birlestirilmisSosyalYardim",
             "gunlukVasitaYol",
             "giyimYardimi",
             "hizmetZammiBirimi",
-            "isPrimiYuzde",
             "geceCalismaPrimiYuzde",
             "geceCalismaTatiliPrimiYuzde",
-            "ekOdeme",
-            "digerGelirVarsayilan",
         ];
-        if !money_fields
+        let nullable_decimal_fields = ["isPrimiYuzde", "ekOdeme", "digerGelirVarsayilan"];
+        let incomplete = || CompensationPolicyPrefill::Unavailable {
+            reason: "INCOMPLETE_SETTINGS".into(),
+        };
+        if required_decimal_fields
             .iter()
-            .any(|field| settings.get(*field).is_some())
+            .any(|field| !settings.get(*field).is_some_and(serde_json::Value::is_string))
         {
-            return CompensationPolicyPrefill::Unavailable {
-                reason: "NO_LEGACY_SETTINGS".into(),
-            };
+            return incomplete();
         }
-        let groups = match settings.get("isPrimiGruplari") {
-            None | Some(serde_json::Value::Null) => None,
-            Some(value) => match serde_json::from_value::<Vec<IsPrimiGrupItem>>(value.clone()) {
-                Ok(groups) => Some(
-                    groups
-                        .into_iter()
-                        .map(|group| CompensationPolicyGroup {
-                            id: group.id,
-                            ad: group.ad,
-                            oran: group.oran,
-                            aktif: group.aktif,
-                        })
-                        .collect(),
-                ),
-                Err(_) => {
-                    return CompensationPolicyPrefill::Unavailable {
-                        reason: "INCOMPLETE_SETTINGS".into(),
-                    }
-                }
-            },
+        if nullable_decimal_fields.iter().any(|field| {
+            !settings.get(*field).is_some_and(|value| {
+                value.is_null() || value.is_string()
+            })
+        }) {
+            return incomplete();
+        }
+        let Some(group_values) = settings.get("isPrimiGruplari").and_then(serde_json::Value::as_array) else {
+            return incomplete();
+        };
+        if group_values.is_empty() || group_values.iter().any(|value| {
+            let Some(group) = value.as_object() else { return true; };
+            !group.get("id").is_some_and(serde_json::Value::is_string)
+                || !group.get("ad").is_some_and(serde_json::Value::is_string)
+                || !group.get("oran").is_some_and(serde_json::Value::is_string)
+                || !group.get("aktif").is_some_and(serde_json::Value::is_boolean)
+        }) {
+            return incomplete();
+        }
+        let groups = match serde_json::from_value::<Vec<IsPrimiGrupItem>>(serde_json::Value::Array(group_values.clone())) {
+            Ok(groups) => Some(
+                groups
+                    .into_iter()
+                    .map(|group| CompensationPolicyGroup {
+                        id: group.id,
+                        ad: group.ad,
+                        oran: group.oran,
+                        aktif: group.aktif,
+                    })
+                    .collect(),
+            ),
+            Err(_) => return incomplete(),
+        };
+        let decimal = |field: &str| {
+            settings
+                .get(field)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
         };
         let state = CompensationPolicyPrefillState {
             gunlukTabanUcret: decimal("gunlukTabanUcret"),
@@ -1699,4 +1709,72 @@ fn map_save_error(error: DomainError) -> CompensationPolicyApiError {
         }
     }
     map_domain_error(error)
+}
+
+#[cfg(test)]
+mod compensation_prefill_tests {
+    use super::{CompensationPolicyPrefill, CompensationPolicyService};
+    use serde_json::json;
+
+    fn archived_settings() -> serde_json::Value {
+        json!({
+            "gunlukTabanUcret": "2616.26",
+            "gunlukYemek": "300.75",
+            "birlestirilmisSosyalYardim": "5089.7",
+            "gunlukVasitaYol": "128.93",
+            "giyimYardimi": "269.7",
+            "hizmetZammiBirimi": "24.67",
+            "isPrimiYuzde": "0",
+            "isPrimiGruplari": [
+                { "id": "1. Grup", "ad": "1. Grup", "oran": "9", "aktif": true },
+                { "id": "2. Grup", "ad": "2. Grup", "oran": "8", "aktif": true },
+                { "id": "3. Grup", "ad": "3. Grup", "oran": "7", "aktif": true },
+                { "id": "grup_1791176163314", "ad": "UX Deneme Grubu", "oran": "6", "aktif": true }
+            ],
+            "geceCalismaPrimiYuzde": "0",
+            "geceCalismaTatiliPrimiYuzde": "0",
+            "ekOdeme": "0",
+            "digerGelirVarsayilan": "0"
+        })
+    }
+
+    #[test]
+    fn keeps_archived_decimal_text_nulls_and_all_premium_groups() {
+        let prefill = CompensationPolicyService::legacy_settings_to_policy_prefill_only(
+            &archived_settings(),
+            "2026-09",
+        );
+        let CompensationPolicyPrefill::Available { state, sourcePeriodId, .. } = prefill else {
+            panic!("complete archive settings should be available as a draft");
+        };
+        assert_eq!(sourcePeriodId, "2026-09");
+        assert_eq!(state.gunlukTabanUcret.as_deref(), Some("2616.26"));
+        assert_eq!(state.birlestirilmisSosyalYardim.as_deref(), Some("5089.7"));
+        assert_eq!(state.isPrimiYuzde.as_deref(), Some("0"));
+        assert_eq!(state.ekOdeme.as_deref(), Some("0"));
+        assert_eq!(state.digerGelirVarsayilan.as_deref(), Some("0"));
+        let groups = state.isPrimiGruplari.expect("groups should be carried");
+        assert_eq!(groups.len(), 4);
+        assert_eq!(groups[3].id, "grup_1791176163314");
+        assert_eq!(groups[3].ad, "UX Deneme Grubu");
+        assert_eq!(groups[3].oran.to_string(), "6");
+        assert!(groups.iter().all(|group| group.aktif));
+    }
+
+    #[test]
+    fn refuses_partial_or_numeric_archive_values_instead_of_inventing_defaults() {
+        let mut partial = archived_settings();
+        partial.as_object_mut().unwrap().remove("ekOdeme");
+        assert!(matches!(
+            CompensationPolicyService::legacy_settings_to_policy_prefill_only(&partial, "2026-09"),
+            CompensationPolicyPrefill::Unavailable { reason } if reason == "INCOMPLETE_SETTINGS"
+        ));
+
+        let mut numeric = archived_settings();
+        numeric["gunlukTabanUcret"] = json!(2616.26);
+        assert!(matches!(
+            CompensationPolicyService::legacy_settings_to_policy_prefill_only(&numeric, "2026-09"),
+            CompensationPolicyPrefill::Unavailable { reason } if reason == "INCOMPLETE_SETTINGS"
+        ));
+    }
 }

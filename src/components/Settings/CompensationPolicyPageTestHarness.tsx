@@ -10,8 +10,12 @@ import type {
   CompensationPolicyVersionWire,
   CompensationPolicyWriteOperation,
 } from '../../services/compensationPolicy/contract';
+import { AppViewportFrame } from '../AppViewportFrame';
 import { CompensationPolicyPage } from './CompensationPolicyPage';
+import { TopBar } from '../TopBar';
+import { Sidebar } from '../Sidebar';
 import { compensationPolicyStateToDraft, createEmptyCompensationPolicyStateDraft, validateCompensationPolicyDraft } from './compensationPolicyDecimal';
+import { createBordroDonemi } from '../../utils/payrollPresentation';
 
 const scope: CompensationPolicyPageProps['scope'] = {
   institutionScope: 'CURRENT_INSTITUTION',
@@ -21,7 +25,7 @@ const scope: CompensationPolicyPageProps['scope'] = {
   projectionDate: '2026-09-30',
 };
 
-const initialState: CompensationPolicyStateWire = {
+const precisionState: CompensationPolicyStateWire = {
   gunlukTabanUcret: '9007199254740993.12',
   gunlukYemek: '50.00',
   birlestirilmisSosyalYardim: '20.00',
@@ -59,7 +63,7 @@ const makeVersion = (
   supersedesVersionId,
 });
 
-function initialLoad(): CompensationPolicyLoadData {
+function initialLoad(state: CompensationPolicyStateWire = eylulState): CompensationPolicyLoadData {
   return {
     scope,
     timeline: { versions: [], resolvedSegments: [], resolution: 'MISSING_START_POLICY' },
@@ -70,14 +74,34 @@ function initialLoad(): CompensationPolicyLoadData {
       authority: 'PREFILL_ONLY',
       source: 'LEGACY_INSTITUTION_SETTINGS',
       sourcePeriodId: '2026-09',
-      state: initialState,
+      state,
     },
   };
 }
 
+const eylulState: CompensationPolicyStateWire = {
+  gunlukTabanUcret: '2616.26',
+  gunlukYemek: '300.75',
+  birlestirilmisSosyalYardim: '5089.7',
+  gunlukVasitaYol: '128.93',
+  giyimYardimi: '269.7',
+  hizmetZammiBirimi: '24.67',
+  isPrimiYuzde: '0',
+  isPrimiGruplari: [
+    { id: '1. Grup', ad: '1. Grup', oran: '9', aktif: true },
+    { id: '2. Grup', ad: '2. Grup', oran: '8', aktif: true },
+    { id: '3. Grup', ad: '3. Grup', oran: '7', aktif: true },
+    { id: 'grup_1791176163314', ad: 'UX Deneme Grubu', oran: '6', aktif: true },
+  ],
+  geceCalismaPrimiYuzde: '0',
+  geceCalismaTatiliPrimiYuzde: '0',
+  ekOdeme: '0',
+  digerGelirVarsayilan: '0',
+};
+
 function existingLoad(): CompensationPolicyLoadData {
-  const root = makeVersion('root-1', initialState, null);
-  const leaf = makeVersion('leaf-2', initialState, 'root-1', '2026-09-15', 'Aynı tarihli son düzeltme');
+  const root = makeVersion('root-1', precisionState, null);
+  const leaf = makeVersion('leaf-2', precisionState, 'root-1', '2026-09-15', 'Aynı tarihli son düzeltme');
   return {
     scope,
     timeline: {
@@ -98,25 +122,88 @@ function existingLoad(): CompensationPolicyLoadData {
   };
 }
 
-function draftForBaseline(): CompensationPolicyPageProps['draft'] {
+function draftForBaseline(data: CompensationPolicyLoadData = initialLoad()): CompensationPolicyPageProps['draft'] {
+  const state = data.activePolicyProjection.kind === 'ACTIVE'
+    ? data.activePolicyProjection.version.state
+    : data.nonAuthoritativePrefill.kind === 'AVAILABLE'
+      ? data.nonAuthoritativePrefill.state
+      : null;
   return {
     ...createEmptyCompensationPolicyStateDraft(),
+    ...(state ? compensationPolicyStateToDraft(state) : {}),
     operationKind: 'INITIAL_BASELINE',
     effectiveFrom: '2026-09-15',
     boundaryScope: 'FULL_EARNING',
     roadRoundingMode: 'PER_COMPENSATION_SLICE',
-    reason: 'Başlangıç ücret politikası',
+    reason: '',
     supersedesVersionId: null,
   };
 }
 
-function draftForExisting(): CompensationPolicyPageProps['draft'] {
+function roadOnlyPolicyLoad(): CompensationPolicyLoadData {
+  const version = makeVersion('saved-road-only', precisionState, null, '2026-09-15', 'Kayıtlı yol politikası', 'ROAD_ONLY', 'PERIOD_TOTAL');
   return {
-    ...compensationPolicyStateToDraft(initialState),
+    scope,
+    timeline: {
+      versions: [version],
+      resolvedSegments: [{
+        versionId: version.id,
+        startDate: scope.periodStartInclusive,
+        endDate: scope.periodEndInclusive,
+        state: version.state,
+        boundaryScope: version.boundaryScope,
+        roadRoundingMode: version.roadRoundingMode,
+      }],
+      resolution: 'RESOLVED',
+    },
+    activePolicyProjection: { kind: 'ACTIVE', asOfDate: scope.projectionDate, version },
+    initialBaselineRequired: false,
+    nonAuthoritativePrefill: { kind: 'UNAVAILABLE', reason: 'NO_LEGACY_SETTINGS' },
+  };
+}
+
+function correctionPreferenceLoad(): CompensationPolicyLoadData {
+  const root = makeVersion('preference-root', precisionState, null, '2026-09-15', 'Başlangıç kaydı');
+  const targetState = { ...eylulState, gunlukTabanUcret: '3141.59', gunlukVasitaYol: '175.25' };
+  const target = makeVersion('preference-target', targetState, null, '2026-10-01', 'Yol politikası düzeltmesi', 'ROAD_ONLY', 'PERIOD_TOTAL');
+  return {
+    scope,
+    timeline: {
+      versions: [root, target],
+      resolvedSegments: [
+        {
+          versionId: root.id,
+          startDate: '2026-09-15',
+          endDate: '2026-09-30',
+          state: root.state,
+          boundaryScope: root.boundaryScope,
+          roadRoundingMode: root.roadRoundingMode,
+        },
+        {
+          versionId: target.id,
+          startDate: '2026-10-01',
+          endDate: scope.periodEndInclusive,
+          state: target.state,
+          boundaryScope: target.boundaryScope,
+          roadRoundingMode: target.roadRoundingMode,
+        },
+      ],
+      resolution: 'RESOLVED',
+    },
+    activePolicyProjection: { kind: 'ACTIVE', asOfDate: '2026-09-30', version: root },
+    initialBaselineRequired: false,
+    nonAuthoritativePrefill: { kind: 'UNAVAILABLE', reason: 'NO_LEGACY_SETTINGS' },
+  };
+}
+
+function draftForExisting(data: CompensationPolicyLoadData = existingLoad()): CompensationPolicyPageProps['draft'] {
+  const activeVersion = data.activePolicyProjection.kind === 'ACTIVE' ? data.activePolicyProjection.version : null;
+  return {
+    ...compensationPolicyStateToDraft(activeVersion?.state ?? precisionState),
     operationKind: 'NEW_EFFECTIVE_DATE',
     effectiveFrom: '2026-10-01',
-    boundaryScope: 'FULL_EARNING',
-    roadRoundingMode: 'PER_COMPENSATION_SLICE',
+    boundaryScope: activeVersion?.boundaryScope ?? 'FULL_EARNING',
+    roadRoundingMode: activeVersion?.roadRoundingMode ?? 'PER_COMPENSATION_SLICE',
     reason: 'Yeni dönem ücret değişikliği',
     supersedesVersionId: null,
   };
@@ -199,6 +286,10 @@ declare global {
       events: Array<{ type: string; value?: unknown }>;
       setScenario(scenario: string): void;
       useExistingTimeline(): void;
+      usePersistedRoadOnlyPolicy(): void;
+      useCorrectionPreferenceTimeline(): void;
+      useEylulPrefill(): void;
+      usePrecisionPrefill(): void;
       setLoadIdle(): void;
     };
   }
@@ -224,11 +315,60 @@ const Harness: React.FC = () => {
     setScenario,
     useExistingTimeline() {
       const data = existingLoad();
-      const nextDraft = draftForExisting();
+      const nextDraft = draftForExisting(data);
       setLoadState({ status: 'ready', value: data });
       setDraft(nextDraft);
       setDraftValidation(validateCompensationPolicyDraft(nextDraft));
       setInitialBaselineConfirmationRequired(false);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    usePersistedRoadOnlyPolicy() {
+      const data = roadOnlyPolicyLoad();
+      const nextDraft = draftForExisting(data);
+      setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(false);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    useCorrectionPreferenceTimeline() {
+      const data = correctionPreferenceLoad();
+      const nextDraft = draftForExisting(data);
+      setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(false);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    useEylulPrefill() {
+      const data: CompensationPolicyLoadData = {
+        ...initialLoad(),
+        nonAuthoritativePrefill: {
+          kind: 'AVAILABLE',
+          authority: 'PREFILL_ONLY',
+          source: 'LEGACY_INSTITUTION_SETTINGS',
+          sourcePeriodId: '2026-09',
+          state: eylulState,
+        },
+      };
+      const nextDraft = draftForBaseline(data);
+      setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(true);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    usePrecisionPrefill() {
+      const data = initialLoad(precisionState);
+      const nextDraft = draftForBaseline(data);
+      setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(true);
       setPreviewState({ status: 'idle' });
       setSaveState({ status: 'idle' });
     },
@@ -250,7 +390,12 @@ const Harness: React.FC = () => {
       } else if (scenario === 'loaderror') {
         setLoadState({ status: 'error', error: { code: 'UNAVAILABLE', message: 'Test ortamı yükleme hatası.' } });
       } else {
-        setLoadState({ status: 'ready', value: initialLoad() });
+        const data = initialLoad();
+        const nextDraft = draftForBaseline(data);
+        setLoadState({ status: 'ready', value: data });
+        setDraft(nextDraft);
+        setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+        setInitialBaselineConfirmationRequired(true);
       }
     }, 20);
   };
@@ -376,4 +521,40 @@ const Harness: React.FC = () => {
   />;
 };
 
-createRoot(rootElement).render(<Harness />);
+const testPeriod = createBordroDonemi(2026, 9, 2026, 10);
+const AppTestFrame: React.FC<React.PropsWithChildren> = ({ children }) => (
+  <AppViewportFrame
+    viewportBounded
+    header={(
+      <TopBar
+        donemler={[testPeriod]}
+        aktifDonemId={testPeriod.id}
+        onSelectDonem={() => undefined}
+        onExportBackup={() => undefined}
+        onImportFileSelected={() => undefined}
+        onResetSampleData={() => undefined}
+        onOpenNoticeSummary={() => undefined}
+        isSidebarOpen={false}
+        onToggleSidebar={() => undefined}
+      />
+    )}
+    navigation={(
+      <Sidebar
+        activeTab="parametrelar"
+        activeKesintiType="sendika"
+        activeParametreSection="gelir"
+        activePayrollView="normal"
+        onTabChange={() => undefined}
+        onKesintiTypeChange={() => undefined}
+        onParametreSectionChange={() => undefined}
+        onPayrollViewChange={() => undefined}
+        isOpen={false}
+        onClose={() => undefined}
+      />
+    )}
+  >
+    {children}
+  </AppViewportFrame>
+);
+
+createRoot(rootElement).render(<AppTestFrame><Harness /></AppTestFrame>);

@@ -48,6 +48,67 @@ function resetBrowserPayrollDatabase(): Promise<void> {
   });
 }
 
+async function loadArchivedSeptemberPrefill() {
+  await resetBrowserPayrollDatabase();
+  const data = getInitialDataset();
+  const period = createBordroDonemi(2026, 9, 2026, 10);
+  const neighboringSettings = data.kurumDegerleriMap[data.aktifDonemId];
+  if (!neighboringSettings) throw new Error('Browser archive fixture has no base institution settings.');
+  const archivedSettings = {
+    ...neighboringSettings,
+    donemId: period.id,
+    gunlukTabanUcret: '2616.26',
+    gunlukYemek: '300.75',
+    birlestirilmisSosyalYardim: '5089.7',
+    gunlukVasitaYol: '128.93',
+    giyimYardimi: '269.7',
+    hizmetZammiBirimi: '24.67',
+    isPrimiYuzde: '0',
+    isPrimiGruplari: [
+      { id: '1. Grup', ad: '1. Grup', oran: '9', aktif: true },
+      { id: '2. Grup', ad: '2. Grup', oran: '8', aktif: true },
+      { id: '3. Grup', ad: '3. Grup', oran: '7', aktif: true },
+      { id: 'grup_1791176163314', ad: 'UX Deneme Grubu', oran: '6', aktif: true },
+    ],
+    geceCalismaPrimiYuzde: '0',
+    geceCalismaTatiliPrimiYuzde: '0',
+    ekOdeme: '0',
+    digerGelirVarsayilan: '0',
+  };
+  const payload = toPayrollBoundaryDto({
+    backupVersion: BACKUP_FORMAT_VERSION,
+    exportedAt: '2026-10-07T00:00:00.000Z',
+    ...data,
+    aktifDonemId: period.id,
+    donemler: [...data.donemler, period],
+    compensationPolicyVersions: [],
+    compensationRevisions: [],
+    compensationRevisionOverrides: [],
+    retroBatches: [],
+    retroAllocations: [],
+    legacyInstitutionSettings: { [period.id]: archivedSettings },
+  }) as unknown as PayrollStorageDto;
+  await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+
+  const scope: Scope = {
+    institutionScope: 'CURRENT_INSTITUTION',
+    periodId: period.id,
+    periodStartInclusive: period.baslangicTarihi,
+    periodEndInclusive: period.bitisTarihi,
+    projectionDate: period.baslangicTarihi,
+  };
+  const before = await browserPayrollStore.loadSnapshot();
+  if (!before) throw new Error('Archived September fixture did not persist to the isolated browser store.');
+  const result = await getCompensationPolicyApi().load({ scope });
+  const after = await browserPayrollStore.loadSnapshot();
+  return {
+    scope,
+    result,
+    beforeRevision: before.revision,
+    afterRevision: after?.revision ?? null,
+  };
+}
+
 async function prepareBaseline() {
   await resetBrowserPayrollDatabase();
   const data = getInitialDataset();
@@ -1273,6 +1334,7 @@ declare global {
       runV5RestoreBaselineGate(): Promise<BrowserAcceptanceV5Result>;
     };
     __compensationPolicyBrowserApiTest: {
+      loadArchivedSeptemberPrefill(): ReturnType<typeof loadArchivedSeptemberPrefill>;
       prepareBaseline(): ReturnType<typeof prepareBaseline>;
       prepareRetroBaseline(): ReturnType<typeof prepareRetroBaseline>;
       previewBaseline(periodId: string): ReturnType<typeof previewBaseline>;
@@ -1308,6 +1370,7 @@ window.__compensationAcceptanceBrowserApp = {
 };
 
 window.__compensationPolicyBrowserApiTest = {
+  loadArchivedSeptemberPrefill,
   prepareBaseline,
   prepareRetroBaseline,
   previewBaseline,

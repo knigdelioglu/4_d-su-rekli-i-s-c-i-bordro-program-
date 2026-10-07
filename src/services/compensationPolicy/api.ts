@@ -139,7 +139,7 @@ export function legacySettingsToPolicyPrefillOnly(
     | undefined;
   if (!settings) return { kind: 'UNAVAILABLE', reason: 'NO_LEGACY_SETTINGS' };
 
-  const required = [
+  const requiredDecimalFields = [
     'gunlukTabanUcret',
     'gunlukYemek',
     'birlestirilmisSosyalYardim',
@@ -149,39 +149,36 @@ export function legacySettingsToPolicyPrefillOnly(
     'geceCalismaPrimiYuzde',
     'geceCalismaTatiliPrimiYuzde',
   ] as const;
+  const nullableDecimalFields = ['isPrimiYuzde', 'ekOdeme', 'digerGelirVarsayilan'] as const;
+  const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(settings, key);
+  if (requiredDecimalFields.some((field) => !hasOwn(field) || typeof settings[field] !== 'string')) {
+    return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
+  }
+  if (nullableDecimalFields.some((field) =>
+    !hasOwn(field) || (settings[field] !== null && typeof settings[field] !== 'string')
+  )) {
+    return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
+  }
   const state: Partial<CompensationPolicyStateWire> = {};
-  for (const field of required) {
-    const value = settings[field];
-    if (value === undefined) continue;
-    if (typeof value !== 'string') {
-      return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
-    }
-    (state as Record<string, unknown>)[field] = value;
+  for (const field of [...requiredDecimalFields, ...nullableDecimalFields]) {
+    (state as Record<string, unknown>)[field] = settings[field];
   }
-  for (const field of ['isPrimiYuzde', 'ekOdeme', 'digerGelirVarsayilan'] as const) {
-    const value = settings[field];
-    if (value === undefined) continue;
-    if (value !== null && typeof value !== 'string') {
-      return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
-    }
-    (state as Record<string, unknown>)[field] = value;
+  if (!Array.isArray(settings.isPrimiGruplari) || settings.isPrimiGruplari.length === 0 || settings.isPrimiGruplari.some((group) => {
+    if (!group || typeof group !== 'object') return true;
+    const value = group as Record<string, unknown>;
+    return typeof value.id !== 'string' || typeof value.ad !== 'string' || typeof value.oran !== 'string' || typeof value.aktif !== 'boolean';
+  })) {
+    return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
   }
-  if (settings.isPrimiGruplari !== undefined) {
-    if (!Array.isArray(settings.isPrimiGruplari) || settings.isPrimiGruplari.some((group) =>
-      !group || typeof group !== 'object' || typeof (group as Record<string, unknown>).oran !== 'string'
-    )) {
-      return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
-    }
-    state.isPrimiGruplari = settings.isPrimiGruplari.map((group) => {
-      const value = group as Record<string, unknown>;
-      return {
-        id: String(value.id ?? ''),
-        ad: String(value.ad ?? ''),
-        oran: value.oran as string,
-        aktif: typeof value.aktif === 'boolean' ? value.aktif : true,
-      };
-    });
-  }
+  state.isPrimiGruplari = settings.isPrimiGruplari.map((group) => {
+    const value = group as Record<string, unknown>;
+    return {
+      id: value.id as string,
+      ad: value.ad as string,
+      oran: value.oran as string,
+      aktif: value.aktif as boolean,
+    };
+  });
   return {
     kind: 'AVAILABLE',
     authority: 'PREFILL_ONLY',

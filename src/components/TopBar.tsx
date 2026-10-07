@@ -75,14 +75,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           </div>
 
           {/* Active period selector and compact storage tools */}
-          <div className="flex w-full items-center justify-end gap-2 md:w-auto">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/90 px-2.5 py-1">
+          <div className="flex w-full min-w-0 items-center justify-end gap-2 md:w-auto">
+            <div className="flex min-w-0 flex-1 items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/90 px-2.5 py-1 md:flex-none">
               <Calendar className="h-4 w-4 shrink-0 text-indigo-400" />
               <select
                 data-testid="active-period-selector"
                 value={aktifDonemId}
                 onChange={(e) => onSelectDonem(e.target.value)}
-                className="cursor-pointer border-none bg-transparent text-xs font-bold text-white focus:ring-0"
+                className="w-full min-w-0 cursor-pointer truncate border-none bg-transparent text-xs font-bold text-white focus:ring-0"
               >
                 {donemler.length === 0 && (
                   <option value="" className="bg-slate-900 text-white">
@@ -97,7 +97,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               </select>
             </div>
 
-            <div className="flex items-center gap-1 border-l border-slate-800 pl-2">
+            <div className="flex shrink-0 items-center gap-1 border-l border-slate-800 pl-2">
               <button
                 type="button"
                 data-testid="notice-summary-trigger"

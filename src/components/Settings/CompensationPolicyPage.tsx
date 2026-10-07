@@ -47,54 +47,52 @@ function titleCaseApiError(error: CompensationPolicyApiError): { title: string; 
   switch (error.code) {
     case 'QUARANTINED_POLICY':
       return {
-        title: 'Kapsam içindeki bir ücret politikası okunamıyor.',
-        message: 'Bu kayıt doğrulanana kadar ücret geçmişi önizlenemez veya değiştirilemez.',
-        detail: `${error.policyVersion.effectiveFrom} tarihli kayıt · ${error.policyVersion.id} · ${quarantineReasonLabel(error.policyVersion.reason)}`,
+        title: 'Ücret geçmişindeki bir kayıt doğrulanamıyor.',
+        message: 'Kayıt incelenene kadar bu dönem önizlenemez veya değiştirilemez.',
+        detail: `${error.policyVersion.effectiveFrom} tarihli kayıt · ${quarantineReasonLabel(error.policyVersion.reason)}`,
       };
     case 'ROAD_ONLY_STATE_CONFLICT':
       return {
         title: 'Yalnız yol tutarı değişikliği doğrulanamadı.',
         message: error.reason === 'NON_ROAD_FIELDS_DIFFER'
-          ? 'ROAD_ONLY seçildiğinde yol dışındaki tüm ücret alanlarının önceki tam durumla aynı kalması gerekir.'
-          : 'Bu değişiklik sonraki ROAD_ONLY sürümlerinin yol dışı alan eşitliğini bozuyor. Sonraki kayıtlar otomatik değiştirilmedi.',
-        detail: error.conflictingVersionId ? `Çakışan kayıt: ${error.conflictingVersionId} · önerilen tarih: ${error.proposedEffectiveFrom}` : `Önerilen tarih: ${error.proposedEffectiveFrom}`,
+          ? 'Yalnız yol tutarı seçildiğinde diğer ücret kalemleri önceki kayıtla aynı kalmalıdır.'
+          : 'Bu tarih, daha sonraki yol tutarı değişiklikleriyle çakışıyor. Sonraki kayıtlar değiştirilmedi.',
+        detail: `Önerilen geçerlilik tarihi: ${error.proposedEffectiveFrom}`,
       };
     case 'FINALIZED_BLOCKER':
       return {
         title: 'Kesinleştirilmiş bordro bu değişikliği engelliyor.',
-        message: 'Ücret politikası kaydedilmedi. Kesinleşmiş bordro burada yeniden hesaplanmaz; geçmiş düzeltmesi için ayrı retro işlemi gerekir.',
+        message: 'Ücret politikası kaydedilmedi. Kesinleşmiş bordro burada yeniden hesaplanmaz; geçmiş düzeltmesi için geçmiş farkı işlemi gerekir.',
         detail: `${error.blockers.length} kesinleştirilmiş bordro engel oluşturuyor.`,
       };
     case 'RETRO_BLOCKER':
       return {
-        title: 'Kesinleşmiş veya settlement uygulanmış retro kayıt değişikliği engelliyor.',
-        message: 'Ücret politikası kaydedilmedi. Engelli retro batch veya ödeme olaylarını önce yetkili retro akışında çözümleyin.',
-        detail: error.blockers.map((blocker) => `${blocker.batchId}: ${blocker.blockers.map(retroBlockerLabel).join(', ')}`).join(' · '),
+        title: 'Geçmiş farkı kaydı bu değişikliği engelliyor.',
+        message: 'Ücret değişikliği kaydedilmedi. Engeli geçmiş farkı kayıtlarında çözümleyip yeniden önizleyin.',
+        detail: error.blockers.map((blocker) => blocker.blockers.map(retroBlockerLabel).join(', ')).join(' · '),
       };
     case 'CONFLICT':
       return {
-        title: 'Timeline önizlemeden sonra değişti.',
-        message: 'Bu kaydetme yapılmadı. Yetkili ücret politikasını yeniden yükleyin ve etkileri tekrar önizleyin.',
-        detail: error.message,
+        title: 'Önizlemeden sonra ücret geçmişi değişti.',
+        message: 'Bu kayıt yapılmadı. Ücret geçmişini yenileyip etkileri tekrar önizleyin.',
       };
     case 'UNSUPPORTED_HISTORICAL_REPLAY':
       return {
         title: 'Bu tarih için olağan ücret politikası değişikliği uygulanamaz.',
-        message: 'Geçmiş bordro hakkı normal ileri tarihli timeline düzeltmesiyle değiştirilmez. Geçmiş düzeltmesi için retro işlemi gerekir.',
-        detail: error.message,
+        message: 'Geçmiş bordro hakkı ileri tarihli ücret değişikliğiyle düzeltilemez. Geçmiş farkı işlemini kullanın.',
       };
     case 'INVALID_REQUEST':
     case 'INVALID_POLICY':
-      return { title: 'Ücret politikası doğrulanamadı.', message: 'Formdaki alanları ve değişiklik kapsamını gözden geçirin.', detail: error.message };
+      return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.' };
     case 'UNAUTHORIZED':
-      return { title: 'Bu işlemi yapma yetkisi doğrulanamadı.', message: 'Ayarları yeniden yükleyin veya yetkili kullanıcıyla giriş yapın.', detail: error.message };
+      return { title: 'Bu işlemi yapma yetkisi doğrulanamadı.', message: 'Ayarları yenileyin veya yetkili kullanıcıyla giriş yapın.' };
     case 'NOT_FOUND':
-      return { title: 'Bordro hizmet dönemi bulunamadı.', message: 'Dönem seçimini yenileyip tekrar deneyin.', detail: error.message };
+      return { title: 'Bordro dönemi bulunamadı.', message: 'Dönem seçimini yenileyip tekrar deneyin.' };
     case 'CURRENT_ENGINE_SNAPSHOT_REQUIRED':
-      return { title: 'Güncel hesaplama kaynağı eksik.', message: 'Ücret politikası değişikliği bu bordro durumunda uygulanamadı.', detail: error.message };
+      return { title: 'Güncel bordro bilgisi eksik.', message: 'Ücret değişikliği bu bordro durumunda uygulanamadı.' };
     case 'PERSISTENCE':
     case 'UNAVAILABLE':
-      return { title: 'Ücret politikası işlemi tamamlanamadı.', message: 'Bağlantıyı veya kaydetme durumunu kontrol edip yeniden deneyin.', detail: error.message };
+      return { title: 'Ücret değişikliği tamamlanamadı.', message: 'Bağlantıyı veya kaydetme durumunu kontrol edip yeniden deneyin.' };
   }
 }
 
@@ -103,21 +101,32 @@ function quarantineReasonLabel(reason: Extract<CompensationPolicyApiError, { cod
     case 'MISSING_BOUNDARY_SCOPE': return 'değişiklik kapsamı eksik';
     case 'MISSING_ROAD_ROUNDING_MODE': return 'yol yuvarlama biçimi eksik';
     case 'UNKNOWN_BOUNDARY_METADATA': return 'tanınmayan kapsam bilgisi';
-    case 'INVALID_POLICY_STATE': return 'tam ücret durumu geçersiz';
-    case 'INVALID_POLICY_GRAPH': return 'aynı tarihli sürüm bağlantısı geçersiz';
+    case 'INVALID_POLICY_STATE': return 'kayıtlı ücret bilgileri geçersiz';
+    case 'INVALID_POLICY_GRAPH': return 'aynı tarihli kayıt bağlantısı geçersiz';
   }
 }
 
 function boundaryLabel(scope: CompensationBoundaryScope): string {
-  return scope === 'ROAD_ONLY' ? 'Yalnız yol tutarı (ROAD_ONLY)' : 'Tam kazanç değişikliği (FULL_EARNING)';
+  return scope === 'ROAD_ONLY' ? 'Yalnız yol tutarı' : 'Tüm ücret kalemleri';
 }
 
 function roundingLabel(mode: RoadRoundingMode): string {
   return mode === 'PER_COMPENSATION_SLICE' ? 'Her tam kazanç diliminde ayrı' : 'Bütün dönemi tek kez';
 }
 
+function periodName(periodId: string): string {
+  const [year, month] = periodId.split('-');
+  const monthNames = ['Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+  const index = Number(month) - 1;
+  return Number.isInteger(Number(year)) && monthNames[index] ? `${monthNames[index]} ${year}` : periodId;
+}
+
+function shortDate(date: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date.split('-').reverse().join('.') : date;
+}
+
 function moneyStateEntries(state: CompensationPolicyStateWire): Array<[string, string, string]> {
-  const userValue = (value: string | null): string => value === null ? 'Yok (null)' : formatCompensationPolicyDecimalForUser(value);
+  const userValue = (value: string | null): string => value === null ? 'Uygulanmıyor' : formatCompensationPolicyDecimalForUser(value);
   return [
     ['Günlük taban ücret', userValue(state.gunlukTabanUcret), 'TL'],
     ['Günlük yemek', userValue(state.gunlukYemek), 'TL'],
@@ -175,20 +184,20 @@ function operationFieldLabels(fields: CompensationPolicyDirectEffect['changedFie
 }
 
 function windowEndLabel(throughInclusive: string | null, nextDate: string | null): string {
-  if (throughInclusive) return `${throughInclusive} tarihine kadar (dahil)`;
-  if (nextDate) return `${nextDate} tarihinden önceki güne kadar`;
+  if (throughInclusive) return `${shortDate(throughInclusive)} tarihine kadar (dahil)`;
+  if (nextDate) return `${shortDate(nextDate)} tarihinden önceki güne kadar`;
   return 'Dönem kapsamı içinde sonraki sınır görünmüyor';
 }
 
 const DirectEffectDetails: React.FC<{ effect: CompensationPolicyDirectEffect }> = ({ effect }) => {
   const earningKind = effect.earningRoundingWindow.kind === 'PERIOD_BASELINE'
-    ? 'Dönem başlangıç baseline yuvarlama sınırı'
+    ? 'Dönem başlangıcındaki yuvarlama sınırı'
     : effect.earningRoundingWindow.kind === 'OPENS_FULL_EARNING_SLICE'
       ? 'Bu sürüm yeni kazanç yuvarlama dilimi açıyor'
       : 'Yalnız yol güncelleniyor; mevcut kazanç yuvarlama dilimi sürüyor';
   return (
     <article className="space-y-2 border-t border-slate-200 pt-3 first:border-t-0 first:pt-0">
-      <h4 className="text-sm font-bold text-slate-900">{effect.effectiveFrom} tarihinde doğrudan ücret etkisi</h4>
+      <h4 className="text-sm font-bold text-slate-900">{shortDate(effect.effectiveFrom)} tarihinde doğrudan ücret etkisi</h4>
       <dl className="grid gap-2 sm:grid-cols-2">
         <div className="rounded-sm bg-slate-50 p-2">
           <dt className="text-xs font-semibold text-slate-700">Ücret durumu penceresi</dt>
@@ -211,7 +220,7 @@ const DirectEffectDetails: React.FC<{ effect: CompensationPolicyDirectEffect }> 
 };
 
 function payrollReferenceLabel(reference: CompensationPolicyPayrollReference): string {
-  return `${reference.periodId} · bordro ${reference.payrollId} · tahakkuk ${reference.accrualId}`;
+  return `${periodName(reference.periodId)} dönemindeki bordro kaydı`;
 }
 
 function dependencyLabel(kind: CompensationPolicyPreviewData['dependencyClosureEffects'][number]['kind']): string {
@@ -225,7 +234,7 @@ function dependencyLabel(kind: CompensationPolicyPreviewData['dependencyClosureE
 
 function dependencyActionLabel(action: CompensationPolicyPreviewData['dependencyClosureEffects'][number]['action']): string {
   switch (action) {
-    case 'CALCULATED_TO_STALE': return 'Hesaplandı → yeniden hesaplanmalı';
+    case 'CALCULATED_TO_STALE': return 'Hesaplandı → yeniden hesaplanması gerekecek';
     case 'ALREADY_STALE': return 'Zaten yeniden hesaplanmalı';
     case 'FINALIZED_BLOCKER': return 'Kesinleştirilmiş · engel';
     case 'NO_MUTATION': return 'Kayıt değiştirilmeyecek';
@@ -239,29 +248,29 @@ function payrollStatusLabel(status: CompensationPolicyPreviewData['dependencyClo
     case 'FINALIZED': return 'Kesinleştirildi';
     case 'DRAFT': return 'Taslak';
   }
-  return status;
+  return 'Durum bilinmiyor';
 }
 
 function retroBlockerLabel(reason: string): string {
   switch (reason) {
-    case 'FINALIZED_BATCH': return 'batch kesinleştirilmiş';
-    case 'SETTLED_BATCH': return 'settlement uygulanmış';
+    case 'FINALIZED_BATCH': return 'geçmiş farkı kaydı kesinleştirilmiş';
+    case 'SETTLED_BATCH': return 'ödeme tamamlanmış';
     case 'FINALIZED_SOURCE': return 'kaynak bordro kesinleştirilmiş';
-    case 'FINALIZED_PAYMENT_EVENT': return 'ödeme olayı kesinleştirilmiş';
-    default: return reason;
+    case 'FINALIZED_PAYMENT_EVENT': return 'ödeme kaydı kesinleştirilmiş';
+    default: return 'çözümlenmemiş bir engel var';
   }
 }
 
 const PreviewPanel: React.FC<{ data: CompensationPolicyPreviewData }> = ({ data }) => (
   <section aria-labelledby="policy-preview-heading" className="space-y-4 border-t border-slate-200 pt-4">
     <div>
-      <h3 id="policy-preview-heading" className="text-base font-bold text-slate-900">Önizleme etkileri</h3>
+      <h3 id="policy-preview-heading" className="text-base font-bold text-slate-900">3. Etkileri inceleyin</h3>
       <p className="mt-1 text-xs text-slate-600">Ücret tutarı penceresi ile kazanç yuvarlama penceresi ayrıdır. Doğrudan dönemler ve bordro bağımlılıkları ayrı listelenir.</p>
     </div>
     {data.finalizedBlockers.length > 0 && (
       <div role="alert" className={errorBoxClass}>
         <h4 className="font-bold">Kesinleştirilmiş bordro değişikliği engelliyor</h4>
-        <p className="mt-1">Politika kaydedilemez. Kesinleşmiş bordro burada yeniden hesaplanmaz; geçmiş düzeltmesi için retro işlemi gerekir.</p>
+        <p className="mt-1">Politika kaydedilemez. Kesinleşmiş bordro burada yeniden hesaplanmaz; geçmiş düzeltmesi için geçmiş farkı işlemi gerekir.</p>
         <ul className="mt-2 list-disc pl-5 text-xs">
           {data.finalizedBlockers.map((reference) => <li key={`${reference.payrollId}:${reference.accrualId}`}>{payrollReferenceLabel(reference)}</li>)}
         </ul>
@@ -270,14 +279,14 @@ const PreviewPanel: React.FC<{ data: CompensationPolicyPreviewData }> = ({ data 
 
     {data.retroEffects.length > 0 && (
       <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
-        <h4 className="font-bold text-indigo-950">Etkilenen retro kayıtları</h4>
-        <p className="mt-1 text-xs text-indigo-900">Politika kaydedilirse bu hesaplanmış, henüz settlement uygulanmamış kayıtlar ve bağlı ödeme olayları eski durum olarak korunup STALE yapılır.</p>
+        <h4 className="font-bold text-indigo-950">Etkilenen geçmiş farkı kayıtları</h4>
+        <p className="mt-1 text-xs text-indigo-900">Kaydetme tamamlanırsa hesaplanmış ve ödemesi tamamlanmamış kayıtlar korunur, yeniden hesaplanması gereken duruma alınır.</p>
         <ul className="mt-2 divide-y divide-indigo-100 text-xs text-indigo-950">
           {data.retroEffects.map((effect) => (
             <li key={effect.batchId} className="py-2">
-              <span className="font-semibold">Batch {effect.batchId}</span>
-              <span className="block">Kaynak dönemler: {effect.sourcePeriodIds.join(', ') || '—'} · bağlı ödeme olayı: {effect.linkedPaymentEventIds.length}</span>
-              <span className="block">Durum: {effect.action === 'STALE_ELIGIBLE' ? 'Politika kaydıyla birlikte STALE yapılacak' : effect.blockers.map(retroBlockerLabel).join(', ')}</span>
+              <span className="font-semibold">Geçmiş farkı kaydı</span>
+              <span className="block">Kaynak dönemler: {effect.sourcePeriodIds.map(periodName).join(', ') || '—'} · bağlı ödeme kaydı: {effect.linkedPaymentEventIds.length}</span>
+              <span className="block">{effect.action === 'STALE_ELIGIBLE' ? 'Kaydetme tamamlanırsa yeniden hesaplanması gerekecek.' : effect.blockers.map(retroBlockerLabel).join(', ')}</span>
             </li>
           ))}
         </ul>
@@ -303,82 +312,38 @@ const PreviewPanel: React.FC<{ data: CompensationPolicyPreviewData }> = ({ data 
             </li>
           ))}
         </ul>
-      ) : <p className="text-sm text-slate-600">Transitif bordro bağımlılığı gösterilmedi.</p>}
+      ) : <p className="text-sm text-slate-600">Bağlı başka bordro etkisi gösterilmedi.</p>}
     </div>
   </section>
 );
 
 const ScopedHistory: React.FC<{ data: CompensationPolicyLoadData }> = ({ data }) => {
-  const projection = data.activePolicyProjection;
+  if (data.timeline.versions.length === 0) return null;
   return (
-    <section aria-labelledby="policy-history-heading" className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h2 id="policy-history-heading" className="text-lg font-bold text-slate-900">Bu hizmet dönemi kapsamındaki ücret geçmişi</h2>
-          <p className="mt-1 text-xs text-slate-600">Dönem: {data.scope.periodId} · {data.scope.periodStartInclusive}–{data.scope.periodEndInclusive} · as-of: {data.scope.projectionDate}</p>
-        </div>
-        <p className="text-xs text-slate-500">Bu görünüm yalnız kapsamlı sürümlerdir; kurumun tüm geçmiş timeline'ı değildir.</p>
-      </div>
-
-      {data.timeline.resolution === 'MISSING_START_POLICY' && (
-        <div className={warningBoxClass} role="status">
-          <strong>Dönem başlangıç tarihini kapsayan ücret politikası bulunamadı.</strong>
-          <span className="block mt-1">Yeni ücret kaynağı eksik. Önce kullanıcı onaylı tam durumlu başlangıç politikası oluşturulmalıdır.</span>
-        </div>
-      )}
-
-      <div className="border-l-2 border-slate-200 pl-3">
-        <h3 className="text-sm font-bold text-slate-900">As-of günündeki etkin ücret politikası</h3>
-        {projection.kind === 'ACTIVE' ? (
-          <div className="mt-2 space-y-2">
-            <p className="text-xs text-slate-700">{projection.asOfDate} · geçerlilik başlangıcı {projection.version.effectiveFrom} · {boundaryLabel(projection.version.boundaryScope)} · {roundingLabel(projection.version.roadRoundingMode)}</p>
-            <PolicyStateDetails state={projection.version.state} />
-          </div>
-        ) : <p className="mt-1 text-sm text-slate-600">{projection.asOfDate} tarihinde etkin politika yok.</p>}
-      </div>
-
-      <div className="space-y-2">
-        <h3 className="text-sm font-bold text-slate-900">Scoped sürümler</h3>
-        {data.timeline.versions.length === 0 ? (
-          <p className="text-sm text-slate-600">Bu dönem kapsamına giren kayıtlı sürüm yok. İlk kullanımda bu boş timeline normaldir; başlangıç sürümü otomatik oluşturulmaz.</p>
-        ) : (
-          <ol className="divide-y divide-slate-200 border-y border-slate-200">
-            {data.timeline.versions.map((version) => (
-              <li key={version.id} className="py-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div>
-                    <h4 className="text-sm font-semibold text-slate-900">{version.effectiveFrom} · {version.reason}</h4>
-                    <p className="mt-1 text-xs text-slate-600">{boundaryLabel(version.boundaryScope)} · yol yuvarlama: {roundingLabel(version.roadRoundingMode)}</p>
-                    {version.supersedesVersionId && <p className="mt-1 text-xs text-slate-500">Aynı tarihli önceki sürümü düzeltiyor.</p>}
-                  </div>
-                  <span className="text-xs text-slate-500">{version.createdAt}</span>
-                </div>
-                <details className="mt-2">
-                  <summary className="cursor-pointer text-xs font-semibold text-indigo-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">Tam ücret durumunu göster</summary>
-                  <div className="mt-2"><PolicyStateDetails state={version.state} /></div>
-                </details>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
-
-      <div className="space-y-2 border-t border-slate-200 pt-3">
-        <h3 className="text-sm font-bold text-slate-900">Çözümlenmiş dönem dilimleri</h3>
-        {data.timeline.resolvedSegments.length === 0 ? (
-          <p className="text-sm text-slate-600">Bu dönem için ücret dilimi çözümlenmedi.</p>
-        ) : (
-          <ul className="space-y-1 text-xs text-slate-700">
-            {data.timeline.resolvedSegments.map((segment, index) => (
-              <li key={`${segment.versionId}:${index}`} className="flex flex-wrap justify-between gap-2">
-                <span>{segment.startDate}–{segment.endDate} · {boundaryLabel(segment.boundaryScope)} · yol {roundingLabel(segment.roadRoundingMode)}</span>
-                <span className="font-mono text-slate-500">{segment.versionId}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </section>
+    <details className="border-t border-slate-200 pt-3">
+      <summary className="cursor-pointer text-sm font-semibold text-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+        Bu dönem için geçerli ücret kayıtları ({data.timeline.versions.length})
+      </summary>
+      <p className="mt-1 text-xs text-slate-600">Liste, seçili dönem başlangıcında geçerli kayıtla bu dönem içindeki değişiklikleri kapsar.</p>
+      <ol className="mt-2 divide-y divide-slate-200">
+        {data.timeline.versions.map((version) => (
+          <li key={version.id} className="py-2">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">{shortDate(version.effectiveFrom)} · {version.reason}</h3>
+                <p className="mt-1 text-xs text-slate-600">{boundaryLabel(version.boundaryScope)} · yol tutarı: {roundingLabel(version.roadRoundingMode)}</p>
+                {version.supersedesVersionId && <p className="mt-1 text-xs text-slate-500">Aynı tarihteki önceki kayıt düzeltildi.</p>}
+              </div>
+              <time className="text-xs text-slate-500" dateTime={version.createdAt}>{version.createdAt.slice(0, 10)}</time>
+            </div>
+            <details className="mt-2">
+              <summary className="cursor-pointer text-xs font-semibold text-indigo-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">Ücret ayrıntılarını göster</summary>
+              <div className="mt-2"><PolicyStateDetails state={version.state} /></div>
+            </details>
+          </li>
+        ))}
+      </ol>
+    </details>
   );
 };
 
@@ -389,9 +354,32 @@ function mergedValidation(local: CompensationPolicyDraftValidation, upstream: Co
   return { draft: operationErrors.length === 0 ? 'VALID' : 'INVALID', fullState: local.fullState, operationErrors };
 }
 
+function policySelectionSource(
+  load: CompensationPolicyLoadData | null,
+  draft: Draft
+): CompensationPolicyLoadData['timeline']['versions'][number] | null {
+  if (!load || draft.operationKind === 'INITIAL_BASELINE') return null;
+  if (draft.operationKind === 'SAME_DATE_CORRECTION') {
+    const targetId = findScopedSameDateActiveLeaf(load.timeline.versions, draft.effectiveFrom);
+    return targetId ? load.timeline.versions.find((version) => version.id === targetId) ?? null : null;
+  }
+  return load.activePolicyProjection.kind === 'ACTIVE' ? load.activePolicyProjection.version : null;
+}
+
 export const CompensationPolicyPage: React.FC<Props> = (props) => {
-  const [scopeSelection, setScopeSelection] = useState<Props['draft']['boundaryScope'] | null>(null);
-  const [roundingSelection, setRoundingSelection] = useState<Props['draft']['roadRoundingMode'] | null>(null);
+  const succeededLoad = props.saveState.status === 'succeeded' ? props.saveState.authoritativeLoad : null;
+  const readyLoad = props.loadState.status === 'ready' ? props.loadState.value : null;
+  const candidateAuthoritativeLoad = succeededLoad && stableValue(succeededLoad.scope) === stableValue(props.scope)
+    ? succeededLoad
+    : readyLoad ?? succeededLoad;
+  const scopeMatches = Boolean(candidateAuthoritativeLoad && stableValue(candidateAuthoritativeLoad.scope) === stableValue(props.scope));
+  const authoritativeLoad = scopeMatches ? candidateAuthoritativeLoad : null;
+  const selectionSource = policySelectionSource(authoritativeLoad, props.draft);
+  const selectionSourceKey = selectionSource
+    ? stableValue({ id: selectionSource.id, boundaryScope: selectionSource.boundaryScope, roadRoundingMode: selectionSource.roadRoundingMode, state: selectionSource.state })
+    : '';
+  const [scopeSelection, setScopeSelection] = useState<Props['draft']['boundaryScope'] | null>(selectionSource?.boundaryScope ?? null);
+  const [roundingSelection, setRoundingSelection] = useState<Props['draft']['roadRoundingMode'] | null>(selectionSource?.roadRoundingMode ?? null);
   const [baselineConfirmation, setBaselineConfirmation] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
   const [callbackError, setCallbackError] = useState<string | null>(null);
@@ -405,13 +393,6 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const saveInFlightRef = useRef(false);
   const validationSummaryRef = useRef<HTMLDivElement>(null);
 
-  const succeededLoad = props.saveState.status === 'succeeded' ? props.saveState.authoritativeLoad : null;
-  const readyLoad = props.loadState.status === 'ready' ? props.loadState.value : null;
-  const candidateAuthoritativeLoad = succeededLoad && stableValue(succeededLoad.scope) === stableValue(props.scope)
-    ? succeededLoad
-    : readyLoad ?? succeededLoad;
-  const scopeMatches = Boolean(candidateAuthoritativeLoad && stableValue(candidateAuthoritativeLoad.scope) === stableValue(props.scope));
-  const authoritativeLoad = scopeMatches ? candidateAuthoritativeLoad : null;
   const localValidation = useMemo(() => validateCompensationPolicyDraft(props.draft), [props.draft]);
   const validation = mergedValidation(localValidation, props.draftValidation);
   const operationResult = useMemo(() => draftToCompensationPolicyOperation(props.draft), [props.draft]);
@@ -423,14 +404,19 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
     : null;
   const correctionTargetFresh = props.draft.operationKind !== 'SAME_DATE_CORRECTION'
     || (sameDateLeaf !== null && props.draft.supersedesVersionId === sameDateLeaf);
-  const scopeSelectionFresh = scopeSelection !== null && scopeSelection === props.draft.boundaryScope;
-  const roundingSelectionFresh = roundingSelection !== null && roundingSelection === props.draft.roadRoundingMode;
+  const visibleScopeSelection = scopeSelection ?? selectionSource?.boundaryScope ?? null;
+  const visibleRoundingSelection = roundingSelection ?? selectionSource?.roadRoundingMode ?? null;
+  const scopeSelectionFresh = visibleScopeSelection !== null && visibleScopeSelection === props.draft.boundaryScope;
+  const roundingSelectionFresh = visibleRoundingSelection !== null && visibleRoundingSelection === props.draft.roadRoundingMode;
   const initialBaselineAllowed = Boolean(authoritativeLoad?.initialBaselineRequired && props.draft.operationKind === 'INITIAL_BASELINE');
-  const baselineConfirmed = !initialBaselineAllowed || baselineConfirmationMatches;
   const isSaving = props.saveState.status === 'saving' || props.saveState.status === 'reloading-authoritative' || savePending;
   const operationUnchangedSinceSuccess = props.saveState.status === 'succeeded'
     && (savedOperationFingerprint === null || savedOperationFingerprint === currentFingerprint);
 
+  useEffect(() => {
+    setScopeSelection(selectionSource?.boundaryScope ?? null);
+    setRoundingSelection(selectionSource?.roadRoundingMode ?? null);
+  }, [selectionSourceKey]);
   useEffect(() => {
     if (props.loadState.status !== 'idle' && props.loadState.status !== 'error') setLoadPending(false);
   }, [props.loadState.status]);
@@ -452,13 +438,27 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   }, [props.loadState.status]);
 
   const changeDraft = (next: Draft) => {
-    if (next.operationKind !== props.draft.operationKind) {
-      setScopeSelection(null);
-      setRoundingSelection(null);
+    const operationChanged = next.operationKind !== props.draft.operationKind;
+    const correctionTargetChanged = next.operationKind === 'SAME_DATE_CORRECTION'
+      && (next.effectiveFrom !== props.draft.effectiveFrom || next.supersedesVersionId !== props.draft.supersedesVersionId);
+    if (operationChanged || correctionTargetChanged) {
+      const nextSource = policySelectionSource(authoritativeLoad, next);
+      setScopeSelection(nextSource?.boundaryScope ?? null);
+      setRoundingSelection(nextSource?.roadRoundingMode ?? null);
+      if (nextSource && next.operationKind !== 'INITIAL_BASELINE') {
+        next = {
+          ...next,
+          ...(operationChanged || next.operationKind === 'SAME_DATE_CORRECTION'
+            ? compensationPolicyStateToDraft(nextSource.state)
+            : {}),
+          boundaryScope: nextSource.boundaryScope,
+          roadRoundingMode: nextSource.roadRoundingMode,
+          supersedesVersionId: next.operationKind === 'SAME_DATE_CORRECTION' ? nextSource.id : null,
+        };
+      }
     }
     setBaselineConfirmation(null);
     setCallbackError(null);
-    setShowValidation(false);
     props.onDraftChange(next);
     props.onValidateDraft(next);
   };
@@ -483,17 +483,16 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
     validation.operationErrors.forEach(add);
     if (!scopeSelectionFresh) add('Ücret değişikliği kapsamını açıkça seçin.');
     if (!roundingSelectionFresh) add('Yol tutarı yuvarlama biçimini açıkça seçin.');
-    if (!correctionTargetFresh) add('Aynı tarih düzeltmesi için mevcut scoped timeline içindeki etkin leaf hedefi eşleşmiyor. Yetkili timeline yüklemesini yenileyin.');
-    if (props.draft.operationKind === 'INITIAL_BASELINE' && !initialBaselineAllowed) add('Başlangıç politikası yalnız yetkili yükleme başlangıç policy’si gerektiğini bildirdiğinde oluşturulabilir.');
-    if (initialBaselineAllowed && !baselineConfirmationMatches) add('Başlangıç ücret politikası için bu tam durum ve geçerlilik tarihini ayrıca onaylayın.');
+    if (!correctionTargetFresh) add('Aynı tarih düzeltmesi için kayıtlı etkin ücret bulunamadı. Ücret geçmişini yenileyin.');
+    if (props.draft.operationKind === 'INITIAL_BASELINE' && !initialBaselineAllowed) add('Başlangıç ücreti yalnız yeni bir başlangıç kaydı gerektiğinde oluşturulabilir.');
     return messages;
-  }, [validation, scopeSelectionFresh, roundingSelectionFresh, correctionTargetFresh, props.draft.operationKind, initialBaselineAllowed, baselineConfirmationMatches]);
+  }, [validation, scopeSelectionFresh, roundingSelectionFresh, correctionTargetFresh, props.draft.operationKind, initialBaselineAllowed]);
 
   const formReady = validation.draft === 'VALID'
     && scopeSelectionFresh
     && roundingSelectionFresh
     && correctionTargetFresh
-    && (props.draft.operationKind !== 'INITIAL_BASELINE' || (initialBaselineAllowed && baselineConfirmationMatches));
+    && (props.draft.operationKind !== 'INITIAL_BASELINE' || initialBaselineAllowed);
   const activePreview = props.previewState.status === 'ready' ? props.previewState.value : null;
   const currentScopeFingerprint = stableValue(props.scope);
   const previewRequestFresh = currentFingerprint !== null
@@ -504,6 +503,15 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const finalizedBlockers = activePreview?.finalizedBlockers ?? [];
   const previewBusy = props.previewState.status === 'loading' || previewPending;
   const loadBusy = props.loadState.status === 'loading' || loadPending;
+  const canConfirmBaseline = initialBaselineAllowed
+    && validation.fullState.status === 'VALID'
+    && scopeSelectionFresh
+    && roundingSelectionFresh
+    && correctionTargetFresh
+    && previewFresh
+    && finalizedBlockers.length === 0
+    && !isSaving
+    && !previewBusy;
   const canPreview = Boolean(authoritativeLoad)
     && !isSaving
     && !previewBusy
@@ -512,17 +520,38 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const canSave = Boolean(activePreview)
     && previewFresh
     && formReady
+    && (props.draft.operationKind !== 'INITIAL_BASELINE' || baselineConfirmationMatches)
     && finalizedBlockers.length === 0
     && !isSaving
     && !previewBusy
     && !operationUnchangedSinceSuccess
     && props.saveState.status !== 'persisted-reload-failed';
+  const saveHint = finalizedBlockers.length > 0
+    ? 'Kesinleştirilmiş bordro engeli çözülmeden bu değişiklik kaydedilemez.'
+    : !formReady
+      ? 'Tutarları tamamlayın ve Hesaplama ayrıntıları içindeki seçimleri yapın.'
+      : !previewFresh
+        ? 'Kaydetmeden önce bu taslağın etkilerini önizleyin.'
+        : null;
 
   const validateAndFocus = (): boolean => {
     props.onValidateDraft(props.draft);
     if (formReady && currentOperation) return true;
     setShowValidation(true);
-    requestAnimationFrame(() => validationSummaryRef.current?.focus());
+    if (!scopeSelectionFresh || !roundingSelectionFresh) {
+      const targetId = !scopeSelectionFresh ? 'policy-boundary-scope-full' : 'policy-road-rounding-slice';
+      requestAnimationFrame(() => {
+        const details = document.getElementById('policy-calculation-details') as HTMLDetailsElement | null;
+        if (details) details.open = true;
+        requestAnimationFrame(() => {
+          const target = document.getElementById(targetId);
+          target?.scrollIntoView({ block: 'center' });
+          target?.focus();
+        });
+      });
+    } else {
+      requestAnimationFrame(() => validationSummaryRef.current?.focus());
+    }
     return false;
   };
 
@@ -625,9 +654,13 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   };
 
   const handleConfirmBaseline = () => {
-    if (!initialBaselineAllowed || validation.fullState.status !== 'VALID' || !scopeSelectionFresh || !roundingSelectionFresh || !currentOperation) {
-      setShowValidation(true);
-      requestAnimationFrame(() => validationSummaryRef.current?.focus());
+    if (!canConfirmBaseline || !currentOperation) {
+      if (!formReady) {
+        setShowValidation(true);
+        requestAnimationFrame(() => validationSummaryRef.current?.focus());
+      } else if (!previewFresh) {
+        setCallbackError('Önce güncel etkileri inceleyin.');
+      }
       return;
     }
     props.onConfirmInitialBaseline(currentOperation.effectiveFrom);
@@ -640,23 +673,22 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
     props.onCancelInitialBaseline();
   };
 
-  const prefillDraft = () => {
-    if (!authoritativeLoad || authoritativeLoad.nonAuthoritativePrefill.kind !== 'AVAILABLE') return;
-    try {
-      const stateDraft = compensationPolicyStateToDraft(authoritativeLoad.nonAuthoritativePrefill.state);
-      changeDraft({ ...props.draft, ...stateDraft, operationKind: 'INITIAL_BASELINE', supersedesVersionId: null });
-    } catch (error) {
-      setCallbackError(error instanceof Error ? `Taslak ön bilgisi kullanılamadı: ${error.message}` : 'Taslak ön bilgisi exact ücret alanı içermiyor.');
-    }
-  };
-
   const copyActivePolicyDraft = () => {
-    if (!authoritativeLoad || authoritativeLoad.activePolicyProjection.kind !== 'ACTIVE') return;
+    const source = policySelectionSource(authoritativeLoad, props.draft);
+    if (!source) return;
     try {
-      const stateDraft = compensationPolicyStateToDraft(authoritativeLoad.activePolicyProjection.version.state);
-      changeDraft({ ...props.draft, ...stateDraft });
-    } catch (error) {
-      setCallbackError(error instanceof Error ? `Etkin ücret durumu forma kopyalanamadı: ${error.message}` : 'Etkin ücret durumu exact string içermiyor.');
+      const stateDraft = compensationPolicyStateToDraft(source.state);
+      setScopeSelection(source.boundaryScope);
+      setRoundingSelection(source.roadRoundingMode);
+      changeDraft({
+        ...props.draft,
+        ...stateDraft,
+        boundaryScope: source.boundaryScope,
+        roadRoundingMode: source.roadRoundingMode,
+        supersedesVersionId: props.draft.operationKind === 'SAME_DATE_CORRECTION' ? source.id : null,
+      });
+    } catch {
+      setCallbackError('Kayıtlı ücret tutarları taslağa taşınamadı; tutarları gözden geçirip yeniden deneyin.');
     }
   };
 
@@ -672,7 +704,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
             {error.blockers.map((reference) => <li key={`${reference.payrollId}:${reference.accrualId}`}>{payrollReferenceLabel(reference)}</li>)}
           </ul>
         )}
-        {error.code === 'CONFLICT' && error.actualTargetState && <p className="mt-1 text-xs">Güncel hedef leaf: {error.actualTargetState.sameDateActiveLeafVersionId ?? 'yok'}.</p>}
+        {error.code === 'CONFLICT' && error.actualTargetState?.sameDateActiveLeafVersionId && <p className="mt-1 text-xs">Aynı tarihte başka bir değişiklik kaydı bulundu.</p>}
         {retry && (
           <button type="button" className={`${secondaryButtonClass} mt-3`} onClick={retry === 'load' ? handleLoad : retry === 'reload' ? handleReloadAuthoritative : handlePreview}>
             {retry === 'preview' ? 'Etkileri yeniden önizle' : retry === 'load' ? 'Ücret geçmişini yeniden yükle' : 'Yetkili durumu yeniden yükle'}
@@ -684,18 +716,14 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
 
   const disabledForm = !authoritativeLoad || loadBusy || isSaving;
   const showInitialBaselineCard = authoritativeLoad?.initialBaselineRequired ?? false;
-  const operationValidForConfirm = validation.draft === 'VALID'
-    && scopeSelectionFresh
-    && roundingSelectionFresh
-    && correctionTargetFresh;
-
   return (
-    <main className="mx-auto w-full max-w-7xl space-y-5 p-4 text-slate-900 sm:p-6" aria-labelledby="compensation-policy-title">
+    <section className="mx-auto flex h-full min-h-0 w-full max-w-7xl flex-1 flex-col text-slate-900" aria-labelledby="compensation-policy-title">
+      <div data-testid="compensation-policy-scroll-region" className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-4">
         <div>
-          <h1 id="compensation-policy-title" className="text-2xl font-bold tracking-tight">Ücret Politikası / Ücret Geçmişi</h1>
-          <p className="mt-1 text-sm text-slate-600">Geçerlilik tarihine göre tam ücret durumunu inceleyin, etkileri önizleyin ve açık onayla kaydedin.</p>
-          <p className="mt-2 text-xs font-medium text-slate-700">Hizmet dönemi: {props.scope.periodId} · {props.scope.periodStartInclusive}–{props.scope.periodEndInclusive} · as-of {props.scope.projectionDate}</p>
+          <h1 id="compensation-policy-title" className="text-xl font-bold tracking-tight">{showInitialBaselineCard ? 'Başlangıç ücretlerini oluştur' : 'Ücret politikası'}</h1>
+          <p className="mt-1 text-sm text-slate-600">{showInitialBaselineCard ? 'Dönem başlangıç ücretlerini kontrol edin ve etkileri inceleyin.' : 'Ücretleri gözden geçirin, etkileri önizleyin ve kaydedin.'}</p>
+          <p className="mt-2 text-xs font-medium text-slate-700">{periodName(props.scope.periodId)} · {shortDate(props.scope.periodStartInclusive)}–{shortDate(props.scope.periodEndInclusive)}</p>
         </div>
         {props.loadState.status === 'idle' && (
           <button type="button" className={secondaryButtonClass} onClick={handleLoad} disabled={loadBusy}>
@@ -704,40 +732,40 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
         )}
       </header>
 
-      {loadBusy && <p role="status" className="text-sm text-slate-600">Bu hizmet dönemi için ücret politikası yükleniyor…</p>}
+      {loadBusy && <p role="status" className="text-sm text-slate-600">Bu dönem için ücret bilgileri yükleniyor…</p>}
       {props.loadState.status === 'error' && props.saveState.status !== 'persisted-reload-failed' && showApiError(props.loadState.error, 'load')}
       {candidateAuthoritativeLoad && !scopeMatches && (
         <div role="alert" className={warningBoxClass}>
-          Bu sayfa farklı bir hizmet dönemi bağlamına geçti. Önceki dönemin timeline'ı gösterilmiyor veya değişiklik önizlemesinde kullanılmıyor.
-          <button type="button" className={`${secondaryButtonClass} mt-3`} onClick={handleReloadAuthoritative} disabled={reloadPending || loadBusy}>{reloadPending ? 'Yeniden yükleniyor…' : 'Yeni dönem ücret geçmişini yükle'}</button>
+          Dönem değişti. Yeni dönemin ücret bilgilerini yeniden yükleyin.
+          <button type="button" className={`${secondaryButtonClass} mt-3`} onClick={handleReloadAuthoritative} disabled={reloadPending || loadBusy}>{reloadPending ? 'Yeniden yükleniyor…' : 'Yeni dönemin bilgilerini yükle'}</button>
         </div>
       )}
       {callbackError && <p role="alert" className={errorBoxClass}>{callbackError}</p>}
 
-      {props.saveState.status === 'saving' && <p role="status" className={warningBoxClass}>Ücret politikası ve etkilenen bordro bağımlılıkları kaydediliyor. Tekrar gönderim engellendi.</p>}
-      {props.saveState.status === 'reloading-authoritative' && <p role="status" className={warningBoxClass}>Kayıt tamamlandı; başarıyı göstermeden önce yetkili ücret geçmişi yeniden yükleniyor.</p>}
+      {props.saveState.status === 'saving' && <p role="status" className={warningBoxClass}>Ücret değişikliği kaydediliyor…</p>}
+      {props.saveState.status === 'reloading-authoritative' && <p role="status" className={warningBoxClass}>Kayıt tamamlandı; ücret bilgileri yeniden yükleniyor…</p>}
       {props.saveState.status === 'persisted-reload-failed' && (
         <div className={errorBoxClass} role="alert">
-          <h2 className="font-bold">Politika kaydedildi; yetkili görünüm yeniden yüklenemedi.</h2>
-          <p className="mt-1">Sürüm {props.saveState.versionId} kalıcı olarak yazıldı. Form taslağı başarı olarak gösterilmez.</p>
+          <h2 className="font-bold">Kayıt tamamlandı ancak güncel ücret bilgileri yeniden yüklenemedi.</h2>
+          <p className="mt-1">Tekrar yükleyerek kaydedilen değişikliği doğrulayın.</p>
           <p className="mt-1 text-xs">{titleCaseApiError(props.saveState.error).message}</p>
-          <button type="button" className={`${secondaryButtonClass} mt-3`} onClick={handleReloadAuthoritative} disabled={reloadPending || props.loadState.status === 'loading'}>{reloadPending ? 'Yeniden yükleniyor…' : 'Yetkili ücret geçmişini yeniden yükle'}</button>
+          <button type="button" className={`${secondaryButtonClass} mt-3`} onClick={handleReloadAuthoritative} disabled={reloadPending || props.loadState.status === 'loading'}>{reloadPending ? 'Yeniden yükleniyor…' : 'Ücret bilgilerini yeniden yükle'}</button>
         </div>
       )}
       {props.saveState.status === 'succeeded' && operationUnchangedSinceSuccess && (
         <div role="status" className={successBoxClass}>
-          <strong>Ücret politikası kaydedildi ve yetkili geçmiş yeniden yüklendi.</strong>
-          <span className="block mt-1">{props.saveState.receipt.version.effectiveFrom} · sürüm {props.saveState.receipt.version.id}.</span>
+          <strong>Ücret değişikliği kaydedildi.</strong>
+          <span className="block mt-1">Geçerlilik tarihi: {shortDate(props.saveState.receipt.version.effectiveFrom)}.</span>
           {props.saveState.receipt.invalidatedRetroBatches.length > 0 && (
-            <span className="block mt-1">STALE yapılan retro batch’ler: {props.saveState.receipt.invalidatedRetroBatches.map((item) => item.batchId).join(', ')}.</span>
+            <span className="block mt-1">Yeniden hesaplanması gereken geçmiş farkı kaydı: {props.saveState.receipt.invalidatedRetroBatches.length}.</span>
           )}
           {props.saveState.receipt.invalidatedRetroPaymentEvents.length > 0 && (
-            <span className="block mt-1">STALE yapılan bağlı ödeme olayları: {props.saveState.receipt.invalidatedRetroPaymentEvents.map((item) => item.payroll.accrualId).join(', ')}.</span>
+            <span className="block mt-1">Yeniden incelenmesi gereken bağlı ödeme kaydı: {props.saveState.receipt.invalidatedRetroPaymentEvents.length}.</span>
           )}
         </div>
       )}
       {props.saveState.status === 'succeeded' && !operationUnchangedSinceSuccess && (
-        <p role="status" className="rounded-sm bg-slate-50 p-2 text-sm text-slate-700">Önceki ücret sürümü kaydedildi. Mevcut taslak bu kayıttan sonra değişti; yeni taslağı önizlemeden ve kaydetmeden önceki başarı mesajı güncel taslak için geçerli değildir.</p>
+        <p role="status" className="rounded-sm bg-slate-50 p-2 text-sm text-slate-700">Önceki değişiklik kaydedildi. Taslak sonradan değişti; yeni taslağı önizleyip tekrar kaydedin.</p>
       )}
       {props.saveState.status === 'conflict' && showApiError(props.saveState.error, 'reload')}
       {props.saveState.status === 'blocked' && showApiError(props.saveState.error)}
@@ -746,39 +774,22 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
       {authoritativeLoad && <ScopedHistory data={authoritativeLoad} />}
 
       {showInitialBaselineCard && authoritativeLoad && (
-        <section aria-labelledby="initial-baseline-heading" className={warningBoxClass}>
-          <h2 id="initial-baseline-heading" className="font-bold">Başlangıç ücret politikası gerekli</h2>
-          <p className="mt-1">Dönem başlangıcını kapsayan yetkili ücret politikası yok. Eski ayar arşivi yalnız taslak ön bilgisi olabilir; bu sayfa yüklenirken baseline oluşturulmadı.</p>
-          <p className="mt-1 text-xs">{authoritativeLoad.nonAuthoritativePrefill.kind === 'AVAILABLE'
-            ? `Taslak ön bilgisi eski dönem ayarları arşivinden (${authoritativeLoad.nonAuthoritativePrefill.sourcePeriodId}) geliyor ve authoritative değildir.`
+        <section aria-labelledby="initial-baseline-heading" className={`${warningBoxClass} space-y-0.5 px-3 py-2`}>
+          <h2 id="initial-baseline-heading" className="text-sm font-bold">Başlangıç kaydı henüz yok.</h2>
+          <p className="text-sm">{authoritativeLoad.nonAuthoritativePrefill.kind === 'AVAILABLE'
+            ? `${periodName(authoritativeLoad.nonAuthoritativePrefill.sourcePeriodId)} tutarları aşağıdaki forma aktarıldı. Bu işlem kayıt oluşturmadı.`
             : authoritativeLoad.nonAuthoritativePrefill.reason === 'INCOMPLETE_SETTINGS'
-              ? 'Mevcut dönem ayarları eksik; eksik ücret alanları otomatik sıfırlanmayacak.'
+              ? 'Eski dönem ayarlarında eksik alanlar var. Eksik tutarları doğrulayarak tamamlayın.'
               : authoritativeLoad.nonAuthoritativePrefill.reason === 'NO_LEGACY_SETTINGS'
-                ? 'Eski ücret ayarları bulunamadı; tam durumu kullanıcı girmelidir.'
-                : 'Mevcut dönem ücret ayarları prefill olarak verilmedi.'}</p>
-          {authoritativeLoad.nonAuthoritativePrefill.kind === 'AVAILABLE' && (
-            <button type="button" className={`${secondaryButtonClass} mt-3`} onClick={prefillDraft} disabled={isSaving}>Eski ayar arşivinden taslak hazırla</button>
-          )}
-          {initialBaselineAllowed && operationValidForConfirm && !baselineConfirmationMatches && (
-            <div className="mt-3 border-t border-amber-300 pt-3">
-              <p className="text-sm font-semibold">{props.draft.effectiveFrom} tarihli ve aşağıda görünen tam ücret durumunu başlangıç politikası olarak kaydetmek istediğinizi açıkça onaylayın. {props.initialBaselineConfirmationRequired ? 'Bu onay kaydetme işleminden önce zorunludur.' : 'Başlangıç sürümü her durumda ayrı kullanıcı onayı ister.'}</p>
-              <button type="button" className={`${primaryButtonClass} mt-2 bg-amber-900 hover:bg-amber-950 focus-visible:outline-amber-800`} onClick={handleConfirmBaseline} disabled={isSaving}>Bu tarihten itibaren geçerli başlangıç ücret politikası olarak onayla</button>
-            </div>
-          )}
-          {initialBaselineAllowed && baselineConfirmationMatches && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-amber-300 pt-3">
-              <p className="text-sm font-semibold">{props.draft.effectiveFrom} tarihi ve bu tam ücret durumu için başlangıç onayı geçerli. Herhangi bir alan veya tarih değişirse yeniden onay gerekir.</p>
-              <button type="button" className={secondaryButtonClass} onClick={handleCancelBaseline} disabled={isSaving}>Başlangıç onayını iptal et</button>
-            </div>
-          )}
+                ? 'Kullanılabilir eski ücret kaydı bulunamadı. Başlangıç tutarlarını girin.'
+                : 'Eski dönem ücret ayarlarına erişilemiyor. Başlangıç tutarlarını girin.'}</p>
         </section>
       )}
 
       {authoritativeLoad && (
         <section aria-labelledby="policy-edit-heading" className="space-y-4 border-t-2 border-slate-300 pt-4">
           <div>
-            <h2 id="policy-edit-heading" className="text-lg font-bold text-slate-900">Ücret politikasını düzenle</h2>
-            <p className="mt-1 text-xs text-slate-600">Yeni sürüm tam ücret durumunu taşır. Aynı tarih düzeltmesi mevcut scoped etkin leaf'i belirtir; gelecek tarihteki kaynak state backend önizlemesinde yetkili olarak belirlenir.</p>
+            <h2 id="policy-edit-heading" className="text-base font-bold text-slate-900">{showInitialBaselineCard ? '1. Tutarları ve grup oranlarını gözden geçirin' : 'Değişikliği hazırlayın'}</h2>
           </div>
 
           {showValidation && validationMessages.length > 0 && (
@@ -796,8 +807,9 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
             loadData={authoritativeLoad}
             validation={validation}
             disabled={disabledForm}
-            scopeSelection={scopeSelection}
-            roundingSelection={roundingSelection}
+            showValidation={showValidation}
+            scopeSelection={visibleScopeSelection}
+            roundingSelection={visibleRoundingSelection}
             onDraftChange={changeDraft}
             onSelectBoundaryScope={selectBoundaryScope}
             onSelectRoadRoundingMode={selectRoadMode}
@@ -807,26 +819,60 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
 
           {props.previewState.status === 'error' && showApiError(props.previewState.error, 'preview')}
           {activePreview && previewStale && (
-            <p role="status" className={warningBoxClass}>Bu önizleme başka bir taslak, tarih veya kapsam içindi. Kaydetme kapalı; güncel taslağın etkilerini yeniden önizleyin.</p>
+            <p role="status" className={warningBoxClass}>Taslak önizlemeden sonra değişti. Kaydetmeden önce güncel etkileri yeniden önizleyin.</p>
           )}
           {activePreview && previewFresh && <PreviewPanel data={activePreview} />}
 
-          {props.previewState.status === 'loading' && <p role="status" className={warningBoxClass}>Etkiler, tarih pencereleri ve bordro bağımlılıkları yetkili timeline üzerinden hesaplanıyor…</p>}
+          {props.previewState.status === 'loading' && <p role="status" className={warningBoxClass}>Ücret değişikliğinin dönem ve bordro etkileri hesaplanıyor…</p>}
           {props.previewState.status === 'ready' && !activePreview && <p className="text-sm text-slate-600">Önizleme sonucu bulunmuyor.</p>}
 
-          <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 pt-4">
-            <button type="button" className={primaryButtonClass} onClick={handlePreview} disabled={!canPreview} title={!formReady ? 'Tüm alanları tamamlayın, kapsamları açıkça seçin ve gerekiyorsa baseline onayı verin.' : undefined}>
-              {previewBusy ? 'Etkiler yükleniyor…' : 'Değişikliği ve etkileri önizle'}
-            </button>
-            <button type="button" className={secondaryButtonClass} onClick={handleSave} disabled={!canSave} title={finalizedBlockers.length > 0 ? 'Kesinleştirilmiş bordro engeli varken kaydedilemez.' : !previewFresh ? 'Önce bu tam taslak için güncel önizleme alın.' : undefined}>
-              {isSaving ? 'Kaydediliyor…' : 'Önizlenen ücret politikasını kaydet'}
-            </button>
-            {!formReady && <p className="text-xs text-slate-600">Kaydetme için tam ve geçerli state, açık kapsam seçimleri, güncel baseline onayı ve geçerli hedef gerekir.</p>}
-            {finalizedBlockers.length > 0 && <p className="text-xs font-semibold text-rose-800">Kesinleştirilmiş bordro engeli kaydetmeyi kapattı. Normal yeniden hesaplama seçeneği yoktur.</p>}
-            {operationUnchangedSinceSuccess && <p className="text-xs text-emerald-800">Bu değişiklik zaten kaydedildi. Yeni değişiklik için tarihi veya tam durumu güncelleyin ve yeniden önizleyin.</p>}
-          </div>
         </section>
       )}
-    </main>
+      <div data-testid="compensation-policy-content-end" aria-hidden="true" className="h-px" />
+      </div>
+      {authoritativeLoad && (
+        <footer data-testid="compensation-policy-action-bar" className="shrink-0 border-t border-slate-200 bg-white px-4 py-3 shadow-[0_-4px_10px_rgba(15,23,42,0.06)] sm:px-6">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            {initialBaselineAllowed ? (
+              !previewFresh || finalizedBlockers.length > 0 ? (
+                <button type="button" className={primaryButtonClass} onClick={handlePreview} disabled={!canPreview} title={!formReady ? saveHint ?? undefined : undefined}>
+                  {previewBusy ? 'Etkiler hesaplanıyor…' : previewFresh ? 'Önizlemeyi yenile' : previewStale ? 'Önizlemeyi yenile' : 'Etkileri önizle'}
+                </button>
+              ) : !baselineConfirmationMatches ? (
+                <button type="button" className={primaryButtonClass} onClick={handleConfirmBaseline} disabled={!canConfirmBaseline}>
+                  Başlangıç ücretini onayla
+                </button>
+              ) : (
+                <>
+                  <button type="button" className={primaryButtonClass} onClick={handleSave} disabled={!canSave} title={!canSave ? saveHint ?? undefined : undefined}>
+                    {isSaving ? 'Kaydediliyor…' : 'Başlangıç ücretini kaydet'}
+                  </button>
+                  <button type="button" className={secondaryButtonClass} onClick={handleCancelBaseline} disabled={isSaving}>Onayı kaldır</button>
+                </>
+              )
+            ) : !previewFresh || finalizedBlockers.length > 0 ? (
+              <button type="button" className={primaryButtonClass} onClick={handlePreview} disabled={!canPreview} title={!formReady ? saveHint ?? undefined : undefined}>
+                {previewBusy ? 'Etkiler hesaplanıyor…' : previewStale ? 'Önizlemeyi yenile' : 'Etkileri önizle'}
+              </button>
+            ) : (
+              <>
+                <button type="button" className={secondaryButtonClass} onClick={handlePreview} disabled={!canPreview}>Önizlemeyi yenile</button>
+                <button type="button" className={primaryButtonClass} onClick={handleSave} disabled={!canSave} title={!canSave ? saveHint ?? undefined : undefined}>
+                  {isSaving ? 'Kaydediliyor…' : 'Önizlenen değişikliği kaydet'}
+                </button>
+              </>
+            )}
+          </div>
+          {initialBaselineAllowed && previewFresh && !baselineConfirmationMatches && finalizedBlockers.length === 0 && (
+            <p className="mt-2 text-xs text-slate-600">Önizlemeyi inceledikten sonra {shortDate(props.draft.effectiveFrom)} tarihli başlangıç ücretini ayrıca onaylayın.</p>
+          )}
+          {initialBaselineAllowed && baselineConfirmationMatches && (
+            <p role="status" className="mt-2 text-xs text-emerald-800">Bu tarih ve ücretler için ayrı onay alındı. Kaydetmek son adımdır; tutar veya tarih değişirse onay yenilenir.</p>
+          )}
+          {saveHint && <p className="mt-1 text-xs text-slate-600">{saveHint}</p>}
+          {operationUnchangedSinceSuccess && <p className="mt-1 text-xs text-emerald-800">Bu değişiklik zaten kaydedildi. Yeni değişiklik için tarihi veya tutarları güncelleyin ve yeniden önizleyin.</p>}
+        </footer>
+      )}
+    </section>
   );
 };
