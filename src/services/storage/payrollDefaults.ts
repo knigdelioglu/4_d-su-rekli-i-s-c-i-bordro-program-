@@ -97,7 +97,7 @@ export const DEFAULT_PRODUCTION_KURUM_DEGERLERI: Omit<PayrollPeriodInstitutionSe
   tisIkramiyeListesi: [],
   tediyeTisNotu: '',
   ...DEFAULT_STATUTORY_PERIOD_PARAMETERS,
-  sendikaAidatiYuzde: 0,
+  sendikaAidatiYuzde: 65,
   sabitSendikaAidati: 0,
   besOraniYuzde: 0,
   sabitBesTutar: 0,

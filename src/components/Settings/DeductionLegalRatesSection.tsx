@@ -31,10 +31,16 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
     field: keyof PayrollPeriodInstitutionSettings,
     value: number
   ) => {
-    setParamsForm((current) => ({ ...current, [field]: value }));
+    setParamsForm((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === 'sendikaAidatiYuzde' ? { sabitSendikaAidati: 0 } : {}),
+    }));
   };
 
   const sendikaOrani = paramsForm.sendikaAidatiYuzde ?? 65;
+  const sabitSendikaAidati = paramsForm.sabitSendikaAidati ?? 0;
+  const sabitSendikaAidatiEtkin = sabitSendikaAidati > 0;
 
   const addStatutorySegment = () => {
     setParamsForm((current) => ({
@@ -213,10 +219,13 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 step="1"
                 value={paramsForm.sendikaAidatiYuzde ?? 65}
                 onChange={(e) => updateNumber('sendikaAidatiYuzde', parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
+                disabled={sabitSendikaAidatiEtkin}
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Günlük çıplak ücret × %{sendikaOrani}; ücret, etkin ücret politikası sürümünden alınır.
+                {sabitSendikaAidatiEtkin
+                  ? 'Sabit tutar girildiği için oran devre dışı.'
+                  : `Günlük çıplak ücret × %${sendikaOrani}; ücret, etkin ücret politikası sürümünden alınır.`}
               </span>
             </div>
 
@@ -227,7 +236,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
               <input
                 type="number"
                 step="0.01"
-                value={paramsForm.sabitSendikaAidati ?? 0}
+                value={sabitSendikaAidati}
                 onChange={(e) => updateNumber('sabitSendikaAidati', parseFloat(e.target.value) || 0)}
                 placeholder="0.00"
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
@@ -235,9 +244,9 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
               <span className="text-[11px] text-slate-500 mt-0.5 block">
                 0 kalırsa oran etkin ücret politikası sürümündeki günlük çıplak ücrete uygulanır.
               </span>
-              {(paramsForm.sabitSendikaAidati ?? 0) > 0 && (
+              {sabitSendikaAidatiEtkin && (
                 <span className="text-[11px] text-amber-700 mt-1 block">
-                  Sabit tutar {formatTL(paramsForm.sabitSendikaAidati ?? 0)} / gün olarak girilmiş; bu değer otomatik hesabı geçersiz kılar.
+                  Sabit tutar {formatTL(sabitSendikaAidati)} / gün olarak girilmiş; oran hesabı devre dışı.
                 </span>
               )}
             </div>
