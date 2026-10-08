@@ -262,11 +262,43 @@ jobs:
       - name: Build desktop app for native WebView E2E
         run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi
 
+      - name: Detect WebView2 runtime version
+        id: webview2_runtime
+        shell: pwsh
+        run: |
+          $runtimeId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtimeKeys = @(
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$runtimeId",
+            "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$runtimeId"
+          )
+          $versions = foreach ($key in $runtimeKeys) {
+            if (Test-Path $key) {
+              $value = Get-ItemPropertyValue -Path $key -Name pv -ErrorAction SilentlyContinue
+              if ($value) {
+                try { [version]$value } catch { }
+              }
+            }
+          }
+          if (-not $versions) {
+            throw 'Could not determine the installed Microsoft Edge WebView2 Runtime version.'
+          }
+          $version = $versions | Sort-Object -Descending | Select-Object -First 1
+          Write-Host "Detected WebView2 Runtime $version."
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "native_e2e_supported=$($version.Major -lt 150)" >> $env:GITHUB_OUTPUT
+
       - name: Native Tauri WebView E2E smoke test
+        if: steps.webview2_runtime.outputs.native_e2e_supported == 'True'
         env:
           CI: "true"
           TAURI_WEBVIEW_APP: target/debug/bordro-programi.exe
         run: bun run test:e2e:native
+
+      - name: Explain unsupported WebView2 WebDriver runtime
+        if: steps.webview2_runtime.outputs.native_e2e_supported != 'True'
+        shell: pwsh
+        run: |
+          Write-Host "::warning::Skipped native Windows WebView E2E on WebView2 Runtime ${{ steps.webview2_runtime.outputs.version }}. Runtime 150+ blocks the remote-debugging startup used by the upstream Tauri WebDriver on elevated GitHub-hosted runners. Windows compilation remains checked; native Tauri UI is exercised on Linux."
 
   rust-mutation:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
