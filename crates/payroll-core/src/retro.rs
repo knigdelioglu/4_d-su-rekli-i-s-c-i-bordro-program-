@@ -19,6 +19,7 @@ use crate::payroll_engine::{
     incoming_devreden_pek_for_replay, replay_saved_normal_compensation_income,
     validate_tax_month_overlap, PayrollDatasetSnapshot,
 };
+use crate::round_currency_amount;
 use crate::{DomainError, Result};
 use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate};
 use rust_decimal::Decimal;
@@ -153,7 +154,7 @@ fn retro_period_earning_policy(
 }
 
 fn round2(value: Decimal) -> Decimal {
-    value.round_dp(2)
+    round_currency_amount(value)
 }
 
 fn validate_retro_carry_snapshot(records: &[DevredenPekKaydi], field: &str) -> Result<()> {
@@ -256,25 +257,6 @@ fn parse_date(value: &str, field: &str) -> Result<NaiveDate> {
     NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|error| {
         DomainError::ValidationError(format!("{field} tarihi geçersiz: {value}: {error}"))
     })
-}
-
-fn add_summary(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> Result<()> {
-    match code {
-        "Ç" => summary.c += 1,
-        "T" => summary.t += 1,
-        "G" => summary.g += 1,
-        "İ" => summary.i += 1,
-        "GÇ" => summary.gc += 1,
-        "GÇT" => summary.gct += 1,
-        "R" => summary.r += 1,
-        _ => {
-            return Err(DomainError::InvalidData(format!(
-                "{} döneminde desteklenmeyen puantaj kodu: {}",
-                period_id, code
-            )))
-        }
-    }
-    Ok(())
 }
 
 fn code_value(income: &GelirKalemleri, code: RetroEarningCode) -> Decimal {
@@ -549,23 +531,6 @@ fn override_value(
     key: RetroParameterKey,
 ) -> Result<Option<Decimal>> {
     Ok(selected_override(overrides, revision_id, personnel_id, key)?.map(|item| item.value))
-}
-
-fn historical_attendance<'a>(
-    index: &'a PayrollDatasetIndex,
-    dataset: &'a PayrollDatasetSnapshot,
-    personnel_id: &str,
-    period_id: &str,
-) -> Result<&'a PersonelPuantaj> {
-    index
-        .attendances(dataset, personnel_id, period_id)
-        .next()
-        .ok_or_else(|| {
-            DomainError::NotFound(format!(
-                "{} / {} için tarihsel puantaj bulunamadı.",
-                personnel_id, period_id
-            ))
-        })
 }
 
 fn authoritative_normal_payroll<'a>(
@@ -1518,37 +1483,6 @@ struct SourcePekReplay {
     outgoing_carry: Vec<DevredenPekKaydi>,
 }
 
-fn source_statutory_snapshot(
-    index: &PayrollDatasetIndex,
-    dataset: &PayrollDatasetSnapshot,
-    personnel_id: &str,
-    period: &BordroDonemi,
-) -> Result<ResolvedStatutorySnapshot> {
-    let normal = authoritative_normal_payroll(index, dataset, personnel_id, &period.id)?;
-    let disposition = crate::validate_payroll_calculation_metadata_with_context(
-        normal,
-        period,
-        &dataset.payrolls,
-        &dataset.periods,
-    )
-    .map_err(|error| DomainError::InvalidData(error.to_string()))?;
-    if disposition == crate::PayrollCalculationSnapshotDisposition::CurrentSnapshotValidated {
-        return normal.statutorySnapshot.clone().ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "{} validated NORMAL source has no persisted statutory output.",
-                period.id
-            ))
-        });
-    }
-    if let Some(snapshot) = normal.statutorySnapshot.clone() {
-        return Ok(snapshot);
-    }
-    Err(DomainError::InvalidData(format!(
-        "LEGACY_REPLAY_UNAVAILABLE: {} NORMAL source has no persisted statutory snapshot.",
-        normal.accrualId
-    )))
-}
-
 /// Monetary/statutory context used by the PEK formula. For schema-2 source
 /// payrolls every consumed field is populated from the persisted snapshot;
 /// the default constructor is used only as a struct initializer and no
@@ -1834,20 +1768,6 @@ fn calendar_tax_month_ordinal(event: &BordroKaydi) -> Result<i64> {
     Ok(i64::from(date.year()) * 12 + i64::from(date.month0()))
 }
 
-fn attendance_summary_for_source(
-    index: &PayrollDatasetIndex,
-    dataset: &PayrollDatasetSnapshot,
-    personnel_id: &str,
-    period: &BordroDonemi,
-) -> Result<PuantajOzeti> {
-    let attendance = historical_attendance(index, dataset, personnel_id, &period.id)?;
-    let mut summary = PuantajOzeti::default();
-    for code in attendance.gunler.values() {
-        add_summary(&mut summary, code, &period.id)?;
-    }
-    Ok(summary)
-}
-
 fn source_income_target(
     original_normal_income: &GelirKalemleri,
     target_normal_income: &GelirKalemleri,
@@ -1882,10 +1802,14 @@ fn source_original_state(
     period: &BordroDonemi,
     events: &[BordroKaydi],
 ) -> Result<SourcePekReplay> {
-    let schema2_normal = schema2_source_normal(index, dataset, personnel_id, period)?;
-    if let Some(normal) = schema2_normal {
-        validate_schema2_source_events(index, dataset, personnel_id, period, events, normal)?;
-    }
+    let schema2_normal =
+        schema2_source_normal(index, dataset, personnel_id, period)?.ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "LEGACY_REPLAY_UNAVAILABLE: {} source lacks a validated schema-2 NORMAL snapshot.",
+                period.id
+            ))
+        })?;
+    validate_schema2_source_events(index, dataset, personnel_id, period, events, schema2_normal)?;
     let mut state = SourcePekState::default();
     for payroll in events {
         let detail = payroll.pekDetay.as_ref().ok_or_else(|| {
@@ -1907,32 +1831,7 @@ fn source_original_state(
             state.employer_lower_bound_premium
                 + detail.pekAltSinirTamamlamaIsverenPrimi.unwrap_or_default(),
         );
-        if schema2_normal.is_none()
-            && state.upper != Decimal::ZERO
-            && round2(state.upper) != round2(detail.pekUstSinir)
-        {
-            return Err(DomainError::InvalidData(format!(
-                "{} source period PEK tavan snapshot'ları çelişkili.",
-                period.id
-            )));
-        }
         state.upper = detail.pekUstSinir;
-    }
-    if schema2_normal.is_none() {
-        let settings = source_replay_settings(index, dataset, personnel_id, period)?;
-        let (employer_sgk, employer_unemployment, employer_lower_bound_premium) =
-            canonical_source_employer_premiums(
-                state.worker_pek,
-                state.employer_lower_bound,
-                &settings,
-            )?;
-        state.employer_sgk = employer_sgk;
-        state.employer_unemployment = employer_unemployment;
-        state.employer_lower_bound_premium = employer_lower_bound_premium;
-        if state.upper == Decimal::ZERO {
-            state.upper =
-                source_statutory_snapshot(index, dataset, personnel_id, period)?.pekUstSinir;
-        }
     }
     Ok(SourcePekReplay {
         state,
@@ -1941,40 +1840,6 @@ fn source_original_state(
             .and_then(|event| event.sonrakiDevredenPek.clone())
             .unwrap_or_default(),
     })
-}
-
-fn canonical_source_employer_premiums(
-    worker_pek: Decimal,
-    employer_lower_bound: Decimal,
-    settings: &PayrollPeriodInstitutionSettings,
-) -> Result<(Decimal, Decimal, Decimal)> {
-    let employer_sgk_rate = settings
-        .sgkIsverenOraniYuzde
-        .ok_or_else(|| DomainError::InvalidData("Historical SGK işveren oranı eksik.".into()))?
-        / dec!(100);
-    let employer_unemployment_rate = settings.issizlikIsverenOraniYuzde.ok_or_else(|| {
-        DomainError::InvalidData("Historical işveren işsizlik oranı eksik.".into())
-    })? / dec!(100);
-    let worker_sgk_rate = settings
-        .sgkIsciOraniYuzde
-        .ok_or_else(|| DomainError::InvalidData("Historical SGK işçi oranı eksik.".into()))?
-        / dec!(100);
-    let worker_unemployment_rate = settings
-        .issizlikIsciOraniYuzde
-        .ok_or_else(|| DomainError::InvalidData("Historical işsizlik işçi oranı eksik.".into()))?
-        / dec!(100);
-    let final_pek = round2((worker_pek + employer_lower_bound).max(Decimal::ZERO));
-    let employer_sgk = round_sgk_amount(final_pek * employer_sgk_rate);
-    let employer_unemployment = round_sgk_amount(final_pek * employer_unemployment_rate);
-    let lower_bound_sgk =
-        round_sgk_amount(employer_lower_bound.max(Decimal::ZERO) * worker_sgk_rate);
-    let lower_bound_unemployment =
-        round_sgk_amount(employer_lower_bound.max(Decimal::ZERO) * worker_unemployment_rate);
-    Ok((
-        employer_sgk,
-        employer_unemployment,
-        lower_bound_sgk + lower_bound_unemployment,
-    ))
 }
 
 fn source_target_state(
@@ -1987,317 +1852,184 @@ fn source_target_state(
     target_meal_exemption: MealExemptionTotals,
 ) -> Result<SourcePekReplay> {
     let settings = source_replay_settings(index, dataset, personnel_id, period)?;
-    let statutory_fallback = source_statutory_snapshot(index, dataset, personnel_id, period)?;
-    let mut ordered_events = events.to_vec();
-    let authoritative_normal =
-        authoritative_normal_payroll(index, dataset, personnel_id, &period.id)?;
-    let normal_disposition = crate::validate_payroll_calculation_metadata_with_context(
-        authoritative_normal,
-        period,
-        &dataset.payrolls,
-        &dataset.periods,
-    )
-    .map_err(|error| DomainError::InvalidData(error.to_string()))?;
-    let snapshot_replay = normal_disposition
-        == crate::PayrollCalculationSnapshotDisposition::CurrentSnapshotValidated;
-    let original_normal_income = events
-        .iter()
-        .find(|event| event.accrualType == AccrualType::NORMAL)
-        .map(|event| event.gelirler.clone())
-        .unwrap_or_default();
-    if ordered_events
-        .iter()
-        .all(|event| event.accrualType != AccrualType::NORMAL)
-    {
-        // Missing original accrual: replay a synthetic NORMAL event using the
-        // source attendance/statutory snapshot. This is also where paid sick
-        // R-days enter the source PEK capacity.
-        let synthetic_summary =
-            attendance_summary_for_source(index, dataset, personnel_id, period)?;
-        ordered_events.push(BordroKaydi {
-            id: format!("{}_retro_source_normal", period.id),
-            personelId: personnel_id.to_string(),
-            donemId: period.id.clone(),
-            accrualId: format!("{}_retro_source_normal", period.id),
-            accrualType: AccrualType::NORMAL,
-            paymentDate: period.bitisTarihi.clone(),
-            sequence: -1,
-            accrualDescription: None,
-            puantajOzeti: synthetic_summary,
-            gelirler: GelirKalemleri::default(),
-            gelirToplam: Decimal::ZERO,
-            kesintiler: KesintiKalemleri::default(),
-            kesintiToplam: Decimal::ZERO,
-            netOdeme: Decimal::ZERO,
-            status: BordroStatus::CALCULATED,
-            olusturulmaTarihi: String::new(),
-            sonGuncellemeTarihi: String::new(),
-            notlar: None,
-            oncekiKumulatifGvMatrahi: None,
-            oncekiKumulatifAsgariGvMatrahi: None,
-            manuelKumulatifGvMatrahi: None,
-            devredenPekGelen: None,
-            sonrakiDevredenPek: None,
-            pekDetay: None,
-            isPrimiDetay: None,
-            gvDetay: None,
-            persistedGvBase: None,
-            damgaDetay: None,
-            statutorySnapshot: Some(statutory_fallback.clone()),
-            odenenRaporluGun: None,
-            raporluGun: None,
-            calculationMetadata: None,
-        });
-        ordered_events.sort_by_key(|event| (event.sequence, event.accrualId.clone()));
-    }
-
-    if snapshot_replay {
-        // NORMAL owns the schema-2 compensation snapshot. Supplementary
-        // payment events remain authoritative through their own saved payment,
-        // statutory and PEK fields and need not carry a NORMAL-only snapshot.
-        if ordered_events.is_empty() {
-            return Err(DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} schema-2 source has no authoritative payment events.",
+    let authoritative_normal = schema2_source_normal(index, dataset, personnel_id, period)?
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "LEGACY_REPLAY_UNAVAILABLE: {} source lacks a validated schema-2 NORMAL snapshot.",
                 period.id
-            )));
-        }
-        validate_schema2_source_events(
-            index,
-            dataset,
-            personnel_id,
-            period,
-            &ordered_events,
-            authoritative_normal,
-        )?;
-        let first_event = &ordered_events[0];
-        let first_carry = first_event.devredenPekGelen.clone().ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event lacks incoming PEK carry.",
-                first_event.accrualId
             ))
         })?;
-        validate_retro_carry_snapshot(&first_carry, "schema-2 incoming PEK carry")?;
-        let (first_incoming, _) =
-            incoming_devreden_pek_for_replay(dataset, index, personnel_id, period, first_event)?;
-        if first_incoming.records != first_carry {
-            return Err(DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event incoming carry disagrees with the saved payment history.",
-                first_event.accrualId
-            )));
-        }
-        let first_detail = first_event.pekDetay.as_ref().ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event PEK snapshot is missing.",
-                first_event.accrualId
-            ))
-        })?;
-        first_detail.aylikOncekiPekTuketimi.ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event same-month PEK input is missing.",
-                first_event.accrualId
-            ))
-        })?;
-        let target_normal_income =
-            source_income_target(&authoritative_normal.gelirler, target_normal_income);
-        let normal_snapshot = authoritative_normal
-            .calculationMetadata
+    let ordered_events = events.to_vec();
+    // NORMAL owns the schema-2 compensation snapshot. Supplementary
+    // payment events remain authoritative through their own saved payment,
+    // statutory and PEK fields and need not carry a NORMAL-only snapshot.
+    if ordered_events.is_empty() {
+        return Err(DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} schema-2 source has no authoritative payment events.",
+            period.id
+        )));
+    }
+    validate_schema2_source_events(
+        index,
+        dataset,
+        personnel_id,
+        period,
+        &ordered_events,
+        authoritative_normal,
+    )?;
+    let first_event = &ordered_events[0];
+    let first_carry = first_event.devredenPekGelen.clone().ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event lacks incoming PEK carry.",
+            first_event.accrualId
+        ))
+    })?;
+    validate_retro_carry_snapshot(&first_carry, "schema-2 incoming PEK carry")?;
+    let (first_incoming, _) =
+        incoming_devreden_pek_for_replay(dataset, index, personnel_id, period, first_event)?;
+    if first_incoming.records != first_carry {
+        return Err(DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event incoming carry disagrees with the saved payment history.",
+            first_event.accrualId
+        )));
+    }
+    let first_detail = first_event.pekDetay.as_ref().ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event PEK snapshot is missing.",
+            first_event.accrualId
+        ))
+    })?;
+    first_detail.aylikOncekiPekTuketimi.ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} first payment event same-month PEK input is missing.",
+            first_event.accrualId
+        ))
+    })?;
+    let target_normal_income =
+        source_income_target(&authoritative_normal.gelirler, target_normal_income);
+    let normal_snapshot = authoritative_normal
+        .calculationMetadata
+        .as_ref()
+        .and_then(|metadata| metadata.snapshot.as_ref())
+        .expect("schema2_normal was validated above");
+    let normal_incoming = normal_snapshot
+        .usedInputs
+        .incomingPekCarry
+        .records
+        .iter()
+        .map(|item| DevredenPekKaydi {
+            tutar: item.tutar,
+            kalanAySayisi: item.kalanAySayisi,
+            kaynakDonemId: item.kaynakDonemId.clone(),
+        })
+        .collect::<Vec<_>>();
+    let normal_detail = authoritative_normal.pekDetay.as_ref().ok_or_else(|| {
+        DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} NORMAL PEK snapshot is missing.",
+            authoritative_normal.accrualId
+        ))
+    })?;
+    if authoritative_normal.devredenPekGelen.as_ref() != Some(&normal_incoming)
+        || normal_detail.aylikOncekiPekTuketimi
+            != Some(
+                normal_snapshot
+                    .usedInputs
+                    .taxHistory
+                    .samePaymentMonthPekUsed,
+            )
+    {
+        return Err(DomainError::InvalidData(format!(
+            "UNSUPPORTED_HISTORICAL_REPLAY: {} NORMAL payment inputs disagree with its schema-2 snapshot.",
+            authoritative_normal.accrualId
+        )));
+    }
+    let mut carry = first_carry;
+    let mut previous_tax_month = calendar_tax_month_ordinal(first_event)?;
+    let mut accumulated_source_delta_by_month = HashMap::<i64, Decimal>::new();
+    let mut state = SourcePekState {
+        upper: first_detail.pekUstSinir,
+        ..SourcePekState::default()
+    };
+    for event in &ordered_events {
+        let tax_month = calendar_tax_month_ordinal(event)?;
+        let event_month_to_date = event
+            .pekDetay
             .as_ref()
-            .and_then(|metadata| metadata.snapshot.as_ref())
-            .expect("schema2_normal was validated above");
-        let normal_incoming = normal_snapshot
-            .usedInputs
-            .incomingPekCarry
-            .records
-            .iter()
-            .map(|item| DevredenPekKaydi {
-                tutar: item.tutar,
-                kalanAySayisi: item.kalanAySayisi,
-                kaynakDonemId: item.kaynakDonemId.clone(),
-            })
-            .collect::<Vec<_>>();
-        let normal_detail = authoritative_normal.pekDetay.as_ref().ok_or_else(|| {
-            DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} NORMAL PEK snapshot is missing.",
-                authoritative_normal.accrualId
-            ))
-        })?;
-        if authoritative_normal.devredenPekGelen.as_ref() != Some(&normal_incoming)
-            || normal_detail.aylikOncekiPekTuketimi
-                != Some(
-                    normal_snapshot
-                        .usedInputs
-                        .taxHistory
-                        .samePaymentMonthPekUsed,
-                )
-        {
-            return Err(DomainError::InvalidData(format!(
-                "UNSUPPORTED_HISTORICAL_REPLAY: {} NORMAL payment inputs disagree with its schema-2 snapshot.",
-                authoritative_normal.accrualId
-            )));
-        }
-        let mut carry = first_carry;
-        let mut previous_tax_month = calendar_tax_month_ordinal(first_event)?;
-        let mut accumulated_source_delta_by_month = HashMap::<i64, Decimal>::new();
-        let mut state = SourcePekState {
-            upper: first_detail.pekUstSinir,
-            ..SourcePekState::default()
-        };
-        for event in &ordered_events {
-            let tax_month = calendar_tax_month_ordinal(event)?;
-            let event_month_to_date = event
-                .pekDetay
-                .as_ref()
-                .and_then(|detail| detail.aylikOncekiPekTuketimi)
-                .ok_or_else(|| {
-                    DomainError::InvalidData(format!(
-                        "UNSUPPORTED_HISTORICAL_REPLAY: {} same-month PEK input is missing.",
-                        event.accrualId
-                    ))
-                })?;
-            let month_to_date = round2(
-                event_month_to_date
-                    + accumulated_source_delta_by_month
-                        .get(&tax_month)
-                        .copied()
-                        .unwrap_or_default(),
-            );
-            let actual_incoming = event.devredenPekGelen.as_ref().ok_or_else(|| {
+            .and_then(|detail| detail.aylikOncekiPekTuketimi)
+            .ok_or_else(|| {
                 DomainError::InvalidData(format!(
-                    "UNSUPPORTED_HISTORICAL_REPLAY: {} incoming PEK carry is missing.",
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} same-month PEK input is missing.",
                     event.accrualId
                 ))
             })?;
-            let (persisted_incoming, _) =
-                incoming_devreden_pek_for_replay(dataset, index, personnel_id, period, event)?;
-            if &persisted_incoming.records != actual_incoming {
+        let month_to_date = round2(
+            event_month_to_date
+                + accumulated_source_delta_by_month
+                    .get(&tax_month)
+                    .copied()
+                    .unwrap_or_default(),
+        );
+        let actual_incoming = event.devredenPekGelen.as_ref().ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "UNSUPPORTED_HISTORICAL_REPLAY: {} incoming PEK carry is missing.",
+                event.accrualId
+            ))
+        })?;
+        let (persisted_incoming, _) =
+            incoming_devreden_pek_for_replay(dataset, index, personnel_id, period, event)?;
+        if &persisted_incoming.records != actual_incoming {
+            return Err(DomainError::InvalidData(format!(
+                "UNSUPPORTED_HISTORICAL_REPLAY: {} incoming carry disagrees with saved payment history.",
+                event.accrualId
+            )));
+        }
+        let elapsed_since_previous = if event.accrualId == first_event.accrualId {
+            first_incoming.tax_months_elapsed
+        } else {
+            let elapsed = tax_month - previous_tax_month;
+            if elapsed < 0 || elapsed > i64::from(i32::MAX) {
                 return Err(DomainError::InvalidData(format!(
-                    "UNSUPPORTED_HISTORICAL_REPLAY: {} incoming carry disagrees with saved payment history.",
+                    "UNSUPPORTED_HISTORICAL_REPLAY: {} payment order has an invalid tax-month gap.",
                     event.accrualId
                 )));
             }
-            let elapsed_since_previous = if event.accrualId == first_event.accrualId {
-                first_incoming.tax_months_elapsed
-            } else {
-                let elapsed = tax_month - previous_tax_month;
-                if elapsed < 0 || elapsed > i64::from(i32::MAX) {
-                    return Err(DomainError::InvalidData(format!(
-                        "UNSUPPORTED_HISTORICAL_REPLAY: {} payment order has an invalid tax-month gap.",
-                        event.accrualId
-                    )));
-                }
-                elapsed as i32
-            };
-            let is_normal = event.accrualType == AccrualType::NORMAL;
-            let income = if is_normal {
-                &target_normal_income
-            } else {
-                &event.gelirler
-            };
-            let statutory = event.statutorySnapshot.clone().ok_or_else(|| {
-                DomainError::InvalidData(format!(
-                    "UNSUPPORTED_HISTORICAL_REPLAY: {} validated event has no statutory snapshot.",
-                    event.accrualId
-                ))
-            })?;
-            let event_settings = source_event_replay_settings(&settings, event)?;
-            let (detail, next_carry) =
-                calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
-                    income,
-                    Some(&event.puantajOzeti),
-                    Some(&event_settings),
-                    &carry,
-                    Some(&statutory),
-                    month_to_date,
-                    PekCalculationOptions {
-                        tax_months_elapsed: elapsed_since_previous,
-                        apply_lower_bound: is_normal,
-                        meal_exemption: is_normal.then_some(target_meal_exemption),
-                    },
-                )?;
-            let original_prim = event
-                .pekDetay
-                .as_ref()
-                .expect("schema2 source validation requires PEK details")
-                .primMatrahi;
-            *accumulated_source_delta_by_month
-                .entry(tax_month)
-                .or_default() += detail.primMatrahi - original_prim;
-            state.worker_pek = round2(state.worker_pek + detail.primMatrahi);
-            state.meal_exemption = round2(state.meal_exemption + detail.yemekIstisnasiTutar);
-            state.employer_sgk =
-                round_sgk_amount(state.employer_sgk + detail.isverenSgkPrimi.unwrap_or_default());
-            state.employer_unemployment = round_sgk_amount(
-                state.employer_unemployment + detail.isverenIssizlikPrimi.unwrap_or_default(),
-            );
-            state.employer_lower_bound =
-                round2(state.employer_lower_bound + detail.altSinirTamamlamaFarki);
-            state.employer_lower_bound_premium = round_sgk_amount(
-                state.employer_lower_bound_premium
-                    + detail.pekAltSinirTamamlamaIsverenPrimi.unwrap_or_default(),
-            );
-            state.upper = detail.pekUstSinir;
-            carry = next_carry;
-            previous_tax_month = tax_month;
-        }
-        return Ok(SourcePekReplay {
-            state,
-            outgoing_carry: carry,
-        });
-    }
-
-    let first_event = ordered_events.first().ok_or_else(|| {
-        DomainError::InvalidData(format!(
-            "{} source period replay'i için payment event bulunamadı.",
-            period.id
-        ))
-    })?;
-    let (canonical_incoming, canonical_incoming_available) =
-        incoming_devreden_pek_for_replay(dataset, index, personnel_id, period, first_event)?;
-    let first_carry = if canonical_incoming_available {
-        canonical_incoming.records
-    } else {
-        first_event.devredenPekGelen.clone().unwrap_or_default()
-    };
-    let mut carry = first_carry;
-    let mut month_to_date = Decimal::ZERO;
-    let mut tax_months_elapsed = if canonical_incoming_available {
-        canonical_incoming.tax_months_elapsed
-    } else if carry.is_empty() {
-        0
-    } else {
-        1
-    };
-    let mut state = SourcePekState {
-        upper: statutory_fallback.pekUstSinir,
-        ..SourcePekState::default()
-    };
-    let target_normal_income = source_income_target(&original_normal_income, target_normal_income);
-
-    for event in ordered_events {
+            elapsed as i32
+        };
         let is_normal = event.accrualType == AccrualType::NORMAL;
         let income = if is_normal {
             &target_normal_income
         } else {
             &event.gelirler
         };
-        let statutory = event
-            .statutorySnapshot
-            .clone()
-            .unwrap_or_else(|| statutory_fallback.clone());
+        let statutory = event.statutorySnapshot.clone().ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "UNSUPPORTED_HISTORICAL_REPLAY: {} validated event has no statutory snapshot.",
+                event.accrualId
+            ))
+        })?;
+        let event_settings = source_event_replay_settings(&settings, event)?;
         let (detail, next_carry) =
             calculate_prime_esas_kazanc_with_month_to_date_and_devreden_state(
                 income,
                 Some(&event.puantajOzeti),
-                Some(&settings),
+                Some(&event_settings),
                 &carry,
                 Some(&statutory),
                 month_to_date,
                 PekCalculationOptions {
-                    tax_months_elapsed,
+                    tax_months_elapsed: elapsed_since_previous,
                     apply_lower_bound: is_normal,
                     meal_exemption: is_normal.then_some(target_meal_exemption),
                 },
             )?;
+        let original_prim = event
+            .pekDetay
+            .as_ref()
+            .expect("schema2 source validation requires PEK details")
+            .primMatrahi;
+        *accumulated_source_delta_by_month
+            .entry(tax_month)
+            .or_default() += detail.primMatrahi - original_prim;
         state.worker_pek = round2(state.worker_pek + detail.primMatrahi);
         state.meal_exemption = round2(state.meal_exemption + detail.yemekIstisnasiTutar);
         state.employer_sgk =
@@ -2312,19 +2044,9 @@ fn source_target_state(
                 + detail.pekAltSinirTamamlamaIsverenPrimi.unwrap_or_default(),
         );
         state.upper = detail.pekUstSinir;
-        month_to_date = round2(month_to_date + detail.primMatrahi);
         carry = next_carry;
-        tax_months_elapsed = 0;
+        previous_tax_month = tax_month;
     }
-    let (employer_sgk, employer_unemployment, employer_lower_bound_premium) =
-        canonical_source_employer_premiums(
-            state.worker_pek,
-            state.employer_lower_bound,
-            &settings,
-        )?;
-    state.employer_sgk = employer_sgk;
-    state.employer_unemployment = employer_unemployment;
-    state.employer_lower_bound_premium = employer_lower_bound_premium;
     Ok(SourcePekReplay {
         state,
         outgoing_carry: carry,
@@ -3237,6 +2959,338 @@ mod tests {
     use super::*;
     use crate::payroll_engine::PayrollDatasetSnapshot;
 
+    fn settlement_test_allocation(id: &str, period_id: &str, delta: Decimal) -> RetroAllocation {
+        RetroAllocation {
+            id: id.into(),
+            batchId: "batch".into(),
+            personnelId: "p1".into(),
+            sourcePeriodId: period_id.into(),
+            earningCode: RetroEarningCode::BASE_WAGE,
+            originalRecognizedAmount: Decimal::ZERO,
+            previousAuthoritativeRetroAmount: Decimal::ZERO,
+            targetAmount: delta.max(Decimal::ZERO),
+            deltaAmount: delta,
+            sgkTreatment: RetroSgkTreatment::WAGE_SOURCE_MONTH,
+            incomeTaxTreatment: RetroTaxTreatment::TAXABLE,
+            stampTaxTreatment: RetroTaxTreatment::TAXABLE,
+            originalPek: Decimal::ZERO,
+            retroPekDelta: Decimal::ZERO,
+            adjustedPek: Decimal::ZERO,
+            workerSgkDelta: Decimal::ZERO,
+            workerUnemploymentDelta: Decimal::ZERO,
+            employerSgkDelta: Decimal::ZERO,
+            employerUnemploymentDelta: Decimal::ZERO,
+            originalEmployerLowerBound: Decimal::ZERO,
+            targetEmployerLowerBound: Decimal::ZERO,
+            employerLowerBoundDelta: Decimal::ZERO,
+            employerLowerBoundPremiumDelta: Decimal::ZERO,
+            originalSourceCarry: None,
+            targetSourceCarry: None,
+            payableSettlementAmount: Decimal::ZERO,
+            offsetSettlementAmount: Decimal::ZERO,
+            recoverableAmount: Decimal::ZERO,
+            metadata: None,
+        }
+    }
+
+    fn settlement_test_batch(status: CompensationRevisionStatus) -> RetroAdjustmentBatch {
+        RetroAdjustmentBatch {
+            id: "batch".into(),
+            revisionId: "revision".into(),
+            personnelId: "p1".into(),
+            paymentDate: "2026-06-20".into(),
+            status,
+            settlementStatus: RetroSettlementStatus::UNSETTLED,
+            totalGrossDelta: dec!(10),
+            payableSettlementAmount: dec!(10),
+            offsetSettlementAmount: Decimal::ZERO,
+            recoveredAmount: Decimal::ZERO,
+            recoverableAmount: Decimal::ZERO,
+            outstandingReceivable: Decimal::ZERO,
+            description: None,
+            createdAt: None,
+            calculatedAt: None,
+            finalizedAt: None,
+        }
+    }
+
+    fn source_test_period() -> BordroDonemi {
+        BordroDonemi {
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-15".into(),
+            bitisTarihi: "2026-02-14".into(),
+            donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 2,
+        }
+    }
+
+    fn source_test_event(accrual_type: AccrualType) -> BordroKaydi {
+        BordroKaydi {
+            id: "p1_event".into(),
+            personelId: "p1".into(),
+            donemId: "2026-01".into(),
+            accrualId: "p1_event".into(),
+            accrualType: accrual_type,
+            paymentDate: "2026-02-10".into(),
+            sequence: 0,
+            accrualDescription: None,
+            puantajOzeti: PuantajOzeti::default(),
+            gelirler: GelirKalemleri::default(),
+            gelirToplam: Decimal::ZERO,
+            kesintiler: KesintiKalemleri::default(),
+            kesintiToplam: Decimal::ZERO,
+            netOdeme: Decimal::ZERO,
+            status: BordroStatus::CALCULATED,
+            olusturulmaTarihi: "2026-02-10T00:00:00Z".into(),
+            sonGuncellemeTarihi: "2026-02-10T00:00:00Z".into(),
+            notlar: None,
+            oncekiKumulatifGvMatrahi: None,
+            oncekiKumulatifAsgariGvMatrahi: None,
+            manuelKumulatifGvMatrahi: None,
+            devredenPekGelen: None,
+            sonrakiDevredenPek: None,
+            pekDetay: None,
+            isPrimiDetay: None,
+            gvDetay: None,
+            persistedGvBase: None,
+            damgaDetay: None,
+            statutorySnapshot: None,
+            odenenRaporluGun: None,
+            raporluGun: None,
+            calculationMetadata: None,
+        }
+    }
+
+    fn source_test_pek_detail() -> PekDetayi {
+        PekDetayi {
+            hesaplananPek: Decimal::ZERO,
+            hamPek: Decimal::ZERO,
+            devredenPekKullanilan: Decimal::ZERO,
+            primMatrahi: Decimal::ZERO,
+            aylikOncekiPekTuketimi: Some(Decimal::ZERO),
+            aylikSonrasiPekTuketimi: Some(Decimal::ZERO),
+            finalPek: Decimal::ZERO,
+            devredenPekAşanTutar: Decimal::ZERO,
+            pekAltSinir: Decimal::ZERO,
+            pekUstSinir: Decimal::ZERO,
+            altSinirTamamlamaFarki: Decimal::ZERO,
+            fiiliYemekGunu: 0,
+            yemekIstisnasiTutar: Decimal::ZERO,
+            isverenSgkPrimi: Some(Decimal::ZERO),
+            isverenIssizlikPrimi: Some(Decimal::ZERO),
+            pekAltSinirTamamlamaIsverenPrimi: Some(Decimal::ZERO),
+            isverenPrimToplami: Some(Decimal::ZERO),
+            sgkIsverenOraniYuzde: Some(dec!(20.5)),
+            isverenIssizlikOraniYuzde: Some(dec!(2)),
+        }
+    }
+
+    fn source_test_statutory_snapshot() -> ResolvedStatutorySnapshot {
+        ResolvedStatutorySnapshot {
+            source: StatutorySnapshotSource::AttendanceBacked,
+            segments: vec![ResolvedStatutorySegmentSnapshot {
+                effectiveFrom: "2026-01-15".into(),
+                effectiveTo: "2026-02-14".into(),
+                sgkPrimGunSayisi: 30,
+                fiiliYemekGunu: 0,
+                gunlukAsgariUcret: dec!(1000),
+                pekTavanKatsayisi: dec!(7.5),
+                gunlukYemekIstisnasiSGK: Decimal::ZERO,
+                gunlukYemekIstisnasiGV: Decimal::ZERO,
+            }],
+            sgkPrimGunSayisi: 30,
+            pekAltSinir: dec!(30000),
+            pekUstSinir: dec!(225000),
+            sgkYemekIstisnasiToplam: Decimal::ZERO,
+            gvYemekIstisnasiToplam: Decimal::ZERO,
+            gvReferansGunlukAsgariUcret: dec!(1000),
+            sgkIsciOraniYuzde: Some(dec!(14)),
+            issizlikIsciOraniYuzde: Some(dec!(1)),
+        }
+    }
+
+    #[test]
+    fn normal_source_baseline_rejects_missing_stale_and_duplicate_records() {
+        let mut period = source_test_period();
+        period.donemAdi.clear();
+        let missing = PayrollDatasetSnapshot::default();
+        let missing_index = PayrollDatasetIndex::build(&missing);
+        let missing_error =
+            ensure_authoritative_normal_baseline(&missing_index, &missing, "p1", &period)
+                .expect_err("an empty source period cannot establish recognized payroll");
+        assert!(missing_error.to_string().contains("2026-01"));
+
+        let mut stale = source_test_event(AccrualType::NORMAL);
+        stale.status = BordroStatus::STALE;
+        let stale_dataset = PayrollDatasetSnapshot {
+            payrolls: vec![stale],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let stale_index = PayrollDatasetIndex::build(&stale_dataset);
+        assert!(
+            ensure_authoritative_normal_baseline(&stale_index, &stale_dataset, "p1", &period,)
+                .is_err()
+        );
+
+        let duplicate = source_test_event(AccrualType::NORMAL);
+        let duplicate_dataset = PayrollDatasetSnapshot {
+            payrolls: vec![duplicate.clone(), duplicate],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let duplicate_index = PayrollDatasetIndex::build(&duplicate_dataset);
+        let duplicate_error = ensure_authoritative_normal_baseline(
+            &duplicate_index,
+            &duplicate_dataset,
+            "p1",
+            &period,
+        )
+        .expect_err("multiple authoritative NORMAL events are ambiguous");
+        assert!(duplicate_error
+            .to_string()
+            .contains("multiple authoritative NORMAL"));
+    }
+
+    #[test]
+    fn schema2_source_event_validation_rejects_invalid_identity_and_missing_financial_state() {
+        let period = source_test_period();
+        let normal = source_test_event(AccrualType::NORMAL);
+        let base_dataset = PayrollDatasetSnapshot {
+            periods: vec![period.clone()],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let base_index = PayrollDatasetIndex::build(&base_dataset);
+
+        let mut wrong_person = source_test_event(AccrualType::SUPPLEMENTAL);
+        wrong_person.personelId = "p2".into();
+        let identity_error = validate_schema2_source_events(
+            &base_index,
+            &base_dataset,
+            "p1",
+            &period,
+            &[wrong_person],
+            &normal,
+        )
+        .expect_err("a source event cannot be rebound to a different employee");
+        assert!(identity_error
+            .to_string()
+            .contains("identity does not match"));
+
+        let mut incomplete_identity = source_test_event(AccrualType::SUPPLEMENTAL);
+        incomplete_identity.accrualId = "  ".into();
+        incomplete_identity.paymentDate = " ".into();
+        let identity_error = validate_schema2_source_events(
+            &base_index,
+            &base_dataset,
+            "p1",
+            &period,
+            &[incomplete_identity],
+            &normal,
+        )
+        .expect_err("source payment identity and payment date are required");
+        assert!(identity_error
+            .to_string()
+            .contains("identity/date is incomplete"));
+
+        let empty_error =
+            validate_schema2_source_events(&base_index, &base_dataset, "p1", &period, &[], &normal)
+                .expect_err("schema-2 replay requires exactly one NORMAL event");
+        assert!(empty_error
+            .to_string()
+            .contains("exactly one authoritative NORMAL"));
+
+        let mut missing_detail = source_test_event(AccrualType::SUPPLEMENTAL);
+        let detail_error = validate_schema2_source_events(
+            &base_index,
+            &base_dataset,
+            "p1",
+            &period,
+            &[missing_detail.clone()],
+            &normal,
+        )
+        .expect_err("each payment event needs its saved PEK output");
+        assert!(detail_error
+            .to_string()
+            .contains("lacks persisted PEK outputs"));
+
+        missing_detail.pekDetay = Some(source_test_pek_detail());
+        let statutory_error = validate_schema2_source_events(
+            &base_index,
+            &base_dataset,
+            "p1",
+            &period,
+            &[missing_detail.clone()],
+            &normal,
+        )
+        .expect_err("each payment event needs its saved statutory inputs");
+        assert!(statutory_error
+            .to_string()
+            .contains("lacks its persisted statutory inputs"));
+
+        let mut forged_gv_base = source_test_event(AccrualType::SUPPLEMENTAL);
+        forged_gv_base.persistedGvBase = Some(dec!(-1));
+        let forged_error = validate_schema2_source_events(
+            &base_index,
+            &base_dataset,
+            "p1",
+            &period,
+            &[forged_gv_base],
+            &normal,
+        )
+        .expect_err("negative persisted GV base must be rejected before replay");
+        assert!(forged_error
+            .to_string()
+            .contains("persisted payment snapshot invalid"));
+
+        let normal_dataset = PayrollDatasetSnapshot {
+            periods: vec![period.clone()],
+            payrolls: vec![normal.clone()],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let normal_index = PayrollDatasetIndex::build(&normal_dataset);
+        assert!(validate_schema2_source_events(
+            &normal_index,
+            &normal_dataset,
+            "p1",
+            &period,
+            std::slice::from_ref(&normal),
+            &normal,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn source_event_settings_never_fall_back_when_snapshots_or_rates_are_missing() {
+        let base = PayrollPeriodInstitutionSettings::default();
+        let mut event = source_test_event(AccrualType::SUPPLEMENTAL);
+        assert!(source_event_replay_settings(&base, &event).is_err());
+
+        event.statutorySnapshot = Some(source_test_statutory_snapshot());
+        assert!(source_event_replay_settings(&base, &event).is_err());
+
+        event.pekDetay = Some(source_test_pek_detail());
+        let mut statutory = source_test_statutory_snapshot();
+        statutory.sgkIsciOraniYuzde = None;
+        event.statutorySnapshot = Some(statutory);
+        assert!(source_event_replay_settings(&base, &event)
+            .unwrap_err()
+            .to_string()
+            .contains("lacks persisted statutory contribution rates"));
+    }
+
+    #[test]
+    fn authoritative_retro_order_rejects_invalid_dates_and_creation_times() {
+        let mut bad_payment_date = settlement_test_batch(CompensationRevisionStatus::CALCULATED);
+        bad_payment_date.paymentDate = "2026-02-30".into();
+        assert!(sort_retro_batches_chronologically(vec![bad_payment_date]).is_err());
+
+        let mut bad_created_at = settlement_test_batch(CompensationRevisionStatus::CALCULATED);
+        bad_created_at.createdAt = Some("not-rfc3339".into());
+        assert!(sort_retro_batches_chronologically(vec![bad_created_at]).is_err());
+    }
+
     #[test]
     fn policy_keeps_statutory_treatment_out_of_revision_parameters() {
         let policy = retro_earning_policy(RetroEarningCode::BASE_WAGE);
@@ -3304,5 +3358,165 @@ mod tests {
             ..PayrollDatasetSnapshot::default()
         };
         assert!(retro_payment_income(&dataset, "b").is_err());
+    }
+
+    #[test]
+    fn retro_carry_snapshot_rejects_negative_amount_or_age() {
+        let negative_amount = vec![DevredenPekKaydi {
+            tutar: dec!(-1),
+            kalanAySayisi: 1,
+            kaynakDonemId: Some("source".into()),
+        }];
+        assert!(validate_retro_carry_snapshot(&negative_amount, "incoming").is_err());
+
+        let negative_age = vec![DevredenPekKaydi {
+            tutar: dec!(1),
+            kalanAySayisi: -1,
+            kaynakDonemId: Some("source".into()),
+        }];
+        assert!(validate_retro_carry_snapshot(&negative_age, "outgoing").is_err());
+    }
+
+    #[test]
+    fn retro_carry_snapshot_accepts_zero_and_positive_records() {
+        let records = vec![
+            DevredenPekKaydi {
+                tutar: Decimal::ZERO,
+                kalanAySayisi: 0,
+                kaynakDonemId: Some("zero".into()),
+            },
+            DevredenPekKaydi {
+                tutar: dec!(1250.50),
+                kalanAySayisi: 2,
+                kaynakDonemId: Some("source".into()),
+            },
+        ];
+        validate_retro_carry_snapshot(&records, "incoming").unwrap();
+    }
+
+    #[test]
+    fn signed_delta_distribution_preserves_sign_and_allocates_rounding_residual() {
+        let positive = distribute_signed_delta(dec!(20), &[dec!(5), dec!(-9), dec!(15)]);
+        assert_eq!(positive, vec![dec!(5), Decimal::ZERO, dec!(15)]);
+        assert_eq!(positive.iter().copied().sum::<Decimal>(), dec!(20));
+
+        let negative = distribute_signed_delta(dec!(-10), &[dec!(5), dec!(-2), dec!(-8)]);
+        assert_eq!(negative, vec![Decimal::ZERO, dec!(-2), dec!(-8)]);
+        assert_eq!(negative.iter().copied().sum::<Decimal>(), dec!(-10));
+
+        // When the canonical delta has no same-sign component, preserve the
+        // requested total deterministically on the first eligible allocation.
+        assert_eq!(
+            distribute_signed_delta(dec!(1.25), &[Decimal::ZERO, Decimal::ZERO]),
+            vec![dec!(1.25), Decimal::ZERO]
+        );
+        assert!(distribute_signed_delta(dec!(1), &[]).is_empty());
+    }
+
+    #[test]
+    fn meal_source_pek_delta_uses_exemptions_only_for_meal_earnings() {
+        let mut meal = settlement_test_allocation("meal", "2026-01", dec!(6));
+        meal.earningCode = RetroEarningCode::MEAL;
+        meal.originalRecognizedAmount = dec!(5);
+        meal.previousAuthoritativeRetroAmount = dec!(1);
+        meal.targetAmount = dec!(12);
+        assert_eq!(
+            source_eligible_delta(&meal, dec!(7), dec!(4)).unwrap(),
+            dec!(8)
+        );
+
+        let wage = settlement_test_allocation("wage", "2026-01", dec!(6));
+        assert_eq!(
+            source_eligible_delta(&wage, dec!(7), dec!(4)).unwrap(),
+            dec!(6)
+        );
+    }
+
+    #[test]
+    fn sgk_rebalance_puts_the_final_cent_on_the_last_source_allocation() {
+        let mut allocations = vec![
+            settlement_test_allocation("a", "2026-01", dec!(5)),
+            settlement_test_allocation("b", "2026-01", dec!(5)),
+        ];
+        allocations[0].workerSgkDelta = dec!(0.02);
+        allocations[1].workerSgkDelta = dec!(0.02);
+        rebalance_sgk_component_to_total(
+            &mut allocations,
+            &[0, 1],
+            dec!(0.05),
+            |allocation| allocation.workerSgkDelta,
+            |allocation, value| allocation.workerSgkDelta = value,
+        );
+        assert_eq!(allocations[0].workerSgkDelta, dec!(0.02));
+        assert_eq!(allocations[1].workerSgkDelta, dec!(0.03));
+
+        let before = allocations[0].workerSgkDelta;
+        rebalance_sgk_component_to_total(
+            &mut allocations,
+            &[],
+            dec!(100),
+            |allocation| allocation.workerSgkDelta,
+            |allocation, value| allocation.workerSgkDelta = value,
+        );
+        assert_eq!(allocations[0].workerSgkDelta, before);
+    }
+
+    #[test]
+    fn settlement_flows_split_payable_offset_and_recovery_without_netting_signs() {
+        let mut allocations = vec![
+            settlement_test_allocation("positive-b", "2026-02", dec!(15)),
+            settlement_test_allocation("negative", "2026-01", dec!(-7)),
+            settlement_test_allocation("positive-a", "2026-01", dec!(20)),
+        ];
+        assign_current_settlement_allocations(&mut allocations, dec!(25), dec!(10), dec!(5));
+
+        let positive = allocations
+            .iter()
+            .filter(|allocation| allocation.deltaAmount > Decimal::ZERO)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            positive
+                .iter()
+                .map(|allocation| allocation.offsetSettlementAmount)
+                .sum::<Decimal>(),
+            dec!(10)
+        );
+        assert_eq!(
+            positive
+                .iter()
+                .map(|allocation| allocation.payableSettlementAmount)
+                .sum::<Decimal>(),
+            dec!(25)
+        );
+        let negative = allocations
+            .iter()
+            .find(|allocation| allocation.deltaAmount < Decimal::ZERO)
+            .unwrap();
+        assert_eq!(negative.recoverableAmount, dec!(5));
+        assert_eq!(negative.payableSettlementAmount, Decimal::ZERO);
+        assert_eq!(negative.offsetSettlementAmount, Decimal::ZERO);
+    }
+
+    #[test]
+    fn retro_payment_rejects_draft_and_nonpayable_batches_before_ledger_read() {
+        let draft = settlement_test_batch(CompensationRevisionStatus::DRAFT);
+        let draft_dataset = PayrollDatasetSnapshot {
+            retroBatches: vec![draft],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let draft_index = PayrollDatasetIndex::build(&draft_dataset);
+        assert!(retro_payment_income_with_index(&draft_dataset, &draft_index, "batch").is_err());
+
+        let mut nonpayable = settlement_test_batch(CompensationRevisionStatus::CALCULATED);
+        nonpayable.payableSettlementAmount = Decimal::ZERO;
+        let nonpayable_dataset = PayrollDatasetSnapshot {
+            retroBatches: vec![nonpayable],
+            ..PayrollDatasetSnapshot::default()
+        };
+        let nonpayable_index = PayrollDatasetIndex::build(&nonpayable_dataset);
+        assert!(
+            retro_payment_income_with_index(&nonpayable_dataset, &nonpayable_index, "batch")
+                .is_err()
+        );
     }
 }

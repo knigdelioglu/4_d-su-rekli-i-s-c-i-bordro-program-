@@ -1,10 +1,30 @@
-use super::tax_oracle::{round_gv, round_money};
+use super::tax_oracle::{round_gv, round_money, round_product_to_cents};
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MealExemptionOracle {
     pub sgk: Decimal,
     pub gv: Decimal,
+}
+
+/// Applies per-segment statutory caps, then rounds the single earning-slice
+/// result. This avoids a date split changing the amount merely because one
+/// payment was represented by multiple legal-parameter segments.
+pub fn segmented_meal_exemption(segments: &[(Decimal, Decimal, Decimal)]) -> MealExemptionOracle {
+    let (sgk, gv) = segments.iter().fold(
+        (Decimal::ZERO, Decimal::ZERO),
+        |(sgk_total, gv_total), (actual, sgk_capacity, gv_capacity)| {
+            let actual = (*actual).max(Decimal::ZERO);
+            (
+                sgk_total + actual.min((*sgk_capacity).max(Decimal::ZERO)),
+                gv_total + actual.min((*gv_capacity).max(Decimal::ZERO)),
+            )
+        },
+    );
+    MealExemptionOracle {
+        sgk: round_money(sgk),
+        gv: round_money(gv),
+    }
 }
 
 pub fn meal_exemption(
@@ -69,8 +89,9 @@ pub fn stamp_tax(
     stamp_rate: Decimal,
     used_before: Decimal,
 ) -> StampTaxOracle {
-    let gross = round_money(taxable_income.max(Decimal::ZERO) * stamp_rate);
-    let monthly_entitlement = round_money(monthly_minimum_gross.max(Decimal::ZERO) * stamp_rate);
+    let gross = round_product_to_cents(taxable_income.max(Decimal::ZERO), stamp_rate);
+    let monthly_entitlement =
+        round_product_to_cents(monthly_minimum_gross.max(Decimal::ZERO), stamp_rate);
     let used_before = used_before.max(Decimal::ZERO);
     let remaining_before = (monthly_entitlement - used_before).max(Decimal::ZERO);
     let applied = gross.min(remaining_before);

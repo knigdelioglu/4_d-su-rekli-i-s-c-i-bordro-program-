@@ -1,5 +1,8 @@
 //! Road allowance dates are independent from the institution's wage raise calendar.
-use crate::{BordroDonemi, DomainError, DonemselKurumDegerleri, PersonelPuantaj, Result};
+use crate::{
+    round_currency_amount, BordroDonemi, DomainError, DonemselKurumDegerleri, PersonelPuantaj,
+    Result,
+};
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 
@@ -52,7 +55,7 @@ pub fn calculate_dated_transport(
         .filter(|(_, code)| matches!(code.as_str(), "Ç" | "GÇ"))
         .map(|(date, _)| transport_rate_on(settings, date))
         .sum();
-    Ok(total.round_dp(2))
+    Ok(round_currency_amount(total))
 }
 
 #[cfg(test)]

@@ -56,6 +56,28 @@ fn period_jan_2026() -> BordroDonemi {
     }
 }
 
+fn full_default_attendance(period: &BordroDonemi) -> PersonelPuantaj {
+    let start = chrono::NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = chrono::NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").unwrap();
+    let mut gunler = HashMap::new();
+    let mut curr = start;
+    while curr <= end {
+        let code = if matches!(curr.weekday(), chrono::Weekday::Sat | chrono::Weekday::Sun) {
+            "T"
+        } else {
+            "Ç"
+        };
+        gunler.insert(curr.format("%Y-%m-%d").to_string(), code.to_string());
+        curr += chrono::Duration::days(1);
+    }
+    PersonelPuantaj {
+        id: format!("{}_{}", "p-sync-test", period.id),
+        personelId: "p-sync-test".into(),
+        donemId: period.id.clone(),
+        gunler,
+    }
+}
+
 #[test]
 fn sick_leave_syncs_puantaj_across_15_14_boundary_and_preserves_manual_changes(
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -236,5 +258,73 @@ fn sick_leave_syncs_puantaj_across_15_14_boundary_and_preserves_manual_changes(
         Some("T")
     );
 
+    Ok(())
+}
+
+#[test]
+fn editing_sick_leave_restores_removed_dates_but_preserves_manual_non_r_codes(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let conn = create_in_memory_connection()?;
+    let period = period_jan_2026();
+    PersonnelRepository::save(&conn, &test_person())?;
+    PeriodRepository::save(&conn, &period)?;
+    AttendanceRepository::save(&conn, &full_default_attendance(&period))?;
+
+    // The first record marks Jan 17–24 as R. Jan 17 is then changed manually
+    // so that the edit path must not overwrite a non-R attendance code.
+    SickLeaveRepository::save_and_sync_attendance(
+        &conn,
+        &SickLeaveRecord {
+            id: "sick-edit".into(),
+            personnelId: "p-sync-test".into(),
+            startDate: "2026-01-17".into(),
+            endDate: "2026-01-24".into(),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
+    let mut attendance =
+        AttendanceRepository::get_by_personnel_and_period(&conn, "p-sync-test", "2026-01")?
+            .expect("attendance exists");
+    attendance.gunler.insert("2026-01-17".into(), "Ç".into());
+    AttendanceRepository::save(&conn, &attendance)?;
+
+    // Narrow the episode. Jan 19–22 still overlap and remain R; removed dates
+    // are restored from R to their weekday/weekend defaults.
+    SickLeaveRepository::save_and_sync_attendance(
+        &conn,
+        &SickLeaveRecord {
+            id: "sick-edit".into(),
+            personnelId: "p-sync-test".into(),
+            startDate: "2026-01-19".into(),
+            endDate: "2026-01-22".into(),
+            createdAt: None,
+            updatedAt: None,
+        },
+    )?;
+
+    let updated =
+        AttendanceRepository::get_by_personnel_and_period(&conn, "p-sync-test", "2026-01")?
+            .expect("attendance exists");
+    assert_eq!(
+        updated.gunler.get("2026-01-17").map(String::as_str),
+        Some("Ç")
+    );
+    assert_eq!(
+        updated.gunler.get("2026-01-18").map(String::as_str),
+        Some("T")
+    );
+    for date in ["2026-01-19", "2026-01-20", "2026-01-21", "2026-01-22"] {
+        assert_eq!(updated.gunler.get(date).map(String::as_str), Some("R"));
+    }
+    assert_eq!(
+        updated.gunler.get("2026-01-23").map(String::as_str),
+        Some("Ç")
+    );
+    assert_eq!(
+        updated.gunler.get("2026-01-24").map(String::as_str),
+        Some("T")
+    );
+    assert_eq!(updated.gunler.len(), 31);
     Ok(())
 }

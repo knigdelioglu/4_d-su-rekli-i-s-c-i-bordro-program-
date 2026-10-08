@@ -11,6 +11,7 @@ pub mod calculations;
 pub mod compensation_policy;
 pub mod errors;
 pub mod models;
+pub mod money;
 
 pub use errors::DomainError;
 
@@ -30,6 +31,7 @@ pub use calculations::*;
 pub use compensation_policy::*;
 pub use index::*;
 pub use models::*;
+pub use money::*;
 pub use notices::*;
 pub use payroll_engine::*;
 pub use payroll_snapshot::*;

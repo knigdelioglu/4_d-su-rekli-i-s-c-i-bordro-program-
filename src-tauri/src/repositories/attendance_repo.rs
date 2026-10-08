@@ -3,7 +3,7 @@ use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::transaction::with_transaction;
-use chrono::{NaiveDate, Utc};
+use chrono::{Duration, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
@@ -94,6 +94,27 @@ impl AttendanceRepository {
                 return Err(DomainError::ValidationError(format!(
                     "{} puantaj tarihi {} döneminin {}–{} aralığı dışında.",
                     date_text, period.id, period.baslangicTarihi, period.bitisTarihi
+                )));
+            }
+
+            if date.format("%Y-%m-%d").to_string() != date_text.as_str() {
+                return Err(DomainError::ValidationError(format!(
+                    "{} döneminde puantaj tarihi YYYY-MM-DD biçiminde kanonik olmalıdır: {}",
+                    period.id, date_text
+                )));
+            }
+        }
+
+        // `validate_period` above establishes the 15–14 service-period
+        // geometry, so this finite offset range ends at `end` and cannot
+        // advance beyond Chrono's supported calendar.
+        for day_offset in 0..calendar_day_count {
+            let date = start + Duration::days(day_offset);
+            let date_text = date.format("%Y-%m-%d").to_string();
+            if !attendance.gunler.contains_key(&date_text) {
+                return Err(DomainError::ValidationError(format!(
+                    "{} döneminde puantaj günü eksik: {}. Her hizmet dönemi günü bir puantaj koduyla kaydedilmelidir.",
+                    period.id, date_text
                 )));
             }
         }

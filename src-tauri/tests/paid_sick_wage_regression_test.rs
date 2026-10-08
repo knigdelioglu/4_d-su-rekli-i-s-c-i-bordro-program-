@@ -11,6 +11,7 @@ use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
 use bordro_programi_lib::repositories::tax_opening_repo::TaxOpeningRepository;
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -156,23 +157,46 @@ fn save_tax_opening(
     Ok(())
 }
 
-fn attendance_28_work_2_sick(personnel_id: &str) -> PersonelPuantaj {
+fn attendance_period(
+    personnel_id: &str,
+    period: &BordroDonemi,
+    default_code: &str,
+) -> PersonelPuantaj {
     let mut gunler = HashMap::new();
-    for day in 15..=31 {
-        gunler.insert(format!("2026-07-{day:02}"), "Ç".to_string());
+    let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").unwrap();
+    for offset in 0..=(end - start).num_days() {
+        let date = start + Duration::days(offset);
+        gunler.insert(
+            date.format("%Y-%m-%d").to_string(),
+            default_code.to_string(),
+        );
     }
-    for day in 1..=11 {
-        gunler.insert(format!("2026-08-{day:02}"), "Ç".to_string());
-    }
-    gunler.insert("2026-08-12".into(), "R".into());
-    gunler.insert("2026-08-13".into(), "R".into());
-
     PersonelPuantaj {
-        id: format!("{personnel_id}_2026-07"),
+        id: format!("{personnel_id}_{}", period.id),
         personelId: personnel_id.into(),
-        donemId: "2026-07".into(),
+        donemId: period.id.clone(),
         gunler,
     }
+}
+
+fn set_attendance(attendance: &mut PersonelPuantaj, date: &str, code: &str) {
+    attendance.gunler.insert(date.into(), code.into());
+}
+
+fn attendance_28_work_2_sick(personnel_id: &str) -> PersonelPuantaj {
+    let period = july_period();
+    let mut attendance = attendance_period(personnel_id, &period, "R");
+    for day in 15..=31 {
+        set_attendance(&mut attendance, &format!("2026-07-{day:02}"), "Ç");
+    }
+    for day in 1..=11 {
+        set_attendance(&mut attendance, &format!("2026-08-{day:02}"), "Ç");
+    }
+    set_attendance(&mut attendance, "2026-08-12", "R");
+    set_attendance(&mut attendance, "2026-08-13", "R");
+    set_attendance(&mut attendance, "2026-08-14", "T");
+    attendance
 }
 
 fn sick_record(id: &str, personnel_id: &str, start: &str, end: &str) -> SickLeaveRecord {
@@ -209,7 +233,7 @@ fn paid_sick_days_restore_base_wage_but_not_meal_road_or_work_premium(
 
     assert_eq!(payroll.raporluGun, Some(2));
     assert_eq!(payroll.odenenRaporluGun, Some(2));
-    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(30000)));
+    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(31000)));
     assert_eq!(payroll.gelirler.yemek, Some(dec!(2800)));
     assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(1400)));
     assert_eq!(payroll.gelirler.isPrimi, Some(dec!(2520)));
@@ -255,7 +279,7 @@ fn sixth_sick_episode_does_not_restore_base_wage() -> Result<(), Box<dyn std::er
 
     assert_eq!(payroll.raporluGun, Some(2));
     assert_eq!(payroll.odenenRaporluGun, Some(0));
-    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(28000)));
+    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(29000)));
     assert_eq!(payroll.gelirler.yemek, Some(dec!(2800)));
     assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(1400)));
 
@@ -272,18 +296,10 @@ fn payable_sick_date_must_match_r_code_in_attendance() -> Result<(), Box<dyn std
     PeriodRepository::save(&conn, &period)?;
     save_policy_baseline(&conn, &period.baslangicTarihi, dec!(1000))?;
 
-    let mut gunler = HashMap::new();
-    gunler.insert("2026-08-12".into(), "Ç".into());
-    gunler.insert("2026-08-13".into(), "R".into());
-    AttendanceRepository::save(
-        &conn,
-        &PersonelPuantaj {
-            id: "paid-sick-conflict_2026-07".into(),
-            personelId: p.id.clone(),
-            donemId: period.id.clone(),
-            gunler,
-        },
-    )?;
+    let mut attendance = attendance_period(&p.id, &period, "R");
+    set_attendance(&mut attendance, "2026-08-12", "Ç");
+    set_attendance(&mut attendance, "2026-08-13", "R");
+    AttendanceRepository::save(&conn, &attendance)?;
     SickLeaveRepository::save(
         &conn,
         &sick_record("paid-sick-conflict-1", &p.id, "2026-08-12", "2026-08-13"),
@@ -351,20 +367,20 @@ fn paid_sick_wage_uses_correct_rate_on_each_side_of_raise_date(
     save_annual_parameters(&conn)?;
     save_tax_opening(&conn, &p.id, &active)?;
 
-    let mut gunler = HashMap::new();
-    gunler.insert("2026-03-30".into(), "Ç".into());
-    gunler.insert("2026-03-31".into(), "R".into());
-    gunler.insert("2026-04-01".into(), "R".into());
-    gunler.insert("2026-04-02".into(), "Ç".into());
-    AttendanceRepository::save(
-        &conn,
-        &PersonelPuantaj {
-            id: "paid-sick-raise_2026-03".into(),
-            personelId: p.id.clone(),
-            donemId: active.id.clone(),
-            gunler,
-        },
-    )?;
+    let mut attendance = attendance_period(&p.id, &active, "Ç");
+    for date in [
+        "2026-03-15",
+        "2026-03-22",
+        "2026-03-29",
+        "2026-04-05",
+        "2026-04-12",
+    ] {
+        set_attendance(&mut attendance, date, "T");
+    }
+    set_attendance(&mut attendance, "2026-03-31", "R");
+    set_attendance(&mut attendance, "2026-04-01", "R");
+    set_attendance(&mut attendance, "2026-04-02", "Ç");
+    AttendanceRepository::save(&conn, &attendance)?;
     SickLeaveRepository::save(
         &conn,
         &sick_record("paid-sick-raise-1", &p.id, "2026-03-31", "2026-04-02"),
@@ -372,15 +388,15 @@ fn paid_sick_wage_uses_correct_rate_on_each_side_of_raise_date(
 
     let payroll = PayrollService::calculate_payroll_for_personnel(&conn, &p.id, &active.id)?;
 
-    // Before 1 April: 1 worked + 1 institution-paid sick day = 2 x 1,000.
-    // From 1 April: 1 institution-paid sick + 1 worked day = 2 x 2,000.
-    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(6000)));
+    // Before 1 April: 17 entitlement days × 1,000. From 1 April:
+    // 14 entitlement days × 2,000. One paid sick day falls on each side.
+    assert_eq!(payroll.gelirler.tabanBrutAylik, Some(dec!(45000)));
     assert_eq!(payroll.odenenRaporluGun, Some(2));
-    // Only the two worked days earn meals: 1 × 100 before the raise,
-    // 1 × 200 after the same 100% wage increase. Paid R days earn no meal.
-    assert_eq!(payroll.gelirler.yemek, Some(dec!(300)));
-    assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(100)));
-    assert_eq!(payroll.gelirler.isPrimi, Some(dec!(270)));
+    // 13 worked days before the raise and 11 after it receive meal, road,
+    // and work-premium treatment. The two paid R days receive base wage only.
+    assert_eq!(payroll.gelirler.yemek, Some(dec!(3500)));
+    assert_eq!(payroll.gelirler.vasitaYol, Some(dec!(1200)));
+    assert_eq!(payroll.gelirler.isPrimi, Some(dec!(3150)));
 
     Ok(())
 }

@@ -147,3 +147,38 @@ impl PayrollInvalidationRepository {
         Ok(changed)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use payroll_core::{MutationImpact, PayrollKey};
+    use rusqlite::Connection;
+
+    #[test]
+    fn finalized_message_mentions_remaining_examples() {
+        let conn = Connection::open_in_memory().unwrap();
+        let impact = MutationImpact {
+            blockedByFinalized: (0..4)
+                .map(|index| PayrollKey {
+                    personnelId: format!("person-{index}"),
+                    periodId: format!("period-{index}"),
+                    accrualId: "normal".into(),
+                })
+                .collect(),
+            ..MutationImpact::default()
+        };
+        let message = PayrollInvalidationRepository::finalized_block_message(&conn, &impact);
+        assert!(message.contains("ve 1 kayıt daha"));
+    }
+
+    #[test]
+    fn finalized_message_mentions_blocked_retro_batches() {
+        let conn = Connection::open_in_memory().unwrap();
+        let impact = MutationImpact {
+            blockedByFinalizedRetroBatches: vec!["batch-a".into(), "batch-b".into()],
+            ..MutationImpact::default()
+        };
+        let message = PayrollInvalidationRepository::finalized_block_message(&conn, &impact);
+        assert!(message.contains("2 kesinleşmiş geriye dönük fark ödemesi"));
+    }
+}

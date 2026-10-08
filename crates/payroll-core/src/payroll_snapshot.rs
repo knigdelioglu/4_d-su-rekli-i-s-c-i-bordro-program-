@@ -1397,7 +1397,7 @@ fn validate_tax_history(
 }
 
 fn round_tax_total(value: Decimal) -> Decimal {
-    value.round_dp(2)
+    crate::round_currency_amount(value)
 }
 
 fn add_tax_history_amount(total: Decimal, amount: Decimal, field: &str) -> SnapshotResult<Decimal> {

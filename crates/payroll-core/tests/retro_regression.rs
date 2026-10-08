@@ -8,7 +8,7 @@ use payroll_core::{
     CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
     CompensationPolicyVersion, CompensationRevision, CompensationRevisionOverride,
     CompensationRevisionReason, CompensationRevisionScope, CompensationRevisionStatus,
-    DonemselKurumDegerleri, ManualPayrollIncomeInput, PayrollAccrualInput,
+    DevredenPekKaydi, DonemselKurumDegerleri, ManualPayrollIncomeInput, PayrollAccrualInput,
     PayrollCalculationRequest, PayrollDatasetSnapshot, PayrollPeriodInstitutionSettings, Personel,
     PersonelPuantaj, RetroAdjustmentBatch, RetroAllocation, RetroEarningCode,
     RetroEntitlementEngine, RetroParameterKey, RetroSettlementStatus, RetroSgkTreatment,
@@ -524,6 +524,50 @@ fn schema2_wage_retro(
     .expect("schema-2 payment-event replay should calculate")
 }
 
+fn assert_schema2_source_replay_rejects(source: PayrollDatasetSnapshot, batch_id: &str) {
+    let revision_id = format!("{batch_id}-revision");
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        batch_id,
+        revision(&revision_id, "2026-02-15"),
+        vec![wage_override(
+            &format!("{batch_id}-wage"),
+            &revision_id,
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("an incomplete immutable payment input must not be reconstructed");
+    assert!(
+        error.to_string().contains("UNSUPPORTED_HISTORICAL_REPLAY"),
+        "unexpected error for {batch_id}: {error}"
+    );
+}
+
+fn assert_source_baseline_rejects(
+    source: PayrollDatasetSnapshot,
+    batch_id: &str,
+    expected_message: &str,
+) {
+    let revision_id = format!("{batch_id}-revision");
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        batch_id,
+        revision(&revision_id, "2026-02-15"),
+        vec![wage_override(
+            &format!("{batch_id}-wage"),
+            &revision_id,
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("retro cannot calculate without exactly one authoritative NORMAL baseline");
+    assert!(
+        error.to_string().contains(expected_message),
+        "unexpected baseline error for {batch_id}: {error}"
+    );
+}
+
 #[test]
 fn schema2_normal_replays_real_non_normal_events_from_their_saved_payment_snapshots() {
     let calculated_source = schema2_source_with_payment_events(false);
@@ -756,6 +800,185 @@ fn schema2_non_normal_source_requires_its_saved_statutory_snapshot() {
         error.to_string().contains("supplement-early"),
         "unexpected error: {error}"
     );
+}
+
+#[test]
+fn schema2_source_replay_rejects_forged_or_missing_event_financial_snapshots() {
+    let source = schema2_source_with_payment_events(false);
+
+    let mut mismatched_person = source.clone();
+    mismatched_person
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::SUPPLEMENTAL)
+        .expect("supplementary payment")
+        .personelId = "p2".into();
+    let revision_id = "schema2-event-person-mismatch-revision";
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        mismatched_person,
+        "schema2-event-person-mismatch",
+        revision(revision_id, "2026-02-15"),
+        vec![wage_override(
+            "schema2-event-person-mismatch-wage",
+            revision_id,
+            dec!(120),
+        )],
+        "2026-06-20",
+    ))
+    .expect_err("a payment event rebound to another person must be rejected");
+    assert!(error
+        .to_string()
+        .contains("canonical financial replay source"));
+
+    let mut incomplete_payment_date = source.clone();
+    incomplete_payment_date
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::TEDIYE)
+        .expect("tediye payment")
+        .paymentDate = " ".into();
+    assert_schema2_source_replay_rejects(incomplete_payment_date, "schema2-event-date-missing");
+
+    let mut compensation_snapshot_on_supplementary = source.clone();
+    let normal_snapshot = compensation_snapshot_on_supplementary
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualType == AccrualType::NORMAL)
+        .and_then(|payroll| payroll.calculationMetadata.clone())
+        .expect("normal snapshot");
+    compensation_snapshot_on_supplementary
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::SUPPLEMENTAL)
+        .expect("supplementary payment")
+        .calculationMetadata = Some(normal_snapshot);
+    assert_schema2_source_replay_rejects(
+        compensation_snapshot_on_supplementary,
+        "schema2-extra-compensation-snapshot",
+    );
+
+    let mut mismatched_net = source.clone();
+    let event = mismatched_net
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::TEDIYE)
+        .expect("tediye payment");
+    event.netOdeme += dec!(0.01);
+    assert_schema2_source_replay_rejects(mismatched_net, "schema2-mismatched-net");
+
+    let mut missing_pek_carry = source.clone();
+    missing_pek_carry
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::TEDIYE)
+        .expect("tediye payment")
+        .devredenPekGelen = None;
+    assert_schema2_source_replay_rejects(missing_pek_carry, "schema2-missing-incoming-carry");
+
+    let mut missing_gv_base = source.clone();
+    missing_gv_base
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::TIS_IKRAMIYE)
+        .expect("TİS payment")
+        .persistedGvBase = None;
+    assert_schema2_source_replay_rejects(missing_gv_base, "schema2-missing-gv-base");
+
+    let mut pek_limit_mismatch = source;
+    pek_limit_mismatch
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::TEDIYE)
+        .expect("tediye payment")
+        .pekDetay
+        .as_mut()
+        .expect("PEK snapshot")
+        .pekAltSinir += dec!(0.01);
+    assert_schema2_source_replay_rejects(pek_limit_mismatch, "schema2-pek-limit-mismatch");
+
+    let mut mismatched_later_carry = schema2_source_with_payment_events(false);
+    mismatched_later_carry
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::TEDIYE)
+        .expect("tediye payment")
+        .devredenPekGelen = Some(vec![DevredenPekKaydi {
+        tutar: dec!(1),
+        kalanAySayisi: 1,
+        kaynakDonemId: Some("forged-carry".into()),
+    }]);
+    assert_schema2_source_replay_rejects(mismatched_later_carry, "schema2-event-carry-mismatch");
+}
+
+#[test]
+fn retro_rejects_missing_stale_and_duplicate_normal_source_baselines() {
+    let source = schema2_source_with_payment_events(false);
+
+    let mut missing_normal = source.clone();
+    missing_normal
+        .payrolls
+        .retain(|payroll| payroll.accrualType != AccrualType::NORMAL);
+    assert_source_baseline_rejects(
+        missing_normal,
+        "retro-source-normal-missing",
+        "hesaplanmış (CALCULATED/FINALIZED) NORMAL bordro yok",
+    );
+
+    let mut stale_normal = source.clone();
+    stale_normal
+        .payrolls
+        .iter_mut()
+        .find(|payroll| payroll.accrualType == AccrualType::NORMAL)
+        .expect("normal payment")
+        .status = BordroStatus::STALE;
+    assert_source_baseline_rejects(
+        stale_normal,
+        "retro-source-normal-stale",
+        "has no CALCULATED/FINALIZED NORMAL source record",
+    );
+
+    let mut duplicate_normal = source;
+    let duplicate = duplicate_normal
+        .payrolls
+        .iter()
+        .find(|payroll| payroll.accrualType == AccrualType::NORMAL)
+        .expect("normal payment")
+        .clone();
+    duplicate_normal.payrolls.push(duplicate);
+    assert_source_baseline_rejects(
+        duplicate_normal,
+        "retro-source-normal-duplicate",
+        "multiple authoritative NORMAL source records",
+    );
+}
+
+#[test]
+fn retro_request_rejects_empty_batch_identity_and_foreign_revision_overrides() {
+    let source = schema2_source_with_payment_events(false);
+    let mut empty_id = retro_request(
+        source.clone(),
+        "batch",
+        revision("empty-id-revision", "2026-02-15"),
+        vec![],
+        "2026-06-20",
+    );
+    empty_id.batchId = "  ".into();
+    let error = RetroEntitlementEngine::calculate(&empty_id)
+        .expect_err("retro batch identity is required before it can be persisted");
+    assert!(error.to_string().contains("batch kimliği boş"));
+
+    let request = retro_request(
+        source,
+        "foreign-override-batch",
+        revision("current-revision", "2026-02-15"),
+        vec![wage_override("foreign-wage", "foreign-revision", dec!(120))],
+        "2026-06-20",
+    );
+    let error = RetroEntitlementEngine::calculate(&request)
+        .expect_err("an override from another revision cannot enter this retro calculation");
+    assert!(error
+        .to_string()
+        .contains("başka bir revision'a ait override"));
 }
 
 #[test]
@@ -1407,6 +1630,32 @@ fn schema2_source_payroll_replays_without_live_attendance_rows() {
     ))
     .expect("schema-2 payroll retains the inputs needed for deterministic replay");
     assert_eq!(result.batch.totalGrossDelta, dec!(620));
+}
+
+#[test]
+fn snapshotless_legacy_normal_is_rejected_instead_of_replayed_from_live_settings() {
+    let source_period = period("2026-03", "2026-03-15", "2026-04-14", 4);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let mut legacy_normal = normal_payroll(&source, "2026-03", "2026-04-14", 0);
+    legacy_normal.calculationMetadata = None;
+    source.payrolls.push(legacy_normal);
+
+    let error = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "retro-snapshotless-legacy-source",
+        revision("snapshotless-legacy-revision", "2026-03-15"),
+        vec![wage_override(
+            "snapshotless-legacy-wage",
+            "snapshotless-legacy-revision",
+            dec!(120),
+        )],
+        "2026-05-14",
+    ))
+    .expect_err("retro must not reconstruct historical PEK from mutable live settings");
+    assert!(
+        error.to_string().contains("LEGACY_REPLAY_UNAVAILABLE"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -3679,6 +3928,90 @@ fn receivable_replay_matches_runtime_order_for_zero_and_unpaid_overpayment_batch
 }
 
 #[test]
+fn receivable_replay_filters_drafts_and_rejects_invalid_v5_settlement_flows() {
+    fn batch(
+        id: &str,
+        status: CompensationRevisionStatus,
+        amounts: (Decimal, Decimal, Decimal, Decimal, Decimal),
+        settlement_status: RetroSettlementStatus,
+    ) -> RetroAdjustmentBatch {
+        let (total, recoverable, offset, recovered, outstanding) = amounts;
+        RetroAdjustmentBatch {
+            id: id.into(),
+            revisionId: format!("revision-{id}"),
+            personnelId: "p1".into(),
+            paymentDate: "2027-03-14".into(),
+            status,
+            settlementStatus: settlement_status,
+            totalGrossDelta: total,
+            payableSettlementAmount: Decimal::ZERO,
+            offsetSettlementAmount: offset,
+            recoveredAmount: recovered,
+            recoverableAmount: recoverable,
+            outstandingReceivable: outstanding,
+            description: None,
+            createdAt: Some("2027-03-14T12:00:00Z".into()),
+            calculatedAt: Some("2027-03-14T12:00:00Z".into()),
+            finalizedAt: None,
+        }
+    }
+
+    // Draft and stale rows are historical edits, not payment events, and must
+    // never alter the replayed balance. The legacy negative row is still
+    // accepted by the runtime compatibility path and derives its receivable
+    // from the signed entitlement delta.
+    let draft = batch(
+        "draft",
+        CompensationRevisionStatus::DRAFT,
+        (
+            dec!(-100),
+            dec!(100),
+            Decimal::ZERO,
+            Decimal::ZERO,
+            dec!(100),
+        ),
+        RetroSettlementStatus::OVERPAYMENT,
+    );
+    let stale = batch(
+        "stale",
+        CompensationRevisionStatus::STALE,
+        (dec!(-50), dec!(50), Decimal::ZERO, Decimal::ZERO, dec!(50)),
+        RetroSettlementStatus::OVERPAYMENT,
+    );
+    let legacy = batch(
+        "legacy-negative",
+        CompensationRevisionStatus::CALCULATED,
+        (
+            dec!(-25),
+            Decimal::ZERO,
+            Decimal::ZERO,
+            Decimal::ZERO,
+            Decimal::ZERO,
+        ),
+        RetroSettlementStatus::OVERPAYMENT,
+    );
+    let replay = replay_retro_outstanding_receivables(&[draft, stale, legacy])
+        .expect("non-authoritative rows must be ignored and legacy flow replayed");
+    assert_eq!(replay.get("p1"), Some(&dec!(25)));
+
+    let mut over_recovered = batch(
+        "over-recovered",
+        CompensationRevisionStatus::CALCULATED,
+        (dec!(-100), dec!(100), Decimal::ZERO, dec!(101), dec!(100)),
+        RetroSettlementStatus::OVERPAYMENT,
+    );
+    let error = validate_v5_retro_outstanding_receivables(&[over_recovered.clone()])
+        .expect_err("recovery cannot exceed the available receivable");
+    assert!(error.to_string().contains("over-recovered"));
+
+    over_recovered.recoveredAmount = Decimal::ZERO;
+    over_recovered.outstandingReceivable = dec!(99);
+    let error = validate_v5_retro_outstanding_receivables(&[over_recovered])
+        .expect_err("V5 snapshot must equal chronological replay");
+    assert!(error.to_string().contains("outstanding receivable"));
+}
+
+#[test]
 fn dated_transport_replay_preserves_historical_schedule_and_applies_transport_override() {
     let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
     let mut source = dataset(&[source_period], dec!(100), dec!(9));
@@ -3726,4 +4059,120 @@ fn dated_transport_replay_preserves_historical_schedule_and_applies_transport_ov
         .unwrap();
     // 28 working days × 30 minus 18×10 + 10×20 already paid.
     assert_eq!(transport.deltaAmount, dec!(460));
+}
+
+#[test]
+fn coverage_authoritative_wage_retro_reconciles_source_pek_and_worker_premium() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    assert_eq!(normal.gelirler.tabanBrutAylik, Some(dec!(2800)));
+    source.payrolls.push(normal);
+
+    let result = wage_retro_result(source, "coverage-wage", "coverage-rev", dec!(110));
+    let wage = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("wage allocation");
+    // 28 service days × (110 - 100) = 280 TL.
+    assert_eq!(wage.deltaAmount, dec!(280));
+    assert_eq!(wage.retroPekDelta, dec!(280));
+    assert_eq!(wage.workerSgkDelta, dec!(39.20));
+    assert_eq!(wage.workerUnemploymentDelta, dec!(2.80));
+    assert_eq!(result.batch.totalGrossDelta, dec!(280));
+}
+
+#[test]
+fn coverage_retro_payment_income_separates_wage_source_and_non_wage_payment_month() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    source.payrolls.push(normal);
+
+    let result = RetroEntitlementEngine::calculate(&retro_request(
+        source,
+        "coverage-mixed",
+        revision("coverage-mixed-rev", "2026-02-15"),
+        vec![
+            wage_override("coverage-wage-override", "coverage-mixed-rev", dec!(110)),
+            CompensationRevisionOverride {
+                id: "coverage-premium-override".into(),
+                revisionId: "coverage-mixed-rev".into(),
+                parameter: RetroParameterKey::IS_PRIMI_YUZDE,
+                value: dec!(10),
+                personnelId: None,
+            },
+        ],
+        "2026-06-20",
+    ))
+    .expect("mixed authoritative retro should calculate");
+
+    let wage = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("wage allocation");
+    let premium = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::WORK_PREMIUM)
+        .expect("work premium allocation");
+    assert_eq!(wage.deltaAmount, dec!(280));
+    assert_eq!(premium.deltaAmount, dec!(308));
+    assert_eq!(wage.sgkTreatment, RetroSgkTreatment::WAGE_SOURCE_MONTH);
+    assert_eq!(
+        premium.sgkTreatment,
+        RetroSgkTreatment::NON_WAGE_PAYMENT_MONTH
+    );
+    assert_eq!(wage.retroPekDelta, dec!(280));
+    assert_eq!(premium.retroPekDelta, dec!(0));
+    assert_eq!(result.batch.totalGrossDelta, dec!(588));
+}
+
+#[test]
+fn coverage_authoritative_wage_retro_emits_negative_delta_without_payable_cash() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    assert_eq!(normal.gelirler.tabanBrutAylik, Some(dec!(2800)));
+    source.payrolls.push(normal);
+
+    let result = wage_retro_result(
+        source,
+        "coverage-negative-wage",
+        "coverage-negative-rev",
+        dec!(90),
+    );
+    let wage = result
+        .allocations
+        .iter()
+        .find(|allocation| allocation.earningCode == RetroEarningCode::BASE_WAGE)
+        .expect("negative wage allocation");
+    // 28 service days × (90 - 100) = -280 TL; negative entitlement is
+    // recoverable and must not become a positive payment.
+    assert_eq!(wage.deltaAmount, dec!(-280));
+    assert_eq!(wage.retroPekDelta, dec!(-280));
+    assert_eq!(wage.workerSgkDelta, dec!(-39.20));
+    assert_eq!(wage.workerUnemploymentDelta, dec!(-2.80));
+    assert_eq!(result.batch.totalGrossDelta, dec!(-280));
+    assert_eq!(result.batch.payableSettlementAmount, dec!(0));
+    assert_eq!(result.batch.recoverableAmount, dec!(280));
+}
+
+#[test]
+fn coverage_authoritative_wage_retro_zero_delta_is_idempotent() {
+    let source_period = period("2026-02", "2026-02-15", "2026-03-14", 3);
+    let mut source = dataset(&[source_period], dec!(100), dec!(9));
+    let normal = normal_payroll(&source, "2026-02", "2026-03-14", 0);
+    source.payrolls.push(normal);
+
+    let result = wage_retro_result(source, "coverage-zero-wage", "coverage-zero-rev", dec!(100));
+    assert_eq!(result.batch.totalGrossDelta, Decimal::ZERO);
+    assert_eq!(result.batch.payableSettlementAmount, Decimal::ZERO);
+    assert_eq!(result.batch.recoverableAmount, Decimal::ZERO);
+    assert!(result
+        .allocations
+        .iter()
+        .all(|allocation| allocation.deltaAmount == Decimal::ZERO));
 }

@@ -410,7 +410,7 @@ fn normalize_legacy_retro_settlement(
             batch.status,
             CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
         );
-        let total = batch.totalGrossDelta.round_dp(2);
+        let total = payroll_core::round_currency_amount(batch.totalGrossDelta);
         let payable = total.max(rust_decimal::Decimal::ZERO);
         let recoverable = (-total).max(rust_decimal::Decimal::ZERO);
         let personnel_id = batch.personnelId.clone();
@@ -460,10 +460,12 @@ fn normalize_legacy_retro_settlement(
             allocation.payableSettlementAmount = positive.min(remaining_payable);
             allocation.offsetSettlementAmount = rust_decimal::Decimal::ZERO;
             allocation.recoverableAmount = negative.min(remaining_recoverable);
-            remaining_payable =
-                (remaining_payable - allocation.payableSettlementAmount).round_dp(2);
-            remaining_recoverable =
-                (remaining_recoverable - allocation.recoverableAmount).round_dp(2);
+            remaining_payable = payroll_core::round_currency_amount(
+                remaining_payable - allocation.payableSettlementAmount,
+            );
+            remaining_recoverable = payroll_core::round_currency_amount(
+                remaining_recoverable - allocation.recoverableAmount,
+            );
         }
         if authoritative {
             outstanding_by_personnel.insert(personnel_id, batch.outstandingReceivable);

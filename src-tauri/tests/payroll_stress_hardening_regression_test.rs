@@ -110,6 +110,14 @@ fn attendance_from_codes(
     codes: &[&str],
 ) -> PersonelPuantaj {
     let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").unwrap();
+    let expected_days = (end - start).num_days() + 1;
+    assert_eq!(
+        codes.len() as i64,
+        expected_days,
+        "{} dönemi puantaj fixture'ı her takvim gününü belirtmelidir",
+        period.id
+    );
     let gunler = codes
         .iter()
         .enumerate()
@@ -310,7 +318,9 @@ fn setup_devreden_case(
 fn unpaid_r_is_not_sgk_day_but_paid_r_is() -> Result<(), Box<dyn std::error::Error>> {
     let p = period("2026-07-r", 2026, 7, 2026, 8);
     let k = active_settings(&p.id);
-    let attendance = attendance_from_codes("r-person", &p, &["Ç", "R"]);
+    let mut codes = vec!["R"; 31];
+    codes[0] = "Ç";
+    let attendance = attendance_from_codes("r-person", &p, &codes);
 
     let unpaid =
         resolve_statutory_snapshot_for_period_with_paid_sick_dates(&attendance, &p, &k, &[])?;
@@ -365,7 +375,8 @@ fn unpaid_r_sgk_day_count_is_independent_of_calendar_position(
 #[test]
 fn incoming_devreden_pek_is_not_used_but_ages_when_period_has_no_prim_day(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (conn, active) = setup_devreden_case("no-prim-day", false, &["R"])?;
+    let no_prim_days = vec!["R"; 31];
+    let (conn, active) = setup_devreden_case("no-prim-day", false, &no_prim_days)?;
 
     let payroll =
         PayrollService::calculate_payroll_for_personnel(&conn, "no-prim-day", &active.id)?;
@@ -396,7 +407,8 @@ fn incoming_devreden_pek_is_not_used_but_ages_when_period_has_no_prim_day(
 #[test]
 fn oks_uses_worker_pek_including_devreden_amount_used_this_period(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let work_codes = vec!["Ç"; 30];
+    let mut work_codes = vec!["Ç"; 30];
+    work_codes.push("R");
     let (conn, active) = setup_devreden_case("oks-devreden", true, &work_codes)?;
 
     let payroll =
@@ -432,7 +444,8 @@ fn stamp_tax_uses_resolved_minimum_wage_after_in_period_change(
     SettingsRepository::save_institution_settings(&conn, &k)?;
     compensation_policy_test_support::seed_period_baseline(&conn, &active, &k)?;
 
-    let work_codes = vec!["Ç"; 30];
+    let mut work_codes = vec!["Ç"; 30];
+    work_codes.push("R");
     AttendanceRepository::save(&conn, &attendance_from_codes(&p.id, &active, &work_codes))?;
 
     let payroll = PayrollService::calculate_payroll_for_personnel(&conn, &p.id, &active.id)?;

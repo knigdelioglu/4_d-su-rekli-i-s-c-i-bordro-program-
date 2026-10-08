@@ -832,7 +832,7 @@ mod tests {
                     tediye: Some(dec!(12.345)),
                     tisIkramiyesi: Some(Decimal::ZERO),
                 }),
-                Some(dec!(12.34)),
+                Some(dec!(12.35)),
                 Some(Decimal::ZERO),
             ),
         ];
@@ -1057,9 +1057,9 @@ mod tests {
         let legacy = calculate_legacy_payroll(&request).unwrap();
         let shadow = calculate_payroll_with_policy(&request).unwrap();
         assert_full_record_equal(&legacy, &shadow);
-        assert_eq!(legacy.gelirler.tabanBrutAylik, Some(dec!(3100.15)));
-        assert_eq!(legacy.gelirler.yemek, Some(dec!(115.05)));
-        assert_eq!(legacy.gelirler.vasitaYol, Some(dec!(220.05)));
+        assert_eq!(legacy.gelirler.tabanBrutAylik, Some(dec!(3100.16)));
+        assert_eq!(legacy.gelirler.yemek, Some(dec!(115.06)));
+        assert_eq!(legacy.gelirler.vasitaYol, Some(dec!(220.06)));
         assert_eq!(legacy.gelirler.isPrimi, Some(dec!(110.06)));
         assert_eq!(legacy.gelirler.geceCalismasiUcreti, Some(dec!(15.03)));
         assert_eq!(legacy.gelirler.geceCalismasiTatiliUcreti, Some(dec!(20.03)));
@@ -1079,7 +1079,7 @@ mod tests {
         assert_eq!(result.gelirler.tisIkramiyesi, None);
         assert_eq!(result.gelirler.ekOdeme, Some(Decimal::ZERO));
         assert_eq!(result.gelirler.digerGelir, None);
-        assert_eq!(result.gelirler.yemek, Some(dec!(20.00)));
+        assert_eq!(result.gelirler.yemek, Some(dec!(20.02)));
         assert_eq!(
             result.gelirler.birlestirilmisSosyalYardim,
             Some(dec!(127.74))
@@ -1093,7 +1093,7 @@ mod tests {
             Some(Decimal::ZERO)
         );
         assert_eq!(result.gelirler.hizmetZammi, Some(dec!(5.13)));
-        assert_eq!(result.gelirToplam, dec!(3321.06));
+        assert_eq!(result.gelirToplam, dec!(3321.08));
         assert_eq!(result.pekDetay.as_ref().unwrap().hamPek, dec!(3301.06));
         assert_eq!(result.pekDetay.as_ref().unwrap().primMatrahi, dec!(3301.06));
         assert_eq!(result.pekDetay.as_ref().unwrap().finalPek, dec!(3301.06));
@@ -1101,7 +1101,7 @@ mod tests {
         assert_eq!(result.pekDetay.as_ref().unwrap().pekUstSinir, dec!(27000));
         assert_eq!(
             result.pekDetay.as_ref().unwrap().yemekIstisnasiTutar,
-            dec!(20)
+            dec!(20.02)
         );
         assert_eq!(result.kesintiler.isciSgkPrimi, Some(dec!(462.15)));
         assert_eq!(result.kesintiler.isciIssizlikPrimi, Some(dec!(33.01)));
@@ -1110,7 +1110,7 @@ mod tests {
         assert_eq!(result.kesintiler.gelirVergisi, Some(dec!(38.39)));
         assert_eq!(result.kesintiler.damgaVergisi, Some(dec!(2.29)));
         assert_eq!(result.kesintiToplam, dec!(535.84));
-        assert_eq!(result.netOdeme, dec!(2785.22));
+        assert_eq!(result.netOdeme, dec!(2785.24));
         assert_eq!(
             result.pekDetay.as_ref().unwrap().isverenSgkPrimi,
             Some(dec!(717.98))
@@ -1192,8 +1192,8 @@ mod tests {
             &one_compensation_timeline,
         )
         .unwrap();
-        assert_eq!(statutory_boundary_only.sgk, dec!(20.00));
-        assert_eq!(statutory_boundary_only.gv, dec!(20.00));
+        assert_eq!(statutory_boundary_only.sgk, dec!(20.01));
+        assert_eq!(statutory_boundary_only.gv, dec!(20.01));
         let same_statutory_slice = calculate_policy_meal_exemptions(
             &request.dataset.attendances[0],
             &request.dataset.periods[0],
@@ -1525,7 +1525,7 @@ mod tests {
         for (transport_changes, expected_road, expected_version_dates, road_rounding) in [
             (
                 None,
-                dec!(220.05),
+                dec!(220.06),
                 vec!["2026-01-15", "2026-02-01"],
                 RoadRoundingMode::PerCompensationSlice,
             ),
@@ -1619,8 +1619,8 @@ mod tests {
             let legacy = calculate_legacy_payroll(&request).unwrap();
             let shadow = calculate_payroll_with_policy(&request).unwrap();
             assert_full_record_equal(&legacy, &shadow);
-            assert_eq!(legacy.gelirler.tabanBrutAylik, Some(dec!(3100.15)));
-            assert_eq!(legacy.gelirler.yemek, Some(dec!(110.05)));
+            assert_eq!(legacy.gelirler.tabanBrutAylik, Some(dec!(3100.16)));
+            assert_eq!(legacy.gelirler.yemek, Some(dec!(110.06)));
             assert_eq!(legacy.gelirler.vasitaYol, Some(expected_road));
             assert_eq!(legacy.gelirler.isPrimi, Some(dec!(110.06)));
             assert_eq!(legacy.gelirler.geceCalismasiUcreti, Some(dec!(15.03)));
@@ -2202,10 +2202,10 @@ mod tests {
 
         let legacy = calculate_legacy_payroll(&request).unwrap();
         let shadow = calculate_payroll_with_policy(&request).unwrap();
-        assert_eq!(legacy.gelirler.yemek, Some(dec!(310.15)));
-        assert_eq!(shadow.gelirler.yemek, Some(dec!(310.15)));
-        assert_eq!(legacy.gelirToplam, dec!(3514.67));
-        assert_eq!(shadow.gelirToplam, dec!(3514.67));
+        assert_eq!(legacy.gelirler.yemek, Some(dec!(310.16)));
+        assert_eq!(shadow.gelirler.yemek, Some(dec!(310.16)));
+        assert_eq!(legacy.gelirToplam, dec!(3514.68));
+        assert_eq!(shadow.gelirToplam, dec!(3514.68));
         assert_eq!(legacy.netOdeme, dec!(2987.47));
         assert_eq!(shadow.netOdeme, dec!(2987.47));
         assert_full_record_equal(&legacy, &shadow);

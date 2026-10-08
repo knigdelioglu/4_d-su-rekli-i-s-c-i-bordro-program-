@@ -8,6 +8,7 @@ use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use chrono::{Datelike, NaiveDate, Utc};
+use payroll_core::round_currency_amount;
 use payroll_core::PayrollMutation;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_decimal::Decimal;
@@ -170,7 +171,7 @@ impl PayrollRepository {
     ) -> Result<()> {
         let calculated_gross = calculate_gelir_toplam(&bordro.gelirler);
         let calculated_deductions = calculate_kesinti_toplam(&bordro.kesintiler);
-        let calculated_net = (calculated_gross - calculated_deductions).round_dp(2);
+        let calculated_net = round_currency_amount(calculated_gross - calculated_deductions);
 
         if bordro.gelirToplam < Decimal::ZERO || bordro.kesintiToplam < Decimal::ZERO {
             return Err(DomainError::InvalidData(
@@ -181,9 +182,9 @@ impl PayrollRepository {
             return Err(DomainError::NegativeNetPayment {
                 gelir: bordro.gelirToplam,
                 kesinti: bordro.kesintiToplam,
-                fark: (bordro.kesintiToplam - bordro.gelirToplam)
-                    .max(Decimal::ZERO)
-                    .round_dp(2),
+                fark: round_currency_amount(
+                    (bordro.kesintiToplam - bordro.gelirToplam).max(Decimal::ZERO),
+                ),
             });
         }
         payroll_core::validate_payroll_snapshot_authority(bordro)?;
@@ -1004,7 +1005,7 @@ impl PayrollRepository {
                     )
                 })?;
         }
-        Ok(total.round_dp(2))
+        Ok(round_currency_amount(total))
     }
 
     pub fn get_next_devreden_pek(
@@ -1668,11 +1669,9 @@ impl PayrollRepository {
             }
         }
 
-        let computed_net = (b.gelirToplam - b.kesintiToplam).round_dp(2);
+        let computed_net = round_currency_amount(b.gelirToplam - b.kesintiToplam);
         if b.netOdeme < Decimal::ZERO || computed_net < Decimal::ZERO {
-            let fark = (b.kesintiToplam - b.gelirToplam)
-                .max(Decimal::ZERO)
-                .round_dp(2);
+            let fark = round_currency_amount((b.kesintiToplam - b.gelirToplam).max(Decimal::ZERO));
             return Err(DomainError::NegativeNetPayment {
                 gelir: b.gelirToplam,
                 kesinti: b.kesintiToplam,

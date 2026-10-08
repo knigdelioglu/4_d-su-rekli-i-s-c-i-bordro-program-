@@ -168,7 +168,7 @@ pub(crate) fn weighted_period_income_amount(
             "Zam gelir hesabında takvim günleri geçersiz.".into(),
         ));
     }
-    Ok(round2(
+    Ok(crate::round_currency_amount(
         (before_amount * Decimal::from(before_days) + after_amount * Decimal::from(after_days))
             / Decimal::from(total_days),
     ))

@@ -1,17 +1,24 @@
 # Görev 4 — Shadow engine parity kanıtı
 
+> **Aşama 2 güncellemesi:** Bu dosya, Görev 4 sırasında geçerli olan parity
+> yuvarlama sonuçlarını tarihsel kayıt olarak içerir. Üretim parasal sonuçları
+> için Aşama 2'de bulunan bağımsız dayanaklı yuvarlama kuralı ve yemek
+> istisnası birleştirmesi [finansal denetim raporunda](payroll-financial-audit-stage2.md)
+> yürürlüktedir. `10.005` örneklerindeki aşağıdaki eski kuruş sonuçları artık
+> güncel beklenen değer değildir.
+
 ## Proof plan
 
 | Gereksinim | Sahip akış | Kabul kanıtı |
 |---|---|---|
 | Shadow yalnız açık tam-state policy timeline'ı kullanır; legacy oracle değişmez | `resolve_compensation_segments` → private `cfg(test)` seam → ortak PEK/GV/DV/kesinti/carry orkestrasyonu | Aynı fixture'da tüm serileştirilen `BordroKaydi` eşitliği; production core derlemesi |
-| Tam Decimal parity mevcut rounding sınırlarını korur | Typed `FullEarning` boundary günlük base, meal, road, premium ve night rounding slice'ını başlatır; state değerleri eşit olsa da sınır korunur | Fractional single-field, automatic/explicit indexing, consecutive raise ve paid-sickness fixture'ları |
-| B-RND-01 eski statutory yemek yuvarlamasını korur | Yemek earning compensation sınırlarında; exemption compensation × statutory kesişimlerinde yuvarlanır | Tek compensation slice içinde iki `10.005` gün için tek statutory dilim `20.01`, iki statutory dilim `20.00` |
+| Tam Decimal parity kayıtlı earning sınırlarını korur | Typed `FullEarning` boundary günlük base, meal, road, premium ve night earning slice'ını başlatır; parasal kuruş yuvarlaması Aşama 2'de ortak half-up oracle ile doğrulanır | Fractional single-field, automatic/explicit indexing, consecutive raise ve paid-sickness fixture'ları |
+| Statutory yemek sınırı tek earning tutarını ikinci kez yuvarlamaz | Yemek earning compensation diliminde hesaplanır; aynı dilimdeki statutory kesişimleri önce toplanır | Tek compensation slice içindeki iki `10.005` gün, statutory tarih tek veya iki parçaya ayrılsa da `20.01` |
 | Road-only dated boundary diğer kazançları bölmez | Tek full-state timeline içindeki `RoadOnly` typed metadata'sı yalnız `gunlukVasitaYol` değişimine izin verir ve earning slice'ını bölmez | Fractional road `None` / `Some([])` / `Some(changes)` ile bağımsız statutory ve compensation sınırları; eksik/çelişkili metadata reddi |
 | Policy hataları fail-closed | Shadow giriş noktası mevcut full-state validator/resolver'ını çağırır | Eksik baseline, invalid state/date/order ve same-date correction leaf testleri |
 | N≥3 formülleri legacy'den bağımsız doğrulanır | Sabit input'tan literal elle hesaplanan golden | 3 compensation segment + statutory sınır, tam bordro değerleri ve carry |
 
-Günlük ücret girdileri önce her explicit compensation segmentinde mevcut helper ile hesaplanıp yuvarlanır, sonra legacy `sum_income_field` / premium-detail merge sözleşmesiyle birleştirilir. Günlük oran aynı kalsa da segment yuvarlaması korunur. Sosyal yardım, giyim ve hizmet zammı tüm inclusive takvim günleri ağırlıklandırıldıktan sonra bir kez `round2` edilir. Ek ödeme ve diğer gelir dönem sonu `Option` state'inden bir kez seçilir; null/zero ayrımı korunur.
+Günlük ücret girdileri her explicit compensation segmentinde hesaplanıp yasal kuruş kuralıyla yuvarlanır, sonra `sum_income_field` / premium-detail merge sözleşmesiyle birleştirilir. Günlük oran aynı kalsa da gerçek compensation sınırı korunur. Sosyal yardım, giyim ve hizmet zammı tüm inclusive takvim günleri ağırlıklandırıldıktan sonra bir kez yuvarlanır. Ek ödeme ve diğer gelir dönem sonu `Option` state'inden bir kez seçilir; null/zero ayrımı korunur.
 
 ## Uygulama ve seam
 
@@ -27,10 +34,10 @@ Günlük ücret girdileri önce her explicit compensation segmentinde mevcut hel
 |---|---|---|
 | Taban brüt | C,T,G,İ,GC,GÇT hak günleri; ücretli rapor günleri ayrıca | Her compensation version'da günlük ücret ve doğrulanmış ücretli rapor ücreti hesaplanıp birleştirilir |
 | Yemek | C+GC | Her compensation version'da mevcut `calculate_meal_income`; exemption ayrıca compensation × statutory kesişiminde |
-| Yol | C+GC | `PerCompensationSlice`: her `FullEarning` diliminde ayrı toplam ve `round2`; `PeriodTotal`: tek full-state timeline'daki tüm uygun günleri topla ve bir kez `round2` |
+| Yol | C+GC | `PerCompensationSlice`: her `FullEarning` diliminde ayrı toplam ve kuruşa yuvarlama; `PeriodTotal`: tek full-state timeline'daki tüm uygun günleri topla ve bir kez kuruşa yuvarlama |
 | İş primi | Aktif personel grubunun oranı × C+GC | Her compensation version'da mevcut premium helper; `merge_is_primi_details` ile amount, gün ve son hak edilen grup detayı birleştirilir |
 | Gece / gece tatili | GC / GÇT | İki ayrı gelir, her compensation version'da mevcut gece helper'ı |
-| Sosyal yardım / giyim / hizmet | Inclusive dönem takvim günleri | Ağırlıklı toplamdan sonra alan başına tek `round2` |
+| Sosyal yardım / giyim / hizmet | Inclusive dönem takvim günleri | Ağırlıklı toplamdan sonra alan başına tek kuruş yuvarlaması |
 | Ek ödeme / diğer gelir | Dönem sonu policy state'i | Dönem başına bir kez; nullable semantics korunur |
 
 ## Coverage ve regression haritası
@@ -56,7 +63,7 @@ Mevcut 14 senaryolu `raise_transition_regression` paketinin eşlemesi:
 | `retro_meal_tax_treatment_uses_the_source_period_meal_policy` | Görev 6 retro owner'ı |
 | `rate_history_changes_protect_cross_year_payrolls_and_retro_ledgers_without_source_payroll` | Normal cross-year kısmı `year_crossing_service_period_uses_explicit_payment_tax_anchor`; retro ledger kısmı Görev 6 owner'ı |
 
-## Üç-segment bağımsız golden ve B-RND-01
+## Üç-segment bağımsız golden ve statüter yemek kesişimleri
 
 2026-01-15–2026-02-14 döneminde yalnız bir dönem/ayar, puantaj ve eski bordrosuz üç explicit policy version vardır. İlk iki gün C, kalan günler G'dir. Compensation state tarihleri ve ilgili girdiler:
 
@@ -71,13 +78,13 @@ Günlük yemek tüm state'lerde 10.005; statutory state 2026-01-16'da değişir.
 Elle hesaplanan literal sonuçlar:
 
 - Taban `100×1 + 101×16 + 102×14 = 3144`.
-- Yemek iki farklı compensation segmentindeki birer C günü olduğundan `round2(1×10.005) + round2(1×10.005) = 10.00 + 10.00 = 20.00`.
-- Sosyal `round2((100×1 + 110×16 + 150×14)/31) = 127.74`; giyim `round2((10×1 + 20×16 + 30×14)/31) = 24.19`; hizmet `round2(3×(1×1 + 1.5×16 + 2×14)/31) = 5.13`.
-- Brüt toplam `3321.06`; yemek istisnası `20.00`; ham/prim/final PEK `3301.06`, alt/üst sınır `3000/27000`.
-- İşçi SGK `462.15`, işsizlik `33.01`, GV `38.39`, DV `2.29`; kesinti toplamı `535.84`, net `2785.22`. İşveren SGK `717.98`, işsizlik `66.02`, toplam `784.00`.
+- Yemek iki farklı compensation segmentindeki birer C günü olduğundan her gerçek earning dilimi ayrı yuvarlanır: `10.005 → 10.01`; toplam `20.02`.
+- Sosyal `127.74`; giyim `24.19`; hizmet `5.13` (ağırlıklı ham tutarların tek sefer kuruşa yuvarlanması).
+- Brüt toplam `3321.08`; yemek istisnası `20.02`; ham/prim/final PEK `3301.06`, alt/üst sınır `3000/27000`.
+- İşçi SGK `462.15`, işsizlik `33.01`, GV `38.39`, DV `2.29`; kesinti toplamı `535.84`, net `2785.24`. İşveren SGK `717.98`, işsizlik `66.02`, toplam `784.00`.
 - GV matrahı `2805.90`, brüt GV `420.89`, asgari ücret matrahı/istisnası `2550/382.50`; brüt damga `25.06`, aylık ve uygulanan istisna `22.77`. PEK carry giriş/çıkış listeleri `Some([])`.
 
-B-RND-01 ayrı helper kontrolünde compensation boyunca tek yemek state'i kullanılır. İki `10.005` günü iki statutory slice'a düşerse her gerçek statutory dilim `round2(10.005)` ile exemption toplamı `20.00` olur. Statutory tek dilime birleştirilirse earning `round2(2×10.005)=20.01` olur. Böylece statutory sınır yalnız meal exemption hesabını böler; diğer gelirleri bölmez ve mevcut statutory rounding aynen kalır.
+Güncel helper kontrolünde compensation boyunca tek yemek state'i kullanılır. İki `10.005` günü iki statutory slice'a düşerse önce iki kesin kesişim toplanır ve bir kez yarım-yukarı yuvarlanır: `20.010 → 20.01`. Tek statutory dilimde de sonuç `20.01` olur. Böylece yalnız gerçek earning sınırı tutarı böler; statutory-only sınır aynı kazancı ikinci kez yuvarlamaz.
 
 ## Parity sonucu ve model integration gate
 

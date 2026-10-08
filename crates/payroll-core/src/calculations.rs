@@ -1,13 +1,13 @@
 use super::errors::DomainError;
 use super::models::*;
 use super::Result;
+use crate::round_currency_amount;
 use rust_decimal::Decimal;
-use rust_decimal::RoundingStrategy;
 use rust_decimal_macros::dec;
 use std::collections::HashSet;
 
 fn round2(val: Decimal) -> Decimal {
-    val.round_dp(2)
+    round_currency_amount(val)
 }
 
 /// One real attendance/earning slice paired with its statutory meal
@@ -39,32 +39,31 @@ pub fn calculate_meal_income(worked_days: i32, daily_meal: Decimal) -> Decimal {
 pub fn calculate_segmented_meal_exemptions(
     segments: &[MealExemptionSegment],
 ) -> MealExemptionTotals {
-    segments
+    let exact = segments
         .iter()
         .fold(MealExemptionTotals::default(), |totals, segment| {
             let actual = segment.actual.max(Decimal::ZERO);
             MealExemptionTotals {
-                sgk: round2(totals.sgk + actual.min(segment.sgk_capacity.max(Decimal::ZERO))),
-                gv: round2(totals.gv + actual.min(segment.gv_capacity.max(Decimal::ZERO))),
+                sgk: totals.sgk + actual.min(segment.sgk_capacity.max(Decimal::ZERO)),
+                gv: totals.gv + actual.min(segment.gv_capacity.max(Decimal::ZERO)),
             }
-        })
+        });
+    MealExemptionTotals {
+        sgk: round2(exact.sgk),
+        gv: round2(exact.gv),
+    }
 }
 
-/// Gelir vergisi kalemlerinin parasal yuvarlama politikası (GİB uygulaması).
-/// Yarım kuruşluk değerler sıfırdan uzağa yuvarlanır (MidpointAwayFromZero / banker's
-/// rounding değil): Ocak asgari istisnası tax(28.075,50) = 4.211,325 → 4.211,33.
-/// Yalnız GV kalemlerinde (brüt GV, asgari istisna, kesilen GV ve asgari ara değerler)
-/// kullanılır. `round2` (MidpointNearestEven) ve `round_sgk_amount` dokunulmaz.
+/// Income-tax amounts follow the same Turkish-lira half-kuruş rule as all
+/// other monetary results: midpoint values round away from zero.
 pub(crate) fn round_gv_amount(val: Decimal) -> Decimal {
-    val.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+    round_currency_amount(val)
 }
 
-/// SGK/işsizlik prim tahakkuklarının parasal yuvarlama politikası.
-/// SGK'nın resmî örneklerine uygun olarak midpoint değerler sıfırdan uzağa yuvarlanır
-/// (banker's rounding değil): 33.030 × %21,75 = 7.184,025 → 7.184,03.
-/// Genel round2()'dan (MidpointNearestEven) farklıdır ve yalnız SGK prim kalemlerinde kullanılır.
+/// Compatibility name for SGK callers; the currency rounding rule is shared
+/// by every money result, not limited to statutory premiums.
 pub fn round_sgk_amount(val: Decimal) -> Decimal {
-    val.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+    round_currency_amount(val)
 }
 
 /// Canonical SGK treatment class used by both normal PEK and retro PEK
@@ -1020,23 +1019,28 @@ pub fn calculate_gv_indirimleri(
     sigorta_gv_yillik_tavan: Decimal,
     sigorta_gv_yil_once_kullanilan: Decimal,
 ) -> GvIndirimHesabi {
-    let life_candidate = (hayat_sigortasi_primi.max(Decimal::ZERO) * dec!(0.50)).round_dp(2);
-    let health_candidate = saglik_sigortasi_primi.max(Decimal::ZERO).round_dp(2);
-    let sigorta_adayi = (life_candidate + health_candidate).round_dp(2);
+    let life_candidate =
+        round_currency_amount(hayat_sigortasi_primi.max(Decimal::ZERO) * dec!(0.50));
+    let health_candidate = round_currency_amount(saglik_sigortasi_primi.max(Decimal::ZERO));
+    let sigorta_adayi = round_currency_amount(life_candidate + health_candidate);
     let sigorta_aylik_limiti =
-        (sigorta_limit_brut_ucret.max(Decimal::ZERO) * dec!(0.15)).round_dp(2);
-    let sigorta_yillik_kalan_limiti = (sigorta_gv_yillik_tavan.max(Decimal::ZERO)
-        - sigorta_gv_yil_once_kullanilan.max(Decimal::ZERO))
-    .max(Decimal::ZERO)
-    .round_dp(2);
-    let uygulanabilir_sigorta_indirimi = sigorta_adayi
-        .min(sigorta_aylik_limiti)
-        .min(sigorta_yillik_kalan_limiti)
-        .max(Decimal::ZERO)
-        .round_dp(2);
+        round_currency_amount(sigorta_limit_brut_ucret.max(Decimal::ZERO) * dec!(0.15));
+    let sigorta_yillik_kalan_limiti = round_currency_amount(
+        (sigorta_gv_yillik_tavan.max(Decimal::ZERO)
+            - sigorta_gv_yil_once_kullanilan.max(Decimal::ZERO))
+        .max(Decimal::ZERO),
+    );
+    let uygulanabilir_sigorta_indirimi = round_currency_amount(
+        sigorta_adayi
+            .min(sigorta_aylik_limiti)
+            .min(sigorta_yillik_kalan_limiti)
+            .max(Decimal::ZERO),
+    );
 
     GvIndirimHesabi {
-        dogum_askerlik_indirimi: dogum_askerlik_gv_indirimi.max(Decimal::ZERO).round_dp(2),
+        dogum_askerlik_indirimi: round_currency_amount(
+            dogum_askerlik_gv_indirimi.max(Decimal::ZERO),
+        ),
         sigorta_adayi,
         sigorta_aylik_limiti,
         sigorta_yillik_kalan_limiti,

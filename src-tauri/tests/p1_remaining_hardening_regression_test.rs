@@ -80,12 +80,14 @@ fn person(id: &str) -> Personel {
 fn attendance_for(period: &BordroDonemi, personnel_id: &str) -> PersonelPuantaj {
     let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d").unwrap();
     let mut gunler = HashMap::new();
-    for offset in 0..30 {
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d").unwrap();
+    let period_days = (end - start).num_days() + 1;
+    for offset in 0..period_days {
         gunler.insert(
             (start + Duration::days(offset))
                 .format("%Y-%m-%d")
                 .to_string(),
-            "Ç".to_string(),
+            if offset < 30 { "Ç" } else { "R" }.to_string(),
         );
     }
     PersonelPuantaj {

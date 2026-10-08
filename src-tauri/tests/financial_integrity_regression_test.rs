@@ -201,6 +201,21 @@ fn reconciliation_connection() -> rusqlite::Connection {
     conn
 }
 
+fn complete_attendance(overrides: &[(&str, &str)]) -> HashMap<String, String> {
+    let d = period();
+    let mut date = chrono::NaiveDate::parse_from_str(&d.baslangicTarihi, "%Y-%m-%d").unwrap();
+    let end = chrono::NaiveDate::parse_from_str(&d.bitisTarihi, "%Y-%m-%d").unwrap();
+    let mut days = HashMap::new();
+    while date <= end {
+        days.insert(date.format("%Y-%m-%d").to_string(), "R".into());
+        date += chrono::Duration::days(1);
+    }
+    for (date, code) in overrides {
+        days.insert((*date).into(), (*code).into());
+    }
+    days
+}
+
 #[test]
 fn source_mutation_rolls_back_when_invalidation_fails() -> Result<(), Box<dyn std::error::Error>> {
     let conn = create_in_memory_connection()?;
@@ -213,7 +228,7 @@ fn source_mutation_rolls_back_when_invalidation_fails() -> Result<(), Box<dyn st
         id: "p-integrity_2026-05".into(),
         personelId: p.id.clone(),
         donemId: d.id.clone(),
-        gunler: HashMap::from([(String::from("2026-05-15"), String::from("Ç"))]),
+        gunler: complete_attendance(&[("2026-05-15", "Ç")]),
     };
     AttendanceRepository::save(&conn, &original)?;
     PayrollRepository::save_legacy_in_transaction(
@@ -231,7 +246,7 @@ fn source_mutation_rolls_back_when_invalidation_fails() -> Result<(), Box<dyn st
     )?;
 
     let changed = PersonelPuantaj {
-        gunler: HashMap::from([(String::from("2026-05-16"), String::from("Ç"))]),
+        gunler: complete_attendance(&[("2026-05-16", "Ç")]),
         ..original.clone()
     };
     let error = AttendanceRepository::save(&conn, &changed).unwrap_err();

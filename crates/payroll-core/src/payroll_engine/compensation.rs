@@ -327,13 +327,26 @@ pub(super) fn calculate_policy_meal_exemptions(
 ) -> Result<MealExemptionTotals> {
     let slices = timeline.earning_slices()?;
     let dates = attendance_dates(attendance)?;
-    let mut earning_segments = Vec::new();
+    let statutory_ranges = statutory_snapshot
+        .segments
+        .iter()
+        .map(|statutory| {
+            Ok((
+                policy_date(&statutory.effectiveFrom)?,
+                policy_date(&statutory.effectiveTo)?,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut meal_days_by_statutory = vec![0; statutory_snapshot.segments.len()];
+    let mut totals = MealExemptionTotals::default();
 
-    for statutory in &statutory_snapshot.segments {
-        let statutory_start = policy_date(&statutory.effectiveFrom)?;
-        let statutory_end = policy_date(&statutory.effectiveTo)?;
-        let mut meal_days_total = 0;
-        for compensation_slice in &slices {
+    // Each earning slice is an independently rounded payroll amount. Statutory
+    // boundaries split its legal caps, but must not round the same payment
+    // again and create more exempt meal value than was actually paid.
+    for compensation_slice in &slices {
+        let mut earning_segments = Vec::new();
+        for (statutory_index, statutory) in statutory_snapshot.segments.iter().enumerate() {
+            let (statutory_start, statutory_end) = statutory_ranges[statutory_index];
             let start = compensation_slice.start.max(statutory_start);
             let end = compensation_slice.end.min(statutory_end);
             if start > end {
@@ -341,23 +354,30 @@ pub(super) fn calculate_policy_meal_exemptions(
             }
             let summary = summary_in_range(&dates, start, end, &period.id)?;
             let days = meal_days(&summary);
-            meal_days_total += days;
+            meal_days_by_statutory[statutory_index] += days;
             if days > 0 {
                 earning_segments.push(MealExemptionSegment {
-                    actual: calculate_meal_income(days, compensation_slice.state.gunlukYemek),
+                    actual: Decimal::from(days) * compensation_slice.state.gunlukYemek,
                     sgk_capacity: statutory.gunlukYemekIstisnasiSGK * Decimal::from(days),
                     gv_capacity: statutory.gunlukYemekIstisnasiGV * Decimal::from(days),
                 });
             }
         }
-        if meal_days_total != statutory.fiiliYemekGunu {
+
+        let slice_totals = calculate_segmented_meal_exemptions(&earning_segments);
+        totals.sgk = round2(totals.sgk + slice_totals.sgk);
+        totals.gv = round2(totals.gv + slice_totals.gv);
+    }
+
+    for (index, statutory) in statutory_snapshot.segments.iter().enumerate() {
+        if meal_days_by_statutory[index] != statutory.fiiliYemekGunu {
             return Err(DomainError::InvalidData(format!(
                 "{} döneminde statutory yemek günü ile policy meal günü eşleşmiyor ({} / {}).",
-                period.id, statutory.fiiliYemekGunu, meal_days_total
+                period.id, statutory.fiiliYemekGunu, meal_days_by_statutory[index]
             )));
         }
     }
-    Ok(calculate_segmented_meal_exemptions(&earning_segments))
+    Ok(totals)
 }
 
 /// Replays a NORMAL entitlement directly from its validated persisted

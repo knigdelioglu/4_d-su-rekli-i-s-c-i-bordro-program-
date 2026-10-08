@@ -16,6 +16,7 @@ use crate::retro::{
     retro_payable_allocation_amount, retro_payable_settlement_amount,
     retro_payment_income_with_index,
 };
+use crate::round_currency_amount;
 use crate::{DomainError, Result};
 use chrono::{Datelike, Duration, NaiveDate};
 use rust_decimal::Decimal;
@@ -74,7 +75,7 @@ pub struct PayrollCalculationRequest {
 }
 
 fn round2(value: Decimal) -> Decimal {
-    value.round_dp(2)
+    round_currency_amount(value)
 }
 
 fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> Result<()> {
@@ -596,10 +597,10 @@ fn resolve_statutory_snapshot_internal(
             .unwrap_or(StatutorySnapshotSource::ProvisionalPaymentMonth),
         segments: snapshots,
         sgkPrimGunSayisi: total_sgk_days,
-        pekAltSinir: pek_alt_sinir.round_dp(2),
-        pekUstSinir: pek_ust_sinir.round_dp(2),
-        sgkYemekIstisnasiToplam: sgk_meal_total.round_dp(2),
-        gvYemekIstisnasiToplam: gv_meal_total.round_dp(2),
+        pekAltSinir: round_currency_amount(pek_alt_sinir),
+        pekUstSinir: round_currency_amount(pek_ust_sinir),
+        sgkYemekIstisnasiToplam: round_currency_amount(sgk_meal_total),
+        gvYemekIstisnasiToplam: round_currency_amount(gv_meal_total),
         gvReferansGunlukAsgariUcret: gv_reference,
         sgkIsciOraniYuzde: settings.sgkIsciOraniYuzde,
         issizlikIsciOraniYuzde: settings.issizlikIsciOraniYuzde,
@@ -744,7 +745,8 @@ fn calculate_normal_meal_exemptions(
     previous_settings: Option<&DonemselKurumDegerleri>,
     raise_date: Option<NaiveDate>,
 ) -> Result<MealExemptionTotals> {
-    let mut earning_segments = Vec::new();
+    let mut before_raise_segments = Vec::new();
+    let mut after_raise_segments = Vec::new();
 
     for statutory_segment in &statutory_snapshot.segments {
         let segment_start = parse_period_date(
@@ -796,8 +798,8 @@ fn calculate_normal_meal_exemptions(
                     period.id
                 ))
             })?;
-            earning_segments.push(MealExemptionSegment {
-                actual: calculate_meal_income(before_raise_days, settings.gunlukYemek),
+            before_raise_segments.push(MealExemptionSegment {
+                actual: Decimal::from(before_raise_days) * settings.gunlukYemek,
                 sgk_capacity: statutory_segment.gunlukYemekIstisnasiSGK
                     * Decimal::from(before_raise_days),
                 gv_capacity: statutory_segment.gunlukYemekIstisnasiGV
@@ -805,8 +807,8 @@ fn calculate_normal_meal_exemptions(
             });
         }
         if after_raise_days > 0 {
-            earning_segments.push(MealExemptionSegment {
-                actual: calculate_meal_income(after_raise_days, current_settings.gunlukYemek),
+            after_raise_segments.push(MealExemptionSegment {
+                actual: Decimal::from(after_raise_days) * current_settings.gunlukYemek,
                 sgk_capacity: statutory_segment.gunlukYemekIstisnasiSGK
                     * Decimal::from(after_raise_days),
                 gv_capacity: statutory_segment.gunlukYemekIstisnasiGV
@@ -815,7 +817,12 @@ fn calculate_normal_meal_exemptions(
         }
     }
 
-    Ok(calculate_segmented_meal_exemptions(&earning_segments))
+    let before = calculate_segmented_meal_exemptions(&before_raise_segments);
+    let after = calculate_segmented_meal_exemptions(&after_raise_segments);
+    Ok(MealExemptionTotals {
+        sgk: round2(before.sgk + after.sgk),
+        gv: round2(before.gv + after.gv),
+    })
 }
 
 fn sum_income_field(before: Option<Decimal>, after: Option<Decimal>) -> Option<Decimal> {
@@ -4235,6 +4242,43 @@ mod tests {
     use rust_decimal_macros::dec;
     use std::collections::HashMap;
 
+    fn service_period() -> BordroDonemi {
+        BordroDonemi {
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-15".into(),
+            bitisTarihi: "2026-02-14".into(),
+            donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 2,
+        }
+    }
+
+    fn meal_snapshot(worked_days: i32) -> ResolvedStatutorySnapshot {
+        ResolvedStatutorySnapshot {
+            source: StatutorySnapshotSource::AttendanceBacked,
+            segments: vec![ResolvedStatutorySegmentSnapshot {
+                effectiveFrom: "2026-01-15".into(),
+                effectiveTo: "2026-02-14".into(),
+                sgkPrimGunSayisi: 30,
+                fiiliYemekGunu: worked_days,
+                gunlukAsgariUcret: dec!(1000),
+                pekTavanKatsayisi: dec!(7.5),
+                gunlukYemekIstisnasiSGK: dec!(8),
+                gunlukYemekIstisnasiGV: dec!(6),
+            }],
+            sgkPrimGunSayisi: 30,
+            pekAltSinir: dec!(30000),
+            pekUstSinir: dec!(225000),
+            sgkYemekIstisnasiToplam: dec!(16),
+            gvYemekIstisnasiToplam: dec!(12),
+            gvReferansGunlukAsgariUcret: dec!(1000),
+            sgkIsciOraniYuzde: Some(dec!(14)),
+            issizlikIsciOraniYuzde: Some(dec!(1)),
+        }
+    }
+
     fn tax_period(id: &str, tax_month: i32) -> BordroDonemi {
         BordroDonemi {
             id: id.into(),
@@ -5315,5 +5359,171 @@ mod tests {
         .expect_err("negative tax-month distance must be rejected");
 
         assert!(error.to_string().contains("negatif"));
+    }
+
+    #[test]
+    fn meal_exemptions_split_a_raise_period_and_match_independent_caps() {
+        let period = service_period();
+        let attendance = PersonelPuantaj {
+            id: "p1_2026-01".into(),
+            personelId: "p1".into(),
+            donemId: period.id.clone(),
+            gunler: HashMap::from([
+                ("2026-01-15".into(), "Ç".into()),
+                ("2026-01-16".into(), "GÇ".into()),
+                ("2026-01-17".into(), "T".into()),
+            ]),
+        };
+        let previous = DonemselKurumDegerleri {
+            gunlukYemek: dec!(10),
+            ..DonemselKurumDegerleri::default()
+        };
+        let current = DonemselKurumDegerleri {
+            gunlukYemek: dec!(12),
+            ..DonemselKurumDegerleri::default()
+        };
+
+        let actual = calculate_normal_meal_exemptions(
+            &attendance,
+            &period,
+            &meal_snapshot(2),
+            &current,
+            Some(&previous),
+            Some(NaiveDate::from_ymd_opt(2026, 1, 16).unwrap()),
+        )
+        .expect("meal days before and after the raise retain their legal capacities");
+
+        // Independent max/min by actual meal and daily statutory capacities.
+        assert_eq!(actual.sgk, dec!(8) + dec!(8));
+        assert_eq!(actual.gv, dec!(6) + dec!(6));
+    }
+
+    #[test]
+    fn meal_exemptions_after_raise_need_only_the_current_rate() {
+        let period = service_period();
+        let attendance = PersonelPuantaj {
+            id: "p1_2026-01".into(),
+            personelId: "p1".into(),
+            donemId: period.id.clone(),
+            gunler: HashMap::from([
+                ("2026-01-15".into(), "Ç".into()),
+                ("2026-01-16".into(), "GÇ".into()),
+            ]),
+        };
+        let current = DonemselKurumDegerleri {
+            gunlukYemek: dec!(12),
+            ..DonemselKurumDegerleri::default()
+        };
+
+        let actual = calculate_normal_meal_exemptions(
+            &attendance,
+            &period,
+            &meal_snapshot(2),
+            &current,
+            None,
+            Some(NaiveDate::from_ymd_opt(2026, 1, 14).unwrap()),
+        )
+        .expect("a period wholly after the raise does not need a previous rate");
+
+        assert_eq!(actual.sgk, (dec!(12) * dec!(2)).min(dec!(8) * dec!(2)));
+        assert_eq!(actual.gv, (dec!(12) * dec!(2)).min(dec!(6) * dec!(2)));
+    }
+
+    #[test]
+    fn meal_exemptions_reject_bad_snapshot_dates_day_counts_and_missing_prior_rate() {
+        let period = service_period();
+        let attendance = PersonelPuantaj {
+            id: "p1_2026-01".into(),
+            personelId: "p1".into(),
+            donemId: period.id.clone(),
+            gunler: HashMap::from([("2026-01-15".into(), "Ç".into())]),
+        };
+        let current = DonemselKurumDegerleri {
+            gunlukYemek: dec!(12),
+            ..DonemselKurumDegerleri::default()
+        };
+        let raise = Some(NaiveDate::from_ymd_opt(2026, 1, 16).unwrap());
+
+        let mut malformed_date = meal_snapshot(1);
+        malformed_date.segments[0].effectiveFrom = "bad-date".into();
+        assert!(calculate_normal_meal_exemptions(
+            &attendance,
+            &period,
+            &malformed_date,
+            &current,
+            None,
+            raise,
+        )
+        .is_err());
+
+        let mut malformed_end = meal_snapshot(1);
+        malformed_end.segments[0].effectiveTo = "bad-date".into();
+        assert!(calculate_normal_meal_exemptions(
+            &attendance,
+            &period,
+            &malformed_end,
+            &current,
+            None,
+            raise,
+        )
+        .is_err());
+
+        assert!(calculate_normal_meal_exemptions(
+            &attendance,
+            &period,
+            &meal_snapshot(2),
+            &current,
+            None,
+            raise,
+        )
+        .is_err());
+
+        assert!(calculate_normal_meal_exemptions(
+            &attendance,
+            &period,
+            &meal_snapshot(1),
+            &current,
+            None,
+            raise,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn paid_sick_dates_fail_closed_for_invalid_period_and_absent_attendance_day() {
+        let mut period = service_period();
+        period.baslangicTarihi = "not-a-date".into();
+        assert!(calculate_paid_sick_dates_from_records(&[], &period).is_err());
+
+        period = service_period();
+        period.bitisTarihi = "not-a-date".into();
+        assert!(calculate_paid_sick_dates_from_records(&[], &period).is_err());
+
+        let attendance = PersonelPuantaj {
+            id: "p1_2026-01".into(),
+            personelId: "p1".into(),
+            donemId: period.id.clone(),
+            gunler: HashMap::new(),
+        };
+        let missing_paid_day = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        assert!(validate_paid_sick_dates_against_attendance(
+            &attendance,
+            &[missing_paid_day],
+            &period.id,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn raise_split_rejects_an_unknown_attendance_code() {
+        let mut period = service_period();
+        period.ay = 1;
+        let attendance = PersonelPuantaj {
+            id: "p1_2026-01".into(),
+            personelId: "p1".into(),
+            donemId: period.id.clone(),
+            gunler: HashMap::from([("2026-01-15".into(), "UNKNOWN".into())]),
+        };
+        assert!(split_puantaj_by_zam_tarihi(&attendance, &period, &[1]).is_err());
     }
 }

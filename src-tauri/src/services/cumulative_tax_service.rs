@@ -5,6 +5,7 @@ use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use chrono::{Datelike, NaiveDate};
+use payroll_core::round_currency_amount;
 use rusqlite::Connection;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
@@ -65,7 +66,7 @@ impl CumulativeTaxService {
                 start_tax_month,
                 active_period.taxMonth,
             )?;
-            return Ok((opening_value + prior_gv).round_dp(2));
+            return Ok(round_currency_amount(opening_value + prior_gv));
         }
 
         // Aktif vergi yılına ait açılış yoksa: aynı vergi yılı içinde
@@ -77,7 +78,7 @@ impl CumulativeTaxService {
             1,
             active_period.taxMonth,
         )?;
-        Ok(prior_gv.round_dp(2))
+        Ok(round_currency_amount(prior_gv))
     }
 
     /// Resolves the cumulative GV immediately before one explicit accrual.
@@ -185,7 +186,7 @@ impl CumulativeTaxService {
                 DomainError::InvalidData("Kümülatif GV Decimal taşması oluştu.".into())
             })?;
         }
-        Ok(cumulative.round_dp(2))
+        Ok(round_currency_amount(cumulative))
     }
 
     pub fn get_previous_cumulative_asgari_gv(
@@ -301,7 +302,7 @@ impl CumulativeTaxService {
                 })?;
         }
 
-        Ok(cumulative_asgari.round_dp(2))
+        Ok(round_currency_amount(cumulative_asgari))
     }
 }
 

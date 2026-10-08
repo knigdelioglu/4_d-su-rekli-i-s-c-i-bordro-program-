@@ -10,7 +10,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 
 fn round2(value: rust_decimal::Decimal) -> rust_decimal::Decimal {
-    value.round_dp(2)
+    payroll_core::round_currency_amount(value)
 }
 
 fn validate_settlement_status(

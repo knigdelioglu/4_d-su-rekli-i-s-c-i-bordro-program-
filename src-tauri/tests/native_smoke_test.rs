@@ -164,6 +164,7 @@ mod smoke_tests {
                 mayis_gunler.insert(mayis_date.format("%Y-%m-%d").to_string(), "Ç".to_string());
                 haziran_gunler.insert(haziran_date.format("%Y-%m-%d").to_string(), "Ç".to_string());
             }
+            mayis_gunler.insert("2026-06-14".into(), "R".into());
 
             let mayis_puantaj = PersonelPuantaj {
                 id: "p-smoke-1_2026-05".into(),
@@ -257,8 +258,8 @@ mod smoke_tests {
             );
             assert_eq!(restored_payrolls[0].kesintiler.nafaka, Some(dec!(125.50)));
 
-            // Verify snapshot of pekDetay, employer costs, raporluGun and odenenRaporluGun persisted across SQLite restart
-            assert_eq!(restored_payrolls[0].raporluGun, Some(0));
+            // Verify snapshot of pekDetay, employer costs and one unpaid R day persisted across SQLite restart.
+            assert_eq!(restored_payrolls[0].raporluGun, Some(1));
             assert_eq!(restored_payrolls[0].odenenRaporluGun, Some(0));
 
             let restored_mayis_pek = restored_payrolls[0]

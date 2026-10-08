@@ -8,6 +8,7 @@ use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::repositories::sick_leave_repo::SickLeaveRepository;
 use bordro_programi_lib::services::sick_leave_service::SickLeaveService;
+use chrono::{Duration, NaiveDate};
 
 fn person() -> Personel {
     Personel {
@@ -169,6 +170,12 @@ fn overlapping_atomic_save_leaves_record_and_attendance_unchanged(
     };
     PeriodRepository::save(&conn, &period)?;
     let mut days = std::collections::HashMap::new();
+    let mut date = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")?;
+    let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")?;
+    while date <= end {
+        days.insert(date.format("%Y-%m-%d").to_string(), "Ç".into());
+        date += Duration::days(1);
+    }
     days.insert("2027-03-19".into(), "Ç".into());
     days.insert("2027-03-20".into(), "R".into());
     days.insert("2027-03-21".into(), "T".into());

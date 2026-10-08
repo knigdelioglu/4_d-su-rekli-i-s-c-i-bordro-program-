@@ -93,6 +93,14 @@ fn setup(personnel_id: &str) -> Result<rusqlite::Connection> {
         },
     )?;
     let mut gunler = HashMap::new();
+    let mut date = chrono::NaiveDate::parse_from_str(&d.baslangicTarihi, "%Y-%m-%d")
+        .expect("test period start must be valid");
+    let end = chrono::NaiveDate::parse_from_str(&d.bitisTarihi, "%Y-%m-%d")
+        .expect("test period end must be valid");
+    while date <= end {
+        gunler.insert(date.format("%Y-%m-%d").to_string(), "R".into());
+        date += chrono::Duration::days(1);
+    }
     gunler.insert("2026-05-15".into(), "Ç".into());
     AttendanceRepository::save(
         &conn,

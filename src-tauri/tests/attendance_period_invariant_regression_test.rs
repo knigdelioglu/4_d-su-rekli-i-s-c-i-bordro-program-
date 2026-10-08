@@ -5,7 +5,7 @@ use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
 use bordro_programi_lib::repositories::period_repo::PeriodRepository;
 use bordro_programi_lib::repositories::personnel_repo::PersonnelRepository;
 use bordro_programi_lib::services::payroll_service::PayrollService;
-use chrono::{Duration, NaiveDate};
+use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::params;
 use std::collections::HashMap;
 
@@ -66,6 +66,32 @@ fn valid_days(count: i64) -> HashMap<String, String> {
         .collect()
 }
 
+fn period_for_range(id: &str, start: &str, end: &str) -> BordroDonemi {
+    let start = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap();
+    BordroDonemi {
+        id: id.into(),
+        yil: start.year(),
+        ay: start.month() as i32,
+        baslangicTarihi: start.format("%Y-%m-%d").to_string(),
+        bitisTarihi: end.format("%Y-%m-%d").to_string(),
+        donemAdi: id.into(),
+        taxYear: end.year(),
+        taxMonth: end.month() as i32,
+    }
+}
+
+fn days_for_range(start: &str, end: &str) -> HashMap<String, String> {
+    let mut date = NaiveDate::parse_from_str(start, "%Y-%m-%d").unwrap();
+    let end = NaiveDate::parse_from_str(end, "%Y-%m-%d").unwrap();
+    let mut days = HashMap::new();
+    while date <= end {
+        days.insert(date.format("%Y-%m-%d").to_string(), "Ç".into());
+        date += Duration::days(1);
+    }
+    days
+}
+
 #[test]
 fn period_startindan_bir_gun_once_reject() {
     let mut gunler = HashMap::new();
@@ -112,6 +138,54 @@ fn otuz_bir_gunluk_periodun_tum_gecerli_tarihleri_accept() {
 
     AttendanceRepository::validate_attendance_for_period(&attendance("2026-07", gunler), &period())
         .expect("31 günlük gerçek dönem aralığı kabul edilmeli");
+}
+
+#[test]
+fn eksik_puantaj_tarihi_reject_ve_donem_gun_sayisi_tam_olmalidir() {
+    let mut gunler = valid_days(31);
+    gunler.remove("2026-08-14");
+
+    let result = AttendanceRepository::validate_attendance_for_period(
+        &attendance("2026-07", gunler),
+        &period(),
+    );
+
+    assert!(matches!(result, Err(DomainError::ValidationError(_))));
+}
+
+#[test]
+fn tam_puantaj_28_29_30_31_gunluk_15_14_donemlerinde_kabul_edilir() {
+    let cases = [
+        ("2027-02", "2027-02-15", "2027-03-14", 28),
+        ("2028-02", "2028-02-15", "2028-03-14", 29),
+        ("2026-06", "2026-06-15", "2026-07-14", 30),
+        ("2026-07", "2026-07-15", "2026-08-14", 31),
+    ];
+
+    for (id, start, end, expected_days) in cases {
+        let period = period_for_range(id, start, end);
+        let days = days_for_range(start, end);
+        assert_eq!(days.len(), expected_days);
+        AttendanceRepository::validate_attendance_for_period(&attendance(id, days), &period)
+            .unwrap_or_else(|error| panic!("{id} tam puantajı reddedildi: {error}"));
+    }
+}
+
+#[test]
+fn kanonik_olmayan_tarih_anahtari_reject() {
+    let mut gunler = valid_days(31);
+    gunler.remove("2026-07-15");
+    gunler.insert("2026-7-15".into(), "Ç".into());
+
+    let result = AttendanceRepository::validate_attendance_for_period(
+        &attendance("2026-07", gunler),
+        &period(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(DomainError::ValidationError(message)) if message.contains("kanonik olmalıdır")
+    ));
 }
 
 #[test]

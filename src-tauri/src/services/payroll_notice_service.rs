@@ -10,6 +10,7 @@ use crate::repositories::personnel_repo::PersonnelRepository;
 use crate::repositories::settings_repo::SettingsRepository;
 use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use chrono::{Datelike, NaiveDate};
+use payroll_core::round_currency_amount;
 use rusqlite::Connection;
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -179,25 +180,28 @@ impl PayrollNoticeService {
 
         let incoming = first_record.devredenPekGelen.as_deref().unwrap_or(&[]);
         let outgoing = last_record.sonrakiDevredenPek.as_deref().unwrap_or(&[]);
-        let incoming_total = incoming
-            .iter()
-            .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
-            .fold(Decimal::ZERO, |total, item| total + item.tutar)
-            .round_dp(2);
-        let outgoing_total = outgoing
-            .iter()
-            .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
-            .fold(Decimal::ZERO, |total, item| total + item.tutar)
-            .round_dp(2);
-        let used = records
-            .iter()
-            .map(|p| {
-                p.pekDetay
-                    .as_ref()
-                    .map_or(Decimal::ZERO, |detail| detail.devredenPekKullanilan)
-            })
-            .sum::<Decimal>()
-            .round_dp(2);
+        let incoming_total = round_currency_amount(
+            incoming
+                .iter()
+                .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
+                .fold(Decimal::ZERO, |total, item| total + item.tutar),
+        );
+        let outgoing_total = round_currency_amount(
+            outgoing
+                .iter()
+                .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi > 0)
+                .fold(Decimal::ZERO, |total, item| total + item.tutar),
+        );
+        let used = round_currency_amount(
+            records
+                .iter()
+                .map(|p| {
+                    p.pekDetay
+                        .as_ref()
+                        .map_or(Decimal::ZERO, |detail| detail.devredenPekKullanilan)
+                })
+                .sum::<Decimal>(),
+        );
 
         if incoming_total > Decimal::ZERO {
             let mut details = vec![format!("Bu ay kullanılan: {}", Self::format_money(used))];
@@ -236,11 +240,12 @@ impl PayrollNoticeService {
             });
         }
 
-        let last_month_total = incoming
-            .iter()
-            .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi == 1)
-            .fold(Decimal::ZERO, |total, item| total + item.tutar)
-            .round_dp(2);
+        let last_month_total = round_currency_amount(
+            incoming
+                .iter()
+                .filter(|item| item.tutar > Decimal::ZERO && item.kalanAySayisi == 1)
+                .fold(Decimal::ZERO, |total, item| total + item.tutar),
+        );
         if last_month_total > Decimal::ZERO {
             notices.push(PayrollNotice {
                 code: "PEK_CARRY_LAST_MONTH".into(),
@@ -487,14 +492,14 @@ impl PayrollNoticeService {
             }
             let upper = upper_total.min(bracket.limit);
             if upper > lower {
-                result.push(((upper - lower).round_dp(2), bracket.oran));
+                result.push((round_currency_amount(upper - lower), bracket.oran));
                 lower = upper;
             }
         }
 
         if lower < upper_total {
             if let Some(last) = brackets.last() {
-                result.push(((upper_total - lower).round_dp(2), last.oran));
+                result.push((round_currency_amount(upper_total - lower), last.oran));
             }
         }
 
@@ -507,7 +512,7 @@ impl PayrollNoticeService {
     }
 
     fn format_money(value: Decimal) -> String {
-        format!("{:.2} TL", value.round_dp(2))
+        format!("{:.2} TL", round_currency_amount(value))
     }
 
     fn format_rate(rate: Decimal) -> String {

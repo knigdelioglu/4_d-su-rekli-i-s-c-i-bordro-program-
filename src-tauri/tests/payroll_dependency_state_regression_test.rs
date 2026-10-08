@@ -95,25 +95,6 @@ fn settings(period_id: &str, daily_minimum: rust_decimal::Decimal) -> DonemselKu
     }
 }
 
-fn attendance(personnel_id: &str, p: &BordroDonemi, code: &str) -> PersonelPuantaj {
-    let start = NaiveDate::parse_from_str(&p.baslangicTarihi, "%Y-%m-%d").unwrap();
-    let mut gunler = HashMap::new();
-    for offset in 0..30 {
-        gunler.insert(
-            (start + Duration::days(offset))
-                .format("%Y-%m-%d")
-                .to_string(),
-            code.to_string(),
-        );
-    }
-    PersonelPuantaj {
-        id: format!("{}_{}", personnel_id, p.id),
-        personelId: personnel_id.into(),
-        donemId: p.id.clone(),
-        gunler,
-    }
-}
-
 fn complete_attendance(personnel_id: &str, p: &BordroDonemi, code: &str) -> PersonelPuantaj {
     let start = NaiveDate::parse_from_str(&p.baslangicTarihi, "%Y-%m-%d").unwrap();
     let end = NaiveDate::parse_from_str(&p.bitisTarihi, "%Y-%m-%d").unwrap();
@@ -193,7 +174,7 @@ fn attendance_mutation_marks_current_and_later_payrolls_stale() {
     PeriodRepository::save(&conn, &january).unwrap();
     PeriodRepository::save(&conn, &february).unwrap();
 
-    AttendanceRepository::save(&conn, &attendance(&p.id, &january, "Ç")).unwrap();
+    AttendanceRepository::save(&conn, &complete_attendance(&p.id, &january, "Ç")).unwrap();
     PayrollRepository::save_legacy_in_transaction(
         &conn,
         &calculated_payroll(&p.id, &january.id, None),
@@ -205,7 +186,7 @@ fn attendance_mutation_marks_current_and_later_payrolls_stale() {
     )
     .unwrap();
 
-    let mut changed = attendance(&p.id, &january, "Ç");
+    let mut changed = complete_attendance(&p.id, &january, "Ç");
     let first_date = changed.gunler.keys().next().unwrap().clone();
     changed.gunler.insert(first_date, "R".into());
     AttendanceRepository::save(&conn, &changed).unwrap();

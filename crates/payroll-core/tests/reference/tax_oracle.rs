@@ -1,18 +1,72 @@
 use payroll_core::TaxBracket;
-use rust_decimal::{Decimal, RoundingStrategy};
+use rust_decimal::Decimal;
 
-/// Test-only money rounding. This deliberately does not call a payroll-core
-/// rounding helper so the differential test retains an independent boundary.
+/// Test-only money rounding expressed as integer rational arithmetic. This
+/// deliberately does not call a payroll-core rounding helper or Decimal's
+/// rounding API, so half-kuruş expectations stay independent of production.
 pub fn round_money(value: Decimal) -> Decimal {
-    value.round_dp(2)
+    let denominator = pow10(value.scale());
+    round_ratio_to_cents(value.mantissa(), denominator)
+}
+
+/// Rounds an exact rational amount to kuruş, with half-kuruş values away from
+/// zero, as required by Law 5083 Article 2. Inputs in the test oracle are
+/// bounded payroll amounts, so checked integer arithmetic makes overflow
+/// explicit instead of silently changing the expected value.
+pub fn round_ratio_to_cents(numerator: i128, denominator: i128) -> Decimal {
+    assert!(denominator > 0, "oracle denominator must be positive");
+    let signed_cents = numerator
+        .checked_mul(100)
+        .expect("oracle amount fits i128 cents");
+    let sign = if signed_cents < 0 { -1 } else { 1 };
+    let magnitude = signed_cents
+        .checked_abs()
+        .expect("oracle amount magnitude fits i128");
+    let mut cents = magnitude / denominator;
+    let remainder = magnitude % denominator;
+    if remainder
+        .checked_mul(2)
+        .expect("oracle remainder fits i128")
+        >= denominator
+    {
+        cents += 1;
+    }
+    Decimal::from_i128_with_scale(sign * cents, 2)
+}
+
+pub fn round_product_to_cents(left: Decimal, right: Decimal) -> Decimal {
+    let numerator = left
+        .mantissa()
+        .checked_mul(right.mantissa())
+        .expect("oracle product fits i128");
+    let denominator = pow10(left.scale() + right.scale());
+    round_ratio_to_cents(numerator, denominator)
+}
+
+pub fn round_percent_product_to_cents(base: Decimal, percent: Decimal, units: i32) -> Decimal {
+    let numerator = base
+        .mantissa()
+        .checked_mul(percent.mantissa())
+        .and_then(|value| value.checked_mul(i128::from(units)))
+        .expect("oracle percentage product fits i128");
+    let denominator = pow10(base.scale() + percent.scale())
+        .checked_mul(100)
+        .expect("oracle percentage denominator fits i128");
+    round_ratio_to_cents(numerator, denominator)
+}
+
+fn pow10(scale: u32) -> i128 {
+    10_i128
+        .checked_pow(scale)
+        .expect("oracle decimal scale fits i128")
 }
 
 pub fn round_sgk(value: Decimal) -> Decimal {
-    value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+    round_money(value)
 }
 
 pub fn round_gv(value: Decimal) -> Decimal {
-    value.round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero)
+    round_money(value)
 }
 
 /// Calculates progressive tax by intersecting the cumulative base with each

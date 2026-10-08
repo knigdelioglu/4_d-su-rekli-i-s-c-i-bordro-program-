@@ -217,12 +217,22 @@ mod tests {
         let period_day_count = (end - start).num_days() + 1;
         let work_day_count = period_day_count.min(30);
 
-        (0..work_day_count)
+        let mut attendance = (0..work_day_count)
             .map(|offset| {
                 let date = start + chrono::Duration::days(offset);
                 (date.format("%Y-%m-%d").to_string(), "Ç".to_string())
             })
-            .collect()
+            .collect::<HashMap<_, _>>();
+        let mut date = start;
+        while date <= end {
+            attendance
+                .entry(date.format("%Y-%m-%d").to_string())
+                // These fixtures model 30 paid days; a 31-day 15–14 period's
+                // remaining day is explicitly unpaid rather than omitted.
+                .or_insert_with(|| "R".to_string());
+            date += chrono::Duration::days(1);
+        }
+        attendance
     }
 
     #[test]
@@ -1684,9 +1694,7 @@ mod tests {
             for d in 25..=30 {
                 gunler.insert(format!("2026-05-{d:02}"), "R".to_string());
             }
-            gunler
-                .entry("2026-06-14".into())
-                .or_insert_with(|| "G".into());
+            gunler.insert("2026-06-14".into(), "G".into());
 
             let puantaj = PersonelPuantaj {
                 id: "p-rapor-test_2026-05".into(),

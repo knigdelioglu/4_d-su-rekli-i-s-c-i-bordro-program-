@@ -1,0 +1,402 @@
+{
+  "description": "Synthetic prior-UAT observations for an independent progressive-GV replay. Observed fields are comparison data only; expected values are recomputed in the test oracle from bases, cumulative inputs, and the explicit synthetic brackets.",
+  "syntheticBrackets": [
+    {
+      "limitCents": 10000000,
+      "rateNumerator": 15,
+      "rateDenominator": 100
+    },
+    {
+      "limitCents": 20000000,
+      "rateNumerator": 20,
+      "rateDenominator": 100
+    },
+    {
+      "limitCents": 30000000,
+      "rateNumerator": 27,
+      "rateDenominator": 100
+    },
+    {
+      "limitCents": 40000000,
+      "rateNumerator": 40,
+      "rateDenominator": 100
+    }
+  ],
+  "minimumTaxBaseCents": 2807550,
+  "periods": [
+    {
+      "servicePeriodId": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "rows": [
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 72143008,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 68622359,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 68622359,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 68622359,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 68622359,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 68622359,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9127165,
+          "previousTaxCumulativeCents": 67261903,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3650866,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2527846
+        },
+        {
+          "taxBaseCents": 9297222,
+          "previousTaxCumulativeCents": 68622359,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3718889,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2595869
+        },
+        {
+          "taxBaseCents": 9120123,
+          "previousTaxCumulativeCents": 67336616,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3648049,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2525029
+        },
+        {
+          "taxBaseCents": 9052276,
+          "previousTaxCumulativeCents": 66706471,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3620910,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2497890
+        },
+        {
+          "taxBaseCents": 9309804,
+          "previousTaxCumulativeCents": 68723009,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3723922,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2600902
+        },
+        {
+          "taxBaseCents": 9368518,
+          "previousTaxCumulativeCents": 69192729,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3747407,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2624387
+        },
+        {
+          "taxBaseCents": 9180554,
+          "previousTaxCumulativeCents": 67776380,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 30883050,
+          "observedGrossTaxCents": 3672222,
+          "observedMinimumExemptionCents": 1123020,
+          "observedWithheldTaxCents": 2549202
+        }
+      ]
+    },
+    {
+      "servicePeriodId": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "rows": [
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9434711,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1415207,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 994074
+        },
+        {
+          "taxBaseCents": 9604768,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1440715,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1019582
+        },
+        {
+          "taxBaseCents": 9419715,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1412957,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 991824
+        },
+        {
+          "taxBaseCents": 9357171,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1403576,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 982443
+        },
+        {
+          "taxBaseCents": 9617350,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1442603,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1021470
+        },
+        {
+          "taxBaseCents": 9676064,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1451410,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1030277
+        },
+        {
+          "taxBaseCents": 9482798,
+          "previousTaxCumulativeCents": 0,
+          "minimumTaxBaseCents": 2807550,
+          "previousMinimumTaxCumulativeCents": 0,
+          "observedGrossTaxCents": 1422420,
+          "observedMinimumExemptionCents": 421133,
+          "observedWithheldTaxCents": 1001287
+        }
+      ]
+    }
+  ]
+}

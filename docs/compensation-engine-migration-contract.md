@@ -2,6 +2,14 @@
 
 Bu belge mevcut koddan doğrulanan davranışları ve henüz uygulanmamış hedef mimari kararlarını ayırır. Görev sırası ve sahiplikler [görev haritasında](compensation-engine-migration-tasks.md).
 
+> **Aşama 2 finansal güncellemesi:** Bu geçiş belgesindeki bazı eski `round2`
+> ve B-RND-01 örnekleri önceki uygulamanın banker yuvarlamasını ve statutory
+> dilim davranışını kaydeder. Finansal sonuçlarda bugün
+> `round_currency_amount` (yarım kuruş ve üzeri yukarı) kullanılır; aynı
+> compensation earning içindeki yemek istisnası statutory kesişimler toplandıktan
+> sonra bir kez yuvarlanır. Güncel kurallar, bağımsız oracle sonuçları ve
+> UAT mutabakatı [Aşama 2 denetim raporundadır](payroll-financial-audit-stage2.md).
+
 ## Güncel uygulama durumu — 2026-10-07
 
 1–8B kod görevleri kendi kapsamlarıyla kabul edildi. Aşağıdaki ilk keşif tabloları ve aşama notları geçiş öncesi davranışı da kaydeder; güncel uygulamanın kanıtı görev haritasındaki son kabul kayıtları ve 8A/8B handoff'larıdır. Ordinary NORMAL/native/WASM/browser hesap ve preflight full-policy timeline kullanır; aktif period DTO'su yalnız yasal/kesinti/tax-application ve ayrı tahakkuk girdilerini taşır. Schema2 provenance ve canonical finansal replay zorunluluğu yeni bordrolarda uygulanır.
@@ -52,11 +60,9 @@ CompensationRevision geriye dönük hak, CompensationPolicyVersion ileri normal 
 
 Compensation ve statutory modeller ayrı kalır. Dönem start/end, compensation effective dates ve statutory effective dates yemek/SGK/GV için atomik tarih dilimlerini oluşturur. Atomik tarih aralığı ile gelir yuvarlama aralığı aynı kavram değildir. Eski motorun tam compensation/raise yuvarlama sınırı günlük oran değişmese de korunur; yalnız rate eşitliğine bakarak dilim birleştirmek 310.15/310.16 yemek farkı yaratmıştır. Statutory-only veya gerçek yol-only tarih diğer günlük gelirler için yeni yuvarlama sınırı olmaz. Her effective-date'in bu rollerden hangisini taşıdığı mevcut full-state modelinde açık değildir; B-RND-02 kapısı aşağıda bu eksikliği izler. Yemek uygulama tercihi ve günlük yasal cap’ler aynı tarihte geçerli ayrı input’lardır.
 
-### B-RND-01 — legacy yemek istisnası yuvarlaması korunur; doğrulama Görev 4'te
+### B-RND-01 — Aşama 2'de supersede edildi: tek earning dilimindeki yemek istisnası
 
-Bugünkü calculate_normal_meal_exemptions statutory segmentleri dolaşıp her parça için calculate_meal_income çağırır [payroll_engine.rs](../crates/payroll-core/src/payroll_engine.rs#L727), [calculations.rs](../crates/payroll-core/src/calculations.rs#L32). round2 midpoint-nearest-even’dir [calculations.rs](../crates/payroll-core/src/calculations.rs#L53). Günlük yemek 10.005, iki çalışılan gün: tek economic dilim round2(20.010)=20.01; statutory-only iki tek günlük dilim round2(10.005)+round2(10.005)=20.00. Günlük cap’ler yeterliyse exemption/vergilendirilebilir yemek 0.01 değişir.
-
-Kullanıcının mevcut finansal sonuçları değiştirmeme talimatı gereği legacy statutory-boundary exemption rounding'i korunur. Yemek gelir toplamının hesap dilimleri ile yemek istisnasının yasal kapasite dilimleri farklıdır: statutory sınırı istisna hesabının ilgili girdisidir; unrelated gelirleri bölmeme kuralı bu sınırı istisna hesabından kaldırmaz. Yeni cent allocation/rounding formülü bu migration'a eklenmez. Görev 4 örneği tam bordro fixture'ında ve doğrudan helper seviyesinde doğrular; gelir toplamı, istisna ve vergi sonucu ayrı karşılaştırılır. N-segment genişlemede tam compensation yuvarlama sınırı ile yol-only boundary ayrımı B-RND-02'nin açık typed semantiğine tabi olacaktır. Bu kararın uygulanabilirliğini çürüten gerçek parity farkı bulunursa blocker yeniden açılır; test daraltılarak veya expected değiştirilerek kapatılmaz.
+Görev 4 kararında yemek istisnası her statutory parçayı ayrı yuvarlıyordu. Aşama 2 bağımsız oracle ve 5083/5228 yuvarlama dayanağıyla bu davranışın aynı earning tutarını tarih sınırları yüzünden değiştirdiğini doğruladı. `10.005 × 2` için tek tutar `20.01`; bunu iki statutory parçaya ayırıp her parçayı ayrı yarım-yukarı yuvarlamak `20.02` üretirdi. Güncel uygulama, her gerçek compensation earning dilimindeki statutory kesişimleri toplar ve istisnayı bir kez kuruşa yuvarlar; sonuç her iki tarih düzeninde de `20.01` olur. Bu değişiklik diğer gelirlerin earning dilimlerini statutory tarihlerle bölmez. Regresyonlar `tax_properties::statutory_meal_date_split_does_not_round_one_payment_twice` ve `compensation_shadow::n_segment_golden_intersects_statutory_dates_and_preserves_b_rnd_01` içinde korunur.
 
 ### B-RND-02 — tek ücret timeline'ında yol ve kazanç yuvarlama sınırı; proof kabul, kalıcı entegrasyon bekliyor
 
@@ -69,20 +75,20 @@ Orchestrator yönü: ikinci authoritative yol tutarı timeline'ı veya yeniden a
 - Alanlar yeni version'da zorunludur; serde/schema/SQL financial default veya source/reason/rate-equality inference yoktur. Düzeltme yeni version ve açık flag'lerle yapılır.
 - `FULL_EARNING` ilgili günlük kazançlar için oranlar eşit olsa da yeni yuvarlama dilimi açar. Dönem içi `ROAD_ONLY`, önceki aktif full state ile yol dışındaki bütün state alanları eşitse kabul edilir; diğer gelirlerin yuvarlama dilimini bölmez. Dönem başlangıcındaki son full state, scope ne olursa olsun doğal baseline'dır; eski full-boundary tarihini bulmak için compensation geçmişi yüklenmez.
 - Tek bordro hizmet aralığında resolved active version'ların road mode'u aynı olmalıdır; dönem içindeki karma mode fail-closed olur. Metadata sırf değerler eşit diye birleştirilmez veya tahmin edilmez.
-- `PER_COMPENSATION_SLICE`: her full earning dilimindeki C+GC günlerinin o tarihlerdeki full-state yol tutarlarını topla, ayrı round2 uygula, sonra dilimleri topla. `PERIOD_TOTAL`: bütün dönem C+GC günlerinin o tarihlerdeki full-state yol tutarlarını topla, sonunda tek round2 uygula.
+- `PER_COMPENSATION_SLICE`: her full earning dilimindeki C+GC günlerinin o tarihlerdeki full-state yol tutarlarını topla, `round_currency_amount` uygula, sonra dilimleri topla. `PERIOD_TOTAL`: bütün dönem C+GC günlerinin o tarihlerdeki full-state yol tutarlarını topla, sonunda tek `round_currency_amount` uygula.
 - Resolved compensation snapshot her segmentte iki flag'i de taşır. Yeni snapshot schema 2 olur; flag'siz schema 1 finansal anlamı sessizce yeniden üretilmez. Eski/missing metadata legacy bordroları ve V1–V5 authority kuralları korunur.
 
 Görev 4B tek owner olarak domain/resolver, SQLite/repository, snapshot schema/validator, native/WASM/browser boundary ve V6 backup kalıcılığını bu sözleşmeye geçirir. Ardından shadow sidecar kaldırılarak kesin parity aynı persisted final model üzerinden yeniden çalıştırılır. Experimental flag'siz policy/snapshot için açık unsupported/quarantine hata yolu gerekir; otomatik financial backfill veya veri silme yoktur. Loader/mutation/UI activation Görev 5/7'deki sahipliğini korur. 4B teslimi ve orchestrator package consolidation tamamlanmadan 5A veya normal production switch açılmaz.
 
 ## Finansal formül ve legacy davranış tablosu
 
-round2 bugünkü Decimal::round_dp(2), midpoint-nearest-even’dir. GV ve SGK/işsizlik primleri için ayrı midpoint-away-from-zero politikaları vardır [calculations.rs](../crates/payroll-core/src/calculations.rs#L53). Multi-segment kuralları legacy parity yanında golden ile de sabitlenir.
+Parasal sonuçlarda `round2` yardımcıları `round_currency_amount` üzerinden `MidpointAwayFromZero` uygular; pozitif yarım kuruş ve üzerindeki tutar bir üst kuruşa yuvarlanır. Bu ortak politika ücret/yan hak, SGK, GV, DV, retro, snapshot ve çıktı tutarlarında kullanılır. Ücret zammı oranının iki ondalık yüzde olarak saklanması parasal tutar yuvarlamasından ayrı bir yüzde kuralıdır. Bağımsız integer-rational oracle `tax_oracle.rs` içindedir; multi-segment sonuçlar regression ve goldens ile korunur.
 
 | Kalem | Kodla doğrulanan kaynak/formül | Hak/ağırlık | Rounding/segment |
 |---|---|---|---|
 | Taban ücret | daily base × ücret hak kodları C,T,G,İ,GC,GÇT; paid sick wage ayrıca eklenir | Attendance hak günü + doğrulanmış paid report dates | Bugünkü pre/post tam compensation/raise dilimleri round2, sonra toplanır; oran eşitliği bu sınırı kaldırmaz. Yol-only kapsam B-RND-02'ye tabidir. |
 | Ücretli rapor | Her yıl sıralı ilk 5 epizodun ilk iki tarihi; period içinde R ile eşleşirse daily base ekle [payroll_engine.rs](../crates/payroll-core/src/payroll_engine.rs#L597) | Exact sick dates, epizot başına en çok 2 gün | Günlük tutar × paid days; round2. Tarihler snapshot’lanır. |
-| Yemek | daily meal × (C+GC) [calculations.rs](../crates/payroll-core/src/calculations.rs#L989) | Yalnız C+GC, calendar weighting yok | Tam compensation/raise dilimi başına round2; aynı oranlı dilimler kör birleştirilmez. Exemption compensation × statutory kesişimidir; B-RND-01 korunur. |
+| Yemek | daily meal × (C+GC) [calculations.rs](../crates/payroll-core/src/calculations.rs#L989) | Yalnız C+GC, calendar weighting yok | Gerçek earning dilimi başına `round_currency_amount`; aynı oranlı dilimler kör birleştirilmez. İstisna, dilim içindeki statutory kapasite kesişimlerini toplar ve bir kez yuvarlar; bu Aşama 2 davranışı eski B-RND-01 sonucunu supersede eder. |
 | Yol | daily road × C+GC; legacy dated transport varsa günlük effective rate [transport_rates.rs](../crates/payroll-core/src/transport_rates.rs#L31) | Yalnız C+GC | Legacy None compensation dilimi başına; Some([])/dated override dönem toplamında round2. Final tek-timeline temsili B-RND-02'de BLOCKED. Road-only tarih diğer günlük gelirleri bölmez. |
 | İş primi | daily base × (aktif grubun oranı/100) × (C+GC) [calculations.rs](../crates/payroll-core/src/calculations.rs#L964) | Hak günü C+GC | Tam compensation/raise dilimi başına tutar round2, ardından legacy detail merge; yüzde katsayı değil yüzde birimidir. |
 | Gece / gece tatili | daily base × ilgili oran/100 × GC veya GÇT [calculations.rs](../crates/payroll-core/src/calculations.rs#L475) | GC ve GÇT ayrı | İki ayrı gelir; tam compensation/raise dilimi başına round2. |
@@ -167,7 +173,7 @@ CURRENT_BACKUP_VERSION 5→6 olurken tüm CURRENT karşılaştırmaları garanti
 
 Görev 4/5 veya kod entegrasyonunun tamamlanması activation değildir. Hepsi PASS olmalı:
 
-- Legacy full parity, bağımsız formula goldens, N≥3 manual goldens; B-RND-01'in legacy yuvarlamayı koruyan kararının test kanıtı.
+- Legacy full parity, bağımsız formula goldens, N≥3 manual goldens; yarım-kuruş ve statutory yemek sınırı davranışlarının bağımsız test kanıtı.
 - Required compensation input snapshots, loader, transitif invalidation, FINALIZED guards/rollback.
 - Native SQLite + browser IndexedDB/JSON V6; V5 restore baseline gate; fresh runtime rebind.
 - Kullanıcının onayladığı 2026-09-15 baseline.
@@ -183,7 +189,7 @@ Bu görevde DB/sentetik bordro silinmedi. Gelecek acceptance isolated/safe test 
 | Gereksinim | Owner | Flow | PASS / failure / proof |
 |---|---|---|---|
 | Full-state model/resolver/timeline | 2 | Repo → index → core resolver | Baseline ve contiguous segments; invalid/missing baseline/fork fail; resolver + DB tests |
-| Rounding ve full parity | 4, sonra 5 | Legacy calculate_payroll oracle + full shadow | Tüm financial Decimal projection compare; independent goldens ayrı; B-RND-01 parity kanıtı yoksa activation fail |
+| Rounding ve full parity | 4, sonra 5 | Legacy calculate_payroll oracle + full shadow | Tüm financial Decimal projection compare; independent half-kuruş oracle ve statutory meal sınırı regression'ı ayrı; sapma varsa activation fail |
 | Snapshot/source provenance | 3, sonra 5 | Inputs → payroll snapshot → persistence | Replayable current record; daily input yoksa fail; repo/backup fixtures |
 | V6/V5 + runtime restore | 3, 8 | SQLite/JSON/IDB → strict validate → loader | V6 current replay; V5 timeline yokken calculate fail; partial/stale state fail |
 | Timeline mutation closure | 5 | Transaction → graph impact → stale/block | Direct + transitive closure; finalized case rollback; graph/DB tests |
