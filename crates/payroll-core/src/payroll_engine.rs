@@ -4099,9 +4099,19 @@ fn calculate_payroll_with_index_policy_override_mode(
     } else {
         previous_insurance_gv(dataset, index, &person.id, &period, &accrual)?
     };
-    let insurance_wage_base =
+    // v1 snapshots predate the corrected GVK 63/3 base and must replay their
+    // historical result exactly. New calculations use taxable gross
+    // remuneration: keep taxable cash benefits such as road allowance in the
+    // basis and remove only amounts actually exempted from income tax.
+    let insurance_wage_base = if legacy_backup_replay
+        || replay_snapshot.is_some_and(|snapshot| {
+            snapshot.calculationVersion == crate::PAYROLL_PREVIOUS_CALCULATION_VERSION
+        }) {
         (income_total - income.yemek.unwrap_or_default() - income.vasitaYol.unwrap_or_default())
-            .max(Decimal::ZERO);
+            .max(Decimal::ZERO)
+    } else {
+        (income_total - retro_income_tax_exempt - normal_meal_tax_exemption).max(Decimal::ZERO)
+    };
     let daily_minimum = statutory_snapshot.gvReferansGunlukAsgariUcret;
     let monthly_asgari_gv =
         calculate_aylik_asgari_ucret_gv_matrahi(daily_minimum, sgk_rate, unemployment_rate);

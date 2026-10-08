@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import { constants } from 'node:fs';
-import { access } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const webdriverHost = '127.0.0.1';
-const webdriverPort = 4444;
-const nativeDriverPort = 4445;
+const webdriverPort = Number(process.env.TAURI_WEBDRIVER_PORT ?? 4445);
 const webdriverUrl = `http://${webdriverHost}:${webdriverPort}`;
 const defaultAppPath = resolve(
   'target/debug',
@@ -16,36 +16,44 @@ const defaultAppPath = resolve(
 const appPath = resolve(process.env.TAURI_WEBVIEW_APP ?? defaultAppPath);
 const timeoutMs = 30_000;
 
-if (process.platform !== 'linux' && process.platform !== 'win32') {
-  throw new Error('Native Tauri WebView E2E currently supports Linux and Windows through tauri-driver.');
+if (!['linux', 'win32', 'darwin'].includes(process.platform)) {
+  throw new Error('Native Tauri WebView E2E currently supports Linux, Windows, and macOS.');
 }
 
 if (process.env.CI !== 'true') {
-  throw new Error('Run this smoke test only in an isolated CI runner; it starts the app against its local application data directory.');
+  throw new Error('Set CI=true to run this smoke test; it starts the app with a temporary, isolated application data directory.');
 }
 
 await access(appPath, process.platform === 'win32' ? constants.F_OK : constants.X_OK);
+const isolatedProfile = await mkdtemp(join(tmpdir(), '4d-bordro-native-e2e-'));
+const isolatedShare = join(isolatedProfile, 'share');
 
-let driverExitCode = null;
-let driverSpawnError = null;
-let driverOutput = '';
-const driver = spawn(
-  'tauri-driver',
-  ['--port', String(webdriverPort), '--native-port', String(nativeDriverPort)],
-  { stdio: ['ignore', 'pipe', 'pipe'] },
-);
+let appExitCode = null;
+let appSpawnError = null;
+let appOutput = '';
+const app = spawn(appPath, [], {
+  stdio: ['ignore', 'pipe', 'pipe'],
+  env: {
+    ...process.env,
+    APPDATA: isolatedProfile,
+    HOME: isolatedProfile,
+    LOCALAPPDATA: isolatedProfile,
+    TAURI_WEBDRIVER_PORT: String(webdriverPort),
+    XDG_DATA_HOME: isolatedShare,
+  },
+});
 
-for (const stream of [driver.stdout, driver.stderr]) {
+for (const stream of [app.stdout, app.stderr]) {
   stream.setEncoding('utf8');
   stream.on('data', (chunk) => {
-    driverOutput = `${driverOutput}${chunk}`.slice(-12_000);
+    appOutput = `${appOutput}${chunk}`.slice(-12_000);
   });
 }
-driver.on('exit', (code) => {
-  driverExitCode = code ?? 1;
+app.on('exit', (code) => {
+  appExitCode = code ?? 1;
 });
-driver.on('error', (error) => {
-  driverSpawnError = error;
+app.on('error', (error) => {
+  appSpawnError = error;
 });
 
 async function command(path, { method = 'GET', body, requestTimeout = timeoutMs } = {}) {
@@ -64,26 +72,26 @@ async function command(path, { method = 'GET', body, requestTimeout = timeoutMs 
   return payload?.value;
 }
 
-async function waitForDriver() {
-  const deadline = Date.now() + 20_000;
+async function waitForWebDriver() {
+  const deadline = Date.now() + timeoutMs;
   let lastError;
   while (Date.now() < deadline) {
-    if (driverSpawnError) {
-      throw new Error(`Could not start tauri-driver: ${driverSpawnError.message}`);
+    if (appSpawnError) {
+      throw new Error(`Could not start the Tauri app: ${appSpawnError.message}`);
     }
-    if (driverExitCode !== null) {
-      throw new Error(`tauri-driver exited early with code ${driverExitCode}.`);
+    if (appExitCode !== null) {
+      throw new Error(`The Tauri app exited early with code ${appExitCode}.`);
     }
     try {
       const status = await command('/status', { requestTimeout: 1_000 });
-      if (status?.ready !== false) return;
-      lastError = new Error('tauri-driver is not ready yet.');
+      if (status?.ready === true) return;
+      lastError = new Error('The embedded WebDriver is waiting for the Tauri WebView.');
     } catch (error) {
       lastError = error;
     }
     await delay(250);
   }
-  throw new Error(`Timed out waiting for tauri-driver: ${lastError?.message ?? 'no status response'}`);
+  throw new Error(`Timed out waiting for the embedded WebDriver: ${lastError?.message ?? 'no status response'}`);
 }
 
 async function readAppState(sessionId) {
@@ -105,24 +113,19 @@ async function readAppState(sessionId) {
 let sessionId;
 let testError;
 try {
-  await waitForDriver();
+  await waitForWebDriver();
   const session = await command('/session', {
     method: 'POST',
     body: {
       capabilities: {
         alwaysMatch: {
-          browserName: 'wry',
-          'tauri:options': {
-            application: appPath,
-            args: [],
-            webviewOptions: {},
-          },
+          'wdio:tauriServiceOptions': { windowLabel: 'main' },
         },
       },
     },
   });
   sessionId = session?.sessionId;
-  assert.equal(typeof sessionId, 'string', 'tauri-driver should return a W3C session');
+  assert.equal(typeof sessionId, 'string', 'embedded WebDriver should return a W3C session');
 
   await command(`/session/${sessionId}/timeouts`, {
     method: 'POST',
@@ -169,18 +172,19 @@ try {
   if (sessionId) {
     await command(`/session/${sessionId}`, { method: 'DELETE', requestTimeout: 5_000 }).catch(() => {});
   }
-  driver.kill('SIGTERM');
+  app.kill('SIGTERM');
   await Promise.race([
-    new Promise((resolveExit) => driver.once('exit', resolveExit)),
+    new Promise((resolveExit) => app.once('exit', resolveExit)),
     delay(2_000),
   ]);
-  if (driver.exitCode === null) driver.kill('SIGKILL');
+  if (app.exitCode === null) app.kill('SIGKILL');
+  await rm(isolatedProfile, { recursive: true, force: true });
 }
 
 if (testError) {
-  const detail = driverOutput.trim();
+  const detail = appOutput.trim();
   throw new Error(
-    `Native Tauri WebView E2E failed: ${testError instanceof Error ? testError.message : String(testError)}${detail ? `\n\ntauri-driver output:\n${detail}` : ''}`,
+    `Native Tauri WebView E2E failed: ${testError instanceof Error ? testError.message : String(testError)}${detail ? `\n\nTauri app output:\n${detail}` : ''}`,
     { cause: testError },
   );
 }

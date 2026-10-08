@@ -593,6 +593,44 @@ mod tests {
         }
         let mut legacy_value = serde_json::to_value(legacy).unwrap();
         let mut policy_value = serde_json::to_value(shadow).unwrap();
+
+        // The differential fixtures exercise the older backup calculator,
+        // which intentionally retains the v1 insurance-limit wage base.
+        // New policy calculations use the corrected v2 base; that one field
+        // has its own independent integer-rational oracle in
+        // `insurance_gv_cap_oracle.rs` and golden boundaries. Keep every other
+        // serialized field in this parity check.
+        let legacy_insurance_limit = legacy
+            .gvDetay
+            .as_ref()
+            .map(|detail| detail.sigortaGvAylikLimiti);
+        let policy_insurance_limit = shadow
+            .gvDetay
+            .as_ref()
+            .map(|detail| detail.sigortaGvAylikLimiti);
+        if legacy_insurance_limit != policy_insurance_limit {
+            if shadow.accrualType == AccrualType::NORMAL {
+                let calculation_version = shadow
+                    .calculationMetadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.snapshot.as_ref())
+                    .map(|snapshot| snapshot.calculationVersion.as_str());
+                assert_eq!(
+                    calculation_version,
+                    Some(crate::PAYROLL_CALCULATION_VERSION),
+                    "only the current v2 normal calculation may differ from the legacy insurance-limit formula"
+                );
+            }
+            legacy_value
+                .get_mut("gvDetay")
+                .and_then(serde_json::Value::as_object_mut)
+                .expect("legacy differential fixture has GV detail")
+                .insert(
+                    "sigortaGvAylikLimiti".into(),
+                    serde_json::to_value(policy_insurance_limit)
+                        .expect("policy insurance limit serializes"),
+                );
+        }
         legacy_value
             .as_object_mut()
             .unwrap()
@@ -602,9 +640,8 @@ mod tests {
             .unwrap()
             .remove("calculationMetadata");
         assert_eq!(
-            legacy_value,
-            policy_value,
-            "all financial fields in the serialized payroll record must match when timestamps are fixed"
+            legacy_value, policy_value,
+            "all other serialized financial fields must match when timestamps are fixed"
         );
     }
 

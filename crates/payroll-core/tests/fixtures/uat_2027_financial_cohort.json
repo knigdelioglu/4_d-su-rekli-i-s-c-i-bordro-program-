@@ -1,0 +1,4295 @@
+{
+  "description": "Synthetic UAT observations; expected values are independently recomputed in uat_financial_reconciliation.rs. No personnel identifiers. Daily wage inputs and attendance code counts are independently extracted from the UAT calculation snapshots and daily attendance map.",
+  "rows": [
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "721430.08",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "42945.04",
+        "net": "73034.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "686223.59",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "43195.04",
+        "net": "72784.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "686223.59",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "3281",
+        "totalDeductions": "46476.04",
+        "net": "69503.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "44315.38",
+        "net": "71663.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "3281",
+        "totalDeductions": "47846.38",
+        "net": "68132.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "686223.59",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "43295.04",
+        "net": "72684.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "686223.59",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "43545.04",
+        "net": "72434.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "686223.59",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "3281",
+        "totalDeductions": "46826.04",
+        "net": "69153.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "43965.38",
+        "net": "72013.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "44215.38",
+        "net": "71763.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "44565.38",
+        "net": "71413.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "3281",
+        "totalDeductions": "47246.38",
+        "net": "68732.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "3281",
+        "totalDeductions": "47496.38",
+        "net": "68482.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "672619.03",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "36508.66",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25278.46",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "1700.57",
+        "bes": "3281",
+        "totalDeductions": "47596.38",
+        "net": "68382.7",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "350",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91271.65"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "686223.59",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109379.08"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "115979.08",
+        "pek": "109379.08",
+        "workerSgk": "15313.07",
+        "workerUnemp": "1093.79",
+        "grossTax": "37188.89",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25958.69",
+        "grossStamp": "830.19",
+        "stampWithheld": "579.49",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "42945.04",
+        "net": "73034.04",
+        "employerSgk": "23789.95",
+        "employerUnemp": "2187.58",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "92972.22"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "0",
+        "isPrimi": "4117.69",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "673366.16",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "107295.57"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "113895.57",
+        "pek": "107295.57",
+        "workerSgk": "15021.38",
+        "workerUnemp": "1072.96",
+        "grossTax": "36480.49",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25250.29",
+        "grossStamp": "814.37",
+        "stampWithheld": "563.67",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "41908.3",
+        "net": "71987.27",
+        "employerSgk": "23336.79",
+        "employerUnemp": "2145.91",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91201.23"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "123.35",
+        "isPrimi": "5490.25",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "667064.71",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "108791.48"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "100",
+          "dogumAskerlikBorclanmasiTutar": "250",
+          "hayatSaglikSigortasiTutar": "500",
+          "icraTutar": "700",
+          "kisiBorcuTutar": "350",
+          "nafakaTutar": "1200",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "450",
+        "personalBesFixed": "0",
+        "personalBesPercent": "4.5"
+      },
+      "observed": {
+        "gross": "115391.48",
+        "pek": "108791.48",
+        "workerSgk": "15230.81",
+        "workerUnemp": "1087.91",
+        "grossTax": "36209.1",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "24978.9",
+        "grossStamp": "825.73",
+        "stampWithheld": "575.03",
+        "union": "450",
+        "bes": "4895",
+        "totalDeductions": "50317.65",
+        "net": "65073.83",
+        "employerSgk": "23662.15",
+        "employerUnemp": "2175.83",
+        "garnishment": "700",
+        "alimony": "1200",
+        "personDebt": "350",
+        "birthMilitary": "250",
+        "lifeHealth": "500",
+        "other": "100",
+        "gvBase": "90522.76"
+      },
+      "gvInputs": {
+        "birthMilitary": "250",
+        "lifePremium": "1000",
+        "healthPremium": "750",
+        "priorInsurance": "10000",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "172.69",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "687230.09",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "109527.10"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "600"
+        },
+        "sendikaMember": false,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "600",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "116127.1",
+        "pek": "109527.1",
+        "workerSgk": "15333.79",
+        "workerUnemp": "1095.27",
+        "grossTax": "37239.22",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "26009.02",
+        "grossStamp": "831.31",
+        "stampWithheld": "580.61",
+        "union": "0",
+        "bes": "600",
+        "totalDeductions": "43618.69",
+        "net": "72508.41",
+        "employerSgk": "23822.14",
+        "employerUnemp": "2190.54",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "93098.04"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "863.45",
+        "isPrimi": "6176.53",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "691927.29",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "110217.86"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "116817.86",
+        "pek": "110217.86",
+        "workerSgk": "15430.5",
+        "workerUnemp": "1102.18",
+        "grossTax": "37474.07",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "26243.87",
+        "grossStamp": "836.55",
+        "stampWithheld": "585.85",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "43362.4",
+        "net": "73455.46",
+        "employerSgk": "23972.38",
+        "employerUnemp": "2204.36",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "93685.18"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-11",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "earnings": {
+        "tabanBrutAylik": "93583.81",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "4803.97",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "2945.58",
+        "yemek": "7889.09",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 22,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "677763.8",
+        "previousMinimumCumulative": "336906",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "108006.52"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "114606.52",
+        "pek": "108006.52",
+        "workerSgk": "15120.91",
+        "workerUnemp": "1080.07",
+        "grossTax": "36722.22",
+        "minTaxExemption": "11230.2",
+        "taxWithheld": "25492.02",
+        "grossStamp": "819.77",
+        "stampWithheld": "569.07",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "42262.07",
+        "net": "72344.45",
+        "employerSgk": "23491.42",
+        "employerUnemp": "2160.13",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "91805.54"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "27752.36",
+        "net": "92144.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "28002.36",
+        "net": "91894.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "3389",
+        "totalDeductions": "31391.36",
+        "net": "88505.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "29547.85",
+        "net": "90349.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "3389",
+        "totalDeductions": "33186.85",
+        "net": "86710.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "28102.36",
+        "net": "91794.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "28352.36",
+        "net": "91544.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "3389",
+        "totalDeductions": "31741.36",
+        "net": "88155.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "29197.85",
+        "net": "90699.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "29447.85",
+        "net": "90449.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "0",
+        "totalDeductions": "29797.85",
+        "net": "90099.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "3389",
+        "totalDeductions": "32586.85",
+        "net": "87310.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "250",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "3389",
+        "totalDeductions": "32836.85",
+        "net": "87060.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "250",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "350",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14152.07",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9940.74",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "1700.57",
+        "bes": "3389",
+        "totalDeductions": "32936.85",
+        "net": "86960.42",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "350",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94347.11"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112997.27"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "119897.27",
+        "pek": "112997.27",
+        "workerSgk": "15819.62",
+        "workerUnemp": "1129.97",
+        "grossTax": "14407.15",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10195.82",
+        "grossStamp": "857.65",
+        "stampWithheld": "606.95",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "27752.36",
+        "net": "92144.91",
+        "employerSgk": "24576.91",
+        "employerUnemp": "2259.95",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96047.68"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "0",
+        "isPrimi": "4304.86",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "110820.18"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "117720.18",
+        "pek": "110820.18",
+        "workerSgk": "15514.83",
+        "workerUnemp": "1108.2",
+        "grossTax": "14129.57",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9918.24",
+        "grossStamp": "841.13",
+        "stampWithheld": "590.43",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "27131.7",
+        "net": "90588.48",
+        "employerSgk": "24103.39",
+        "employerUnemp": "2216.4",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94197.15"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "123.35",
+        "isPrimi": "5739.81",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "112378.48"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "100",
+          "dogumAskerlikBorclanmasiTutar": "250",
+          "hayatSaglikSigortasiTutar": "500",
+          "icraTutar": "700",
+          "kisiBorcuTutar": "350",
+          "nafakaTutar": "1200",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": true,
+        "besMember": true,
+        "personalUnionFixed": "450",
+        "personalBesFixed": "0",
+        "personalBesPercent": "4.5"
+      },
+      "observed": {
+        "gross": "119278.48",
+        "pek": "112378.48",
+        "workerSgk": "15732.99",
+        "workerUnemp": "1123.78",
+        "grossTax": "14035.76",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "9824.43",
+        "grossStamp": "852.95",
+        "stampWithheld": "602.25",
+        "union": "450",
+        "bes": "5057",
+        "totalDeductions": "35890.45",
+        "net": "83388.03",
+        "employerSgk": "24442.32",
+        "employerUnemp": "2247.57",
+        "garnishment": "700",
+        "alimony": "1200",
+        "personDebt": "350",
+        "birthMilitary": "250",
+        "lifeHealth": "500",
+        "other": "100",
+        "gvBase": "93571.71"
+      },
+      "gvInputs": {
+        "birthMilitary": "250",
+        "lifePremium": "1000",
+        "healthPremium": "750",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "172.69",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "113145.29"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "600"
+        },
+        "sendikaMember": false,
+        "besMember": true,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "600",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "120045.29",
+        "pek": "113145.29",
+        "workerSgk": "15840.34",
+        "workerUnemp": "1131.45",
+        "grossTax": "14426.03",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10214.7",
+        "grossStamp": "858.77",
+        "stampWithheld": "608.07",
+        "union": "0",
+        "bes": "600",
+        "totalDeductions": "28394.56",
+        "net": "91650.73",
+        "employerSgk": "24609.1",
+        "employerUnemp": "2262.91",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96173.5"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "863.45",
+        "isPrimi": "6457.28",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "113836.05"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "120736.05",
+        "pek": "113836.05",
+        "workerSgk": "15937.05",
+        "workerUnemp": "1138.36",
+        "grossTax": "14514.1",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10302.77",
+        "grossStamp": "864.02",
+        "stampWithheld": "613.32",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "27991.5",
+        "net": "92744.55",
+        "employerSgk": "24759.34",
+        "employerUnemp": "2276.72",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "96760.64"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    },
+    {
+      "period": "2027-12",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "earnings": {
+        "tabanBrutAylik": "96703.27",
+        "giyimYardimi": "269.7",
+        "hizmetZammi": "24.67",
+        "isPrimi": "5022.33",
+        "birlestirilmisSosyalYardim": "5089.7",
+        "vasitaYol": "3104.97",
+        "yemek": "8247.68",
+        "ekOdeme": "0",
+        "tediye": "0",
+        "tisIkramiyesi": "0",
+        "digerGelir": "0"
+      },
+      "mealDays": 23,
+      "parameters": {
+        "dailyMin": "1101",
+        "mealSgk": "300",
+        "mealGv": "300",
+        "sgkWorker": "14",
+        "unempWorker": "1",
+        "sgkEmployer": "21.75",
+        "unempEmployer": "2",
+        "cap": "9",
+        "stampRatePermille": "7.59",
+        "insurancePercentCap": "15"
+      },
+      "tax": {
+        "brackets": [
+          {
+            "limit": "100000",
+            "oran": "0.15"
+          },
+          {
+            "limit": "200000",
+            "oran": "0.2"
+          },
+          {
+            "limit": "300000",
+            "oran": "0.27"
+          },
+          {
+            "limit": "400000",
+            "oran": "0.4"
+          }
+        ],
+        "previousCumulative": "0",
+        "previousMinimumCumulative": "28075.5",
+        "monthlyMinimumBase": "28075.5",
+        "insuranceWageBase": "111562.32"
+      },
+      "deductionPolicy": {
+        "unionFixed": "1700.57",
+        "unionPercent": "65",
+        "besPercent": "3",
+        "besFixed": "0",
+        "personal": {
+          "digerKesintiTutar": "0",
+          "dogumAskerlikBorclanmasiTutar": "0",
+          "hayatSaglikSigortasiTutar": "0",
+          "icraTutar": "0",
+          "kisiBorcuTutar": "0",
+          "nafakaTutar": "0",
+          "sabitBesTutar": "0"
+        },
+        "sendikaMember": false,
+        "besMember": false,
+        "personalUnionFixed": "0",
+        "personalBesFixed": "0",
+        "personalBesPercent": "0"
+      },
+      "observed": {
+        "gross": "118462.32",
+        "pek": "111562.32",
+        "workerSgk": "15618.72",
+        "workerUnemp": "1115.62",
+        "grossTax": "14224.2",
+        "minTaxExemption": "4211.33",
+        "taxWithheld": "10012.87",
+        "grossStamp": "846.76",
+        "stampWithheld": "596.06",
+        "union": "0",
+        "bes": "0",
+        "totalDeductions": "27343.27",
+        "net": "91119.05",
+        "employerSgk": "24264.8",
+        "employerUnemp": "2231.25",
+        "garnishment": "0",
+        "alimony": "0",
+        "personDebt": "0",
+        "birthMilitary": "0",
+        "lifeHealth": "0",
+        "other": "0",
+        "gvBase": "94827.98"
+      },
+      "gvInputs": {
+        "birthMilitary": "0",
+        "lifePremium": "0",
+        "healthPremium": "0",
+        "priorInsurance": "0",
+        "annualCap": "500000"
+      }
+    }
+  ],
+  "periodInputs": {
+    "2027-11": {
+      "serviceStart": "2027-11-15",
+      "serviceEnd": "2027-12-14",
+      "paymentDate": "2027-12-14",
+      "taxYear": 2027,
+      "taxMonth": 12,
+      "cohortRows": 20,
+      "wageSlices": [
+        {
+          "startDate": "2027-11-15",
+          "endDate": "2027-12-14",
+          "dailyBaseWage": "3119.460460108",
+          "attendanceCodeCounts": {
+            "Ç": 22,
+            "T": 8,
+            "G": 0,
+            "İ": 0,
+            "GÇ": 0,
+            "GÇT": 0,
+            "R": 0
+          }
+        }
+      ]
+    },
+    "2027-12": {
+      "serviceStart": "2027-12-15",
+      "serviceEnd": "2028-01-14",
+      "paymentDate": "2028-01-14",
+      "taxYear": 2028,
+      "taxMonth": 1,
+      "cohortRows": 20,
+      "wageSlices": [
+        {
+          "startDate": "2027-12-15",
+          "endDate": "2028-01-14",
+          "dailyBaseWage": "3119.460460108",
+          "attendanceCodeCounts": {
+            "Ç": 23,
+            "T": 8,
+            "G": 0,
+            "İ": 0,
+            "GÇ": 0,
+            "GÇT": 0,
+            "R": 0
+          }
+        }
+      ]
+    }
+  }
+}

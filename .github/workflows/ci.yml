@@ -57,9 +57,6 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --version 0.9.1 --locked
 
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --version 2.0.6 --locked
-
       - name: Install WebAssembly toolchain
         run: |
           rustup target add wasm32-unknown-unknown
@@ -81,7 +78,6 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            webkit2gtk-driver \
             xvfb
 
       - name: Rust workspace check
@@ -178,7 +174,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Build desktop app for native WebView E2E
-        run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi --features native-webdriver,custom-protocol
 
       - name: Native Tauri WebView E2E smoke test
         env:
@@ -241,26 +237,8 @@ jobs:
           bun run verify:wasm-freshness
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Install tauri-driver
-        run: cargo install tauri-driver --version 2.0.6 --locked
-
-      - name: Add Microsoft Edge WebDriver to PATH
-        shell: pwsh
-        run: |
-          $driverDirectory = $env:EDGEWEBDRIVER
-          if ($driverDirectory -and (Test-Path $driverDirectory -PathType Leaf)) {
-            $driverDirectory = Split-Path $driverDirectory -Parent
-          }
-          if (-not $driverDirectory -or -not (Test-Path (Join-Path $driverDirectory "msedgedriver.exe"))) {
-            $driverDirectory = "C:\SeleniumWebDrivers\EdgeDriver"
-          }
-          if (-not (Test-Path (Join-Path $driverDirectory "msedgedriver.exe"))) {
-            throw "Microsoft Edge WebDriver was not found on the Windows runner."
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value $driverDirectory
-
       - name: Build desktop app for native WebView E2E
-        run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi
+        run: cargo build --manifest-path src-tauri/Cargo.toml --bin bordro-programi --features native-webdriver,custom-protocol
 
       - name: Native Tauri WebView E2E smoke test
         shell: pwsh
@@ -268,28 +246,6 @@ jobs:
           CI: "true"
           TAURI_WEBVIEW_APP: target/debug/bordro-programi.exe
         run: |
-          $runtimeId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
-          $runtimeKeys = @(
-            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$runtimeId",
-            "HKCU:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$runtimeId"
-          )
-          $versions = foreach ($key in $runtimeKeys) {
-            if (Test-Path $key) {
-              $value = Get-ItemPropertyValue -Path $key -Name pv -ErrorAction SilentlyContinue
-              if ($value) {
-                try { [version]$value } catch { }
-              }
-            }
-          }
-          if (-not $versions) {
-            throw 'Could not determine the installed Microsoft Edge WebView2 Runtime version.'
-          }
-          $version = $versions | Sort-Object -Descending | Select-Object -First 1
-          Write-Host "Detected WebView2 Runtime $version."
-          if ($version.Major -ge 150) {
-            Write-Host "::warning::Native Windows WebView E2E was skipped on WebView2 Runtime $version. Runtime 150+ blocks remote-debugging startup in the upstream Tauri WebDriver on elevated GitHub-hosted runners. Windows compilation remains checked; native Tauri UI is exercised on Linux."
-            exit 0
-          }
           bun run test:e2e:native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

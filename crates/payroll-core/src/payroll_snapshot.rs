@@ -14,7 +14,8 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 pub const PAYROLL_SNAPSHOT_SCHEMA_VERSION: u16 = 2;
-pub const PAYROLL_CALCULATION_VERSION: &str = "compensation-engine-v1";
+pub const PAYROLL_PREVIOUS_CALCULATION_VERSION: &str = "compensation-engine-v1";
+pub const PAYROLL_CALCULATION_VERSION: &str = "compensation-engine-v2";
 pub const PAID_SICK_LEAVE_RULE_VERSION: &str =
     "first-two-days-first-five-episodes-by-start-year-v1";
 
@@ -139,7 +140,7 @@ pub fn validate_payroll_calculation_metadata_structure(
     validate_parent_context(payroll, period)?;
     if payroll.accrualType != AccrualType::NORMAL {
         return Err(PayrollCalculationSnapshotError::MissingRequiredInput(
-            "compensation-engine-v1 currently defines NORMAL accruals only".into(),
+            "supported compensation-engine versions currently define NORMAL accruals only".into(),
         ));
     }
 
@@ -148,7 +149,9 @@ pub fn validate_payroll_calculation_metadata_structure(
             snapshot.snapshotSchemaVersion,
         ));
     }
-    if snapshot.calculationVersion != PAYROLL_CALCULATION_VERSION {
+    if snapshot.calculationVersion != PAYROLL_CALCULATION_VERSION
+        && snapshot.calculationVersion != PAYROLL_PREVIOUS_CALCULATION_VERSION
+    {
         return Err(
             PayrollCalculationSnapshotError::UnsupportedCalculationVersion(
                 snapshot.calculationVersion.clone(),

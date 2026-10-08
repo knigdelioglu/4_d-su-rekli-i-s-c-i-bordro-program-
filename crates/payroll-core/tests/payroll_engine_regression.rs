@@ -293,15 +293,16 @@ fn canonical_tax_calculator_matches_the_payroll_engine_final_snapshot() {
     let worker_sgk = result.kesintiler.isciSgkPrimi.unwrap_or_default();
     let worker_unemployment = result.kesintiler.isciIssizlikPrimi.unwrap_or_default();
     let daily_minimum = statutory.gvReferansGunlukAsgariUcret;
+    let normal_meal_tax_exemption = if settings.yemekTamGvIstisnaDamgaTabi {
+        result.gelirler.yemek.unwrap_or_default()
+    } else {
+        meal_exemption
+    };
     let canonical = calculate_canonical_tax_state(&CanonicalTaxCalculationInput {
         income_total: result.gelirToplam,
         retro_income_tax_exempt: Default::default(),
         retro_stamp_tax_exempt: Default::default(),
-        normal_meal_tax_exemption: if settings.yemekTamGvIstisnaDamgaTabi {
-            result.gelirler.yemek.unwrap_or_default()
-        } else {
-            meal_exemption
-        },
+        normal_meal_tax_exemption,
         normal_meal_stamp_tax_exemption: if settings.yemekTamGvIstisnaDamgaTabi {
             Decimal::ZERO
         } else {
@@ -310,10 +311,7 @@ fn canonical_tax_calculator_matches_the_payroll_engine_final_snapshot() {
         worker_sgk,
         worker_unemployment,
         union_deduction: result.kesintiler.sendikaAidati.unwrap_or_default(),
-        insurance_wage_base: (result.gelirToplam
-            - result.gelirler.yemek.unwrap_or_default()
-            - result.gelirler.vasitaYol.unwrap_or_default())
-        .max(Decimal::ZERO),
+        insurance_wage_base: (result.gelirToplam - normal_meal_tax_exemption).max(Decimal::ZERO),
         birth_military_gv_input: Default::default(),
         life_insurance_premium: Default::default(),
         health_insurance_premium: Default::default(),

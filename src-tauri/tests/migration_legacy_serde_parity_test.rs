@@ -645,6 +645,7 @@ fn current_v5_fixture_with_nafaka(
     let institution_settings = SettingsRepository::get_all_institution_settings(&conn)?;
     let mut v5_payrolls = dataset.payrolls.clone();
     for payroll in &mut v5_payrolls {
+        preserve_v1_insurance_cap(payroll);
         payroll.calculationMetadata = None;
     }
     let payload = json!({
@@ -676,6 +677,7 @@ fn current_v5_payload_from_database(
     let institution_settings = SettingsRepository::get_all_institution_settings(conn)?;
     let mut v5_payrolls = dataset.payrolls.clone();
     for payroll in &mut v5_payrolls {
+        preserve_v1_insurance_cap(payroll);
         payroll.calculationMetadata = None;
     }
     let active_period_id =
@@ -699,6 +701,22 @@ fn current_v5_payload_from_database(
         "retroAllocations": dataset.retroAllocations
     })
     .to_string())
+}
+
+/// Version-5 fixtures model the historical v1 calculation contract. That
+/// version based its 15% insurance limit on gross income less all meal and
+/// road amounts, so do not export a newly calculated v2 result as though it
+/// were a v1 backup.
+fn preserve_v1_insurance_cap(payroll: &mut BordroKaydi) {
+    let Some(gv) = payroll.gvDetay.as_mut() else {
+        return;
+    };
+    let v1_wage_base = (payroll.gelirToplam
+        - payroll.gelirler.yemek.unwrap_or_default()
+        - payroll.gelirler.vasitaYol.unwrap_or_default())
+    .max(Decimal::ZERO);
+    gv.sigortaGvAylikLimiti = (v1_wage_base * dec!(0.15))
+        .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero);
 }
 
 fn v5_dated_road_fixture(

@@ -82,7 +82,15 @@ pub fn run() {
     let conn = create_connection(None).expect("Failed to initialize SQLite database");
     let state: DbState = Arc::new(Mutex::new(conn));
 
-    configure_builder(tauri::Builder::default(), state)
+    let builder = configure_builder(tauri::Builder::default(), state);
+    #[cfg(all(debug_assertions, feature = "native-webdriver"))]
+    let builder = if std::env::var("CI").is_ok_and(|value| value == "true") {
+        builder.plugin(tauri_plugin_wdio_webdriver::init())
+    } else {
+        builder
+    };
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
