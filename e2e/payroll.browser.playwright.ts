@@ -1694,7 +1694,7 @@ test('dönem ortası %6,25 ücret artışı yuvarlamayı korur ve başka modu re
   );
 });
 
-test('meal payroll tax policy defaults checked and persists both selections through reload and recalculation', async ({ page }) => {
+test('meal payroll tax policy defaults checked and persists both selections through reload and recalculation', async ({ page }, testInfo) => {
   await page.goto('/');
   await loadSampleDataset(page);
   await page.getByTestId('nav-parametrelar').click();
@@ -1726,13 +1726,13 @@ test('meal payroll tax policy defaults checked and persists both selections thro
   const on = await calculateP1(page, periodId);
   expect(on.gelirToplam).toBe(off.gelirToplam);
   expect(on.netOdeme).not.toBe(off.netOdeme);
-  await page.screenshot({ path: '/private/tmp/meal-payroll-tax-policy-desktop.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('meal-payroll-tax-policy-desktop.png'), fullPage: true });
   await page.getByTestId('nav-parametrelar').click();
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(checkbox).toBeVisible();
   const box = await checkbox.boundingBox();
   expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: '/private/tmp/meal-payroll-tax-policy-mobile.png', fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath('meal-payroll-tax-policy-mobile.png'), fullPage: true });
 });
 
 test('service period içinde iki yol tutarı değişikliği doğru tarihlerden hesaplanır', async ({ page }) => {
