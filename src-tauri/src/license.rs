@@ -77,7 +77,7 @@ fn secure_set(account: &str, value: &str) -> Result<(), String> {
             "-w",
             value,
         ])
-        .output()
+        .status()
         .map_err(|_| "macOS Keychain erişilebilir değil.".to_string())?;
     #[cfg(target_os = "linux")]
     let result = {
@@ -112,7 +112,7 @@ fn secure_set(account: &str, value: &str) -> Result<(), String> {
     let result = windows_secure_set(account, value)?;
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     return Err("Bu işletim sisteminde lisans güvenli deposu desteklenmiyor.".into());
-    if result.status.success() {
+    if result.success() {
         Ok(())
     } else {
         Err("İşletim sistemi güvenli deposu güncellenemedi.".into())
@@ -158,8 +158,8 @@ fn windows_secure_get(account: &str) -> Result<std::process::Output, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn windows_secure_set(account: &str, value: &str) -> Result<std::process::Output, String> {
-    windows_secure_command(account, Some(value))
+fn windows_secure_set(account: &str, value: &str) -> Result<std::process::ExitStatus, String> {
+    windows_secure_command(account, Some(value)).map(|output| output.status)
 }
 
 fn enforcement_required() -> bool {
