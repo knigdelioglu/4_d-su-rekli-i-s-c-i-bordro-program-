@@ -4,9 +4,6 @@ use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
-#[path = "../support/compensation_policy.rs"]
-pub(crate) mod compensation_policy_test_support;
-
 mod payment_event_properties;
 mod payroll_properties;
 mod pek_properties;

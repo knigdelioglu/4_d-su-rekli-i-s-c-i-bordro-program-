@@ -220,6 +220,8 @@ pub struct CompensationPolicyTimelineData {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+// This tagged response is short-lived and its direct payload keeps the wire DTO simple.
+#[allow(clippy::large_enum_variant)]
 pub enum ActivePolicyProjection {
     Active {
         asOfDate: String,
@@ -232,6 +234,8 @@ pub enum ActivePolicyProjection {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+// This tagged response is short-lived and its direct payload keeps the wire DTO simple.
+#[allow(clippy::large_enum_variant)]
 pub enum CompensationPolicyPrefill {
     Available {
         authority: String,
@@ -517,8 +521,7 @@ impl CompensationPolicyService {
         let active = Self::active_versions(&versions);
         let projection = active
             .iter()
-            .filter(|version| version.effectiveFrom <= request.scope.projectionDate)
-            .last()
+            .rfind(|version| version.effectiveFrom <= request.scope.projectionDate)
             .cloned();
         let initialBaselineRequired = CompensationPolicyRepository::get_all_versions(conn)
             .map_err(map_domain_error)?
@@ -582,32 +585,44 @@ impl CompensationPolicyService {
         let incomplete = || CompensationPolicyPrefill::Unavailable {
             reason: "INCOMPLETE_SETTINGS".into(),
         };
-        if required_decimal_fields
-            .iter()
-            .any(|field| !settings.get(*field).is_some_and(serde_json::Value::is_string))
-        {
+        if required_decimal_fields.iter().any(|field| {
+            !settings
+                .get(*field)
+                .is_some_and(serde_json::Value::is_string)
+        }) {
             return incomplete();
         }
         if nullable_decimal_fields.iter().any(|field| {
-            !settings.get(*field).is_some_and(|value| {
-                value.is_null() || value.is_string()
-            })
+            !settings
+                .get(*field)
+                .is_some_and(|value| value.is_null() || value.is_string())
         }) {
             return incomplete();
         }
-        let Some(group_values) = settings.get("isPrimiGruplari").and_then(serde_json::Value::as_array) else {
+        let Some(group_values) = settings
+            .get("isPrimiGruplari")
+            .and_then(serde_json::Value::as_array)
+        else {
             return incomplete();
         };
-        if group_values.is_empty() || group_values.iter().any(|value| {
-            let Some(group) = value.as_object() else { return true; };
-            !group.get("id").is_some_and(serde_json::Value::is_string)
-                || !group.get("ad").is_some_and(serde_json::Value::is_string)
-                || !group.get("oran").is_some_and(serde_json::Value::is_string)
-                || !group.get("aktif").is_some_and(serde_json::Value::is_boolean)
-        }) {
+        if group_values.is_empty()
+            || group_values.iter().any(|value| {
+                let Some(group) = value.as_object() else {
+                    return true;
+                };
+                !group.get("id").is_some_and(serde_json::Value::is_string)
+                    || !group.get("ad").is_some_and(serde_json::Value::is_string)
+                    || !group.get("oran").is_some_and(serde_json::Value::is_string)
+                    || !group
+                        .get("aktif")
+                        .is_some_and(serde_json::Value::is_boolean)
+            })
+        {
             return incomplete();
         }
-        let groups = match serde_json::from_value::<Vec<IsPrimiGrupItem>>(serde_json::Value::Array(group_values.clone())) {
+        let groups = match serde_json::from_value::<Vec<IsPrimiGrupItem>>(serde_json::Value::Array(
+            group_values.clone(),
+        )) {
             Ok(groups) => Some(
                 groups
                     .into_iter()
@@ -1052,8 +1067,7 @@ impl CompensationPolicyService {
         if boundary_scope == CompensationBoundaryScope::RoadOnly {
             let prior = Self::active_versions(versions)
                 .into_iter()
-                .filter(|version| version.effectiveFrom.as_str() < operation.effective_from())
-                .last();
+                .rfind(|version| version.effectiveFrom.as_str() < operation.effective_from());
             if prior
                 .as_ref()
                 .is_some_and(|version| !same_policy_except_road(&version.state, operation.state()))
@@ -1114,8 +1128,7 @@ impl CompensationPolicyService {
                 .map(|version| &version.state),
             _ => active
                 .iter()
-                .filter(|version| version.effectiveFrom.as_str() < date)
-                .last()
+                .rfind(|version| version.effectiveFrom.as_str() < date)
                 .map(|version| &version.state),
         };
         let changedFields = if boundaryScope == CompensationBoundaryScope::RoadOnly
@@ -1501,8 +1514,7 @@ impl CompensationPolicyService {
         let active = Self::active_versions(versions);
         let activeVersionIdAtDate = active
             .iter()
-            .filter(|version| version.effectiveFrom.as_str() <= effective_from)
-            .last()
+            .rfind(|version| version.effectiveFrom.as_str() <= effective_from)
             .map(|version| version.id.clone());
         let sameDateActiveLeafVersionId = active
             .iter()
@@ -1744,7 +1756,12 @@ mod compensation_prefill_tests {
             &archived_settings(),
             "2026-09",
         );
-        let CompensationPolicyPrefill::Available { state, sourcePeriodId, .. } = prefill else {
+        let CompensationPolicyPrefill::Available {
+            state,
+            sourcePeriodId,
+            ..
+        } = prefill
+        else {
             panic!("complete archive settings should be available as a draft");
         };
         assert_eq!(sourcePeriodId, "2026-09");

@@ -1,4 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { parseLegacyBackup } from '../src/services/storage/payrollPayload';
 
 const runtimeIssues = new WeakMap<Page, string[]>();
 
@@ -90,6 +92,8 @@ type StoredPeriod = {
   id: string;
   yil: number;
   ay: number;
+  baslangicTarihi: string;
+  bitisTarihi: string;
   taxYear: number;
   taxMonth: number;
 };
@@ -102,6 +106,8 @@ type StoredAnnualPayrollParameters = {
 type StoredSnapshot = {
   bordrolar: StoredPayroll[];
   puantajlar: Array<{ personelId: string; donemId: string; gunler: Record<string, string> }>;
+  compensationPolicyVersions?: Array<Record<string, unknown>>;
+  isPrimiGruplari?: Array<{ id: string; ad: string; oran: string | number; aktif: boolean }>;
   taxOpenings?: Array<{
     id: string;
     personnelId: string;
@@ -275,6 +281,55 @@ async function installCalculableFixture(page: Page): Promise<void> {
               );
               if (!annual) throw new Error('Örnek fixture yıllık vergi parametresi içermiyor.');
               annual.sigortaGvYillikBrutAsgariUcretTavani = '396360';
+
+              const baselinePeriod = [...snapshot.donemler]
+                .sort((left, right) => left.id.localeCompare(right.id))[0];
+              const sourceGroups = snapshot.isPrimiGruplari;
+              if (!Array.isArray(sourceGroups) || sourceGroups.length === 0) {
+                throw new Error('Ücret politikası fixture iş primi grupları bulunamadı.');
+              }
+              const policyGroups = sourceGroups.map((value) => {
+                if (!value || typeof value !== 'object') throw new Error('İş primi grubu geçersiz.');
+                const group = value as Record<string, unknown>;
+                if (typeof group.id !== 'string' || typeof group.ad !== 'string') {
+                  throw new Error('İş primi grubu kimliği/adı eksik.');
+                }
+                const rate = group.oran;
+                if (typeof rate !== 'string' && typeof rate !== 'number') {
+                  throw new Error('İş primi grubu oranı eksik.');
+                }
+                return {
+                  id: group.id,
+                  ad: group.ad,
+                  oran: String(rate),
+                  aktif: typeof group.aktif === 'boolean' ? group.aktif : true,
+                };
+              });
+              snapshot.compensationPolicyVersions = [{
+                id: `e2e-policy-${baselinePeriod.id}`,
+                effectiveFrom: baselinePeriod.baslangicTarihi,
+                state: {
+                  // Synthetic authoritative values matching DEFAULT_KURUM_DEGERLERI.
+                  gunlukTabanUcret: '2443.28',
+                  gunlukYemek: '300.75',
+                  birlestirilmisSosyalYardim: '5089.70',
+                  gunlukVasitaYol: '128.93',
+                  giyimYardimi: '269.70',
+                  hizmetZammiBirimi: '24.67',
+                  isPrimiYuzde: '0',
+                  isPrimiGruplari: policyGroups,
+                  geceCalismaPrimiYuzde: '0',
+                  geceCalismaTatiliPrimiYuzde: '0',
+                  ekOdeme: '0',
+                  digerGelirVarsayilan: '0',
+                },
+                boundaryScope: 'FULL_EARNING',
+                roadRoundingMode: 'PERIOD_TOTAL',
+                createdAt: '2026-10-08T00:00:00.000Z',
+                source: 'TEST_FIXTURE',
+                reason: 'Browser E2E starting policy baseline',
+                supersedesVersionId: null,
+              }];
 
               const writeRequest = objectStore.put(
                 { payload: JSON.stringify(snapshot), revision },
@@ -483,6 +538,8 @@ test('SGK prim kontrolü tüm personeli ve manuel mutabakat farkını gösterir'
     'SGK Sicil No',
     'Ad Soyad',
     'Durum',
+    'SGK Gün Sayısı',
+    'Cari Dönem PEK',
     'SGK İşveren —',
     'İşveren İşsizlik —',
     'SGK İşçi —',
@@ -668,7 +725,7 @@ test('normal payroll screen keeps summary cards compact and desktop table rows v
   // Calculate payrolls so cards show real monetary totals and rows have full actions and calculations
   const calculateAllButton = page.getByRole('button', { name: /Tüm Hesaplanabilir Bordroları Hesapla/ });
   await calculateAllButton.click();
-  await expect(page.getByText(/personelin bordrosu başarıyla güncellendi/i)).toBeVisible();
+  await expect(screen.locator('tbody tr').filter({ hasText: 'Hesaplandı' })).toHaveCount(5);
 
   const monetaryCardConfigs = [
     { cardId: 'kpi-card-gross', expectedTitle: 'Vergi ve SGK Öncesi' },
@@ -978,15 +1035,14 @@ test('active period selector shows explicit year and distinguishes same month ac
   await expect(option2026).toBeAttached();
   await expect(option2027).toBeAttached();
 
-  await expect(option2026).toHaveText('Ocak 2026 · 15 Ocak - 14 Şubat');
-  await expect(option2027).toHaveText('Ocak 2027 · 15 Ocak - 14 Şubat');
+  await expect(option2026).toHaveText('Ocak 2026 · 15 Ocak - 14 Şubat · Ödeme/vergi ayı: Ocak 2026');
+  await expect(option2027).toHaveText('Ocak 2027 · 15 Ocak - 14 Şubat · Ödeme/vergi ayı: Şubat 2027');
 
-  // Verify selecting 2026 by label explicitly activates 2026-01 (not 2027-01)
-  await selector.selectOption({ label: 'Ocak 2026 · 15 Ocak - 14 Şubat' });
+  // Select by value because the UI also includes the payment/tax month in its label.
+  await selector.selectOption({ value: '2026-01' });
   await expect(selector).toHaveValue('2026-01');
 
-  // Verify selecting 2027 by label explicitly activates 2027-01 (not 2026-01)
-  await selector.selectOption({ label: 'Ocak 2027 · 15 Ocak - 14 Şubat' });
+  await selector.selectOption({ value: '2027-01' });
   await expect(selector).toHaveValue('2027-01');
 });
 
@@ -1041,29 +1097,85 @@ test('deduction child navigation switches content and persists the selected type
 });
 
 test('top bar keeps the active period and backup export/import actions', async ({ page }) => {
-  await page.goto('/');
+  const originalPayload = await seedCalculatedSnapshot(page);
+  const original = JSON.parse(originalPayload) as Record<string, unknown>;
   await expect(page.getByTestId('active-period-selector')).toBeVisible();
 
   const downloadPromise = page.waitForEvent('download');
   await page.getByTitle('Yedek İndir (JSON)').click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toMatch(/^4D_Bordro_Yedek_bos_\d{4}-\d{2}-\d{2}\.json$/);
+  expect(download.suggestedFilename()).toMatch(/^4D_Bordro_Yedek_\d{4}-\d{2}_\d{4}-\d{2}-\d{2}\.json$/);
 
   const backupPath = await download.path();
   if (!backupPath) throw new Error('Yedek indirme yolu alınamadı.');
+  const backupText = await readFile(backupPath, 'utf8');
+  const exported = JSON.parse(backupText) as Record<string, unknown>;
+  expect(exported.backupVersion).toBeGreaterThanOrEqual(5);
+  expect(exported.compensationPolicyVersions).toEqual(original.compensationPolicyVersions);
+  expect(exported.bordrolar).toEqual(original.bordrolar);
 
-  const dialogTypes: string[] = [];
-  const dialogMessages: string[] = [];
-  page.on('dialog', async (dialog) => {
-    dialogTypes.push(dialog.type());
-    dialogMessages.push(dialog.message());
-    await dialog.accept();
+  const sentinel = structuredClone(original) as Record<string, unknown>;
+  const sentinelPeople = sentinel.personeller as Array<Record<string, unknown>>;
+  sentinelPeople[0].ad = 'SENTINEL — failed restore must preserve this';
+  const sentinelPayload = JSON.stringify(sentinel);
+  await writeStoredPayload(page, sentinelPayload);
+  await page.reload();
+  await expect(page.getByTestId('payroll-screen')).toBeVisible();
+
+  const corrupt = structuredClone(exported) as Record<string, unknown>;
+  const corruptPayrolls = corrupt.bordrolar as Array<Record<string, unknown>>;
+  corruptPayrolls[0].netOdeme = 123.45;
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'corrupt-backup.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(corrupt)),
   });
+  const importDialog = page.getByRole('dialog', { name: 'Yedekten geri yükleme onayı' });
+  await expect(importDialog).toBeVisible();
+  await importDialog.getByRole('button', { name: 'Yedeği yükle' }).click();
+  await expect(page.getByTestId('storage-error')).toContainText('Yedek yüklenemedi');
+  await expect.poll(() => readStoredPayload(page)).toBe(sentinelPayload);
 
   await page.locator('input[type="file"]').setInputFiles(backupPath);
-  await expect.poll(() => dialogTypes.length).toBe(2);
-  expect(dialogTypes).toEqual(['confirm', 'alert']);
-  expect(dialogMessages[1]).toBe('Yedek başarıyla yüklendi!');
+  const validImportDialog = page.getByRole('dialog', { name: 'Yedekten geri yükleme onayı' });
+  await expect(validImportDialog).toBeVisible();
+  await validImportDialog.getByRole('button', { name: 'Yedeği yükle' }).click();
+  await expect(page.getByTestId('global-success-message')).toContainText('Yedek başarıyla yüklendi');
+
+  const restoredPayload = await readStoredPayload(page);
+  expect(restoredPayload).not.toBeNull();
+  const restored = JSON.parse(restoredPayload!) as Record<string, unknown>;
+  expect(restored.personeller).toEqual(exported.personeller);
+  expect(restored.compensationPolicyVersions).toEqual(exported.compensationPolicyVersions);
+  expect(restored.bordrolar).toEqual(exported.bordrolar);
+});
+
+test('calculated payroll stays out of the bank list until it is finalized', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  const periodId = await openPayrollScreen(page);
+  await calculateP1(page, periodId);
+
+  await page.getByTestId('nav-banka').click();
+  const bankArea = page.locator('#banka-listesi-print-area');
+  await expect(page.getByRole('heading', { name: /Banka Ödeme Listesi/ })).toBeVisible();
+  await expect(bankArea.locator('tbody tr')).toHaveCount(0);
+  await expect(page.getByTestId('excluded-accruals-notice')).toContainText('banka aktarımına hazır değil');
+  await expect(bankArea).toContainText('Ödeme Satırı: 0');
+
+  await page.getByTestId('nav-bordro').click();
+  const payrollRow = page.locator('tbody tr').filter({ hasText: 'Ahmet Yılmaz' }).first();
+  await payrollRow.getByRole('button', { name: /Diğer işlemler/i }).click();
+  await page.getByRole('menuitem', { name: /Kesinleştir/i }).click();
+  await expect(page.getByText('Kesinleştirmeye hazır')).toBeVisible();
+  await page.getByRole('button', { name: 'Kesinleştir ve Kilitle' }).click();
+  await expect(payrollRow).toContainText('Kesinleştirildi');
+
+  await page.getByTestId('nav-banka').click();
+  await expect(bankArea.locator('tbody tr')).toHaveCount(1);
+  await expect(bankArea.locator('tbody tr').first()).toContainText('Ahmet Yılmaz');
+  await expect(bankArea).toContainText('Ödeme Satırı: 1');
+  await expect(page.getByTestId('excluded-accruals-notice')).toHaveCount(0);
 });
 
 test('browser WASM calculation persists in IndexedDB and survives reload', async ({ page }) => {
@@ -1162,12 +1274,14 @@ test('browser migrates a numeric legacy localStorage backup into exact IndexedDB
   const currentPayload = await seedCalculatedSnapshot(page);
   const legacySnapshot = JSON.parse(currentPayload) as Record<string, unknown>;
   legacySnapshot.backupVersion = 1;
+  delete legacySnapshot.compensationPolicyVersions;
   const legacyPayroll = (legacySnapshot.bordrolar as Array<Record<string, unknown>>)[0];
-  legacyPayroll.netOdeme = 64179.78;
-  (legacyPayroll.kesintiler as Record<string, unknown>).digerKesinti = '7297.96';
-  legacyPayroll.kesintiToplam = '31984.88';
+  const originalNet = String(legacyPayroll.netOdeme);
+  legacyPayroll.netOdeme = Number(originalNet);
   delete legacyPayroll.status;
+  delete legacyPayroll.calculationMetadata;
   const legacyPayload = JSON.stringify(legacySnapshot);
+  expect(() => parseLegacyBackup(legacyPayload)).not.toThrow();
   await page.evaluate(
     ({ storageKey, payload }) => localStorage.setItem(storageKey, payload),
     { storageKey: '4d_bordro_programi_mvp_v2', payload: legacyPayload }
@@ -1178,7 +1292,7 @@ test('browser migrates a numeric legacy localStorage backup into exact IndexedDB
   await expect(page.getByTestId('payroll-screen')).toBeVisible();
   await expect
     .poll(async () => (await readStoredSnapshot(page))?.bordrolar?.[0]?.netOdeme)
-    .toBe('64179.78');
+    .toBe(originalNet);
 });
 
 test('browser exact Decimal survives WASM result, IndexedDB reload, and the next WASM request', async ({ page }) => {
@@ -1266,14 +1380,8 @@ test('browser finalization uses WASM, persists FINALIZED, and rejects a finalize
 
   await page.getByTestId('nav-puantaj').click();
   await expect(page.getByText(/Puantaj Özeti/)).toBeVisible();
-  let dialogMessage: string | undefined;
-  page.on('dialog', async (dialog) => {
-    dialogMessage = dialog.message();
-    await dialog.accept();
-  });
   await page.locator('[data-testid^="attendance-day-"]').first().click();
-  await page.waitForTimeout(1_000);
-  expect(dialogMessage).toContain('Kesinleştirilmiş');
+  await expect(page.getByRole('alert')).toContainText('Kesinleştirilmiş');
 
   const afterRejectedMutation = await waitForPayrollStatus(page, periodId, 'FINALIZED');
   expect(afterRejectedMutation.status).toBe('FINALIZED');
@@ -1436,17 +1544,13 @@ test('saving sick leave automatically marks puantaj as R across 15-14 boundary w
   await form.locator('input[type="date"]').nth(0).fill('2026-07-13');
   await form.locator('input[type="date"]').nth(1).fill('2026-07-13');
   await form.getByRole('button', { name: /Rapor Olayını Kaydet/i }).click();
-  await expect(conflictModal).toBeVisible();
-  await page.getByTestId('sick-leave-conflict-apply').click();
   const sickLeaveError = page.getByTestId('sick-leave-error-banner');
   await expect(sickLeaveError).toBeVisible();
   await expect(sickLeaveError).toContainText('Rapor tarihleri çakışıyor');
-  await expect(conflictModal).toBeVisible();
+  await expect(conflictModal).not.toBeVisible();
   const afterDuplicate = await readStoredSnapshot(page);
   expect(afterDuplicate?.sickLeaveRecords).toEqual(beforeDuplicate?.sickLeaveRecords);
   expect(afterDuplicate?.puantajlar).toEqual(beforeDuplicate?.puantajlar);
-  await page.getByTestId('sick-leave-conflict-cancel').click();
-
   // 5. Test delete preserves manual modification:
   // User navigates to puantaj and manually changes 2026-07-15 from 'R' to 'Ç'
   await page.getByTestId('nav-puantaj').click();
@@ -1499,88 +1603,117 @@ test('saving sick leave automatically marks puantaj as R across 15-14 boundary w
     });
 });
 
-test('wage changes remind users to review raise months without changing the schedule automatically', async ({ page }) => {
+test('dönem ortası %6,25 ücret artışı yuvarlamayı korur ve başka modu reddeder', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
-  await page.getByTestId('nav-parametrelar').click();
-  const section = page.getByTestId('period-settings-gelir');
-  const reminder = page.getByTestId('wage-change-raise-reminder');
-  await expect(page.getByTestId('raise-calendar-warning')).toBeVisible();
-  await expect(section.getByText('Kurum bordrosundaki yemek vergi hesabı uygulanır.', { exact: false })).toHaveCount(0);
-  await expect(section.getByText('Önceki dönemle aynı değerler bırakılırsa', { exact: false })).toHaveCount(0);
-  const mealPolicy = page.getByTestId('meal-payroll-tax-policy');
-  await mealPolicy.uncheck();
-  await mealPolicy.blur();
-  await expect(reminder).toHaveCount(0);
-  await mealPolicy.check();
+  const periodId = await page.getByTestId('active-period-selector').inputValue();
+  const before = await readStoredSnapshot(page);
+  const period = before?.donemler?.find((item) => item.id === periodId);
+  expect(period).toBeDefined();
+  const effectiveDate = new Date(
+    Date.parse(`${period!.baslangicTarihi}T00:00:00.000Z`) + 17 * 86_400_000
+  ).toISOString().slice(0, 10);
 
-  const selectionBefore = await section.locator('input[type="checkbox"]').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).checked));
-  const rates = section.getByRole('spinbutton');
-  for (let index = 0; index < 10; index++) {
-    const field = rates.nth(index);
-    const original = await field.inputValue();
-    await field.focus();
-    await field.blur();
-    await expect(reminder).toHaveCount(0);
-    await field.fill(String(Number(original || '0') + 1));
-    await field.blur();
-    if (index === 3) {
-      // Transport changes use their own effective dates, never the wage schedule.
-      await expect(reminder).toHaveCount(0);
-      await field.fill(original);
-      continue;
-    }
-    await expect(reminder).toBeVisible();
-    await page.getByRole('button', { name: 'Zam aylarını kontrol et', exact: true }).click();
-    await expect(reminder).toHaveCount(0);
-    await expect(section.locator('input[type="checkbox"]').first()).toBeFocused();
-    await expect(section.locator('input[type="checkbox"]')).toHaveCount(selectionBefore.length);
-    expect(await section.locator('input[type="checkbox"]').evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).checked))).toEqual(selectionBefore);
-    await field.focus();
-    await field.blur();
-    await expect(reminder).toHaveCount(0);
-    await field.fill(original);
-    await field.blur();
-    await expect(reminder).toHaveCount(0);
-  }
-  await rates.first().fill(String(Number(await rates.first().inputValue()) + 1));
-  await rates.first().blur();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(reminder).toBeVisible();
-  const box = await reminder.boundingBox();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: '/private/tmp/wage-change-raise-reminder-mobile.png', fullPage: true });
-  await page.getByRole('button', { name: 'Zam hatırlatmasını kapat' }).click();
-  await expect(reminder).toHaveCount(0);
-  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
-  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
-  await rates.first().focus();
-  await rates.first().blur();
-  await expect(reminder).toHaveCount(0);
-  await page.reload();
-  await expect(reminder).toHaveCount(0);
+  await page.getByTestId('nav-compensation-policy').click();
+  const editor = page.getByTestId('compensation-policy-scroll-region');
+  await expect(editor).toBeVisible();
+  const dateField = page.locator('#policy-effective-date');
+  await dateField.fill(effectiveDate);
+  await page.locator('#policy-reason').fill('Dönem ortası %6,25 ücret artışı regresyonu');
+
+  const fields = {
+    base: page.locator('#policy-base-wage'),
+    meal: page.locator('#policy-meal'),
+    road: page.locator('#policy-road'),
+    social: page.locator('#policy-social'),
+    clothing: page.locator('#policy-clothing'),
+    serviceUnit: page.locator('#policy-service-unit'),
+  };
+  const unchangedBefore = {
+    road: await fields.road.inputValue(),
+    social: await fields.social.inputValue(),
+    clothing: await fields.clothing.inputValue(),
+    serviceUnit: await fields.serviceUnit.inputValue(),
+  };
+  const baseBefore = await fields.base.inputValue();
+  const mealBefore = await fields.meal.inputValue();
+  await page.getByText('Günlük taban ücret ve yemeği yüzdeyle artır').click();
+  await page.locator('#policy-percentage-helper').fill('6.25');
+  await page.getByRole('button', { name: 'Artışı uygula' }).click();
+  expect(await fields.base.inputValue()).not.toBe(baseBefore);
+  expect(await fields.meal.inputValue()).not.toBe(mealBefore);
+  expect(await fields.road.inputValue()).toBe(unchangedBefore.road);
+  expect(await fields.social.inputValue()).toBe(unchangedBefore.social);
+  expect(await fields.clothing.inputValue()).toBe(unchangedBefore.clothing);
+  expect(await fields.serviceUnit.inputValue()).toBe(unchangedBefore.serviceUnit);
+
+  const calculationDetails = page.locator('#policy-calculation-details');
+  await calculationDetails.locator('summary').click();
+  const periodRounding = page.locator('#policy-road-rounding-period');
+  const sliceRounding = page.locator('#policy-road-rounding-slice');
+  await expect(periodRounding).toBeChecked();
+  await sliceRounding.check();
+  const actionBar = page.getByTestId('compensation-policy-action-bar');
+  await actionBar.getByRole('button', { name: 'Etkileri önizle' }).click();
+  await expect(page.getByText('Yol yuvarlama biçimi dönem ortasında değiştirilemez.')).toBeVisible();
+  expect((await readStoredSnapshot(page))?.compensationPolicyVersions)
+    .toEqual(before?.compensationPolicyVersions);
+
+  await periodRounding.check();
+  await actionBar.getByRole('button', { name: 'Etkileri önizle' }).click();
+  await expect(page.getByRole('heading', { name: '3. Etkileri inceleyin' })).toBeVisible();
+  await actionBar.getByRole('button', { name: 'Önizlenen değişikliği kaydet' }).click();
+  await expect(page.getByText('Ücret değişikliği kaydedildi.')).toBeVisible();
+
+  const afterSave = await readStoredSnapshot(page);
+  const savedVersion = afterSave?.compensationPolicyVersions?.find(
+    (version) => version.effectiveFrom === effectiveDate
+  );
+  expect(savedVersion).toBeDefined();
+  expect(savedVersion?.roadRoundingMode).toBe('PERIOD_TOTAL');
+  const savedState = savedVersion?.state as Record<string, unknown>;
+  const decimalText = (value: string) => value.replace(',', '.');
+  expect(Number(savedState.gunlukVasitaYol)).toBe(Number(decimalText(unchangedBefore.road)));
+  expect(Number(savedState.birlestirilmisSosyalYardim)).toBe(Number(decimalText(unchangedBefore.social)));
+  expect(Number(savedState.giyimYardimi)).toBe(Number(decimalText(unchangedBefore.clothing)));
+  expect(Number(savedState.hizmetZammiBirimi)).toBe(Number(decimalText(unchangedBefore.serviceUnit)));
+
+  await openPayrollScreen(page);
+  await calculateP1(page, periodId);
+  const calculated = await readStoredSnapshot(page);
+  const attendance = calculated?.puantajlar.find(
+    (item) => item.personelId === 'p-1' && item.donemId === periodId
+  );
+  const workDays = Object.values(attendance?.gunler ?? {}).filter((code) => code === 'Ç' || code === 'GÇ').length;
+  const payroll = calculated?.bordrolar.find(
+    (item) => item.personelId === 'p-1' && item.donemId === periodId
+  ) as (StoredPayroll & { gelirler?: { vasitaYol?: string } }) | undefined;
+  expect(Number(payroll?.gelirler?.vasitaYol)).toBeCloseTo(
+    Number((workDays * Number(decimalText(unchangedBefore.road))).toFixed(2)),
+    2
+  );
 });
 
 test('meal payroll tax policy defaults checked and persists both selections through reload and recalculation', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
   await page.getByTestId('nav-parametrelar').click();
+  const section = page.getByTestId('period-settings-gelir');
   const checkbox = page.getByTestId('meal-payroll-tax-policy');
   await expect(checkbox).toBeChecked();
   await checkbox.focus();
   await page.keyboard.press('Space');
   await expect(checkbox).not.toBeChecked();
-  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
-  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  await section.getByRole('button', { name: 'Kaydet' }).click();
+  await expect(section.getByRole('status')).toContainText('Kurum tercihi kaydedildi');
   await page.reload();
   await expect(checkbox).not.toBeChecked();
   const periodId = await openPayrollScreen(page);
   const off = await calculateP1(page, periodId);
   await page.getByTestId('nav-parametrelar').click();
   await checkbox.check();
-  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
-  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
+  await section.getByRole('button', { name: 'Kaydet' }).click();
+  await expect(section.getByRole('status')).toContainText('Kurum tercihi kaydedildi');
   await page.reload();
   await expect(checkbox).toBeChecked();
   const stored = JSON.parse((await readStoredPayload(page))!) as {
@@ -1602,78 +1735,86 @@ test('meal payroll tax policy defaults checked and persists both selections thro
   await page.screenshot({ path: '/private/tmp/meal-payroll-tax-policy-mobile.png', fullPage: true });
 });
 
-test('dated transport rates persist and calculate independently through WASM', async ({ page }) => {
+test('service period içinde iki yol tutarı değişikliği doğru tarihlerden hesaplanır', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
-  await page.getByTestId('nav-parametrelar').click();
-  const panel = page.getByTestId('transport-rate-settings');
-  const base = panel.getByLabel('Günlük Vasıta / Yol Tutarı (TL)', { exact: true });
-  await base.fill('100');
-  await base.blur();
-  await expect(page.getByTestId('wage-change-raise-reminder')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
-  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
-  const periodId = await openPayrollScreen(page);
-  const before = await calculateP1(page, periodId);
-  const readPayload = async () => JSON.parse((await readStoredPayload(page))!) as {
-    donemler: Array<{ id: string; baslangicTarihi: string; bitisTarihi: string }>;
-    puantajlar: Array<{ personelId: string; donemId: string; gunler: Record<string, string> }>;
-    kurumDegerleriMap: Record<string, { gunlukVasitaYol: string; transportRateChanges?: Array<{ effectiveFrom: string; gunlukVasitaYol: string }> }>;
-    zamAylari: number[];
-    bordrolar: Array<StoredPayroll & { gelirler: { vasitaYol: string } }>;
-  };
-  const original = await readPayload();
-  const period = original.donemler.find((row) => row.id === periodId)!;
-  const atDay = (offset: number) => new Date(Date.parse(period.baslangicTarihi) + offset * 86400000).toISOString().slice(0, 10);
+  const periodId = await page.getByTestId('active-period-selector').inputValue();
+  const original = await readStoredSnapshot(page);
+  const period = original?.donemler?.find((row) => row.id === periodId);
+  expect(period).toBeDefined();
+  const atDay = (offset: number) => new Date(
+    Date.parse(`${period!.baslangicTarihi}T00:00:00.000Z`) + offset * 86_400_000
+  ).toISOString().slice(0, 10);
   const firstDate = atDay(4);
   const secondDate = atDay(20);
-  await page.getByTestId('nav-parametrelar').click();
-  await panel.getByRole('button', { name: 'Yol tutarı değişikliği ekle' }).click();
-  await panel.getByLabel('Yol yürürlük tarihi 1', { exact: true }).fill(firstDate);
-  await panel.getByLabel('Yeni günlük yol tutarı 1', { exact: true }).fill('120');
-  await panel.getByRole('button', { name: 'Yol tutarı değişikliği ekle' }).click();
-  // Duplicate dates must fail without losing edits or the saved payroll.
-  await panel.getByLabel('Yol yürürlük tarihi 2', { exact: true }).fill(firstDate);
-  await panel.getByLabel('Yeni günlük yol tutarı 2', { exact: true }).fill('150');
-  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
-  await expect(page.getByTestId('period-settings-save-error')).toContainText('tekrarsız');
-  expect((await readPayload()).bordrolar.find((payroll) => payroll.id === before.id)?.status).toBe('CALCULATED');
-  await panel.getByLabel('Yol yürürlük tarihi 2', { exact: true }).fill(secondDate);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await panel.scrollIntoViewIfNeeded();
-  const box = await panel.boundingBox();
-  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-  await page.screenshot({ path: '/private/tmp/dated-transport-mobile.png', fullPage: true });
-  await page.getByRole('button', { name: 'Ücret Ayarlarını Kaydet' }).click();
-  await expect(page.getByText('Dönem gelir ve zam ayarları başarıyla kaydedildi!')).toBeVisible();
-  const saved = await readPayload();
-  expect(saved.zamAylari).toEqual(original.zamAylari);
-  expect(saved.bordrolar.find((payroll) => payroll.id === before.id)?.status).toBe('STALE');
-  expect(saved.kurumDegerleriMap[periodId].transportRateChanges).toEqual([
-    { effectiveFrom: firstDate, gunlukVasitaYol: '120' }, { effectiveFrom: secondDate, gunlukVasitaYol: '150' },
-  ]);
-  await page.reload();
-  await expect(panel.getByLabel('Yol yürürlük tarihi 2', { exact: true })).toHaveValue(secondDate);
-  await page.setViewportSize({ width: 1280, height: 900 });
+  const initialVersion = original?.compensationPolicyVersions?.find(
+    (version) => version.effectiveFrom <= period!.baslangicTarihi
+  );
+  expect(initialVersion).toBeDefined();
+  const initialState = initialVersion?.state as Record<string, unknown>;
+  const initialRoadRate = String(initialState.gunlukVasitaYol);
+
+  await page.getByTestId('nav-compensation-policy').click();
+  const editor = page.getByTestId('compensation-policy-scroll-region');
+  await expect(editor).toBeVisible();
+  const actionBar = page.getByTestId('compensation-policy-action-bar');
+  const operationDate = page.locator('#policy-effective-date');
+  const reason = page.locator('#policy-reason');
+  const road = page.locator('#policy-road');
+  const roadOnly = page.locator('#policy-boundary-scope-road');
+  await page.locator('#policy-calculation-details').locator('summary').click();
+
+  await operationDate.fill(firstDate);
+  await reason.fill('İlk dönem içi yol tutarı değişikliği');
+  await roadOnly.check();
+  await road.fill('120');
+  await actionBar.getByRole('button', { name: 'Etkileri önizle' }).click();
+  await expect(page.getByRole('heading', { name: '3. Etkileri inceleyin' })).toBeVisible();
+  await actionBar.getByRole('button', { name: 'Önizlenen değişikliği kaydet' }).click();
+  await expect(page.getByText('Ücret değişikliği kaydedildi.')).toBeVisible();
+
+  await operationDate.fill(secondDate);
+  await reason.fill('İkinci dönem içi yol tutarı değişikliği');
+  await road.fill('150');
+  await actionBar.getByRole('button', { name: 'Etkileri önizle' }).click();
+  await expect(page.getByRole('heading', { name: '3. Etkileri inceleyin' })).toBeVisible();
+  await actionBar.getByRole('button', { name: 'Önizlenen değişikliği kaydet' }).click();
+  await expect(page.getByText('Ücret değişikliği kaydedildi.')).toBeVisible();
+
+  const saved = await readStoredSnapshot(page);
+  const versions = (saved?.compensationPolicyVersions ?? []) as Array<{
+    effectiveFrom: string;
+    boundaryScope: string;
+    roadRoundingMode: string;
+    state: Record<string, unknown>;
+  }>;
+  expect(versions.find((version) => version.effectiveFrom === firstDate)).toMatchObject({
+    boundaryScope: 'ROAD_ONLY',
+    roadRoundingMode: initialVersion?.roadRoundingMode,
+    state: { gunlukVasitaYol: '120' },
+  });
+  expect(versions.find((version) => version.effectiveFrom === secondDate)).toMatchObject({
+    boundaryScope: 'ROAD_ONLY',
+    roadRoundingMode: initialVersion?.roadRoundingMode,
+    state: { gunlukVasitaYol: '150' },
+  });
+
   await openPayrollScreen(page);
   await calculateP1(page, periodId);
-  const payroll = (await readPayload()).bordrolar.find((payroll) => payroll.id === before.id)!;
-  const days = original.puantajlar.find((row) => row.personelId === 'p-1' && row.donemId === periodId)!.gunler;
-  const workDays = Object.entries(days).filter(([, code]) => code === 'Ç' || code === 'GÇ');
-  const expected = workDays.reduce((sum, [date]) => sum + (date >= secondDate ? 150 : date >= firstDate ? 120 : 100), 0);
-  expect(Number(payroll.gelirler.vasitaYol)).toBe(expected);
-  expect(Number(payroll.gelirToplam) - Number(before.gelirToplam)).toBeCloseTo(expected - workDays.length * 100, 2);
-  await page.getByTestId('nav-parametrelar').click();
-  await page.getByTestId('nav-parametre-yeni-donem').click();
-  const newPeriod = page.getByTestId('period-settings-yeni-donem');
-  await newPeriod.locator('select').nth(0).selectOption('2026');
-  await newPeriod.locator('select').nth(1).selectOption('11');
-  await page.getByTestId('submit-period-action').click();
-  await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-11');
-  const inherited = (await readPayload()).kurumDegerleriMap['2026-11'];
-  expect(inherited.gunlukVasitaYol).toBe('150');
-  expect(inherited.transportRateChanges).toEqual([]);
-
+  const calculated = await readStoredSnapshot(page);
+  const attendance = calculated?.puantajlar.find(
+    (row) => row.personelId === 'p-1' && row.donemId === periodId
+  );
+  const expectedRoad = Object.entries(attendance?.gunler ?? {}).reduce(
+    (total, [date, code]) => total + (code === 'Ç' || code === 'GÇ'
+      ? Number(date >= secondDate ? '150' : date >= firstDate ? '120' : initialRoadRate)
+      : 0),
+    0
+  );
+  const payroll = calculated?.bordrolar.find(
+    (row) => row.personelId === 'p-1' && row.donemId === periodId
+  ) as (StoredPayroll & { gelirler?: { vasitaYol?: string } }) | undefined;
+  expect(Number(payroll?.gelirler?.vasitaYol)).toBe(Number(expectedRoad.toFixed(2)));
 });
 
 
@@ -1790,9 +1931,22 @@ test('simplified new period form creates the first period without wage or bonus 
   await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-01');
   await expect.poll(async () => {
     const data = JSON.parse((await readStoredPayload(page))!);
-    return data.aktifDonemId === '2026-01' && data.donemler.length === 1 && !data.kurumDegerleriMap['2026-01'];
+    const settings = data.kurumDegerleriMap['2026-01'];
+    return data.aktifDonemId === '2026-01' &&
+      data.donemler.length === 1 &&
+      settings?.donemId === '2026-01' &&
+      Number(settings.sgkIsciOraniYuzde) === 14 &&
+      Number(settings.gunlukAsgariUcret) === 1101 &&
+      Number(settings.pekTavanKatsayisi) === 9;
   }).toBe(true);
   await page.reload();
   await expect(page.getByTestId('period-settings-gelir')).toBeVisible();
   await expect(page.getByTestId('active-period-selector')).toHaveValue('2026-01');
+  await expect.poll(async () => {
+    const data = JSON.parse((await readStoredPayload(page))!);
+    const settings = data.kurumDegerleriMap['2026-01'];
+    return Number(settings?.sgkIsciOraniYuzde) === 14 &&
+      Number(settings?.gunlukAsgariUcret) === 1101 &&
+      Number(settings?.pekTavanKatsayisi) === 9;
+  }).toBe(true);
 });

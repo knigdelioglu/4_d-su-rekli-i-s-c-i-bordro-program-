@@ -189,7 +189,7 @@ mod ipc_tests {
             .build(mock_context(noop_assets()))
             .expect("mock Tauri app should build with the production command handler");
         app.manage(
-            license::initialize(&app.handle())
+            license::initialize(app.handle())
                 .expect("mock app should resolve its local license state directory"),
         );
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
@@ -700,7 +700,7 @@ mod ipc_tests {
             .build(mock_context(noop_assets()))
             .expect("isolated backup mock app should build");
         backup_app.manage(
-            license::initialize(&backup_app.handle())
+            license::initialize(backup_app.handle())
                 .expect("backup mock app should resolve its local license state directory"),
         );
         let backup_webview =

@@ -425,3 +425,68 @@ fn road_modes_must_match_active_projection_but_superseded_flags_are_inert() {
     differing_ancestor.roadRoundingMode = RoadRoundingMode::PeriodTotal;
     assert!(validate_compensation_policy_timeline(&[differing_ancestor, active_fix, next]).is_ok());
 }
+
+#[test]
+fn service_period_raise_and_road_rounding_transition_stay_consistent_across_new_year() {
+    let mut baseline = version("base-2027", "2027-12-15", dec!(100), None);
+    baseline.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+    baseline.state.gunlukVasitaYol = dec!(136.44);
+
+    let mut february_raise = version("raise-2028-02-01", "2028-01-01", dec!(106.25), None);
+    february_raise.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+    february_raise.state.gunlukVasitaYol = dec!(136.44);
+
+    let mut next_service_period = version("rounding-2028-01-15", "2028-01-15", dec!(106.25), None);
+    next_service_period.roadRoundingMode = RoadRoundingMode::PerCompensationSlice;
+    next_service_period.state.gunlukVasitaYol = dec!(136.44);
+
+    let december = resolve(
+        "2027-12-15",
+        "2028-01-14",
+        &[baseline.clone(), february_raise.clone()],
+    );
+    assert_eq!(december.len(), 2);
+    assert_eq!(december[0].roadRoundingMode, RoadRoundingMode::PeriodTotal);
+    assert_eq!(december[1].roadRoundingMode, RoadRoundingMode::PeriodTotal);
+    assert_eq!(december[1].state.gunlukTabanUcret, dec!(106.25));
+    assert_eq!(december[1].state.gunlukVasitaYol, dec!(136.44));
+
+    let january = resolve(
+        "2028-01-15",
+        "2028-02-14",
+        &[baseline, february_raise, next_service_period],
+    );
+    assert_eq!(january.len(), 1);
+    assert_eq!(
+        january[0].roadRoundingMode,
+        RoadRoundingMode::PerCompensationSlice
+    );
+}
+
+#[test]
+fn same_date_correction_can_restore_the_service_period_rounding_mode() {
+    let mut baseline = version("base", "2027-09-15", dec!(100), None);
+    baseline.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+    baseline.state.gunlukVasitaYol = dec!(136.44);
+
+    let mut wrong = version("wrong-rounding", "2027-10-01", dec!(106.25), None);
+    wrong.roadRoundingMode = RoadRoundingMode::PerCompensationSlice;
+    wrong.state.gunlukVasitaYol = dec!(136.44);
+
+    let mut correction = version(
+        "corrected-rounding",
+        "2027-10-01",
+        dec!(106.25),
+        Some("wrong-rounding"),
+    );
+    correction.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+    correction.state.gunlukVasitaYol = dec!(136.44);
+
+    let resolved = resolve("2027-09-15", "2027-10-14", &[baseline, wrong, correction]);
+    assert_eq!(resolved.len(), 2);
+    assert!(resolved
+        .iter()
+        .all(|segment| segment.roadRoundingMode == RoadRoundingMode::PeriodTotal));
+    assert_eq!(resolved[1].versionId, "corrected-rounding");
+    assert_eq!(resolved[1].state.gunlukVasitaYol, dec!(136.44));
+}

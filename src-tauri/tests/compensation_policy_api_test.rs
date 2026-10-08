@@ -101,8 +101,10 @@ fn seed_retro_graph(conn: &rusqlite::Connection, source_status: &str) {
         [],
     )
     .unwrap();
-    let mut settings = DonemselKurumDegerleri::default();
-    settings.donemId = "2026-01".into();
+    let settings = DonemselKurumDegerleri {
+        donemId: "2026-01".into(),
+        ..DonemselKurumDegerleri::default()
+    };
     SettingsRepository::save_institution_settings(conn, &settings).unwrap();
     let start = chrono::NaiveDate::parse_from_str(&period().baslangicTarihi, "%Y-%m-%d").unwrap();
     let end = chrono::NaiveDate::parse_from_str(&period().bitisTarihi, "%Y-%m-%d").unwrap();
@@ -743,9 +745,11 @@ fn stale_native_preview_token_rolls_back_without_appending() {
 fn native_load_exposes_current_settings_as_exact_string_prefill_only() {
     let conn = create_in_memory_connection().unwrap();
     PeriodRepository::save(&conn, &period()).unwrap();
-    let mut settings = DonemselKurumDegerleri::default();
-    settings.donemId = "2026-01".into();
-    settings.gunlukTabanUcret = dec!(1234.56789);
+    let settings = DonemselKurumDegerleri {
+        donemId: "2026-01".into(),
+        gunlukTabanUcret: dec!(1234.56789),
+        ..DonemselKurumDegerleri::default()
+    };
     SettingsRepository::save_institution_settings(&conn, &settings).unwrap();
 
     let loaded = CompensationPolicyService::load(

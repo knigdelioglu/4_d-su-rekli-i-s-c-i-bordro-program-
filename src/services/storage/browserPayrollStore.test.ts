@@ -16,6 +16,7 @@ import {
   parseLegacyBackup,
   repairAndCanonicalizeBackup,
   repairLegacyPersonTaxOpenings,
+  validatePayrollMetadataThroughCore,
   verifyCurrentPayrollBackupReplay,
 } from './payrollPayload';
 import {
@@ -26,6 +27,55 @@ import {
 import type { PayrollEngine } from '../payrollEngine/types';
 
 type TestRecord = Record<string, unknown>;
+
+function createMemoryIndexedDb(initialSnapshot?: unknown) {
+  const values = new Map<IDBValidKey, unknown>();
+  if (initialSnapshot !== undefined) values.set('current', initialSnapshot);
+
+  const database = {
+    objectStoreNames: { contains: () => true },
+    createObjectStore: () => ({}),
+    transaction: () => {
+      const transaction: Record<string, unknown> = {
+        objectStore: () => ({
+          get(key: IDBValidKey) {
+            const request: Record<string, unknown> = {};
+            queueMicrotask(() => {
+              request.result = values.get(key);
+              (request.onsuccess as ((event: Event) => void) | undefined)?.(new Event('success'));
+            });
+            return request;
+          },
+          put(value: unknown, key: IDBValidKey) {
+            const request: Record<string, unknown> = {};
+            values.set(key, structuredClone(value));
+            queueMicrotask(() => {
+              (request.onsuccess as ((event: Event) => void) | undefined)?.(new Event('success'));
+              (transaction.oncomplete as ((event: Event) => void) | undefined)?.(new Event('complete'));
+            });
+            return request;
+          },
+        }),
+        abort: () => queueMicrotask(() =>
+          (transaction.onabort as ((event: Event) => void) | undefined)?.(new Event('abort'))
+        ),
+      };
+      return transaction;
+    },
+    close: () => undefined,
+  };
+  const indexedDB = {
+    open: () => {
+      const request: Record<string, unknown> = { result: database };
+      queueMicrotask(() => {
+        (request.onupgradeneeded as ((event: Event) => void) | undefined)?.(new Event('upgradeneeded'));
+        (request.onsuccess as ((event: Event) => void) | undefined)?.(new Event('success'));
+      });
+      return request;
+    },
+  };
+  return { indexedDB: indexedDB as unknown as IDBFactory, values };
+}
 
 // Keep the representative fixture coupled to the current DTO. A newly
 // required TypeScript model field makes this fixture fail at typecheck until
@@ -466,6 +516,22 @@ describe('BrowserPayrollStore', () => {
     expect(forged.bordrolar[0].gvDetay?.cariGvMatrahi).toBe('3001.00');
   });
 
+  test('replays an imported V5 backup against the production core before adoption', async () => {
+    const referenceJson = readFileSync(
+      new URL('../../../tests/fixtures/session3-reference.json', import.meta.url),
+      'utf8'
+    );
+    const payload = parseImportedBackup(referenceJson);
+
+    expect(Object.keys(payload.legacyInstitutionSettings ?? {}).length).toBeGreaterThan(0);
+    await verifyCurrentPayrollBackupReplay(payload, { kind: 'wasm' } as PayrollEngine);
+
+    const forged = structuredClone(payload);
+    forged.bordrolar[0].netOdeme = '999999.99';
+    await expect(verifyCurrentPayrollBackupReplay(forged, { kind: 'wasm' } as PayrollEngine))
+      .rejects.toThrow('snapshotı canonical Rust replay ile eşleşmiyor');
+  });
+
   test('current backup replay skips unavailable source history and preserves supplied PEK audit values', async () => {
     const payload = parseCurrentBrowserSnapshot(makeV2Snapshot('3000.00'));
     const canonicalResult = structuredClone(payload.bordrolar[0]);
@@ -540,6 +606,60 @@ describe('BrowserPayrollStore', () => {
       } else {
         delete (globalThis as { localStorage?: unknown }).localStorage;
       }
+    }
+  });
+
+  test('migrates the retained legacy backup into IndexedDB and verifies save/mutation revisions', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+    const fakeDatabase = createMemoryIndexedDb();
+    const legacy = JSON.stringify(makeLegacyV1Snapshot());
+    let retainedLegacyBackup = legacy;
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { indexedDB: fakeDatabase.indexedDB },
+    });
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: () => retainedLegacyBackup,
+        setItem: (_key: string, value: string) => { retainedLegacyBackup = value; },
+      },
+    });
+
+    try {
+      const migrated = await browserPayrollStore.loadSnapshot();
+      expect(migrated).toMatchObject({ revision: 1, sourceFormat: 'legacy' });
+      expect(migrated?.payload).toContain('"backupVersion":6');
+      expect(retainedLegacyBackup).toBe(legacy);
+      expect(fakeDatabase.values.get('current')).toEqual({
+        payload: migrated?.payload,
+        revision: 1,
+        sourceFormat: 'legacy',
+      });
+
+      const current = {
+        ...parseCurrentBrowserSnapshot(migrated!.payload),
+        exportedAt: '2026-10-08T12:00:00.000Z',
+      };
+      expect(await browserPayrollStore.savePayload(JSON.stringify(current), 1)).toBe(2);
+      const mutated = await browserPayrollStore.mutateSnapshot((snapshot) => ({
+        ...snapshot,
+        exportedAt: '2026-10-08T12:05:00.000Z',
+      }));
+      expect(mutated.revision).toBe(3);
+      expect(parseCurrentBrowserSnapshot(mutated.payload).exportedAt).toBe('2026-10-08T12:05:00.000Z');
+
+      const reloaded = await browserPayrollStore.loadSnapshot();
+      expect(reloaded).toMatchObject({ revision: 3, sourceFormat: 'current' });
+      expect(parseCurrentBrowserSnapshot(reloaded!.payload).personeller[0].id).toBe('person-1');
+      expect(retainedLegacyBackup).toBe(legacy);
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as { window?: unknown }).window;
+      if (originalLocalStorage) Object.defineProperty(globalThis, 'localStorage', originalLocalStorage);
+      else delete (globalThis as { localStorage?: unknown }).localStorage;
     }
   });
 
@@ -695,6 +815,26 @@ describe('BrowserPayrollStore', () => {
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(unsupported))).toThrow('snapshot şema sürümü');
   });
 
+  test('validates V6 payroll metadata with the production core before backup adoption', async () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const fixture = JSON.parse(readFileSync(
+      new URL('../../../crates/payroll-core/tests/fixtures/v6-current-engine-snapshot.json', import.meta.url),
+      'utf8'
+    )) as TestRecord;
+    payload.bordrolar = [firstRecord(fixture, 'bordrolar')];
+    payload.donemler = fixture.donemler;
+    payload.compensationPolicyVersions = fixture.compensationPolicyVersions;
+    const validated = parseCurrentBrowserSnapshot(JSON.stringify(payload));
+
+    await validatePayrollMetadataThroughCore(validated);
+
+    const forged = structuredClone(validated);
+    const metadata = forged.bordrolar[0].calculationMetadata as unknown as TestRecord;
+    const snapshot = metadata.snapshot as TestRecord;
+    snapshot.snapshotSchemaVersion = 1;
+    await expect(validatePayrollMetadataThroughCore(forged)).rejects.toThrow();
+  });
+
   test('persists a separate nafaka amount through the current browser backup contract', () => {
     const snapshot = parseTestSnapshot(makeV2Snapshot('3000.00'));
     const deductions = firstRecord(snapshot, 'personeller').kesintiler as TestRecord;
@@ -800,6 +940,64 @@ describe('BrowserPayrollStore', () => {
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(incompleteCurrent))).toThrow(
       '$.retroAllocations zorunlu alan eksik'
     );
+  });
+
+  test('orders multiple legacy retro batches and allocations deterministically during V3 upgrade', () => {
+    const legacy = parseTestSnapshot(makeV2Snapshot());
+    downgradeSnapshotVersion(legacy, 3);
+    legacy.compensationRevisions = [{
+      id: 'revision-v3-draft',
+      reason: 'COLLECTIVE_AGREEMENT',
+      title: 'Draft retro order',
+      effectiveFrom: '2026-01-15',
+      status: 'DRAFT',
+      scope: 'SELECTED_PERSONNEL',
+      personnelIds: ['person-1'],
+    }];
+    legacy.retroBatches = ['batch-z', 'batch-a'].map((id) => ({
+      id,
+      revisionId: 'revision-v3-draft',
+      personnelId: 'person-1',
+      paymentDate: '2026-02-14',
+      status: 'DRAFT',
+      totalGrossDelta: '0.00',
+    }));
+    legacy.retroAllocations = [
+      {
+        id: 'allocation-z',
+        batchId: 'batch-z',
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'MEAL',
+        originalRecognizedAmount: '0.00',
+        targetAmount: '0.00',
+        deltaAmount: '0.00',
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+      {
+        id: 'allocation-a',
+        batchId: 'batch-z',
+        personnelId: 'person-1',
+        sourcePeriodId: '2026-01',
+        earningCode: 'BASE_WAGE',
+        originalRecognizedAmount: '0.00',
+        targetAmount: '0.00',
+        deltaAmount: '0.00',
+        sgkTreatment: 'WAGE_SOURCE_MONTH',
+        incomeTaxTreatment: 'TAXABLE',
+        stampTaxTreatment: 'TAXABLE',
+      },
+    ];
+
+    const imported = parseImportedBackup(JSON.stringify(legacy));
+    expect(imported.retroBatches.map((batch) => batch.id)).toEqual(['batch-z', 'batch-a']);
+    expect(imported.retroAllocations.map((allocation) => allocation.id)).toEqual([
+      'allocation-z',
+      'allocation-a',
+    ]);
+    expect(imported.retroBatches.every((batch) => batch.status === 'DRAFT')).toBe(true);
   });
 
   test('validates retro batch totals in kuruş and preserves signed overpayment ledger fields', () => {

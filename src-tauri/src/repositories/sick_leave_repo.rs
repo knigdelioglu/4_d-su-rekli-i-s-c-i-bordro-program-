@@ -309,20 +309,21 @@ impl SickLeaveRepository {
                 ) {
                     let mut curr = old_s;
                     while curr <= old_e {
-                        if curr >= p_start && curr <= p_end {
-                            if curr < record_start || curr > record_end {
-                                let date_str = curr.format("%Y-%m-%d").to_string();
-                                if gunler.get(&date_str).map(|s| s.as_str()) == Some("R") {
-                                    let default_code = if curr.weekday() == chrono::Weekday::Sat
-                                        || curr.weekday() == chrono::Weekday::Sun
-                                    {
-                                        "T"
-                                    } else {
-                                        "Ç"
-                                    };
-                                    gunler.insert(date_str, default_code.to_string());
-                                    changed = true;
-                                }
+                        if curr >= p_start
+                            && curr <= p_end
+                            && (curr < record_start || curr > record_end)
+                        {
+                            let date_str = curr.format("%Y-%m-%d").to_string();
+                            if gunler.get(&date_str).map(|s| s.as_str()) == Some("R") {
+                                let default_code = if curr.weekday() == chrono::Weekday::Sat
+                                    || curr.weekday() == chrono::Weekday::Sun
+                                {
+                                    "T"
+                                } else {
+                                    "Ç"
+                                };
+                                gunler.insert(date_str, default_code.to_string());
+                                changed = true;
                             }
                         }
                         curr += chrono::Duration::days(1);

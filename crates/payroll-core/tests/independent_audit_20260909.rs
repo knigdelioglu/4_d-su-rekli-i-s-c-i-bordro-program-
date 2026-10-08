@@ -4,8 +4,6 @@ use rust_decimal_macros::dec;
 use serde_json::json;
 #[path = "support/audit_fixture.rs"]
 mod audit_fixture;
-#[path = "support/compensation_policy.rs"]
-mod compensation_policy_test_support;
 use audit_fixture::request;
 
 fn export_wasm_case(name: &str, request: &PayrollCalculationRequest, result: &BordroKaydi) {
@@ -365,7 +363,7 @@ fn audit_mixed_income_personal_deductions_and_tax_discount_oracle() {
     state.digerGelirVarsayilan = Some(dec!(500));
     state.geceCalismaPrimiYuzde = dec!(25);
     state.geceCalismaTatiliPrimiYuzde = dec!(50);
-    compensation_policy_test_support::replace_period_baseline_from_state(
+    audit_fixture::compensation_policy::replace_period_baseline_from_state(
         &mut req.dataset,
         &period,
         state,

@@ -90,6 +90,46 @@ export function getAuthoritativeAccrualRows(
     });
 }
 
+/** Only finalized accruals are ready to be transferred to the bank. */
+export function getBankTransferableAccrualRows(
+  period: BordroDonemi,
+  personnel: Personel[],
+  payrolls: BordroKaydi[]
+): AuthoritativeAccrualRow[] {
+  return getAuthoritativeAccrualRows(period, personnel, payrolls)
+    .filter(({ bordro }) => bordro.status === 'FINALIZED');
+}
+
+export function describeBankExcludedAccruals(
+  period: BordroDonemi,
+  personnel: Personel[],
+  payrolls: BordroKaydi[]
+): string | null {
+  const personnelById = new Map(personnel.map((person) => [person.id, person]));
+  const excluded = payrolls.filter((payroll) =>
+    payroll.donemId === period.id && payroll.status !== 'FINALIZED'
+  );
+  if (excluded.length === 0) return null;
+
+  const calculatedCount = excluded.filter((payroll) => payroll.status === 'CALCULATED').length;
+  const recalculationCount = excluded.length - calculatedCount;
+  const examples = excluded.slice(0, 4).map((payroll) => {
+    const person = personnelById.get(payroll.personelId);
+    const name = person ? `${person.ad} ${person.soyad}` : payroll.personelId;
+    return `${name} – ${ACCRUAL_TYPE_LABELS[payroll.accrualType]} (${PAYROLL_STATUS_LABELS[payroll.status]})`;
+  });
+  const more = excluded.length > examples.length ? ` ve ${excluded.length - examples.length} kayıt daha` : '';
+  const reasons = [
+    calculatedCount > 0
+      ? `${calculatedCount} hesaplanmış tahakkuk henüz kesinleştirilmedi ve banka aktarımına hazır değil`
+      : '',
+    recalculationCount > 0
+      ? `${recalculationCount} taslak veya güncelliğini yitirmiş tahakkuk yeniden hesaplanmalı`
+      : '',
+  ].filter(Boolean).join('; ');
+  return `${reasons}: ${examples.join(', ')}${more}. Kesinleştirilmiş kayıtlar banka listesine alınır.`;
+}
+
 export function getPaymentDateOptions(rows: AuthoritativeAccrualRow[]): string[] {
   return [...new Set(rows.map((row) => row.paymentDate))].sort((left, right) =>
     left.localeCompare(right)

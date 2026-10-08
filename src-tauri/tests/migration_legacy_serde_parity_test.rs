@@ -786,7 +786,7 @@ fn current_v6_payload_from_database(
         "donemler": dataset.periods,
         "aktifDonemId": active_period_id,
         "personeller": dataset.personnel,
-        "kurumDegerleriMap": SettingsRepository::get_all_institution_settings(&conn)?,
+        "kurumDegerleriMap": SettingsRepository::get_all_institution_settings(conn)?,
         "puantajlar": dataset.attendances,
         "bordrolar": dataset.payrolls,
         "taxOpenings": dataset.taxOpenings,
@@ -2032,7 +2032,10 @@ fn calculation_metadata_migration_preserves_legacy_payroll_rows() {
         )
         .expect("eski payroll satırı korunmalı");
 
-    assert_eq!(latest_version, COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION);
+    assert!(
+        latest_version >= COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION,
+        "all migrations through the compensation-policy flags must apply"
+    );
     assert_eq!(gross_total, 12345);
     assert_eq!(
         metadata, None,

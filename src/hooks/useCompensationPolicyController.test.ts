@@ -117,4 +117,28 @@ describe('draftForCompensationPolicyLoad', () => {
     expect(draft.boundaryScope).toBe('ROAD_ONLY');
     expect(draft.roadRoundingMode).toBe('PER_COMPENSATION_SLICE');
   });
+
+  test('copies the active period-total rounding choice and unchanged road amount into a new draft', () => {
+    const savedState = { ...state, gunlukVasitaYol: '136.44' };
+    const version: CompensationPolicyVersionWire = {
+      id: 'period-total-version',
+      effectiveFrom: scope.periodStartInclusive,
+      state: savedState,
+      boundaryScope: 'FULL_EARNING',
+      roadRoundingMode: 'PERIOD_TOTAL',
+      createdAt: '2026-09-15T00:00:00.000Z',
+      source: 'TEST',
+      reason: 'Saved policy',
+      supersedesVersionId: null,
+    };
+    const loaded = loadWithPrefill(state);
+    loaded.initialBaselineRequired = false;
+    loaded.activePolicyProjection = { kind: 'ACTIVE', asOfDate: scope.projectionDate, version };
+
+    const draft = draftForCompensationPolicyLoad(scope, loaded);
+
+    expect(draft.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(draft.gunlukVasitaYol).toBe('136,44');
+    expect(draft.gunlukTabanUcret).toBe('2616,26');
+  });
 });

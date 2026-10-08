@@ -254,7 +254,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<LicenseRuntime, Stri
 }
 
 fn ensure_data_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(&path).map_err(|_| "Yerel lisans dizini oluşturulamadı.".to_string())?;
+    fs::create_dir_all(path).map_err(|_| "Yerel lisans dizini oluşturulamadı.".to_string())?;
     Ok(())
 }
 
@@ -442,7 +442,7 @@ fn secure_grant_issued_at() -> Result<Option<DateTime<Utc>>, String> {
 }
 
 fn is_fresh_grant(issued_at: DateTime<Utc>, protected_issued_at: Option<DateTime<Utc>>) -> bool {
-    protected_issued_at.map_or(true, |previous| issued_at > previous)
+    protected_issued_at.is_none_or(|previous| issued_at > previous)
 }
 
 fn grant_replay_error(
@@ -1099,14 +1099,13 @@ pub fn start_background_checker(data_dir: PathBuf) {
                                     })
                             })
                             .unwrap_or(false);
-                        if due {
-                            if remote_check(&data_dir, &device_hash, &mut state)
+                        if due
+                            && remote_check(&data_dir, &device_hash, &mut state)
                                 .await
                                 .is_err()
-                            {
-                                record_transient_failure(&mut state, Utc::now());
-                                let _ = write_state(&data_dir, &state);
-                            }
+                        {
+                            record_transient_failure(&mut state, Utc::now());
+                            let _ = write_state(&data_dir, &state);
                         }
                     }
                 }

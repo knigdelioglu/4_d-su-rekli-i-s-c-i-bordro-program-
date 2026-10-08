@@ -81,8 +81,15 @@ function titleCaseApiError(error: CompensationPolicyApiError): { title: string; 
         title: 'Bu tarih için olağan ücret politikası değişikliği uygulanamaz.',
         message: 'Geçmiş bordro hakkı ileri tarihli ücret değişikliğiyle düzeltilemez. Geçmiş farkı işlemini kullanın.',
       };
-    case 'INVALID_REQUEST':
     case 'INVALID_POLICY':
+      if (/road rounding mode|yol yuvarlama/i.test(error.message)) {
+        return {
+          title: 'Yol yuvarlama biçimi dönem ortasında değiştirilemez.',
+          message: 'Yöntemi mevcut ücret politikasından koruyun. Değiştirmek gerekiyorsa geçerlilik tarihini ayın 15’ine alın; kayıtlı yanlış bir sürüm varsa aynı tarihte düzeltin.',
+        };
+      }
+      return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.' };
+    case 'INVALID_REQUEST':
       return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.' };
     case 'UNAUTHORIZED':
       return { title: 'Bu işlemi yapma yetkisi doğrulanamadı.', message: 'Ayarları yenileyin veya yetkili kullanıcıyla giriş yapın.' };
@@ -352,7 +359,35 @@ function policySelectionSource(
     const targetId = findScopedSameDateActiveLeaf(load.timeline.versions, draft.effectiveFrom);
     return targetId ? load.timeline.versions.find((version) => version.id === targetId) ?? null : null;
   }
-  return load.activePolicyProjection.kind === 'ACTIVE' ? load.activePolicyProjection.version : null;
+  const sourceDate = [...new Set(load.timeline.versions
+    .map((version) => version.effectiveFrom)
+    .filter((date) => date <= draft.effectiveFrom))]
+    .sort()
+    .reverse()
+    .find((date) => findScopedSameDateActiveLeaf(load.timeline.versions, date) !== null);
+  const sourceId = sourceDate
+    ? findScopedSameDateActiveLeaf(load.timeline.versions, sourceDate)
+    : null;
+  return sourceId
+    ? load.timeline.versions.find((version) => version.id === sourceId) ?? null
+    : load.activePolicyProjection.kind === 'ACTIVE' ? load.activePolicyProjection.version : null;
+}
+
+function rebaseChangedDraftFields(
+  draft: Draft,
+  previous: CompensationPolicyLoadData['timeline']['versions'][number] | null,
+  next: CompensationPolicyLoadData['timeline']['versions'][number]
+): Partial<Draft> {
+  const nextState = compensationPolicyStateToDraft(next.state);
+  if (!previous) return nextState;
+  const previousState = compensationPolicyStateToDraft(previous.state);
+  const current = draft as unknown as Record<string, unknown>;
+  const before = previousState as unknown as Record<string, unknown>;
+  const rebased = { ...nextState } as unknown as Record<string, unknown>;
+  for (const key of Object.keys(rebased)) {
+    if (stableValue(current[key]) !== stableValue(before[key])) rebased[key] = current[key];
+  }
+  return rebased as Partial<Draft>;
 }
 
 export const CompensationPolicyPage: React.FC<Props> = (props) => {
@@ -440,7 +475,12 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
     const operationChanged = next.operationKind !== props.draft.operationKind;
     const correctionTargetChanged = next.operationKind === 'SAME_DATE_CORRECTION'
       && (next.effectiveFrom !== props.draft.effectiveFrom || next.supersedesVersionId !== props.draft.supersedesVersionId);
-    if (operationChanged || correctionTargetChanged) {
+    const effectiveDateChanged = next.operationKind === 'NEW_EFFECTIVE_DATE'
+      && next.effectiveFrom !== props.draft.effectiveFrom;
+    if (operationChanged || correctionTargetChanged || effectiveDateChanged) {
+      const previousSource = effectiveDateChanged
+        ? policySelectionSource(authoritativeLoad, props.draft)
+        : null;
       const nextSource = policySelectionSource(authoritativeLoad, next);
       setScopeSelection(nextSource?.boundaryScope ?? null);
       setRoundingSelection(nextSource?.roadRoundingMode ?? null);
@@ -449,7 +489,9 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
           ...next,
           ...(operationChanged || next.operationKind === 'SAME_DATE_CORRECTION'
             ? compensationPolicyStateToDraft(nextSource.state)
-            : {}),
+            : effectiveDateChanged
+              ? rebaseChangedDraftFields(props.draft, previousSource, nextSource)
+              : {}),
           boundaryScope: nextSource.boundaryScope,
           roadRoundingMode: nextSource.roadRoundingMode,
           supersedesVersionId: next.operationKind === 'SAME_DATE_CORRECTION' ? nextSource.id : null,
@@ -771,6 +813,21 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
       {props.saveState.status === 'error' && showApiError(props.saveState.error, props.saveState.error.code === 'CONFLICT' ? 'reload' : 'preview')}
 
       {authoritativeLoad && <ScopedHistory data={authoritativeLoad} />}
+
+      {authoritativeLoad?.timeline.resolution === 'INVALID_ROAD_ROUNDING' && (
+        <div data-testid="policy-road-rounding-recovery" role="alert" className={errorBoxClass}>
+          <h2 className="font-bold">Bu hizmet döneminde yol yuvarlama biçimleri uyuşmuyor.</h2>
+          <p className="mt-1">Bordro hesaplaması güvenli sonuç üretemediği için durduruldu. Her farklı modu, önceki etkin sürümle aynı yapacak şekilde aynı tarih düzeltmesiyle onarın; mod değişikliği gerekiyorsa yeni hizmet dönemi ayın 15’inde başlamalıdır.</p>
+          <ul className="mt-2 list-disc pl-5 text-xs">
+            {(authoritativeLoad.timeline.roadRoundingIssues ?? []).map((issue) => (
+              <li key={`${issue.effectiveFrom}:${issue.actualMode}`}>
+                {shortDate(issue.effectiveFrom)} tarihli sürüm: {roundingLabel(issue.actualMode)} · önceki etkin sürüm: {roundingLabel(issue.expectedMode)}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">Düzeltme için işlem türünü “Aynı tarihte düzeltme” seçin, listedeki tarihi açın ve yuvarlama biçimini önceki sürümle eşleştirin. Kesinleşmiş bordrolar için mevcut retro engelleri ayrıca uygulanır.</p>
+        </div>
+      )}
 
       {showInitialBaselineCard && authoritativeLoad && (
         <section aria-labelledby="initial-baseline-heading" className={`${warningBoxClass} space-y-0.5 px-3 py-2`}>

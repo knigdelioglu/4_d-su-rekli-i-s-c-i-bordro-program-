@@ -1215,6 +1215,7 @@ fn compare_backup_snapshots(imported: &BordroKaydi, replayed: &BordroKaydi) -> R
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod backup_replay_comparison_tests {
     use super::{compare_backup_is_primi, compare_backup_optional_decimal_if_imported};
     use crate::domain::models::IsPrimiHesapDetayi;
@@ -1509,16 +1510,22 @@ impl MigrationService {
                 compensation_policy_versions
                     .iter()
                     .max_by(|left, right| {
-                        left.effectiveFrom.cmp(&right.effectiveFrom)
+                        left.effectiveFrom
+                            .cmp(&right.effectiveFrom)
                             .then_with(|| left.createdAt.cmp(&right.createdAt))
                     })
                     .map(|version| {
-                        version.state.isPrimiGruplari.iter().map(|group| IsPrimiGrupItem {
-                            id: group.id.clone(),
-                            ad: group.ad.clone(),
-                            oran: group.oran,
-                            aktif: group.aktif,
-                        }).collect::<Vec<_>>()
+                        version
+                            .state
+                            .isPrimiGruplari
+                            .iter()
+                            .map(|group| IsPrimiGrupItem {
+                                id: group.id.clone(),
+                                ad: group.ad.clone(),
+                                oran: group.oran,
+                                aktif: group.aktif,
+                            })
+                            .collect::<Vec<_>>()
                     })
             })
             .or_else(|| {
@@ -1527,17 +1534,27 @@ impl MigrationService {
                 let mut entries = legacy.iter().collect::<Vec<_>>();
                 entries.sort_by(|(left, _), (right, _)| right.cmp(left));
                 if let Some(active_id) = active_id {
-                    entries.sort_by_key(|(period_id, _)| if period_id.as_str() == active_id { 0 } else { 1 });
+                    entries.sort_by_key(|(period_id, _)| {
+                        if period_id.as_str() == active_id {
+                            0
+                        } else {
+                            1
+                        }
+                    });
                 }
                 entries.into_iter().find_map(|(_, settings)| {
                     serde_json::from_value::<Vec<IsPrimiGrupItem>>(
                         settings.get("isPrimiGruplari")?.clone(),
-                    ).ok().filter(|groups| !groups.is_empty())
+                    )
+                    .ok()
+                    .filter(|groups| !groups.is_empty())
                 })
             })
             .unwrap_or_default();
-        let global_groups_json = serde_json::to_string(&global_premium_groups)
-            .map_err(|error| DomainError::InvalidData(format!("İş primi grupları JSON'a çevrilemedi: {error}")))?;
+        let global_groups_json =
+            serde_json::to_string(&global_premium_groups).map_err(|error| {
+                DomainError::InvalidData(format!("İş primi grupları JSON'a çevrilemedi: {error}"))
+            })?;
         SettingsRepository::set_app_setting_in_transaction(
             conn,
             "is_primi_gruplari",

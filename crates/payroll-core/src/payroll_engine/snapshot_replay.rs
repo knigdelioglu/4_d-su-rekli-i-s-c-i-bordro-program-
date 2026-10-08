@@ -162,7 +162,7 @@ pub(crate) fn replay_saved_normal_financial_projection(
     let manual_income = inputs
         .manualIncome
         .supplied
-        .then(|| ManualPayrollIncomeInput {
+        .then_some(ManualPayrollIncomeInput {
             tediye: inputs.manualIncome.tediye,
             tisIkramiyesi: inputs.manualIncome.tisIkramiyesi,
         });

@@ -209,7 +209,13 @@ export interface CompensationPolicyLoadData {
     /** Scoped read: baseline at/before period start plus effective dates in range. */
     versions: CompensationPolicyVersionWire[];
     resolvedSegments: ResolvedCompensationSegmentWire[];
-    resolution: 'RESOLVED' | 'MISSING_START_POLICY';
+    resolution: 'RESOLVED' | 'MISSING_START_POLICY' | 'INVALID_ROAD_ROUNDING';
+    /** Off-boundary rounding changes that need an explicit same-date correction. */
+    roadRoundingIssues?: Array<{
+      effectiveFrom: string;
+      expectedMode: RoadRoundingMode;
+      actualMode: RoadRoundingMode;
+    }>;
   };
   activePolicyProjection:
     | {

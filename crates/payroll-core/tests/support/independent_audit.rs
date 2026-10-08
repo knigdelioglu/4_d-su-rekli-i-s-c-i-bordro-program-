@@ -4,7 +4,7 @@ use rust_decimal_macros::dec;
 use serde_json::json;
 
 #[path = "compensation_policy.rs"]
-mod compensation_policy;
+pub mod compensation_policy;
 
 pub fn request() -> PayrollCalculationRequest {
     let person: Personel = serde_json::from_value(json!({

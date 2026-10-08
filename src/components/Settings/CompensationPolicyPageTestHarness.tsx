@@ -196,6 +196,98 @@ function correctionPreferenceLoad(): CompensationPolicyLoadData {
   };
 }
 
+function raiseSourceLoad(): CompensationPolicyLoadData {
+  const baselineState = { ...precisionState, gunlukVasitaYol: '136.44' };
+  const baseline = makeVersion(
+    'raise-source-baseline',
+    baselineState,
+    null,
+    '2026-09-15',
+    'Başlangıç',
+    'FULL_EARNING',
+    'PERIOD_TOTAL'
+  );
+  const raisedSourceState = {
+    ...baselineState,
+    gunlukTabanUcret: '3000.00',
+    gunlukVasitaYol: '145.50',
+  };
+  const raisedSource = makeVersion(
+    'raise-source-october',
+    raisedSourceState,
+    null,
+    '2026-10-05',
+    'Ara ücret güncellemesi',
+    'FULL_EARNING',
+    'PERIOD_TOTAL'
+  );
+  return {
+    scope,
+    timeline: {
+      versions: [baseline, raisedSource],
+      resolvedSegments: [
+        {
+          versionId: baseline.id,
+          startDate: '2026-09-15',
+          endDate: '2026-10-04',
+          state: baseline.state,
+          boundaryScope: baseline.boundaryScope,
+          roadRoundingMode: baseline.roadRoundingMode,
+        },
+        {
+          versionId: raisedSource.id,
+          startDate: '2026-10-05',
+          endDate: scope.periodEndInclusive,
+          state: raisedSource.state,
+          boundaryScope: raisedSource.boundaryScope,
+          roadRoundingMode: raisedSource.roadRoundingMode,
+        },
+      ],
+      resolution: 'RESOLVED',
+    },
+    activePolicyProjection: { kind: 'ACTIVE', asOfDate: scope.projectionDate, version: baseline },
+    initialBaselineRequired: false,
+    nonAuthoritativePrefill: { kind: 'UNAVAILABLE', reason: 'NO_LEGACY_SETTINGS' },
+  };
+}
+
+function mixedRoundingLoad(): CompensationPolicyLoadData {
+  const baseline = makeVersion(
+    'rounding-baseline',
+    precisionState,
+    null,
+    '2026-09-15',
+    'Başlangıç',
+    'FULL_EARNING',
+    'PERIOD_TOTAL'
+  );
+  const invalid = makeVersion(
+    'rounding-invalid',
+    precisionState,
+    null,
+    '2026-10-01',
+    'Yanlış varsayılan yuvarlama',
+    'FULL_EARNING',
+    'PER_COMPENSATION_SLICE'
+  );
+  return {
+    scope,
+    timeline: {
+      versions: [baseline, invalid],
+      resolvedSegments: [],
+      resolution: 'INVALID_ROAD_ROUNDING',
+      roadRoundingIssues: [{
+        effectiveFrom: invalid.effectiveFrom,
+        expectedMode: baseline.roadRoundingMode,
+        actualMode: invalid.roadRoundingMode,
+      }],
+    },
+    activePolicyProjection: { kind: 'ACTIVE', asOfDate: scope.projectionDate, version: baseline },
+    initialBaselineRequired: false,
+    nonAuthoritativePrefill: { kind: 'UNAVAILABLE', reason: 'NO_LEGACY_SETTINGS' },
+  };
+}
+
 function draftForExisting(data: CompensationPolicyLoadData = existingLoad()): CompensationPolicyPageProps['draft'] {
   const activeVersion = data.activePolicyProjection.kind === 'ACTIVE' ? data.activePolicyProjection.version : null;
   return {
@@ -288,6 +380,8 @@ declare global {
       useExistingTimeline(): void;
       usePersistedRoadOnlyPolicy(): void;
       useCorrectionPreferenceTimeline(): void;
+      useRaiseSourceTimeline(): void;
+      useMixedRoundingTimeline(): void;
       useEylulPrefill(): void;
       usePrecisionPrefill(): void;
       setLoadIdle(): void;
@@ -335,6 +429,26 @@ const Harness: React.FC = () => {
     },
     useCorrectionPreferenceTimeline() {
       const data = correctionPreferenceLoad();
+      const nextDraft = draftForExisting(data);
+      setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(false);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    useRaiseSourceTimeline() {
+      const data = raiseSourceLoad();
+      const nextDraft = draftForExisting(data);
+      setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(false);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    useMixedRoundingTimeline() {
+      const data = mixedRoundingLoad();
       const nextDraft = draftForExisting(data);
       setLoadState({ status: 'ready', value: data });
       setDraft(nextDraft);

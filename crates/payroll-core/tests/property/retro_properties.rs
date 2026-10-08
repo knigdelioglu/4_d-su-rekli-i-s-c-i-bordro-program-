@@ -81,11 +81,11 @@ fn dataset_with_original_payroll(daily_wage: Decimal) -> PayrollDatasetSnapshot 
         attendances: vec![attendance(&period)],
         annualPayrollParameters: vec![AnnualPayrollParameters::default_for_2026()],
         compensationPolicyVersions: vec![
-            super::compensation_policy_test_support::baseline_version(&period, &settings),
+            crate::audit_fixture::compensation_policy::baseline_version(&period, &settings),
         ],
         ..Default::default()
     };
-    super::compensation_policy_test_support::seed_zero_tax_openings(&mut dataset);
+    crate::audit_fixture::compensation_policy::seed_zero_tax_openings(&mut dataset);
     let original = calculate_payroll(&PayrollCalculationRequest {
         personnelId: "property-retro-person".into(),
         periodId: period.id,

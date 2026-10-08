@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import type { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
 import {
   countAuthoritativeNormalPersonnel,
+  describeBankExcludedAccruals,
   filterAccrualRowsByPaymentDate,
   getAuthoritativeAccrualRows,
+  getBankTransferableAccrualRows,
   getOtherPeriodAccruals,
 } from './accrualListData';
 
@@ -87,6 +89,23 @@ describe('authoritative accrual list dataset', () => {
     expect(filterAccrualRowsByPaymentDate(rows, '2026-10-13')[0].bordro.netOdeme).toBe(65000);
     expect(filterAccrualRowsByPaymentDate(rows, '2026-10-20')[0].bordro.kesintiler.bes).toBe(120);
     expect(filterAccrualRowsByPaymentDate(rows, '2026-10-20')[0].bordro.netOdeme).toBe(11500);
+  });
+
+  test('bank transfer list includes only finalized payrolls and explains calculated exclusions', () => {
+    const payrolls = [
+      payroll('NORMAL', 'normal-final', '2026-10-13', 0, 900, 'FINALIZED', 65000),
+      payroll('TEDIYE', 'tediye-calculated', '2026-10-20', 1, 120, 'CALCULATED', 11500),
+      payroll('SUPPLEMENTAL', 'stale-event', '2026-10-21', 2, 50, 'STALE'),
+      payroll('NORMAL', 'draft-event', '2026-10-22', 0, 50, 'DRAFT'),
+    ];
+
+    const rows = getBankTransferableAccrualRows(period, [person], payrolls);
+    const notice = describeBankExcludedAccruals(period, [person], payrolls);
+
+    expect(rows.map((row) => row.accrualId)).toEqual(['normal-final']);
+    expect(notice).toContain('1 hesaplanmış tahakkuk henüz kesinleştirilmedi');
+    expect(notice).toContain('yeniden hesaplanmalı');
+    expect(notice).toContain('banka listesine alınır');
   });
 
   test('counts people by authoritative NORMAL accrual, not by total accrual count', () => {

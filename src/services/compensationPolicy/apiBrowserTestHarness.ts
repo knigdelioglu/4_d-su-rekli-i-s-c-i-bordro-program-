@@ -242,6 +242,139 @@ function addDays(iso: string, days: number): string {
   return date.toISOString().slice(0, 10);
 }
 
+async function exerciseRoadRoundingRecovery() {
+  await resetBrowserPayrollDatabase();
+  const data = getInitialDataset();
+  const period = createBordroDonemi(2027, 12);
+  const sourceSettings = data.kurumDegerleriMap[data.aktifDonemId];
+  if (!sourceSettings) throw new Error('Road rounding fixture has no institution settings.');
+  const scope: Scope = {
+    institutionScope: 'CURRENT_INSTITUTION',
+    periodId: period.id,
+    periodStartInclusive: period.baslangicTarihi,
+    periodEndInclusive: period.bitisTarihi,
+    projectionDate: period.baslangicTarihi,
+  };
+  const state: CompensationPolicyStateWire = {
+    ...browserAcceptanceState(),
+    gunlukVasitaYol: '136.44',
+  };
+  const baseline: CompensationPolicyVersionWire = {
+    id: 'road-rounding-december-baseline',
+    effectiveFrom: period.baslangicTarihi,
+    state,
+    boundaryScope: 'FULL_EARNING',
+    roadRoundingMode: 'PERIOD_TOTAL',
+    createdAt: '2027-12-01T00:00:00.000Z',
+    source: 'TEST',
+    reason: 'December service-period baseline',
+    supersedesVersionId: null,
+  };
+  const seed = async (versions: CompensationPolicyVersionWire[]) => {
+    const payload = toPayrollBoundaryDto({
+      backupVersion: BACKUP_FORMAT_VERSION,
+      exportedAt: '2027-12-01T00:00:00.000Z',
+      ...data,
+      donemler: [...data.donemler.filter((item) => item.id !== period.id), period],
+      kurumDegerleriMap: {
+        ...data.kurumDegerleriMap,
+        [period.id]: { ...sourceSettings, donemId: period.id },
+      },
+      compensationPolicyVersions: versions,
+      compensationRevisions: [],
+      compensationRevisionOverrides: [],
+      retroBatches: [],
+      retroAllocations: [],
+    }) as unknown as PayrollStorageDto;
+    await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+  };
+
+  await seed([baseline]);
+  const midPeriodModeChange: CompensationPolicyWriteOperation = {
+    kind: 'NEW_EFFECTIVE_DATE',
+    effectiveFrom: '2028-01-01',
+    state: { ...state, gunlukTabanUcret: '2125.13' },
+    boundaryScope: 'FULL_EARNING',
+    changeIntent: 'FULL_STATE_CHANGE',
+    roadRoundingMode: 'PER_COMPENSATION_SLICE',
+    reason: 'Rejected mid-service-period road mode change',
+  };
+  const rejected = await getCompensationPolicyApi().preview({ scope, operation: midPeriodModeChange });
+
+  const invalid = {
+    ...baseline,
+    id: 'road-rounding-invalid-january-policy',
+    effectiveFrom: '2028-01-01',
+    state: { ...state, gunlukTabanUcret: '2125.13' },
+    roadRoundingMode: 'PER_COMPENSATION_SLICE' as const,
+    createdAt: '2027-12-15T00:00:00.000Z',
+    reason: 'Legacy mid-service-period rounding mismatch',
+  };
+  await seed([baseline, invalid]);
+  const loadedInvalid = await getCompensationPolicyApi().load({ scope });
+  const correction: CompensationPolicyWriteOperation = {
+    kind: 'SAME_DATE_CORRECTION',
+    effectiveFrom: invalid.effectiveFrom,
+    state: invalid.state,
+    boundaryScope: 'FULL_EARNING',
+    changeIntent: 'FULL_STATE_CHANGE',
+    roadRoundingMode: baseline.roadRoundingMode,
+    reason: 'Restore the established rounding mode without changing the effective date',
+    supersedesVersionId: invalid.id,
+  };
+  const correctionPreview = await getCompensationPolicyApi().preview({ scope, operation: correction });
+  let saved: unknown;
+  if (correctionPreview.ok === true) {
+    const saveResult = await getCompensationPolicyApi().save({
+      scope,
+      operation: correction,
+      previewToken: correctionPreview.value.previewToken,
+    });
+    saved = saveResult.ok === true
+      ? { version: {
+        id: saveResult.value.version.id,
+        effectiveFrom: saveResult.value.version.effectiveFrom,
+        roadRoundingMode: saveResult.value.version.roadRoundingMode,
+        supersedesVersionId: saveResult.value.version.supersedesVersionId,
+      }, error: null }
+      : { version: null, error: saveResult.error };
+  } else {
+    saved = { version: null, error: correctionPreview.error };
+  }
+  const reloaded = await getCompensationPolicyApi().load({ scope });
+  const rejectedError = rejected.ok === true ? null : rejected.error;
+  const invalidSummary = {
+    resolution: loadedInvalid.ok === true ? loadedInvalid.value.timeline.resolution : null,
+    roadRoundingIssues: loadedInvalid.ok === true ? loadedInvalid.value.timeline.roadRoundingIssues : [],
+    error: loadedInvalid.ok === true ? null : loadedInvalid.error,
+  };
+  const correctionError = correctionPreview.ok === true ? null : correctionPreview.error;
+  const reloadSummary = {
+    resolution: reloaded.ok === true ? reloaded.value.timeline.resolution : null,
+    roadRoundingIssues: reloaded.ok === true ? reloaded.value.timeline.roadRoundingIssues : [],
+    resolvedRoadRoundingModes: reloaded.ok === true
+      ? reloaded.value.timeline.resolvedSegments.map((segment) => segment.roadRoundingMode)
+      : [],
+    versions: reloaded.ok === true
+      ? reloaded.value.timeline.versions.map((version) => ({
+        id: version.id,
+        effectiveFrom: version.effectiveFrom,
+        roadRoundingMode: version.roadRoundingMode,
+        supersedesVersionId: version.supersedesVersionId,
+      }))
+      : [],
+    error: reloaded.ok === true ? null : reloaded.error,
+  };
+  return {
+    scope,
+    rejected: rejectedError,
+    loadedInvalid: invalidSummary,
+    correctionPreview: correctionError,
+    saved,
+    reloaded: reloadSummary,
+  };
+}
+
 async function previewRoadOnlyScaleChange(periodId: string) {
   const snapshot = await browserPayrollStore.loadSnapshot();
   if (!snapshot) throw new Error('Seed browser snapshot is missing.');
@@ -1335,6 +1468,7 @@ declare global {
     };
     __compensationPolicyBrowserApiTest: {
       loadArchivedSeptemberPrefill(): ReturnType<typeof loadArchivedSeptemberPrefill>;
+      exerciseRoadRoundingRecovery(): ReturnType<typeof exerciseRoadRoundingRecovery>;
       prepareBaseline(): ReturnType<typeof prepareBaseline>;
       prepareRetroBaseline(): ReturnType<typeof prepareRetroBaseline>;
       previewBaseline(periodId: string): ReturnType<typeof previewBaseline>;
@@ -1371,6 +1505,7 @@ window.__compensationAcceptanceBrowserApp = {
 
 window.__compensationPolicyBrowserApiTest = {
   loadArchivedSeptemberPrefill,
+  exerciseRoadRoundingRecovery,
   prepareBaseline,
   prepareRetroBaseline,
   previewBaseline,

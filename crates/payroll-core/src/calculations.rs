@@ -1514,6 +1514,8 @@ pub fn calculate_legacy_statutory_deductions_with_month_to_date(
 /// Canonical production contribution calculation.  It resolves PEK and all
 /// non-tax deductions; GV/DV are calculated once by the state-aware tax
 /// calculator after the engine has resolved meal, retro, and annual state.
+// These inputs are resolved by separate legacy and state-aware calculation stages.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn calculate_statutory_contributions_with_month_to_date_and_devreden_state(
     gelirler: &GelirKalemleri,
     kurum_degerleri: Option<&PayrollPeriodInstitutionSettings>,

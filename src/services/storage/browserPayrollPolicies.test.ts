@@ -39,6 +39,17 @@ describe('browser payroll invalidation policy', () => {
     ).toThrow('Kesinleştirilmiş');
   });
 
+  test('names finalized retro blockers when ordinary payroll blockers are absent', () => {
+    expect(() =>
+      assertBrowserMutationImpactAllowed({
+        affectedPayrolls: [],
+        blockedByFinalized: [],
+        affectedRetroBatches: [],
+        blockedByFinalizedRetroBatches: ['retro-finalized'],
+      })
+    ).toThrow('1 kesinleşmiş geriye dönük fark ödemesi');
+  });
+
   test('assertBrowserMutationImpactAllowed rejects ALL mutation when finalized records exist', () => {
     expect(() =>
       assertBrowserMutationImpactAllowed({

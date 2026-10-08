@@ -1,8 +1,5 @@
 #[path = "support/independent_audit.rs"]
 mod audit_support;
-#[path = "support/compensation_policy.rs"]
-mod compensation_policy_test_support;
-
 use chrono::NaiveDate;
 use payroll_core::*;
 use rust_decimal::Decimal;
@@ -250,12 +247,12 @@ fn raise_split_merges_work_premium_details_with_exact_weighted_values() {
         .dataset
         .institutionSettings
         .insert("audit-dec".into(), previous_settings);
-    compensation_policy_test_support::replace_period_baseline_from_state(
+    audit_support::compensation_policy::replace_period_baseline_from_state(
         &mut request.dataset,
         &active_period,
         previous_state,
     );
-    let mut after_raise = compensation_policy_test_support::baseline_version_from_state(
+    let mut after_raise = audit_support::compensation_policy::baseline_version_from_state(
         &active_period,
         current_state,
     );
@@ -340,12 +337,12 @@ fn raise_split_with_no_after_raise_premium_keeps_the_before_raise_group() {
         .dataset
         .institutionSettings
         .insert("audit-dec".into(), previous_settings);
-    compensation_policy_test_support::replace_period_baseline_from_state(
+    audit_support::compensation_policy::replace_period_baseline_from_state(
         &mut request.dataset,
         &active_period,
         previous_state,
     );
-    let mut after_raise = compensation_policy_test_support::baseline_version_from_state(
+    let mut after_raise = audit_support::compensation_policy::baseline_version_from_state(
         &active_period,
         current_state,
     );
@@ -1094,7 +1091,7 @@ fn same_month_reconciliation_does_not_promote_a_normal_prior_event_to_provisiona
         .clone();
     previous_request.dataset.compensationPolicyVersions.clear();
     previous_request.dataset.compensationPolicyVersions.push(
-        compensation_policy_test_support::baseline_version_from_state(
+        audit_support::compensation_policy::baseline_version_from_state(
             previous_period,
             previous_state,
         ),

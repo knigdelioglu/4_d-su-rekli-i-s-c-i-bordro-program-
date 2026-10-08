@@ -129,7 +129,7 @@ fn dated_policy_slices<'a>(
         .collect()
 }
 
-fn attendance_dates<'a>(attendance: &'a PersonelPuantaj) -> Result<Vec<(NaiveDate, &'a str)>> {
+fn attendance_dates(attendance: &PersonelPuantaj) -> Result<Vec<(NaiveDate, &str)>> {
     attendance
         .gunler
         .iter()
@@ -257,7 +257,7 @@ pub(super) fn calculate_policy_income(
     let mut premium_detail = None;
     for slice in &slices {
         let summary = summary_in_range(&dates, slice.start, slice.end, &period.id)?;
-        let detail = policy_premium_detail(&slice.state, personnel_group, meal_days(&summary))?;
+        let detail = policy_premium_detail(slice.state, personnel_group, meal_days(&summary))?;
         premium_detail = Some(match premium_detail {
             Some(previous) => super::merge_is_primi_details(&previous, &detail),
             None => detail,
@@ -402,7 +402,7 @@ pub(super) fn replay_snapshot_income(
         &inputs.personnelGroup,
     )?;
     let manual = &inputs.manualIncome;
-    let manual_request = manual.supplied.then(|| ManualPayrollIncomeInput {
+    let manual_request = manual.supplied.then_some(ManualPayrollIncomeInput {
         tediye: manual.tediye,
         tisIkramiyesi: manual.tisIkramiyesi,
     });

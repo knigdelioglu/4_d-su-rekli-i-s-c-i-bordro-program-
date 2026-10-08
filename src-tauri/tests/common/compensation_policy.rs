@@ -1,3 +1,6 @@
+// Shared by integration-test binaries with different helper usage.
+#![allow(dead_code)]
+
 use bordro_programi_lib::domain::models::{
     BordroDonemi, CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
     CompensationPolicyVersion, DonemselKurumDegerleri, RoadRoundingMode,

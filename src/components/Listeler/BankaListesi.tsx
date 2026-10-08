@@ -10,8 +10,8 @@ import { exportToExcel, printElement } from '../../utils/excelExport';
 import {
   AuthoritativeAccrualRow,
   filterAccrualRowsByPaymentDate,
-  describeExcludedAccruals,
-  getAuthoritativeAccrualRows,
+  describeBankExcludedAccruals,
+  getBankTransferableAccrualRows,
   getPaymentDateOptions,
 } from './accrualListData';
 import { matchesPersonSearch } from '../../utils/personSearch';
@@ -31,10 +31,10 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   const [paymentDateFilter, setPaymentDateFilter] = useState<string>('all');
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Resmî ödeme listesine yalnız authoritative bordrolar girer. STALE/DRAFT
-  // snapshot'lar yeniden hesaplanmadan banka çıktısına taşınamaz.
-  const bankEntries = getAuthoritativeAccrualRows(aktifDonem, personeller, bordrolar);
-  const excludedAccrualsNotice = describeExcludedAccruals(aktifDonem, personeller, bordrolar);
+  // A calculated result is authoritative for reports, but still requires
+  // explicit finalization before it can become a bank transfer instruction.
+  const bankEntries = getBankTransferableAccrualRows(aktifDonem, personeller, bordrolar);
+  const excludedAccrualsNotice = describeBankExcludedAccruals(aktifDonem, personeller, bordrolar);
   const paymentDateOptions = getPaymentDateOptions(bankEntries);
 
   const filteredEntries = filterAccrualRowsByPaymentDate(bankEntries, paymentDateFilter).filter((e: AuthoritativeAccrualRow) => {
@@ -125,7 +125,7 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
             </h2>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Bordrosu tamamlanan personellerin banka maaş aktarım listesi ve toplamları
+            Kesinleştirilmiş bordrolardan oluşturulan banka aktarım listesi ve toplamları
           </p>
         </div>
 

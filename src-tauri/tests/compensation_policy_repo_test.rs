@@ -132,10 +132,12 @@ fn additive_migration_preserves_payroll_settings_and_retro_history() {
     let mut conn = Connection::open_in_memory().unwrap();
     seed_previous_schema(&mut conn).unwrap();
     get_migrations().to_latest(&mut conn).unwrap();
-    assert_eq!(
-        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
-            .unwrap(),
-        COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION as i64
+    let latest_version = conn
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .unwrap();
+    assert!(
+        latest_version >= COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION as i64,
+        "all migrations through the compensation-policy flags must apply"
     );
     for table in [
         "payroll_records",

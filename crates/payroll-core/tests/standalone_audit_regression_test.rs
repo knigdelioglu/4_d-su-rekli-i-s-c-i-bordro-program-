@@ -1,5 +1,3 @@
-#[path = "support/compensation_policy.rs"]
-mod compensation_policy_test_support;
 #[path = "support/independent_audit.rs"]
 mod support;
 use payroll_core::*;
@@ -226,7 +224,7 @@ fn test_audit_pek_lower_bound_zero_deduction_for_worker() {
         .state
         .clone();
     state.gunlukTabanUcret = dec!(400);
-    compensation_policy_test_support::replace_period_baseline_from_state(
+    support::compensation_policy::replace_period_baseline_from_state(
         &mut req.dataset,
         &period,
         state,

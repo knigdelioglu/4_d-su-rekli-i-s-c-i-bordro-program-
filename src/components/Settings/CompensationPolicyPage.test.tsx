@@ -365,6 +365,85 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect(operation.state.gunlukVasitaYol).toBe('175.25');
   });
 
+  test('rebases untouched fields to the effective-date source and preserves road value and rounding through a raise save', async () => {
+    const page = await openPolicyPage();
+    await page.evaluate(() => window.__compensationPolicyTest.useRaiseSourceTimeline());
+    await page.locator('#policy-calculation-details').evaluate((node) => { (node as HTMLDetailsElement).open = true; });
+    await page.locator('#policy-effective-date').fill('2026-10-10');
+
+    expect(await page.locator('#policy-base-wage').inputValue()).toBe('3000,00');
+    expect(await page.locator('#policy-road').inputValue()).toBe('145,50');
+    expect(await page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]').isChecked()).toBe(true);
+
+    await page.getByText('Günlük taban ücret ve yemeği yüzdeyle artır', { exact: true }).click();
+    await page.locator('#policy-percentage-helper').fill('6.25');
+    await page.getByRole('button', { name: 'Artışı uygula' }).click();
+    expect(await page.locator('#policy-base-wage').inputValue()).toBe('3187,5');
+    expect(await page.locator('#policy-meal').inputValue()).toBe('53,125');
+    expect(await page.locator('#policy-road').inputValue()).toBe('145,50');
+
+    await requestPreview(page);
+    const preview = (await events(page)).filter((entry) => entry.type === 'preview').at(-1)?.value as {
+      state: { gunlukTabanUcret: string; gunlukYemek: string; gunlukVasitaYol: string };
+      roadRoundingMode: string;
+    };
+    expect(preview.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(preview.state).toEqual({
+      gunlukTabanUcret: '3187.5',
+      gunlukYemek: '53.125',
+      birlestirilmisSosyalYardim: '20',
+      gunlukVasitaYol: '145.5',
+      giyimYardimi: '0',
+      hizmetZammiBirimi: '5',
+      isPrimiYuzde: null,
+      isPrimiGruplari: [
+        { id: 'A', ad: 'Atesli', oran: '65.5', aktif: true },
+        { id: 'B', ad: 'Teknik', oran: '0', aktif: false },
+      ],
+      geceCalismaPrimiYuzde: '20',
+      geceCalismaTatiliPrimiYuzde: '30',
+      ekOdeme: '0',
+      digerGelirVarsayilan: null,
+    });
+
+    await page.getByRole('button', { name: 'Önizlenen değişikliği kaydet' }).click();
+    await page.getByText('Ücret değişikliği kaydedildi.').waitFor({ state: 'visible' });
+    const saved = (await events(page)).filter((entry) => entry.type === 'save').at(-1)?.value as {
+      operation: { roadRoundingMode: string; state: { gunlukVasitaYol: string } };
+    };
+    expect(saved.operation.roadRoundingMode).toBe('PERIOD_TOTAL');
+    expect(saved.operation.state.gunlukVasitaYol).toBe('145.5');
+  });
+
+  test('shows a correctable mixed-rounding warning and preloads the offending same-date version', async () => {
+    const page = await openPolicyPage();
+    await page.evaluate(() => window.__compensationPolicyTest.useMixedRoundingTimeline());
+
+    const recovery = page.getByTestId('policy-road-rounding-recovery');
+    const recoveryText = await recovery.innerText();
+    expect(recoveryText).toContain('01.10.2026');
+    expect(recoveryText).toContain('Bütün dönemi tek kez');
+    await page.locator('#policy-operation').selectOption('SAME_DATE_CORRECTION');
+    expect(await page.locator('#policy-effective-date').inputValue()).toBe('2026-10-01');
+    await page.locator('#policy-calculation-details').evaluate((node) => { (node as HTMLDetailsElement).open = true; });
+    expect(await page.locator('input[name="policy-road-rounding"][value="PER_COMPENSATION_SLICE"]').isChecked()).toBe(true);
+    await page.locator('input[name="policy-road-rounding"][value="PERIOD_TOTAL"]').check();
+
+    await requestPreview(page);
+    const operation = (await events(page)).filter((entry) => entry.type === 'preview').at(-1)?.value as {
+      kind: string;
+      effectiveFrom: string;
+      supersedesVersionId: string;
+      roadRoundingMode: string;
+    };
+    expect(operation).toMatchObject({
+      kind: 'SAME_DATE_CORRECTION',
+      effectiveFrom: '2026-10-01',
+      supersedesVersionId: 'rounding-invalid',
+      roadRoundingMode: 'PERIOD_TOTAL',
+    });
+  });
+
   test('applies an exact percentage helper, keeps the source state intact, and previews an overridden ROAD_ONLY baseline', async () => {
     const page = await openPolicyPage();
     await page.evaluate(() => window.__compensationPolicyTest.usePrecisionPrefill());

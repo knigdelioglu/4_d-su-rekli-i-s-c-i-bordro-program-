@@ -754,7 +754,7 @@ fn target_snapshot_segments(
             }
             let date = current.format("%Y-%m-%d").to_string();
             let merge = output.last().is_some_and(|last| {
-                last.endDate != ""
+                !last.endDate.is_empty()
                     && last.endDate == current.pred_opt().unwrap().format("%Y-%m-%d").to_string()
                     && previous_signature == signature
                     && previous_source_id == source.versionId
@@ -765,13 +765,12 @@ fn target_snapshot_segments(
             } else {
                 let revision_boundary = !previous_signature.is_empty() || !signature.is_empty();
                 let source_boundary = current == start;
-                let boundary_scope = if revision_boundary && !source_boundary {
-                    CompensationBoundaryScope::FullEarning
-                } else if revision_boundary && source_boundary && previous_signature != signature {
-                    CompensationBoundaryScope::FullEarning
-                } else {
-                    source.boundaryScope
-                };
+                let boundary_scope =
+                    if revision_boundary && (!source_boundary || previous_signature != signature) {
+                        CompensationBoundaryScope::FullEarning
+                    } else {
+                        source.boundaryScope
+                    };
                 let version_id = if active.is_empty()
                     && current == start
                     && current == parse_date(&source.startDate, "snapshot compensation start")?

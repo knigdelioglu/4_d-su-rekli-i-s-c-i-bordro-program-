@@ -244,6 +244,8 @@ fn minimum_wage_references(
     Ok(references)
 }
 
+// Keep the inputs explicit: each value is resolved by a distinct payroll-state stage.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_compensation_policy_snapshot(
     request: &PayrollCalculationRequest,
     index: &PayrollDatasetIndex,

@@ -324,8 +324,12 @@ fn assert_policy_roundtrip(period_id: &str, start: &str, end: &str, tax_year: i3
         value: dec!(2001.13),
         personnelId: Some(personnel_id.clone()),
     };
-    retro_repo::save_revision_with_overrides(&conn, &retro_revision, &[retro_override.clone()])
-        .unwrap();
+    retro_repo::save_revision_with_overrides(
+        &conn,
+        &retro_revision,
+        std::slice::from_ref(&retro_override),
+    )
+    .unwrap();
     let retro_dataset = PayrollService::build_dataset_snapshot(&conn).unwrap();
     let batch_id = format!("native-lifecycle-batch-{period_id}");
     let retro = RetroEntitlementEngine::calculate(&RetroCalculationRequest {
@@ -735,7 +739,7 @@ fn save_policy_through_api(
         panic!("acceptance policy preview failed: {preview:?}");
     };
     let initial_baseline_confirmation =
-        baseline_confirmation.then(|| InitialBaselineConfirmation {
+        baseline_confirmation.then_some(InitialBaselineConfirmation {
             confirmed: true,
             effectiveFrom: effective_from,
         });
@@ -780,9 +784,7 @@ fn acceptance_backup_payload(conn: &rusqlite::Connection, active_period_id: &str
     payload
 }
 
-fn raw_policy_timeline(
-    conn: &rusqlite::Connection,
-) -> Vec<(
+type RawPolicyTimelineRow = (
     String,
     String,
     String,
@@ -792,7 +794,9 @@ fn raw_policy_timeline(
     Option<String>,
     String,
     String,
-)> {
+);
+
+fn raw_policy_timeline(conn: &rusqlite::Connection) -> Vec<RawPolicyTimelineRow> {
     let mut statement = conn
         .prepare(
             "SELECT id, effective_from, state_json, created_at, source, reason,
@@ -1181,8 +1185,12 @@ fn native_2026_2027_acceptance_roundtrips_v6_v5_and_policy_timeline() {
             + dec!(1),
         personnelId: Some(personnel_id.into()),
     };
-    retro_repo::save_revision_with_overrides(&restored, &revision, &[retro_override.clone()])
-        .unwrap();
+    retro_repo::save_revision_with_overrides(
+        &restored,
+        &revision,
+        std::slice::from_ref(&retro_override),
+    )
+    .unwrap();
     let retro = RetroEntitlementEngine::calculate(&RetroCalculationRequest {
         batchId: "native-post-restore-retro-batch".into(),
         revision,

@@ -28,7 +28,8 @@ impl PayrollService {
         conn: &Connection,
         versions: &mut [CompensationPolicyVersion],
     ) -> Result<()> {
-        let Some(serialized) = SettingsRepository::get_app_setting(conn, "is_primi_gruplari")? else {
+        let Some(serialized) = SettingsRepository::get_app_setting(conn, "is_primi_gruplari")?
+        else {
             return Ok(());
         };
         let groups: Vec<IsPrimiGrupItem> = serde_json::from_str(&serialized).map_err(|error| {

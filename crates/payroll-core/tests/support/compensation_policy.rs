@@ -1,3 +1,6 @@
+// Shared by many integration-test binaries; each test uses a different subset.
+#![allow(dead_code)]
+
 use payroll_core::{
     BordroDonemi, CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
     CompensationPolicyVersion, DonemselKurumDegerleri, PayrollDatasetSnapshot, RoadRoundingMode,

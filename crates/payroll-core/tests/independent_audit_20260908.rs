@@ -3,8 +3,6 @@ mod support;
 use payroll_core::*;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
-#[path = "support/compensation_policy.rs"]
-mod compensation_policy_test_support;
 
 #[test]
 fn audit_meal_is_exempt_from_stamp_as_well_as_income_tax() {
@@ -339,7 +337,7 @@ fn audit_retro_noop_after_split_raise_does_not_create_phantom_wages() {
     let mut active_state = source.dataset.compensationPolicyVersions[0].state.clone();
     active_state.gunlukTabanUcret = dec!(1000);
     active_state.gunlukYemek = dec!(200);
-    compensation_policy_test_support::replace_period_baseline_from_state(
+    support::compensation_policy::replace_period_baseline_from_state(
         &mut source.dataset,
         &active_period,
         active_state,
@@ -475,7 +473,7 @@ fn audit_night_and_group_premiums_use_independent_days() {
     state.geceCalismaPrimiYuzde = dec!(20);
     state.geceCalismaTatiliPrimiYuzde = dec!(30);
     state.isPrimiGruplari[0].oran = dec!(9);
-    compensation_policy_test_support::replace_period_baseline_from_state(
+    support::compensation_policy::replace_period_baseline_from_state(
         &mut req.dataset,
         &period,
         state,

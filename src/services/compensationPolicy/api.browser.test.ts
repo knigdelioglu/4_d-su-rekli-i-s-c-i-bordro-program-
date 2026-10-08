@@ -138,6 +138,47 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
     expect(loaded.beforeRevision).toBe(loaded.afterRevision);
   });
 
+  test('blocks a January rounding-mode change, exposes an invalid legacy timeline, and repairs it through same-date correction', async () => {
+    const page = await openPolicyApiTab();
+    const result = await page.evaluate(() =>
+      window.__compensationPolicyBrowserApiTest.exerciseRoadRoundingRecovery());
+
+    expect(result.rejected).toMatchObject({ code: 'INVALID_POLICY' });
+    expect(result.rejected?.message).toContain('ayın 15’inde');
+    expect(result.loadedInvalid).toMatchObject({
+      resolution: 'INVALID_ROAD_ROUNDING',
+      roadRoundingIssues: [{
+        effectiveFrom: '2028-01-01',
+        expectedMode: 'PERIOD_TOTAL',
+        actualMode: 'PER_COMPENSATION_SLICE',
+      }],
+      error: null,
+    });
+    expect(result.correctionPreview).toBeNull();
+    expect(result.saved).toMatchObject({
+      version: {
+        effectiveFrom: '2028-01-01',
+        roadRoundingMode: 'PERIOD_TOTAL',
+        supersedesVersionId: 'road-rounding-invalid-january-policy',
+      },
+    });
+    expect(result.reloaded).toMatchObject({
+      resolution: 'RESOLVED',
+      roadRoundingIssues: [],
+      error: null,
+    });
+    expect(result.reloaded.resolvedRoadRoundingModes.every((mode) => mode === 'PERIOD_TOTAL')).toBe(true);
+    expect(result.reloaded.versions.at(-1)).toMatchObject({
+      effectiveFrom: '2028-01-01',
+      roadRoundingMode: 'PERIOD_TOTAL',
+      supersedesVersionId: 'road-rounding-invalid-january-policy',
+    });
+    expect(result.scope).toMatchObject({
+      periodStartInclusive: '2027-12-15',
+      periodEndInclusive: '2028-01-14',
+    });
+  });
+
   testWithTimeout('single and batch NORMAL UI routes navigate to policy without saving when baseline is missing', async () => {
     const singlePage = await openMissingBaselineUiTab();
     const personId = await singlePage.locator('[data-testid="missing-baseline-ui-app"]').getAttribute('data-person-id');

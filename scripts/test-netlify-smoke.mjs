@@ -105,12 +105,42 @@ async function installCalculableFixture(page) {
                 taxYear: period.yil,
                 taxMonth: period.ay,
               }));
-              const activeYear = snapshot.donemler[0]?.taxYear;
+              const activeYear = Math.max(...snapshot.donemler.map((period) => period.yil));
               const annual = snapshot.annualPayrollParameters.find(
                 (parameters) => parameters.year === activeYear
               );
               if (!annual) throw new Error('Örnek fixture yıllık vergi parametresi içermiyor.');
               annual.sigortaGvYillikBrutAsgariUcretTavani = '396360';
+              const baselinePeriod = [...snapshot.donemler]
+                .sort((left, right) => left.id.localeCompare(right.id))[0];
+              const policyGroups = snapshot.isPrimiGruplari.map((group) => ({
+                ...group,
+                oran: String(group.oran),
+              }));
+              snapshot.compensationPolicyVersions = [{
+                id: `netlify-smoke-policy-${baselinePeriod.id}`,
+                effectiveFrom: baselinePeriod.baslangicTarihi,
+                state: {
+                  gunlukTabanUcret: '2443.28',
+                  gunlukYemek: '300.75',
+                  birlestirilmisSosyalYardim: '5089.70',
+                  gunlukVasitaYol: '128.93',
+                  giyimYardimi: '269.70',
+                  hizmetZammiBirimi: '24.67',
+                  isPrimiYuzde: '0',
+                  isPrimiGruplari: policyGroups,
+                  geceCalismaPrimiYuzde: '0',
+                  geceCalismaTatiliPrimiYuzde: '0',
+                  ekOdeme: '0',
+                  digerGelirVarsayilan: '0',
+                },
+                boundaryScope: 'FULL_EARNING',
+                roadRoundingMode: 'PERIOD_TOTAL',
+                createdAt: '2026-10-08T00:00:00.000Z',
+                source: 'TEST_FIXTURE',
+                reason: 'Netlify smoke synthetic baseline',
+                supersedesVersionId: null,
+              }];
               const writeRequest = objectStore.put(
                 { payload: JSON.stringify(snapshot), revision },
                 'current'
@@ -211,6 +241,10 @@ try {
   });
   page.on('pageerror', (error) => runtimeIssues.push(`pageerror: ${error.message}`));
 
+  const wasmBrowserResponse = page.waitForResponse(
+    (response) => /\.wasm(?:\?|$)/.test(response.url()),
+    { timeout: 30_000 }
+  );
   await page.goto(`${baseUrl}/`);
   const runtimeMetadata = await page.evaluate(async () => ({
     title: document.title,
@@ -225,19 +259,18 @@ try {
   assert.equal(runtimeMetadata.manifest, '/manifest.webmanifest', 'Netlify runtime manifest bağlantısı beklenen değerde değil.');
   assert.equal(runtimeMetadata.serviceWorkerRegistrations, 0, 'Eski metadata taşıyabilecek kayıtlı service worker bulundu.');
   await page.getByTestId('period-summary').waitFor();
-  const wasmBrowserResponse = page.waitForResponse(
-    (response) => /\.wasm(?:\?|$)/.test(response.url()),
-    { timeout: 30_000 }
-  );
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByTitle('Örnek Veriyi Yeniden Yükle').click();
-  assert.equal((await wasmBrowserResponse).status(), 200, 'Chromium WASM isteği başarılı değil.');
+  await page
+    .getByRole('dialog', { name: 'Örnek Verileri Yeniden Yükle' })
+    .getByRole('button', { name: 'Evet, Örnek Verileri Yükle' })
+    .click();
   await page.getByTestId('nav-personel').click();
   await page.getByText(/4\/D Personel Kayıtları \(5\)/).waitFor();
   await installCalculableFixture(page);
   await page.getByTestId('nav-bordro').click();
   await page.getByTestId('nav-bordro-normal').click();
   await page.getByTestId('calculate-payroll-p-1').click();
+  assert.equal((await wasmBrowserResponse).status(), 200, 'Chromium WASM isteği başarılı değil.');
   await page.getByText(/Ahmet Yılmaz bordrosu başarıyla hesaplandı\./).waitFor();
 
   const snapshot = await readStoredPayroll(page);

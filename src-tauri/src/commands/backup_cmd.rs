@@ -2,8 +2,11 @@ use crate::db::DbState;
 use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use rusqlite::Connection;
 use serde_json::Value;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 fn attach_native_policy_timeline(conn: &Connection, payload_json: &str) -> Result<String, String> {
@@ -22,7 +25,64 @@ fn attach_native_policy_timeline(conn: &Connection, payload_json: &str) -> Resul
 use tauri_plugin_dialog::DialogExt;
 
 fn write_backup_file(path: &Path, payload_json: &str) -> Result<(), String> {
-    fs::write(path, payload_json).map_err(|error| format!("Yedek dosyası yazılamadı: {error}"))
+    write_backup_file_with(path, payload_json.as_bytes(), |file, bytes| {
+        file.write_all(bytes)
+    })
+}
+
+fn write_backup_file_with(
+    path: &Path,
+    payload: &[u8],
+    write_payload: impl FnOnce(&mut File, &[u8]) -> std::io::Result<()>,
+) -> Result<(), String> {
+    static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "Yedek dosyası yazılamadı: dosya adı geçersiz.".to_string())?;
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    for attempt in 0..100_u32 {
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(
+            ".{}.{}.{}.{}.tmp",
+            file_name.to_string_lossy(),
+            std::process::id(),
+            timestamp,
+            counter + u64::from(attempt),
+        ));
+        let mut temp_file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Yedek dosyası yazılamadı: {error}")),
+        };
+
+        let write_result =
+            write_payload(&mut temp_file, payload).and_then(|()| temp_file.sync_all());
+        drop(temp_file);
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("Yedek dosyası yazılamadı: {error}"));
+        }
+
+        if let Err(error) = fs::rename(&temp_path, path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(format!("Yedek dosyası yazılamadı: {error}"));
+        }
+        return Ok(());
+    }
+
+    Err("Yedek dosyası yazılamadı: geçici dosya adı oluşturulamadı.".into())
 }
 
 fn write_excel_file(path: &Path, excel_bytes: &[u8]) -> Result<(), String> {
@@ -126,13 +186,14 @@ pub async fn export_pdf<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        attach_native_policy_timeline, validate_excel_path, write_backup_file, write_excel_file,
-        write_pdf_file,
+        attach_native_policy_timeline, validate_excel_path, write_backup_file,
+        write_backup_file_with, write_excel_file, write_pdf_file,
     };
     use crate::db::create_in_memory_connection;
     use crate::domain::CompensationPolicyVersion;
     use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
     use serde_json::{json, Value};
+    use std::io::Write;
     use std::{fs, path::Path, time::SystemTime};
 
     #[test]
@@ -147,11 +208,47 @@ mod tests {
             std::process::id()
         ));
 
+        fs::write(&path, b"previous-good-backup").expect("previous destination should be written");
         write_backup_file(&path, payload).expect("backup file should be written");
         let saved = fs::read_to_string(&path).expect("written backup should be readable");
         let _ = fs::remove_file(&path);
 
         assert_eq!(saved, payload);
+    }
+
+    #[test]
+    fn failed_atomic_backup_write_preserves_existing_file_and_cleans_temporary_file() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system clock should be after Unix epoch")
+            .as_nanos();
+        let directory = std::env::temp_dir().join(format!(
+            "bordro-backup-atomic-failure-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("test directory should be created");
+        let path = directory.join("existing.json");
+        fs::write(&path, b"previous-good-backup").expect("existing backup should be written");
+
+        let error = write_backup_file_with(&path, b"replacement", |file, _| {
+            file.write_all(b"partial")?;
+            Err(std::io::Error::other("injected disk write failure"))
+        })
+        .expect_err("injected write should fail");
+
+        assert!(error.contains("injected disk write failure"));
+        assert_eq!(
+            fs::read(&path).expect("existing backup must remain readable"),
+            b"previous-good-backup"
+        );
+        assert_eq!(
+            fs::read_dir(&directory)
+                .expect("temporary directory should be readable")
+                .count(),
+            1,
+            "failed temporary backup should be removed"
+        );
+        fs::remove_dir_all(directory).expect("test directory should be removed");
     }
 
     #[test]

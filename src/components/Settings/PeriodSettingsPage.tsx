@@ -387,7 +387,15 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         kurumDegerleriMap,
         newDonem.baslangicTarihi
       );
-      let initialKurum: PayrollPeriodInstitutionSettings | undefined;
+      let initialKurum: PayrollPeriodInstitutionSettings = withVisiblePeriodLegalDefaults(
+        {
+          ...DEFAULT_PRODUCTION_KURUM_DEGERLERI,
+          donemId: newDonem.id,
+          statutoryParameterSegments: [],
+          statutoryParameterSnapshot: undefined,
+        },
+        newDonem.id
+      );
       if (sourcePeriod) {
         const inherited = createParamsForm(kurumDegerleriMap[sourcePeriod.id], sourcePeriod.id);
         initialKurum = withVisiblePeriodLegalDefaults(

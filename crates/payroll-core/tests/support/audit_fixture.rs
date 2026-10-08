@@ -5,7 +5,7 @@ use serde_json::json;
 use std::collections::HashMap;
 
 #[path = "compensation_policy.rs"]
-mod compensation_policy;
+pub mod compensation_policy;
 
 pub fn request() -> PayrollCalculationRequest {
     let mut dataset = PayrollDatasetSnapshot::default();

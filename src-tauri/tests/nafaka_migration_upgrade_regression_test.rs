@@ -88,9 +88,9 @@ fn disk_database_at_previous_latest_version_upgrades_without_losing_personnel(
         initialize_db(&mut conn)?;
 
         let upgraded_version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        assert_eq!(
-            upgraded_version,
-            COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION
+        assert!(
+            upgraded_version >= COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION,
+            "the upgrade must include the compensation-policy flags migration"
         );
         assert!(column_exists(&conn, "nafaka_tutar")?);
 
@@ -127,7 +127,10 @@ fn disk_database_at_previous_latest_version_upgrades_without_losing_personnel(
         let mut reopened = Connection::open(&database.0)?;
         initialize_db(&mut reopened)?;
         let version: u32 = reopened.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        assert_eq!(version, COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION);
+        assert!(
+            version >= COMPENSATION_POLICY_FLAGS_MIGRATION_VERSION,
+            "the reopened database must retain the compensation-policy flags migration"
+        );
         let saved = PersonnelRepository::get_by_id(&reopened, "p-existing")?
             .expect("ikinci açılışta personel korunmalı");
         assert_eq!(
