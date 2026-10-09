@@ -6,8 +6,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { AppViewportFrame } from './components/AppViewportFrame';
-import { PeriodSettingsPage } from './components/Settings/PeriodSettingsPage';
-import { CompensationPolicyPage } from './components/Settings/CompensationPolicyPage';
 import {
   isKesintiTipi,
   isParametreSection,
@@ -18,13 +16,6 @@ import {
   type PayrollViewType,
   type TabType,
 } from './types/navigation';
-import { PersonelList } from './components/PersonelList';
-import { PuantajGrid } from './components/PuantajGrid';
-import { BordroHesaplama } from './components/BordroHesaplama';
-import { GeriyeDonukFarklar } from './components/GeriyeDonukFarklar';
-import { BankaListesi } from './components/Listeler/BankaListesi';
-import { SgkPrimKontrolu } from './components/Listeler/SgkPrimKontrolu';
-import { KesintiListesi } from './components/Listeler/KesintiListesi';
 import {
   BACKUP_FORMAT_VERSION,
   BackupPayload,
@@ -46,13 +37,49 @@ import { useBackupController } from './hooks/useBackupController';
 import { useCompensationPolicyController } from './hooks/useCompensationPolicyController';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { DEFAULT_PRODUCTION_KURUM_DEGERLERI } from './utils/payrollPresentation';
-import { PeriodSummary } from './components/Dashboard/PeriodSummary';
-import { DataBackupPage } from './components/DataBackupPage';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
 import { formatPayrollError } from './components/useBordroCalculationController';
 import { importConfirmedBackupFile } from './services/storage/confirmedBackupImport';
 import { describeError } from './utils/errorMessage';
 import { DEFAULT_IS_PRIMI_GRUPLARI } from './services/storage/payrollDefaults';
+
+const PeriodSettingsPage = React.lazy(() =>
+  import('./components/Settings/PeriodSettingsPage').then((module) => ({
+    default: module.PeriodSettingsPage,
+  }))
+);
+const CompensationPolicyPage = React.lazy(() =>
+  import('./components/Settings/CompensationPolicyPage').then((module) => ({
+    default: module.CompensationPolicyPage,
+  }))
+);
+const PersonelList = React.lazy(() =>
+  import('./components/PersonelList').then((module) => ({ default: module.PersonelList }))
+);
+const PuantajGrid = React.lazy(() =>
+  import('./components/PuantajGrid').then((module) => ({ default: module.PuantajGrid }))
+);
+const BordroHesaplama = React.lazy(() =>
+  import('./components/BordroHesaplama').then((module) => ({ default: module.BordroHesaplama }))
+);
+const GeriyeDonukFarklar = React.lazy(() =>
+  import('./components/GeriyeDonukFarklar').then((module) => ({ default: module.GeriyeDonukFarklar }))
+);
+const BankaListesi = React.lazy(() =>
+  import('./components/Listeler/BankaListesi').then((module) => ({ default: module.BankaListesi }))
+);
+const SgkPrimKontrolu = React.lazy(() =>
+  import('./components/Listeler/SgkPrimKontrolu').then((module) => ({ default: module.SgkPrimKontrolu }))
+);
+const KesintiListesi = React.lazy(() =>
+  import('./components/Listeler/KesintiListesi').then((module) => ({ default: module.KesintiListesi }))
+);
+const PeriodSummary = React.lazy(() =>
+  import('./components/Dashboard/PeriodSummary').then((module) => ({ default: module.PeriodSummary }))
+);
+const DataBackupPage = React.lazy(() =>
+  import('./components/DataBackupPage').then((module) => ({ default: module.DataBackupPage }))
+);
 
 const STORAGE_KEY = '4d_bordro_programi_mvp_v2';
 const ACTIVE_TAB_STORAGE_KEY = '4d_bordro_active_tab';
@@ -789,8 +816,19 @@ export default function App() {
               </div>
             )}
 
-            {isDataLoaded && (
-              <>
+            <React.Suspense
+              fallback={(
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="mx-auto my-16 max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm font-semibold text-slate-600 shadow-sm"
+                >
+                  Ekran yükleniyor…
+                </div>
+              )}
+            >
+              {isDataLoaded && (
+                <>
                 {activeTab === 'personel' && (
                   <PersonelList
                     personeller={personeller}
@@ -972,8 +1010,9 @@ export default function App() {
                     onResetSampleData={() => setIsResetConfirmOpen(true)}
                   />
                 )}
-              </>
-            )}
+                </>
+              )}
+            </React.Suspense>
       </AppViewportFrame>
 
       {pendingBackupFile && (

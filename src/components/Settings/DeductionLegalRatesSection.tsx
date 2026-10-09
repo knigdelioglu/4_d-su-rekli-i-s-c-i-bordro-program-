@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Award, Percent, Plus, Save, ShieldAlert, Trash2, Check } from 'lucide-react';
 import type { BordroDonemi, PayrollPeriodInstitutionSettings } from '../../types/payroll';
 import { formatDateTR, formatTL } from '../../utils/payrollPresentation';
@@ -9,6 +9,18 @@ type StatutoryField =
   | 'pekTavanKatsayisi'
   | 'gunlukYemekIstisnasiSGK'
   | 'gunlukYemekIstisnasiGV';
+
+export type SendikaAidatiYontemi = 'oran' | 'sabit';
+
+export const getSendikaAidatiYontemi = (
+  sabitSendikaAidati: number | null | undefined
+): SendikaAidatiYontemi => ((sabitSendikaAidati ?? 0) > 0 ? 'sabit' : 'oran');
+
+export const applySendikaAidatiYontemi = (
+  params: PayrollPeriodInstitutionSettings,
+  yontem: SendikaAidatiYontemi
+): PayrollPeriodInstitutionSettings =>
+  yontem === 'oran' ? { ...params, sabitSendikaAidati: 0 } : params;
 
 interface DeductionLegalRatesSectionProps {
   aktifDonemId: string;
@@ -40,7 +52,30 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
 
   const sendikaOrani = paramsForm.sendikaAidatiYuzde ?? 65;
   const sabitSendikaAidati = paramsForm.sabitSendikaAidati ?? 0;
-  const sabitSendikaAidatiEtkin = sabitSendikaAidati > 0;
+  const [sabitYontemiTaslakDonemId, setSabitYontemiTaslakDonemId] = useState<string | null>(null);
+  const [sabitTutarHatasi, setSabitTutarHatasi] = useState(false);
+  const sendikaAidatiYontemi =
+    getSendikaAidatiYontemi(sabitSendikaAidati) === 'sabit' ||
+    sabitYontemiTaslakDonemId === aktifDonemId
+      ? 'sabit'
+      : 'oran';
+
+  const selectSendikaAidatiYontemi = (yontem: SendikaAidatiYontemi) => {
+    setSabitYontemiTaslakDonemId(yontem === 'sabit' ? aktifDonemId : null);
+    setSabitTutarHatasi(false);
+    setParamsForm((current) => applySendikaAidatiYontemi(current, yontem));
+  };
+
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    if (sendikaAidatiYontemi === 'sabit' && sabitSendikaAidati <= 0) {
+      event.preventDefault();
+      setSabitTutarHatasi(true);
+      return;
+    }
+
+    setSabitTutarHatasi(false);
+    onSubmit(event);
+  };
 
   const addStatutorySegment = () => {
     setParamsForm((current) => ({
@@ -86,7 +121,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
         </p>
       </header>
 
-      <form onSubmit={onSubmit} className="space-y-5">
+      <form onSubmit={handleSubmit} className="space-y-5">
         <div className="bg-rose-50 border border-rose-100 rounded-xl p-3.5 flex items-start gap-3">
           <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
           <div className="text-xs text-rose-950 leading-relaxed">
@@ -210,45 +245,122 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
           </h3>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Sendika Aidatı — Günlük Çıplak Ücret Oranı (%)
-              </label>
-              <input
-                type="number"
-                step="1"
-                value={paramsForm.sendikaAidatiYuzde ?? 65}
-                onChange={(e) => updateNumber('sendikaAidatiYuzde', parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
-              />
-              <span className="text-[11px] text-slate-500 mt-0.5 block">
-                {sabitSendikaAidatiEtkin
-                  ? 'Sabit tutar kullanılıyor. Oranı değiştirirseniz sabit tutar temizlenir ve oran etkinleşir.'
-                  : `Günlük çıplak ücret × %${sendikaOrani}; ücret, etkin ücret politikası sürümünden alınır.`}
-              </span>
+            <fieldset className="sm:col-span-2 space-y-2">
+              <legend className="block text-xs font-semibold text-slate-700">
+                Sendika aidatı hesaplama yöntemi
+              </legend>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <label
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 cursor-pointer focus-within:ring-2 focus-within:ring-indigo-500 ${
+                    sendikaAidatiYontemi === 'oran'
+                      ? 'border-indigo-400 bg-indigo-50'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="sendikaAidatiYontemi"
+                    value="oran"
+                    checked={sendikaAidatiYontemi === 'oran'}
+                    onChange={() => selectSendikaAidatiYontemi('oran')}
+                    className="mt-0.5 accent-indigo-600"
+                  />
+                  <span>
+                    <span className="block text-xs font-semibold text-slate-800">Oran üzerinden</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-600">
+                      Günlük çıplak ücret × oran; bu seçime geçerken sabit tutar temizlenir.
+                    </span>
+                  </span>
+                </label>
+                <label
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 cursor-pointer focus-within:ring-2 focus-within:ring-indigo-500 ${
+                    sendikaAidatiYontemi === 'sabit'
+                      ? 'border-indigo-400 bg-indigo-50'
+                      : 'border-slate-300 bg-white'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="sendikaAidatiYontemi"
+                    value="sabit"
+                    checked={sendikaAidatiYontemi === 'sabit'}
+                    onChange={() => selectSendikaAidatiYontemi('sabit')}
+                    className="mt-0.5 accent-indigo-600"
+                  />
+                  <span>
+                    <span className="block text-xs font-semibold text-slate-800">Sabit tutar</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-600">
+                      Belirlenen TL / gün tutarı
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+
+            <div className="sm:col-span-2" role="status" aria-live="polite">
+              <p className="text-xs font-semibold text-slate-800">
+                {sendikaAidatiYontemi === 'sabit'
+                  ? sabitSendikaAidati > 0
+                    ? `Kurum genelinde uygulanan yöntem: Sabit tutar — ${formatTL(sabitSendikaAidati)} / gün.`
+                    : 'Kurum genelinde sabit yöntem seçildi; günlük tutarı girin.'
+                  : `Kurum genelinde uygulanan yöntem: Oran — günlük çıplak ücret × %${sendikaOrani}.`}
+              </p>
+              <p className="mt-0.5 text-[11px] text-slate-500">
+                Personel kartında kişiye özel sabit aidat varsa, o tutar bu kurum ayarından önce uygulanır.
+              </p>
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Genel Sabit Sendika Aidatı Tutarı (TL) (Opsiyonel Maktu)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={sabitSendikaAidati}
-                onChange={(e) => updateNumber('sabitSendikaAidati', parseFloat(e.target.value) || 0)}
-                placeholder="0.00"
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
-              />
-              <span className="text-[11px] text-slate-500 mt-0.5 block">
-                0 kalırsa oran etkin ücret politikası sürümündeki günlük çıplak ücrete uygulanır.
-              </span>
-              {sabitSendikaAidatiEtkin && (
-                <span className="text-[11px] text-amber-700 mt-1 block">
-                  Sabit tutar {formatTL(sabitSendikaAidati)} / gün olarak girilmiş; oran hesabı devre dışı.
+            {sendikaAidatiYontemi === 'oran' ? (
+              <div className="sm:col-span-2 sm:max-w-xl">
+                <label htmlFor="sendika-aidati-orani" className="block text-xs font-semibold text-slate-700 mb-1">
+                  Günlük Çıplak Ücret Oranı (%)
+                </label>
+                <input
+                  id="sendika-aidati-orani"
+                  type="number"
+                  step="1"
+                  value={paramsForm.sendikaAidatiYuzde ?? 65}
+                  onChange={(e) => updateNumber('sendikaAidatiYuzde', parseFloat(e.target.value) || 0)}
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
+                />
+                <span className="text-[11px] text-slate-500 mt-0.5 block">
+                  Günlük çıplak ücret, etkin ücret politikası sürümünden alınır.
                 </span>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="sm:col-span-2 sm:max-w-xl">
+                <label htmlFor="sendika-aidati-sabit-tutar" className="block text-xs font-semibold text-slate-700 mb-1">
+                  Günlük Sabit Sendika Aidatı (TL / gün)
+                </label>
+                <input
+                  id="sendika-aidati-sabit-tutar"
+                  type="number"
+                  step="0.01"
+                  value={sabitSendikaAidati}
+                  onChange={(e) => {
+                    const tutar = parseFloat(e.target.value) || 0;
+                    setSabitYontemiTaslakDonemId(aktifDonemId);
+                    updateNumber('sabitSendikaAidati', tutar);
+                    if (tutar > 0) setSabitTutarHatasi(false);
+                  }}
+                  aria-invalid={sabitTutarHatasi}
+                  aria-describedby={
+                    sabitTutarHatasi
+                      ? 'sendika-aidati-sabit-yardim sendika-aidati-sabit-hata'
+                      : 'sendika-aidati-sabit-yardim'
+                  }
+                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-rose-500"
+                />
+                <span id="sendika-aidati-sabit-yardim" className="text-[11px] text-slate-500 mt-0.5 block">
+                  Bu tutar, kişi kartında özel sabit aidat tanımlanmayan sendika üyeleri için geçerlidir.
+                </span>
+                {sabitTutarHatasi && (
+                  <span id="sendika-aidati-sabit-hata" role="alert" className="text-[11px] text-rose-700 mt-1 block">
+                    Sabit yöntem için 0’dan büyük günlük bir tutar girin.
+                  </span>
+                )}
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">

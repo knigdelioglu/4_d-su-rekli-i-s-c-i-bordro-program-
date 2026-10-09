@@ -17,6 +17,7 @@ const RETRY_HOURS: i64 = 6;
 const CHECK_LOOP_SECONDS: u64 = 60;
 const LICENSE_STATE_FILE: &str = "license-state.json";
 const DEVICE_ID_FILE: &str = "license-device-id";
+const LEGACY_BUNDLE_IDENTIFIER: &str = "com.bordro.app";
 const PUBLIC_KEYS: &str = include_str!("../license-public-keys.json");
 const KEYRING_SERVICE: &str = "4d-bordro-license";
 
@@ -250,7 +251,47 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<LicenseRuntime, Stri
         .path()
         .app_local_data_dir()
         .map_err(|_| "Yerel lisans dizinine erişilemedi.".to_string())?;
+    migrate_legacy_license_data(&path)?;
     Ok(LicenseRuntime { data_dir: path })
+}
+
+fn migrate_legacy_license_data(new_dir: &Path) -> Result<(), String> {
+    // A changed bundle identifier changes Tauri's app-local data directory.
+    // Preserve existing license state on upgrade while leaving the old copy
+    // intact for rollback to a build using the previous identifier.
+    if state_path(new_dir).exists() {
+        return Ok(());
+    }
+
+    let Some(parent) = new_dir.parent() else {
+        return Ok(());
+    };
+    let legacy_dir = parent.join(LEGACY_BUNDLE_IDENTIFIER);
+    if !legacy_dir.is_dir() || legacy_dir == new_dir {
+        return Ok(());
+    }
+
+    let device_id = legacy_dir.join(DEVICE_ID_FILE);
+    let license_state = legacy_dir.join(LICENSE_STATE_FILE);
+    let mut migrated_any = false;
+    for source in [&device_id, &license_state] {
+        let bytes = match fs::read(source) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => return Err("Önceki uygulama kimliğindeki lisans kaydı okunamadı.".into()),
+        };
+        if !migrated_any {
+            fs::create_dir_all(new_dir)
+                .map_err(|_| "Yeni yerel lisans dizini oluşturulamadı.".to_string())?;
+            migrated_any = true;
+        }
+        let file_name = source
+            .file_name()
+            .ok_or_else(|| "Lisans dosyası adı geçersiz.".to_string())?;
+        write_private_file(&new_dir.join(file_name), &bytes)?;
+    }
+
+    Ok(())
 }
 
 fn ensure_data_dir(path: &Path) -> Result<(), String> {
