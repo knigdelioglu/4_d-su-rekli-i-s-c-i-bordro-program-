@@ -150,9 +150,6 @@ export function useBackupController({
         return;
       }
 
-      if (isDataLoaded) {
-        await evaluateBrowserMutations({ kind: 'ALL' });
-      }
       await browserPersistence.savePayload(serializePayrollStorage(payload));
       commitBrowserPayload(payload);
       onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
@@ -192,9 +189,6 @@ export function useBackupController({
       retroAllocations: [],
     });
     try {
-      if (isDataLoaded) {
-        await evaluateBrowserMutations({ kind: 'ALL' });
-      }
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await reloadPersistedBackup(loadData);
@@ -255,9 +249,6 @@ export function useBackupController({
         await validatePayrollMetadataThroughCore(payload);
         if (hasV5Authority) {
           await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
-        }
-        if (isDataLoaded) {
-          await evaluateBrowserMutations({ kind: 'ALL' });
         }
         // Import is a user-visible commit point. Verify the IndexedDB write
         // before replacing the in-memory dataset or announcing success.

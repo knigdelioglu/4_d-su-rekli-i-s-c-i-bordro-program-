@@ -175,26 +175,39 @@ impl TaxOpeningRepository {
             )));
         }
 
-        let impact = PayrollInvalidationRepository::assert_mutation_allowed(
-            conn,
-            &payroll_core::PayrollMutation::PersonTaxYear {
-                personnelId: t.personnelId.clone(),
-                taxYear: t.year,
-            },
-        )?;
         let existing = Self::get_by_personnel_and_year(conn, &t.personnelId, t.year)?;
-        let changed = existing
-            .as_ref()
-            .map(|old| {
-                old.gvCumulativeOpening != t.gvCumulativeOpening
-                    || old.effectiveFromPeriodId != t.effectiveFromPeriodId
-                    || old.asgariGvCumulativeOpening != t.asgariGvCumulativeOpening
-                    || old.asgariGvEffectiveFromPeriodId != t.asgariGvEffectiveFromPeriodId
-            })
-            .unwrap_or(true);
-        let now = Utc::now().to_rfc3339();
         let opening_kurus = opt_money_to_kurus(t.gvCumulativeOpening)?;
         let asgari_opening_kurus = opt_money_to_kurus(t.asgariGvCumulativeOpening)?;
+
+        let changed = match &existing {
+            Some(old) => {
+                let old_opening_kurus = opt_money_to_kurus(old.gvCumulativeOpening)?;
+                let old_asgari_kurus = opt_money_to_kurus(old.asgariGvCumulativeOpening)?;
+                old_opening_kurus != opening_kurus
+                    || old.effectiveFromPeriodId != t.effectiveFromPeriodId
+                    || old_asgari_kurus != asgari_opening_kurus
+                    || old.asgariGvEffectiveFromPeriodId != t.asgariGvEffectiveFromPeriodId
+            }
+            None => {
+                opening_kurus.unwrap_or(0) > 0
+                    || t.effectiveFromPeriodId.is_some()
+                    || asgari_opening_kurus.unwrap_or(0) > 0
+                    || t.asgariGvEffectiveFromPeriodId.is_some()
+            }
+        };
+
+        let impact = if changed {
+            Some(PayrollInvalidationRepository::assert_mutation_allowed(
+                conn,
+                &payroll_core::PayrollMutation::PersonTaxYear {
+                    personnelId: t.personnelId.clone(),
+                    taxYear: t.year,
+                },
+            )?)
+        } else {
+            None
+        };
+        let now = Utc::now().to_rfc3339();
 
         conn.execute(
             "INSERT INTO personnel_tax_opening (
@@ -222,7 +235,7 @@ impl TaxOpeningRepository {
         )
         .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
 
-        if changed {
+        if let Some(impact) = impact {
             PayrollInvalidationRepository::apply_impact(conn, &impact)?;
         }
 

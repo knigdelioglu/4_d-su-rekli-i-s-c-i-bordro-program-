@@ -18,6 +18,40 @@ impl PeriodService {
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
         let period = PeriodRepository::get_by_id(&tx, period_id)?
             .ok_or_else(|| DomainError::ValidationError("Silinecek dönem bulunamadı.".into()))?;
+        let db_error = |e: rusqlite::Error| DomainError::DatabaseError(e.to_string());
+
+        // 1. Guard against deleting a period containing FINALIZED payrolls
+        let finalized_count: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM payroll_records WHERE period_id = ?1 AND status = 'FINALIZED'",
+                [period_id],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        if finalized_count > 0 {
+            return Err(DomainError::PayrollFinalized(
+                "Kesinleştirilmiş (FINALIZED) bordro içeren dönem silinemez.".into(),
+            ));
+        }
+
+        // 2. Guard against deleting a period containing FINALIZED retro batches
+        let finalized_retro_count: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM retro_adjustment_batches rb
+                 WHERE rb.status = 'FINALIZED' AND (
+                     EXISTS (SELECT 1 FROM retro_adjustment_allocations ra WHERE ra.batch_id = rb.id AND ra.source_period_id = ?1)
+                     OR EXISTS (SELECT 1 FROM payroll_records pr WHERE pr.period_id = ?1 AND pr.accrual_id = rb.id)
+                 )",
+                [period_id],
+                |r| r.get(0),
+            )
+            .map_err(db_error)?;
+        if finalized_retro_count > 0 {
+            return Err(DomainError::PayrollFinalized(
+                "Kesinleştirilmiş (FINALIZED) geriye dönük fark içeren dönem silinemez.".into(),
+            ));
+        }
+
         let impact = PayrollInvalidationRepository::evaluate_mutation(
             &tx,
             &payroll_core::PayrollMutation::PeriodFromPosition {
@@ -26,9 +60,15 @@ impl PeriodService {
                 taxMonth: period.taxMonth,
             },
         )?;
-        let db_error = |e: rusqlite::Error| DomainError::DatabaseError(e.to_string());
+
+        // 3. Guard against invalidating downstream FINALIZED records
+        if !impact.blockedByFinalized.is_empty() || !impact.blockedByFinalizedRetroBatches.is_empty() {
+            return Err(DomainError::PayrollFinalized(
+                "Dönem silme işlemi sonraki kesinleştirilmiş bordro veya retro kayıtlarını etkilediği için izin verilmez.".into(),
+            ));
+        }
+
         let mut batches = impact.affectedRetroBatches;
-        batches.extend(impact.blockedByFinalizedRetroBatches);
         {
             let mut stmt = tx.prepare("SELECT batch_id FROM retro_adjustment_allocations WHERE source_period_id = ?1
                 UNION SELECT accrual_id FROM payroll_records WHERE period_id = ?1 AND accrual_type = 'RETRO_ADJUSTMENT'").map_err(db_error)?;
@@ -41,24 +81,20 @@ impl PeriodService {
         }
         for batch in batches {
             tx.execute(
-                "DELETE FROM payroll_records WHERE accrual_id = ?1",
+                "DELETE FROM payroll_records WHERE accrual_id = ?1 AND status != 'FINALIZED'",
                 [&batch],
             )
             .map_err(db_error)?;
             tx.execute(
-                "DELETE FROM retro_adjustment_batches WHERE id = ?1",
+                "DELETE FROM retro_adjustment_batches WHERE id = ?1 AND status != 'FINALIZED'",
                 [&batch],
             )
             .map_err(db_error)?;
         }
-        for key in impact
-            .affectedPayrolls
-            .iter()
-            .chain(impact.blockedByFinalized.iter())
-        {
+        for key in &impact.affectedPayrolls {
             tx.execute(
                 "UPDATE payroll_records SET status = 'STALE', updated_at = ?1
-                WHERE personnel_id = ?2 AND period_id = ?3 AND accrual_id = ?4",
+                WHERE personnel_id = ?2 AND period_id = ?3 AND accrual_id = ?4 AND status != 'FINALIZED'",
                 params![
                     chrono::Utc::now().to_rfc3339(),
                     key.personnelId,

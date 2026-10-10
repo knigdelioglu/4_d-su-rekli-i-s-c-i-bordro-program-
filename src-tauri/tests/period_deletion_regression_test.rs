@@ -1,5 +1,6 @@
 use bordro_programi_lib::db::create_in_memory_connection;
 use bordro_programi_lib::domain::models::*;
+use bordro_programi_lib::domain::DomainError;
 use bordro_programi_lib::repositories::{
     attendance_repo::AttendanceRepository, payroll_repo::PayrollRepository,
     period_repo::PeriodRepository, personnel_repo::PersonnelRepository,
@@ -118,7 +119,7 @@ fn setup() -> rusqlite::Connection {
 }
 
 #[test]
-fn delete_finalized_period_cascades_and_invalidates_later_finalized_payroll() {
+fn delete_finalized_period_is_rejected_and_preserves_finalized_history() {
     let mut conn = setup();
     for id in ["2026-01", "2026-02"] {
         PayrollService::calculate_payroll_for_personnel(&conn, "p1", id).unwrap();
@@ -126,6 +127,28 @@ fn delete_finalized_period_cascades_and_invalidates_later_finalized_payroll() {
     }
     SettingsRepository::set_app_setting(&conn, "active_period_id", "2026-01").unwrap();
     conn.execute("INSERT INTO personnel_tax_opening (id, personnel_id, year, gv_cumulative_opening, effective_from_period_id, created_at, updated_at) VALUES ('opening', 'p1', 2026, 0, '2026-01', '', '')", []).unwrap();
+
+    let err = PeriodService::delete_period(&mut conn, "2026-01").unwrap_err();
+    assert!(matches!(err, DomainError::PayrollFinalized(_)));
+
+    assert!(PeriodRepository::get_by_id(&conn, "2026-01")
+        .unwrap()
+        .is_some());
+    let payrolls = PayrollRepository::get_all(&conn).unwrap();
+    assert_eq!(payrolls.len(), 2);
+    assert_eq!(payrolls[0].status, BordroStatus::FINALIZED);
+    assert_eq!(payrolls[1].status, BordroStatus::FINALIZED);
+}
+
+#[test]
+fn delete_draft_period_cascades_and_invalidates_later_calculated_payroll() {
+    let mut conn = setup();
+    for id in ["2026-01", "2026-02"] {
+        PayrollService::calculate_payroll_for_personnel(&conn, "p1", id).unwrap();
+    }
+    SettingsRepository::set_app_setting(&conn, "active_period_id", "2026-01").unwrap();
+    conn.execute("INSERT INTO personnel_tax_opening (id, personnel_id, year, gv_cumulative_opening, effective_from_period_id, created_at, updated_at) VALUES ('opening', 'p1', 2026, 0, '2026-01', '', '')", []).unwrap();
+
     PeriodService::delete_period(&mut conn, "2026-01").unwrap();
     assert!(PeriodRepository::get_by_id(&conn, "2026-01")
         .unwrap()

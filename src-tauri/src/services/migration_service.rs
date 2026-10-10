@@ -2018,16 +2018,11 @@ impl MigrationService {
     }
 
     /// Kullanıcı tarafından çağrılan import/reset akışı: mevcut domain verisini
-    /// aynı transaction içinde siler ve yedek içeriğini eksiksiz yükler.
+    /// aynı transaction içinde siler ve doğrulanmış yedek içeriğini eksiksiz yükler.
+    /// Tam veri kurtarma (disaster recovery) işlemi olduğu için mevcut tablodaki
+    /// FINALIZED kayıtlar doğrulanmış bir yedeğin geri yüklenmesini engellemez.
     pub fn replace_backup_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
         let payload = Self::parse_payload(payload_json)?;
-        // Keep the native bulk-replace path aligned with the browser's
-        // core-owned `ALL` mutation policy. A confirmed UI reset/import still
-        // cannot delete or replace an existing FINALIZED ledger.
-        PayrollInvalidationRepository::assert_mutation_allowed(
-            conn,
-            &payroll_core::PayrollMutation::All,
-        )?;
         let tx = conn
             .transaction()
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;

@@ -1,7 +1,14 @@
 use crate::db::DbState;
+use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
+use crate::repositories::attendance_repo::AttendanceRepository;
 use crate::repositories::compensation_policy_repo::CompensationPolicyRepository;
+use crate::repositories::payroll_repo::PayrollRepository;
+use crate::repositories::period_repo::PeriodRepository;
+use crate::repositories::personnel_repo::PersonnelRepository;
+use crate::repositories::settings_repo::SettingsRepository;
+use crate::repositories::sick_leave_repo::SickLeaveRepository;
+use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use rusqlite::Connection;
-use serde_json::Value;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -9,10 +16,81 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
+pub fn export_authoritative_sqlite_backup(conn: &Connection) -> Result<String, String> {
+    let periods = PeriodRepository::get_all(conn)
+        .map_err(|error| format!("Dönemler okunamadı: {error}"))?;
+    let active_period_id = SettingsRepository::get_app_setting(conn, "active_period_id")
+        .map_err(|error| format!("Aktif dönem okunamadı: {error}"))?
+        .unwrap_or_default();
+    let personnel = PersonnelRepository::get_all(conn)
+        .map_err(|error| format!("Personeller okunamadı: {error}"))?;
+    let institution_settings = SettingsRepository::get_all_institution_settings(conn)
+        .map_err(|error| format!("Kurum ayarları okunamadı: {error}"))?;
+    let attendances = AttendanceRepository::get_all(conn)
+        .map_err(|error| format!("Puantajlar okunamadı: {error}"))?;
+    let payrolls = PayrollRepository::get_all(conn)
+        .map_err(|error| format!("Bordrolar okunamadı: {error}"))?;
+    let tax_openings = TaxOpeningRepository::get_all(conn)
+        .map_err(|error| format!("Kümülatif vergi matrahları okunamadı: {error}"))?;
+    let sick_leave_records = SickLeaveRepository::get_all(conn)
+        .map_err(|error| format!("Rapor kayıtları okunamadı: {error}"))?;
+    let annual_payroll_parameters = AnnualPayrollParametersRepository::get_all(conn)
+        .map_err(|error| format!("Yıllık parametreler okunamadı: {error}"))?;
+    let compensation_revisions = crate::repositories::retro_repo::get_revisions(conn)
+        .map_err(|error| format!("Retro revizyonları okunamadı: {error}"))?;
+    let compensation_revision_overrides = crate::repositories::retro_repo::get_overrides(conn)
+        .map_err(|error| format!("Retro revizyon istisnaları okunamadı: {error}"))?;
+    let retro_batches = crate::repositories::retro_repo::get_batches(conn)
+        .map_err(|error| format!("Retro paketleri okunamadı: {error}"))?;
+    let retro_allocations = crate::repositories::retro_repo::get_allocations(conn)
+        .map_err(|error| format!("Retro dağılımları okunamadı: {error}"))?;
+    let compensation_policy_versions = CompensationPolicyRepository::get_all_versions(conn)
+        .map_err(|error| format!("Ücret politikası sürümleri okunamadı: {error}"))?;
+    let is_primi_gruplari: Vec<payroll_core::IsPrimiGrupItem> = match SettingsRepository::get_app_setting(conn, "is_primi_gruplari")
+        .map_err(|error| format!("İş primi grupları okunamadı: {error}"))? {
+        Some(val) => serde_json::from_str(&val).unwrap_or_default(),
+        None => compensation_policy_versions
+            .iter()
+            .max_by(|a, b| a.effectiveFrom.cmp(&b.effectiveFrom).then_with(|| a.createdAt.cmp(&b.createdAt)))
+            .map(|v| v.state.isPrimiGruplari.iter().map(|g| payroll_core::IsPrimiGrupItem {
+                id: g.id.clone(),
+                ad: g.ad.clone(),
+                oran: g.oran,
+                aktif: g.aktif,
+            }).collect())
+            .unwrap_or_default(),
+    };
+    let exported_at = chrono::Utc::now().to_rfc3339();
+
+    let payload = serde_json::json!({
+        "backupVersion": 6,
+        "exportedAt": exported_at,
+        "donemler": periods,
+        "aktifDonemId": active_period_id,
+        "personeller": personnel,
+        "kurumDegerleriMap": institution_settings,
+        "puantajlar": attendances,
+        "bordrolar": payrolls,
+        "taxOpenings": tax_openings,
+        "sickLeaveRecords": sick_leave_records,
+        "annualPayrollParameters": annual_payroll_parameters,
+        "compensationRevisions": compensation_revisions,
+        "compensationRevisionOverrides": compensation_revision_overrides,
+        "retroBatches": retro_batches,
+        "retroAllocations": retro_allocations,
+        "compensationPolicyVersions": compensation_policy_versions,
+        "isPrimiGruplari": is_primi_gruplari,
+    });
+
+    serde_json::to_string_pretty(&payload)
+        .map_err(|error| format!("V6 yedek JSON'u üretilemedi: {error}"))
+}
+
+#[cfg(test)]
 fn attach_native_policy_timeline(conn: &Connection, payload_json: &str) -> Result<String, String> {
-    let mut payload: Value = serde_json::from_str(payload_json)
+    let mut payload: serde_json::Value = serde_json::from_str(payload_json)
         .map_err(|error| format!("Yedek payload JSON olarak okunamadı: {error}"))?;
-    if payload.get("backupVersion").and_then(Value::as_u64) != Some(6) {
+    if payload.get("backupVersion").and_then(serde_json::Value::as_u64) != Some(6) {
         return Err("Native yedek dışa aktarımı V6 payload gerektirir.".into());
     }
     let versions = CompensationPolicyRepository::get_all_versions(conn)
@@ -108,7 +186,7 @@ fn write_pdf_file(path: &Path, pdf_bytes: &[u8]) -> Result<(), String> {
 pub async fn export_backup<R: tauri::Runtime>(
     window: tauri::WebviewWindow<R>,
     db: State<'_, DbState>,
-    payload_json: String,
+    _payload_json: String,
     file_name: String,
 ) -> Result<bool, String> {
     let Some(file_path) = window
@@ -129,7 +207,7 @@ pub async fn export_backup<R: tauri::Runtime>(
         let conn = db
             .lock()
             .map_err(|error| format!("SQLite bağlantı kilidi alınamadı: {error}"))?;
-        attach_native_policy_timeline(&conn, &payload_json)?
+        export_authoritative_sqlite_backup(&conn)?
     };
     write_backup_file(&path, &payload_json)?;
     Ok(true)
@@ -392,5 +470,120 @@ mod tests {
         let error = write_pdf_file(&path.join("document.pdf"), b"%PDF")
             .expect_err("writing into a missing directory should fail");
         assert!(error.starts_with("PDF dosyası yazılamadı:"));
+    }
+
+    #[test]
+    fn native_backup_export_is_produced_solely_from_authoritative_sqlite_snapshot() {
+        let source = create_in_memory_connection().expect("in-memory source DB should migrate");
+
+        let period = crate::domain::BordroDonemi {
+            id: "2026-01".into(),
+            yil: 2026,
+            ay: 1,
+            baslangicTarihi: "2026-01-15".into(),
+            bitisTarihi: "2026-02-14".into(),
+            donemAdi: "Ocak 2026".into(),
+            taxYear: 2026,
+            taxMonth: 1,
+        };
+        crate::repositories::period_repo::PeriodRepository::save(&source, &period)
+            .expect("period should persist");
+        crate::repositories::settings_repo::SettingsRepository::set_app_setting(
+            &source,
+            "active_period_id",
+            "2026-01",
+        )
+        .expect("active period setting should persist");
+
+        let person = crate::domain::Personel {
+            id: "person-native-backup".into(),
+            tcNo: "11111111110".into(),
+            ad: "Ahmet".into(),
+            soyad: "Kaya".into(),
+            grup: "1. Grup".into(),
+            unvan: None,
+            sgkSicilNo: "12345".into(),
+            iban: "TR000000000000000000000000".into(),
+            hizmetYili: 3,
+            aciklama: None,
+            devirKumulatifGvMatrahi: None,
+            devirKumulatifGvMatrahiYili: None,
+            devirKumulatifGvMatrahiBaslangicAyi: None,
+            devirKumulatifAsgariGvMatrahi: None,
+            devirKumulatifAsgariGvMatrahiYili: None,
+            kesintiler: None,
+        };
+        crate::repositories::personnel_repo::PersonnelRepository::save(&source, &person)
+            .expect("person should persist");
+
+        let version: CompensationPolicyVersion = serde_json::from_value(json!({
+            "id": "policy-native-export",
+            "effectiveFrom": "2026-01-01",
+            "state": {
+                "gunlukTabanUcret": "1500",
+                "gunlukYemek": "100",
+                "birlestirilmisSosyalYardim": "500",
+                "gunlukVasitaYol": "50",
+                "giyimYardimi": "0",
+                "hizmetZammiBirimi": "0",
+                "isPrimiYuzde": null,
+                "isPrimiGruplari": [{"id":"g1","ad":"Grup 1","oran":"10","aktif":true}],
+                "geceCalismaPrimiYuzde": "0",
+                "geceCalismaTatiliPrimiYuzde": "0",
+                "ekOdeme": null,
+                "digerGelirVarsayilan": "0"
+            },
+            "boundaryScope": "FULL_EARNING",
+            "roadRoundingMode": "PER_COMPENSATION_SLICE",
+            "createdAt": "2026-01-01T00:00:00Z",
+            "source": "user-confirmed",
+            "reason": "initial baseline",
+            "supersedesVersionId": null
+        }))
+        .expect("policy model deserializes");
+        CompensationPolicyRepository::insert_version(&source, &version)
+            .expect("policy version should persist");
+
+        crate::repositories::settings_repo::SettingsRepository::set_app_setting(
+            &source,
+            "is_primi_gruplari",
+            r#"[{"id":"g1","ad":"Grup 1","oran":"10","aktif":true}]"#,
+        )
+        .expect("work premium groups setting should persist");
+
+        let exported_json = super::export_authoritative_sqlite_backup(&source)
+            .expect("authoritative export should succeed");
+
+        let exported_value: Value = serde_json::from_str(&exported_json)
+            .expect("exported JSON should be valid");
+
+        assert_eq!(exported_value["backupVersion"], 6);
+        assert_eq!(exported_value["aktifDonemId"], "2026-01");
+        assert_eq!(exported_value["personeller"][0]["id"], "person-native-backup");
+        assert_eq!(exported_value["compensationPolicyVersions"][0]["id"], "policy-native-export");
+        assert_eq!(exported_value["isPrimiGruplari"][0]["id"], "g1");
+
+        // Verify that the exported authoritative payload round-trips into a fresh database
+        let mut target = create_in_memory_connection().expect("in-memory target DB should migrate");
+        crate::services::migration_service::MigrationService::replace_backup_data(
+            &mut target,
+            &exported_json,
+        )
+        .expect("exported authoritative backup should restore cleanly into target DB");
+
+        assert_eq!(
+            crate::repositories::personnel_repo::PersonnelRepository::get_by_id(
+                &target,
+                "person-native-backup",
+            )
+            .unwrap()
+            .unwrap()
+            .ad,
+            "Ahmet"
+        );
+        assert_eq!(
+            CompensationPolicyRepository::get_all_versions(&target).unwrap()[0].id,
+            "policy-native-export"
+        );
     }
 }

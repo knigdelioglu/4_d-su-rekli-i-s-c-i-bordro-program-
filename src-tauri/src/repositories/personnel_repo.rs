@@ -111,11 +111,28 @@ impl PersonnelRepository {
         .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))
     }
 
+    pub fn get_existing_financial_status(conn: &Connection, id: &str, new_p: &Personel) -> Result<bool> {
+        if let Ok(Some(existing_p)) = Self::get_by_id(conn, id) {
+            return Ok(payroll_core::personnel_has_financial_changes(&existing_p, new_p));
+        }
+        let legacy = conn
+            .query_row(
+                "SELECT grup, hizmet_yili FROM personnel WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i32>(1)?)),
+            )
+            .optional()
+            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        if let Some((old_grup, old_hizmet)) = legacy {
+            if old_grup != new_p.grup || old_hizmet != new_p.hizmetYili {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     pub fn save(conn: &Connection, p: &Personel) -> Result<()> {
         with_transaction(conn, |tx| {
-            // Do not load the full row here: the write method intentionally
-            // supports pre-devir SQLite fixtures whose newer columns do not
-            // exist yet.
             let existing = tx
                 .query_row(
                     "SELECT 1 FROM personnel WHERE id = ?1",
@@ -125,7 +142,8 @@ impl PersonnelRepository {
                 .optional()
                 .map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))?
                 .is_some();
-            let impact = existing
+            let has_financial_change = existing && Self::get_existing_financial_status(tx, &p.id, p)?;
+            let impact = has_financial_change
                 .then(|| {
                     PayrollInvalidationRepository::assert_mutation_allowed(
                         tx,

@@ -77,3 +77,114 @@ export function applyBrowserPayrollImpact<T extends {
       : payroll
   );
 }
+
+function parseNumeric(v?: number | string | null): number {
+  if (v === null || v === undefined) return 0;
+  if (typeof v === 'number') return v;
+  const parsed = Number(v);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function optNumberEqualsOrZero(a?: number | string | null, b?: number | string | null): boolean {
+  const v1 = parseNumeric(a);
+  const v2 = parseNumeric(b);
+  return Math.abs(v1 - v2) < 0.000001;
+}
+
+function optBoolEqualsOrFalse(a?: boolean | null, b?: boolean | null): boolean {
+  return (a ?? false) === (b ?? false);
+}
+
+function kesintilerHaveFinancialChanges(
+  a?: any | null,
+  b?: any | null
+): boolean {
+  const k1 = a ?? {};
+  const k2 = b ?? {};
+  if (!optBoolEqualsOrFalse(k1.sendikaUyesi, k2.sendikaUyesi)) return true;
+  if (!optNumberEqualsOrZero(k1.sabitSendikaAidati, k2.sabitSendikaAidati)) return true;
+  if (!optBoolEqualsOrFalse(k1.besUyesi, k2.besUyesi)) return true;
+  if (!optNumberEqualsOrZero(k1.oksOraniYuzde, k2.oksOraniYuzde)) return true;
+  if (!optNumberEqualsOrZero(k1.sabitBesTutar, k2.sabitBesTutar)) return true;
+  if (!optNumberEqualsOrZero(k1.icraTutar, k2.icraTutar)) return true;
+  if (!optNumberEqualsOrZero(k1.nafakaTutar, k2.nafakaTutar)) return true;
+  if (!optNumberEqualsOrZero(k1.kisiBorcuTutar, k2.kisiBorcuTutar)) return true;
+  if (!optNumberEqualsOrZero(k1.dogumAskerlikBorclanmasiTutar, k2.dogumAskerlikBorclanmasiTutar)) return true;
+  if (!optNumberEqualsOrZero(k1.hayatSaglikSigortasiTutar, k2.hayatSaglikSigortasiTutar)) return true;
+  if (!optNumberEqualsOrZero(k1.digerKesintiTutar, k2.digerKesintiTutar)) return true;
+
+  const g1 = k1.gvIndirimleri ?? {};
+  const g2 = k2.gvIndirimleri ?? {};
+  if (!optNumberEqualsOrZero(g1.dogumAskerlikGvIndirimTutar, g2.dogumAskerlikGvIndirimTutar)) return true;
+  if (!optNumberEqualsOrZero(g1.hayatSigortasiPrimiTutar, g2.hayatSigortasiPrimiTutar)) return true;
+  if (!optNumberEqualsOrZero(g1.saglikSigortasiPrimiTutar, g2.saglikSigortasiPrimiTutar)) return true;
+
+  return false;
+}
+
+export function personnelHasFinancialChanges(
+  current: any,
+  updated: any
+): boolean {
+  return (
+    current.grup !== updated.grup ||
+    (current.hizmetYili ?? 0) !== (updated.hizmetYili ?? 0) ||
+    !optNumberEqualsOrZero(current.devirKumulatifGvMatrahi, updated.devirKumulatifGvMatrahi) ||
+    (current.devirKumulatifGvMatrahiYili ?? null) !== (updated.devirKumulatifGvMatrahiYili ?? null) ||
+    (current.devirKumulatifGvMatrahiBaslangicAyi ?? null) !== (updated.devirKumulatifGvMatrahiBaslangicAyi ?? null) ||
+    !optNumberEqualsOrZero(current.devirKumulatifAsgariGvMatrahi, updated.devirKumulatifAsgariGvMatrahi) ||
+    (current.devirKumulatifAsgariGvMatrahiYili ?? null) !== (updated.devirKumulatifAsgariGvMatrahiYili ?? null) ||
+    kesintilerHaveFinancialChanges(current.kesintiler, updated.kesintiler)
+  );
+}
+
+export function taxOpeningHasFinancialChanges(
+  current?: any | null,
+  updated?: any | null
+): boolean {
+  if (!current && !updated) return false;
+  if (!current && updated) {
+    return (
+      parseNumeric(updated.gvCumulativeOpening) > 0 ||
+      Boolean(updated.effectiveFromPeriodId) ||
+      parseNumeric(updated.asgariGvCumulativeOpening) > 0 ||
+      Boolean(updated.asgariGvEffectiveFromPeriodId)
+    );
+  }
+  if (current && !updated) {
+    return (
+      parseNumeric(current.gvCumulativeOpening) > 0 ||
+      Boolean(current.effectiveFromPeriodId) ||
+      parseNumeric(current.asgariGvCumulativeOpening) > 0 ||
+      Boolean(current.asgariGvEffectiveFromPeriodId)
+    );
+  }
+  return (
+    !optNumberEqualsOrZero(current.gvCumulativeOpening, updated.gvCumulativeOpening) ||
+    (current.effectiveFromPeriodId ?? null) !== (updated.effectiveFromPeriodId ?? null) ||
+    !optNumberEqualsOrZero(current.asgariGvCumulativeOpening, updated.asgariGvCumulativeOpening) ||
+    (current.asgariGvEffectiveFromPeriodId ?? null) !== (updated.asgariGvEffectiveFromPeriodId ?? null)
+  );
+}
+
+export function validatePayrollStatusTransition(current: string, next: string): void {
+  if (next === 'FINALIZED') {
+    throw new Error("FINALIZED geçişi için finalize_payroll API'si kullanılmalıdır.");
+  }
+  if (current === next) return;
+  if (current === 'FINALIZED') {
+    throw new Error('Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.');
+  }
+  if (current === 'STALE' && next === 'CALCULATED') {
+    throw new Error(
+      'Yeniden hesaplanmamış STALE kayıt doğrudan CALCULATED yapılamaz; bordro yeniden hesaplanmalıdır.'
+    );
+  }
+  if (current === 'DRAFT' && next === 'CALCULATED') {
+    throw new Error(
+      'DRAFT kayıt doğrudan CALCULATED yapılamaz; bordro hesaplanmalıdır.'
+    );
+  }
+}
+
+
