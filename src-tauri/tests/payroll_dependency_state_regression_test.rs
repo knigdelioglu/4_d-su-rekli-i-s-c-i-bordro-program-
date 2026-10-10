@@ -164,6 +164,79 @@ fn status(conn: &rusqlite::Connection, personnel_id: &str, period_id: &str) -> B
 }
 
 #[test]
+fn accrual_status_transition_rolls_back_when_dependency_invalidation_fails() {
+    let conn = create_in_memory_connection().unwrap();
+    let p = person("p-status-atomicity");
+    PersonnelRepository::save(&conn, &p).unwrap();
+    let january = period("2026-01", 2026, 1, 2026, 1);
+    let february = period("2026-02", 2026, 2, 2026, 2);
+    PeriodRepository::save(&conn, &january).unwrap();
+    PeriodRepository::save(&conn, &february).unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &january.id, None),
+    )
+    .unwrap();
+    PayrollRepository::save_legacy_in_transaction(
+        &conn,
+        &calculated_payroll(&p.id, &february.id, None),
+    )
+    .unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER reject_february_stale
+         BEFORE UPDATE OF status ON payroll_records
+         WHEN OLD.period_id = '2026-02' AND NEW.status = 'STALE'
+         BEGIN
+             SELECT RAISE(ABORT, 'synthetic dependency invalidation failure');
+         END;",
+    )
+    .unwrap();
+
+    let error = PayrollService::set_payroll_status_for_accrual(
+        &conn,
+        &p.id,
+        &january.id,
+        None,
+        BordroStatus::STALE,
+    )
+    .expect_err("downstream invalidation failure should fail the transition");
+    assert!(error
+        .to_string()
+        .contains("synthetic dependency invalidation failure"));
+    assert_eq!(status(&conn, &p.id, &january.id), BordroStatus::CALCULATED);
+    assert_eq!(status(&conn, &p.id, &february.id), BordroStatus::CALCULATED);
+}
+
+#[test]
+fn accrual_status_transition_rejects_draft_and_stale_shortcuts_to_calculated() {
+    let conn = create_in_memory_connection().unwrap();
+    let p = person("p-status-shortcut");
+    PersonnelRepository::save(&conn, &p).unwrap();
+    let january = period("2026-01", 2026, 1, 2026, 1);
+    let february = period("2026-02", 2026, 2, 2026, 2);
+    PeriodRepository::save(&conn, &january).unwrap();
+    PeriodRepository::save(&conn, &february).unwrap();
+
+    for (period, initial_status) in [
+        (&january, BordroStatus::DRAFT),
+        (&february, BordroStatus::STALE),
+    ] {
+        let mut payroll = calculated_payroll(&p.id, &period.id, None);
+        payroll.status = initial_status;
+        PayrollRepository::save_legacy_in_transaction(&conn, &payroll).unwrap();
+        assert!(PayrollService::set_payroll_status_for_accrual(
+            &conn,
+            &p.id,
+            &period.id,
+            None,
+            BordroStatus::CALCULATED,
+        )
+        .is_err());
+        assert_eq!(status(&conn, &p.id, &period.id), initial_status);
+    }
+}
+
+#[test]
 fn attendance_mutation_marks_current_and_later_payrolls_stale() {
     let conn = create_in_memory_connection().unwrap();
     let p = person("p-att");

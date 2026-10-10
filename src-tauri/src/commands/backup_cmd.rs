@@ -17,8 +17,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 pub fn export_authoritative_sqlite_backup(conn: &Connection) -> Result<String, String> {
-    let periods = PeriodRepository::get_all(conn)
-        .map_err(|error| format!("Dönemler okunamadı: {error}"))?;
+    let periods =
+        PeriodRepository::get_all(conn).map_err(|error| format!("Dönemler okunamadı: {error}"))?;
     let active_period_id = SettingsRepository::get_app_setting(conn, "active_period_id")
         .map_err(|error| format!("Aktif dönem okunamadı: {error}"))?
         .unwrap_or_default();
@@ -46,20 +46,32 @@ pub fn export_authoritative_sqlite_backup(conn: &Connection) -> Result<String, S
         .map_err(|error| format!("Retro dağılımları okunamadı: {error}"))?;
     let compensation_policy_versions = CompensationPolicyRepository::get_all_versions(conn)
         .map_err(|error| format!("Ücret politikası sürümleri okunamadı: {error}"))?;
-    let is_primi_gruplari: Vec<payroll_core::IsPrimiGrupItem> = match SettingsRepository::get_app_setting(conn, "is_primi_gruplari")
-        .map_err(|error| format!("İş primi grupları okunamadı: {error}"))? {
-        Some(val) => serde_json::from_str(&val).unwrap_or_default(),
-        None => compensation_policy_versions
-            .iter()
-            .max_by(|a, b| a.effectiveFrom.cmp(&b.effectiveFrom).then_with(|| a.createdAt.cmp(&b.createdAt)))
-            .map(|v| v.state.isPrimiGruplari.iter().map(|g| payroll_core::IsPrimiGrupItem {
-                id: g.id.clone(),
-                ad: g.ad.clone(),
-                oran: g.oran,
-                aktif: g.aktif,
-            }).collect())
-            .unwrap_or_default(),
-    };
+    let is_primi_gruplari: Vec<payroll_core::IsPrimiGrupItem> =
+        match SettingsRepository::get_app_setting(conn, "is_primi_gruplari")
+            .map_err(|error| format!("İş primi grupları okunamadı: {error}"))?
+        {
+            Some(val) => serde_json::from_str(&val).unwrap_or_default(),
+            None => compensation_policy_versions
+                .iter()
+                .max_by(|a, b| {
+                    a.effectiveFrom
+                        .cmp(&b.effectiveFrom)
+                        .then_with(|| a.createdAt.cmp(&b.createdAt))
+                })
+                .map(|v| {
+                    v.state
+                        .isPrimiGruplari
+                        .iter()
+                        .map(|g| payroll_core::IsPrimiGrupItem {
+                            id: g.id.clone(),
+                            ad: g.ad.clone(),
+                            oran: g.oran,
+                            aktif: g.aktif,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+        };
     let exported_at = chrono::Utc::now().to_rfc3339();
 
     let payload = serde_json::json!({
@@ -90,7 +102,11 @@ pub fn export_authoritative_sqlite_backup(conn: &Connection) -> Result<String, S
 fn attach_native_policy_timeline(conn: &Connection, payload_json: &str) -> Result<String, String> {
     let mut payload: serde_json::Value = serde_json::from_str(payload_json)
         .map_err(|error| format!("Yedek payload JSON olarak okunamadı: {error}"))?;
-    if payload.get("backupVersion").and_then(serde_json::Value::as_u64) != Some(6) {
+    if payload
+        .get("backupVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(6)
+    {
         return Err("Native yedek dışa aktarımı V6 payload gerektirir.".into());
     }
     let versions = CompensationPolicyRepository::get_all_versions(conn)
@@ -554,13 +570,19 @@ mod tests {
         let exported_json = super::export_authoritative_sqlite_backup(&source)
             .expect("authoritative export should succeed");
 
-        let exported_value: Value = serde_json::from_str(&exported_json)
-            .expect("exported JSON should be valid");
+        let exported_value: Value =
+            serde_json::from_str(&exported_json).expect("exported JSON should be valid");
 
         assert_eq!(exported_value["backupVersion"], 6);
         assert_eq!(exported_value["aktifDonemId"], "2026-01");
-        assert_eq!(exported_value["personeller"][0]["id"], "person-native-backup");
-        assert_eq!(exported_value["compensationPolicyVersions"][0]["id"], "policy-native-export");
+        assert_eq!(
+            exported_value["personeller"][0]["id"],
+            "person-native-backup"
+        );
+        assert_eq!(
+            exported_value["compensationPolicyVersions"][0]["id"],
+            "policy-native-export"
+        );
         assert_eq!(exported_value["isPrimiGruplari"][0]["id"], "g1");
 
         // Verify that the exported authoritative payload round-trips into a fresh database

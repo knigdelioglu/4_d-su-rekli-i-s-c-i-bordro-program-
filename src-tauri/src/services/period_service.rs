@@ -62,7 +62,9 @@ impl PeriodService {
         )?;
 
         // 3. Guard against invalidating downstream FINALIZED records
-        if !impact.blockedByFinalized.is_empty() || !impact.blockedByFinalizedRetroBatches.is_empty() {
+        if !impact.blockedByFinalized.is_empty()
+            || !impact.blockedByFinalizedRetroBatches.is_empty()
+        {
             return Err(DomainError::PayrollFinalized(
                 "Dönem silme işlemi sonraki kesinleştirilmiş bordro veya retro kayıtlarını etkilediği için izin verilmez.".into(),
             ));

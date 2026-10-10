@@ -505,15 +505,25 @@ fn kesintiler_is_effectively_empty(k: &PersonelKesintileri) -> bool {
         && k.icraTutar.unwrap_or(Decimal::ZERO).is_zero()
         && k.nafakaTutar.unwrap_or(Decimal::ZERO).is_zero()
         && k.kisiBorcuTutar.unwrap_or(Decimal::ZERO).is_zero()
-        && k.dogumAskerlikBorclanmasiTutar.unwrap_or(Decimal::ZERO).is_zero()
-        && k.hayatSaglikSigortasiTutar.unwrap_or(Decimal::ZERO).is_zero()
+        && k.dogumAskerlikBorclanmasiTutar
+            .unwrap_or(Decimal::ZERO)
+            .is_zero()
+        && k.hayatSaglikSigortasiTutar
+            .unwrap_or(Decimal::ZERO)
+            .is_zero()
         && k.digerKesintiTutar.unwrap_or(Decimal::ZERO).is_zero()
         && match &k.gvIndirimleri {
             None => true,
             Some(g) => {
-                g.dogumAskerlikGvIndirimTutar.unwrap_or(Decimal::ZERO).is_zero()
-                    && g.hayatSigortasiPrimiTutar.unwrap_or(Decimal::ZERO).is_zero()
-                    && g.saglikSigortasiPrimiTutar.unwrap_or(Decimal::ZERO).is_zero()
+                g.dogumAskerlikGvIndirimTutar
+                    .unwrap_or(Decimal::ZERO)
+                    .is_zero()
+                    && g.hayatSigortasiPrimiTutar
+                        .unwrap_or(Decimal::ZERO)
+                        .is_zero()
+                    && g.saglikSigortasiPrimiTutar
+                        .unwrap_or(Decimal::ZERO)
+                        .is_zero()
             }
         }
 }
@@ -566,9 +576,11 @@ pub fn personnel_has_financial_changes(current: &Personel, updated: &Personel) -
             current.devirKumulatifAsgariGvMatrahi,
             updated.devirKumulatifAsgariGvMatrahi,
         )
-        || current.devirKumulatifAsgariGvMatrahiYili
-            != updated.devirKumulatifAsgariGvMatrahiYili
-        || kesintiler_have_financial_changes(current.kesintiler.as_ref(), updated.kesintiler.as_ref())
+        || current.devirKumulatifAsgariGvMatrahiYili != updated.devirKumulatifAsgariGvMatrahiYili
+        || kesintiler_have_financial_changes(
+            current.kesintiler.as_ref(),
+            updated.kesintiler.as_ref(),
+        )
 }
 
 pub fn validate_payroll_status_transition(current: BordroStatus, next: BordroStatus) -> Result<()> {
@@ -597,4 +609,3 @@ pub fn validate_payroll_status_transition(current: BordroStatus, next: BordroSta
     }
     Ok(())
 }
-

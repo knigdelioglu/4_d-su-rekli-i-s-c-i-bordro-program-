@@ -35,6 +35,7 @@ import { useBrowserPayrollPersistence } from './services/storage/useBrowserPayro
 import { usePayrollMutationController } from './hooks/usePayrollMutationController';
 import { useBackupController } from './hooks/useBackupController';
 import { useCompensationPolicyController } from './hooks/useCompensationPolicyController';
+import { getCompensationPolicyApi } from './services/compensationPolicy/api';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { DEFAULT_PRODUCTION_KURUM_DEGERLERI } from './utils/payrollPresentation';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
@@ -42,7 +43,6 @@ import { formatPayrollError } from './components/useBordroCalculationController'
 import { importConfirmedBackupFile } from './services/storage/confirmedBackupImport';
 import { describeError } from './utils/errorMessage';
 import { DEFAULT_IS_PRIMI_GRUPLARI } from './services/storage/payrollDefaults';
-import { applyBrowserPayrollImpact, applyBrowserRetroBatchImpact } from './services/storage/browserPayrollPolicies';
 
 const PeriodSettingsPage = React.lazy(() =>
   import('./components/Settings/PeriodSettingsPage').then((module) => ({
@@ -521,43 +521,13 @@ export default function App() {
   const handleSaveIsPrimiGruplari = async (groups: IsPrimiGrupItem[]) => {
     const normalized = normalizePremiumGroups(groups);
     if (!normalized) throw new Error('İş primi grupları geçerli değil.');
-    const exactGroups = toPayrollBoundaryDto(normalized);
-    if (tauriBridge.isTauriAvailable()) {
-      await tauriBridge.setAppSetting('is_primi_gruplari', JSON.stringify(exactGroups));
-      await loadData();
-      return;
-    }
-    const currentGroups = authoritativePayload?.isPrimiGruplari;
-    const sameGroups = JSON.stringify(currentGroups) === JSON.stringify(exactGroups);
-    if (sameGroups) return;
-
-    const versions = authoritativePayload?.compensationPolicyVersions ?? [];
-    if (versions.length > 0) {
-      const headVersion = [...versions].sort((a, b) =>
-        a.effectiveFrom.localeCompare(b.effectiveFrom) || (a.createdAt ?? '').localeCompare(b.createdAt ?? '')
-      ).at(-1)!;
-      const impact = await evaluateBrowserMutations({
-        kind: 'COMPENSATION_POLICY',
-        effectiveFrom: headVersion.effectiveFrom,
-        throughInclusive: undefined,
-      });
-      updateAuthoritativePayload((current) => {
-        const updatedVersions = (current.compensationPolicyVersions ?? []).map((v) =>
-          v.id === headVersion.id
-            ? { ...v, state: { ...v.state, isPrimiGruplari: exactGroups } }
-            : v
-        );
-        return {
-          ...current,
-          isPrimiGruplari: exactGroups,
-          compensationPolicyVersions: updatedVersions,
-          bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
-          retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
-        };
-      });
-    } else {
-      updateAuthoritativePayload((current) => ({ ...current, isPrimiGruplari: exactGroups }));
-    }
+    const exactGroups = toPayrollBoundaryDto(normalized).map((group) => ({
+      ...group,
+      aktif: group.aktif ?? true,
+    }));
+    const result = await getCompensationPolicyApi().saveWorkPremiumGroups(exactGroups);
+    if (result.ok === false) throw new Error(result.error.message);
+    await loadData();
   };
 
   const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];

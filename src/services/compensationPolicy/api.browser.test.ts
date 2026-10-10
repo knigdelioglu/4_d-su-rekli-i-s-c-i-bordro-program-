@@ -267,6 +267,24 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
     expect(authoritative?.payrollStatuses).toEqual(['STALE', 'STALE']);
   });
 
+  testWithTimeout('saves work-premium groups as a dated immutable policy correction and stales payroll and retro dependents', async () => {
+    const page = await openPolicyApiTab();
+    const result = await page.evaluate(() =>
+      window.__compensationPolicyBrowserApiTest.exerciseWorkPremiumGroupSave());
+
+    expect(result.result.ok).toBe(true);
+    expect(result.versions).toHaveLength(2);
+    expect(result.versions[0]).toEqual(result.original);
+    expect(result.versions[1]).toMatchObject({
+      effectiveFrom: result.original.effectiveFrom,
+      supersedesVersionId: result.original.id,
+      state: { isPrimiGruplari: [{ id: '1. Grup', ad: 'Grup 1', oran: '11', aktif: true }] },
+    });
+    expect(result.groups).toEqual([{ id: '1. Grup', ad: 'Grup 1', oran: '11', aktif: true }]);
+    expect(result.payrollStatuses).toEqual(['STALE', 'STALE']);
+    expect(result.retroStatuses).toEqual(['STALE']);
+  }, 60_000);
+
   test('ROAD_ONLY accepts decimal-equivalent non-road values with different scales', async () => {
     const page = await openPolicyApiTab();
     const baseline = await page.evaluate(() => window.__compensationPolicyBrowserApiTest.prepareBaseline());

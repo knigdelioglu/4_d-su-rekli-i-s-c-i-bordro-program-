@@ -301,54 +301,46 @@ fn validate_global_premium_groups(groups: &[IsPrimiGrupItem]) -> Result<()> {
 }
 
 fn validate_policy_restore_compatibility(
-    conn: &Connection,
     incoming: &[CompensationPolicyVersion],
 ) -> Result<Vec<CompensationPolicyVersion>> {
-    let ordered =
-        payroll_core::validate_compensation_policy_timeline(incoming).map_err(|error| {
-            DomainError::InvalidData(format!("Yedek policy timeline geçersiz: {error}"))
-        })?;
-    let existing = CompensationPolicyRepository::get_all_versions(conn)?;
-    let incoming_by_id: HashMap<&str, &CompensationPolicyVersion> = ordered
-        .iter()
-        .map(|version| (version.id.as_str(), version))
-        .collect();
-    let existing_ids: BTreeSet<&str> = existing.iter().map(|version| version.id.as_str()).collect();
-
-    for version in &existing {
-        let Some(restored) = incoming_by_id.get(version.id.as_str()) else {
-            return Err(DomainError::InvalidData(format!(
-                "Immutable policy restore çakışması: mevcut sürüm {} payload'da yok; policy geçmişi silinemez.",
-                version.id
-            )));
-        };
-        let existing_json = serde_json::to_string(version)
-            .map_err(|error| DomainError::InvalidData(error.to_string()))?;
-        let restored_json = serde_json::to_string(restored)
-            .map_err(|error| DomainError::InvalidData(error.to_string()))?;
-        if existing_json != restored_json {
-            return Err(DomainError::InvalidData(format!(
-                "Immutable policy restore çakışması: {} kimliği farklı full-state, boundary flag veya supersession içeriyor.",
-                version.id
-            )));
-        }
-    }
-
-    Ok(ordered
-        .into_iter()
-        .filter(|version| !existing_ids.contains(version.id.as_str()))
-        .collect())
+    payroll_core::validate_compensation_policy_timeline(incoming).map_err(|error| {
+        DomainError::InvalidData(format!("Yedek policy timeline geçersiz: {error}"))
+    })
 }
 
 fn restore_policy_timeline_in_transaction(
     conn: &Connection,
     incoming: &[CompensationPolicyVersion],
 ) -> Result<()> {
-    let missing = validate_policy_restore_compatibility(conn, incoming)?;
-    for version in missing {
+    let ordered = validate_policy_restore_compatibility(incoming)?;
+    for version in ordered {
         CompensationPolicyRepository::insert_version_in_transaction(conn, &version)?;
     }
     Ok(())
+}
+
+/// Full backup replacement is the one authorized operation that may replace
+/// immutable policy history. Temporarily remove only the immutability guards,
+/// detach self-references, clear the rows, and restore the guards in the same
+/// transaction. Any later failure rolls back both schema and data changes.
+fn clear_policy_history_for_full_restore(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "DROP TRIGGER IF EXISTS compensation_policy_immutable_update;
+         DROP TRIGGER IF EXISTS compensation_policy_immutable_delete;
+         UPDATE compensation_policy_versions SET supersedes_version_id = NULL;
+         DELETE FROM compensation_policy_versions;
+         CREATE TRIGGER compensation_policy_immutable_update
+         BEFORE UPDATE ON compensation_policy_versions
+         BEGIN
+             SELECT RAISE(ABORT, 'compensation policy versions are immutable');
+         END;
+         CREATE TRIGGER compensation_policy_immutable_delete
+         BEFORE DELETE ON compensation_policy_versions
+         BEGIN
+             SELECT RAISE(ABORT, 'compensation policy history cannot be deleted');
+         END;",
+    )
+    .map_err(|error| DomainError::DatabaseError(error.to_string()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2022,17 +2014,17 @@ impl MigrationService {
     /// Tam veri kurtarma (disaster recovery) işlemi olduğu için mevcut tablodaki
     /// FINALIZED kayıtlar doğrulanmış bir yedeğin geri yüklenmesini engellemez.
     pub fn replace_backup_data(conn: &mut Connection, payload_json: &str) -> Result<()> {
-        let payload = Self::parse_payload(payload_json)?;
-        let tx = conn
-            .transaction()
-            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        validate_policy_restore_compatibility(
-            &tx,
+        let mut payload = Self::parse_payload(payload_json)?;
+        payload.compensationPolicyVersions = Some(validate_policy_restore_compatibility(
             payload
                 .compensationPolicyVersions
                 .as_deref()
                 .unwrap_or_default(),
-        )?;
+        )?);
+        let tx = conn
+            .transaction()
+            .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
+        clear_policy_history_for_full_restore(&tx)?;
 
         tx.execute_batch(
             "DELETE FROM retro_adjustment_allocations;

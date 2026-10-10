@@ -1,3 +1,4 @@
+use bordro_programi_lib::commands::settings_cmd::set_app_setting_with_connection;
 use bordro_programi_lib::db::create_in_memory_connection;
 use bordro_programi_lib::domain::models::{
     AnnualPayrollParameters, BordroDonemi, CompensationBoundaryScope, CompensationPolicyGroup,
@@ -428,6 +429,76 @@ fn policy_save_stales_eligible_retro_batch_and_linked_payment_event_atomically()
             "SELECT status FROM payroll_records WHERE id = 'retro-payment-event'",
             [],
             |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "STALE"
+    );
+}
+
+#[test]
+fn native_work_premium_group_setting_versions_policy_and_preserves_historical_amounts() {
+    let conn = create_in_memory_connection().unwrap();
+    seed_retro_graph(&conn, "CALCULATED");
+    SettingsRepository::set_app_setting(&conn, "active_period_id", "2026-01").unwrap();
+    let original = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    assert_eq!(original.len(), 1);
+    let original_payroll_amounts: (i64, i64) = conn
+        .query_row(
+            "SELECT gross_total, net_payment FROM payroll_records WHERE id = 'retro-person_2026-01'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+
+    set_app_setting_with_connection(
+        &conn,
+        "is_primi_gruplari",
+        r#"[{"id":"g1","ad":"1. Grup","oran":"11","aktif":true}]"#,
+    )
+    .expect("native settings command should append a policy correction");
+
+    let versions = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0], original[0]);
+    assert_eq!(versions[1].effectiveFrom, original[0].effectiveFrom);
+    assert_eq!(
+        versions[1].supersedesVersionId.as_deref(),
+        Some(original[0].id.as_str())
+    );
+    assert_eq!(versions[1].state.isPrimiGruplari[0].oran, dec!(11));
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM payroll_records WHERE id = 'retro-person_2026-01'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "STALE"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT gross_total, net_payment FROM payroll_records WHERE id = 'retro-person_2026-01'",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .unwrap(),
+        original_payroll_amounts,
+        "invalidating historical payroll must preserve its recorded financial result"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM retro_adjustment_batches WHERE id = 'retro-batch'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "STALE"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM payroll_records WHERE id = 'retro-payment-event'",
+            [],
+            |row| row.get::<_, String>(0),
         )
         .unwrap(),
         "STALE"

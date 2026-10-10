@@ -281,6 +281,9 @@ const apiContract: CompensationPolicyApi = {
       },
     };
   },
+  async saveWorkPremiumGroups() {
+    return { ok: true, value: null };
+  },
 };
 
 describe('compensation policy frozen contract', () => {

@@ -1,7 +1,6 @@
 use crate::domain::models::{
-    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi,
-    DonemselKurumDegerleri, ManualPayrollIncomeInput, PayrollAccrualInput,
-    RetroAdjustmentBatch, RetroAllocation,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
+    ManualPayrollIncomeInput, PayrollAccrualInput, RetroAdjustmentBatch, RetroAllocation,
 };
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
@@ -1010,50 +1009,52 @@ impl PayrollService {
         accrual_id: Option<&str>,
         status: BordroStatus,
     ) -> Result<()> {
-        let resolved_accrual_id = match accrual_id {
-            Some(value) => value.to_owned(),
-            None => PayrollRepository::get_normal_accrual_id(conn, personnel_id, period_id)?
-                .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?,
-        };
-        let current = PayrollRepository::get_status_and_created_at_for_accrual(
-            conn,
-            personnel_id,
-            period_id,
-            &resolved_accrual_id,
-        )?;
-        let Some((current_status, _)) = current else {
-            return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
-        };
+        crate::repositories::transaction::with_transaction(conn, |tx| {
+            let resolved_accrual_id = match accrual_id {
+                Some(value) => value.to_owned(),
+                None => PayrollRepository::get_normal_accrual_id(tx, personnel_id, period_id)?
+                    .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?,
+            };
+            let current = PayrollRepository::get_status_and_created_at_for_accrual(
+                tx,
+                personnel_id,
+                period_id,
+                &resolved_accrual_id,
+            )?;
+            let Some((current_status, _)) = current else {
+                return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
+            };
 
-        payroll_core::validate_payroll_status_transition(current_status, status)?;
+            payroll_core::validate_payroll_status_transition(current_status, status)?;
 
-        if current_status == status {
-            return Ok(());
-        }
+            if current_status == status {
+                return Ok(());
+            }
 
-        let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::assert_mutation_allowed(
-            conn,
-            &payroll_core::PayrollMutation::AccrualCalculation {
-                personnelId: personnel_id.to_owned(),
-                periodId: period_id.to_owned(),
-                accrualId: resolved_accrual_id.clone(),
-            },
-        )?;
+            let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::assert_mutation_allowed(
+                tx,
+                &payroll_core::PayrollMutation::AccrualCalculation {
+                    personnelId: personnel_id.to_owned(),
+                    periodId: period_id.to_owned(),
+                    accrualId: resolved_accrual_id.clone(),
+                },
+            )?;
 
-        PayrollRepository::update_status_for_accrual(
-            conn,
-            personnel_id,
-            period_id,
-            &resolved_accrual_id,
-            status,
-        )?;
+            PayrollRepository::update_status_for_accrual(
+                tx,
+                personnel_id,
+                period_id,
+                &resolved_accrual_id,
+                status,
+            )?;
 
-        crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
-            conn,
-            &impact,
-        )?;
+            crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
+                tx,
+                &impact,
+            )?;
 
-        Ok(())
+            Ok(())
+        })
     }
 
     pub fn calculate_incoming_devreden_pek(

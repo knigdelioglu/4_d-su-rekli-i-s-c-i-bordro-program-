@@ -828,7 +828,10 @@ function validatePayrollCalculationSnapshot(value: UnknownRecord, path: string):
     fail(fieldPath(path, 'snapshotSchemaVersion'), 'desteklenmeyen snapshot şema sürümü.');
   }
   requiredString(value, 'calculationVersion', path);
-  if (value.calculationVersion !== 'compensation-engine-v1') {
+  if (
+    value.calculationVersion !== 'compensation-engine-v1' &&
+    value.calculationVersion !== 'compensation-engine-v2'
+  ) {
     fail(fieldPath(path, 'calculationVersion'), 'desteklenmeyen hesaplama sürümü.');
   }
   const compensation = required(value, 'compensation', path);

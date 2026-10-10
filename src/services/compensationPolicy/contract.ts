@@ -483,6 +483,9 @@ export interface CompensationPolicyApi {
   save(
     request: CompensationPolicySaveRequest
   ): Promise<CompensationPolicyOperationResult<CompensationPolicySaveReceipt>>;
+  saveWorkPremiumGroups(
+    groups: CompensationPolicyStateWire['isPrimiGruplari']
+  ): Promise<CompensationPolicyOperationResult<CompensationPolicySaveReceipt | null>>;
 }
 
 export type CompensationPolicyAsyncState<T> =
