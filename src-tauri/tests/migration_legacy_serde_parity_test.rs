@@ -2145,6 +2145,108 @@ fn precise_compensation_policy_version() -> CompensationPolicyVersion {
 }
 
 #[test]
+fn full_restore_replaces_unrelated_policy_history_and_v5_restore_clears_v6_history() {
+    let (_, v5_json) = current_v5_fixture().expect("V5 payload kurulmalı");
+    let mut first_payload: Value = serde_json::from_str(&v5_json).unwrap();
+    first_payload["backupVersion"] = json!(6);
+    first_payload["compensationPolicyVersions"] = json!([precise_compensation_policy_version()]);
+    first_payload["bordrolar"][0]["status"] = json!("DRAFT");
+    first_payload["bordrolar"][0]["calculationMetadata"] = json!({
+        "provenance": "COMPENSATION_POLICY_ENGINE"
+    });
+
+    let mut target = create_in_memory_connection().expect("hedef DB kurulmalı");
+    MigrationService::replace_backup_data(&mut target, &first_payload.to_string())
+        .expect("ilk V6 yedeği yüklenmeli");
+    let first_history = CompensationPolicyRepository::get_all_versions(&target).unwrap();
+    assert_eq!(first_history.len(), 1);
+
+    let mut second_payload = first_payload.clone();
+    let mut unrelated_policy = precise_compensation_policy_version();
+    unrelated_policy.id = "unrelated-policy-history".into();
+    unrelated_policy.state.gunlukTabanUcret = dec!(2000.987654321);
+    unrelated_policy.reason = "Different complete backup history".into();
+    second_payload["compensationPolicyVersions"] = json!([unrelated_policy.clone()]);
+    MigrationService::replace_backup_data(&mut target, &second_payload.to_string())
+        .expect("tam veri kurtarma mevcut veritabanı policy geçmişine bağlı olmamalı");
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&target).unwrap(),
+        vec![unrelated_policy.clone()]
+    );
+
+    let payroll_before_failure =
+        serde_json::to_value(PayrollRepository::get_all(&target).unwrap()).unwrap();
+    let policy_before_failure = CompensationPolicyRepository::get_all_versions(&target).unwrap();
+    let periods_before_failure = PeriodRepository::get_all(&target).unwrap();
+    let mut invalid_payload = second_payload.clone();
+    invalid_payload["compensationPolicyVersions"][0]["state"]["gunlukTabanUcret"] =
+        json!("not-a-decimal");
+    assert!(
+        MigrationService::replace_backup_data(&mut target, &invalid_payload.to_string()).is_err()
+    );
+    assert_eq!(
+        serde_json::to_value(PayrollRepository::get_all(&target).unwrap()).unwrap(),
+        payroll_before_failure
+    );
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&target).unwrap(),
+        policy_before_failure
+    );
+
+    target
+        .execute_batch(
+            "CREATE TRIGGER reject_backup_personnel_restore
+             BEFORE INSERT ON personnel
+             WHEN NEW.id = 'v5-person'
+             BEGIN
+                 SELECT RAISE(ABORT, 'synthetic restore import failure');
+             END;",
+        )
+        .unwrap();
+    let late_failure =
+        MigrationService::replace_backup_data(&mut target, &second_payload.to_string())
+            .expect_err("late row import failure must roll back the full replacement");
+    assert!(late_failure
+        .to_string()
+        .contains("synthetic restore import failure"));
+    assert_eq!(
+        serde_json::to_value(PayrollRepository::get_all(&target).unwrap()).unwrap(),
+        payroll_before_failure
+    );
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&target).unwrap(),
+        policy_before_failure
+    );
+    assert_eq!(
+        PeriodRepository::get_all(&target)
+            .unwrap()
+            .iter()
+            .map(|period| period.id.as_str())
+            .collect::<Vec<_>>(),
+        periods_before_failure
+            .iter()
+            .map(|period| period.id.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert!(target
+        .execute(
+            "UPDATE compensation_policy_versions SET state_json = state_json WHERE id = ?1",
+            ["unrelated-policy-history"],
+        )
+        .is_err());
+    target
+        .execute_batch("DROP TRIGGER reject_backup_personnel_restore;")
+        .unwrap();
+
+    MigrationService::replace_backup_data(&mut target, &v5_json)
+        .expect("V5 tam geri yükleme hedefteki V6 policy satırlarını da değiştirmeli");
+    assert!(CompensationPolicyRepository::get_all_versions(&target)
+        .unwrap()
+        .is_empty());
+    assert_eq!(PayrollRepository::get_all(&target).unwrap().len(), 1);
+}
+
+#[test]
 fn v6_policy_timeline_and_draft_metadata_round_trip_without_precision_loss() {
     let (_, v5_json) = current_v5_fixture().expect("payroll fixture kurulmalı");
     let policy_version = precise_compensation_policy_version();
@@ -2203,30 +2305,43 @@ fn v6_policy_timeline_and_draft_metadata_round_trip_without_precision_loss() {
     let mut conflicting_policy = payload.clone();
     conflicting_policy["compensationPolicyVersions"][0]["state"]["gunlukTabanUcret"] =
         json!("1000.923456789");
-    let error = MigrationService::replace_backup_data(&mut target, &conflicting_policy.to_string())
-        .expect_err("aynı immutable policy ID farklı full-state ile değiştirilemez");
-    assert!(error.to_string().contains("Immutable policy restore"));
+    MigrationService::replace_backup_data(&mut target, &conflicting_policy.to_string())
+        .expect("tam geri yükleme hedefteki aynı kimlikli policy değerini de değiştirebilir");
     assert_eq!(
-        CompensationPolicyRepository::get_all_versions(&target).expect("existing policy korunmalı")
+        CompensationPolicyRepository::get_all_versions(&target).expect("restored policy okunmalı")
             [0]
         .state
         .gunlukTabanUcret
         .to_string(),
-        "1000.123456789"
-    );
-    assert_eq!(
-        PayrollRepository::get_all(&target)
-            .expect("payroll conflict sonrasında korunmalı")
-            .len(),
-        1
+        "1000.923456789"
     );
 
     let mut conflicting_boundary = payload.clone();
     conflicting_boundary["compensationPolicyVersions"][0]["boundaryScope"] = json!("ROAD_ONLY");
-    let error =
-        MigrationService::replace_backup_data(&mut target, &conflicting_boundary.to_string())
-            .expect_err("aynı immutable policy ID farklı boundary flag ile değiştirilemez");
-    assert!(error.to_string().contains("Immutable policy restore"));
+    MigrationService::replace_backup_data(&mut target, &conflicting_boundary.to_string())
+        .expect("tam geri yükleme backup içindeki geçerli boundary flag'i yüklemeli");
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&target).unwrap()[0].boundaryScope,
+        CompensationBoundaryScope::RoadOnly
+    );
+    assert!(
+        target
+            .execute(
+                "UPDATE compensation_policy_versions SET state_json = state_json WHERE id = ?1",
+                ["precise-policy-v1"],
+            )
+            .is_err(),
+        "normal policy updates remain immutable after restore"
+    );
+    assert!(
+        target
+            .execute(
+                "DELETE FROM compensation_policy_versions WHERE id = ?1",
+                ["precise-policy-v1"],
+            )
+            .is_err(),
+        "normal policy deletes remain immutable after restore"
+    );
 }
 
 #[test]
@@ -2526,28 +2641,35 @@ fn native_v6_current_snapshot_round_trips_calculated_and_finalized_records_exact
                 ["gunlukTabanUcret"] = json!("2443.281234568");
             conflicting_policy["bordrolar"][0]["calculationMetadata"]["snapshot"]["compensation"]
                 ["segments"][0]["state"]["gunlukTabanUcret"] = json!("2443.281234568");
-            let error =
-                MigrationService::replace_backup_data(&mut target, &conflicting_policy.to_string())
-                    .expect_err(
-                        "aynı immutable policy ID farklı snapshot state ile restore edilemez",
-                    );
-            assert!(
-                error.to_string().contains("Immutable policy restore"),
-                "unexpected policy conflict error: {error}"
-            );
-            assert_eq!(
+            MigrationService::replace_backup_data(&mut target, &conflicting_policy.to_string())
+                .expect(
+                    "tam yedek geri yükleme mevcut policy ID/state geçmişinden bağımsız olmalıdır",
+                );
+            let restored_payroll =
                 serde_json::to_value(PayrollRepository::get_all(&target).unwrap().remove(0))
-                    .unwrap(),
-                baseline_payroll,
-                "policy conflict sonrası payroll korunmalı"
+                    .unwrap();
+            for field in ["gelirToplam", "kesintiToplam", "netOdeme"] {
+                assert_eq!(
+                    restored_payroll[field], baseline_payroll[field],
+                    "tam geri yükleme finansal {field} sonucunu korumalı"
+                );
+            }
+            let restored_policy = CompensationPolicyRepository::get_all_versions(&target)
+                .expect("geri yüklenen immutable policy history okunmalı");
+            assert_ne!(
+                serde_json::to_value(&restored_policy).unwrap(),
+                serde_json::to_value(&baseline_policy).unwrap(),
+                "tam geri yükleme hedefteki eski policy state'i korumamalı"
             );
             assert_eq!(
-                serde_json::to_value(
-                    CompensationPolicyRepository::get_all_versions(&target).unwrap()
-                )
-                .unwrap(),
-                baseline_policy,
-                "policy conflict sonrası immutable history korunmalı"
+                restored_policy
+                    .iter()
+                    .find(|version| version.id == "policy-v1")
+                    .expect("replaced policy id should be present")
+                    .state
+                    .gunlukTabanUcret
+                    .to_string(),
+                "2443.281234568"
             );
         }
     }

@@ -7,6 +7,65 @@ use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepositor
 use crate::repositories::transaction::with_transaction;
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, Row};
+use std::collections::HashSet;
+
+const PERSONNEL_SELECT_COLUMNS: [&str; 29] = [
+    "id",
+    "tc_no",
+    "ad",
+    "soyad",
+    "grup",
+    "unvan",
+    "sgk_sicil_no",
+    "iban",
+    "hizmet_yili",
+    "aciklama",
+    "devir_kumulatif_gv_matrahi",
+    "devir_kumulatif_gv_matrahi_yili",
+    "devir_kumulatif_gv_matrahi_baslangic_ayi",
+    "devir_kumulatif_asgari_gv_matrahi",
+    "devir_kumulatif_asgari_gv_matrahi_yili",
+    "sendika_uyesi",
+    "sabit_sendika_aidati",
+    "bes_uyesi",
+    "oks_orani_yuzde",
+    "sabit_bes_tutar",
+    "icra_tutar",
+    "kisi_borcu_tutar",
+    "dogum_askerlik_borclanmasi_tutar",
+    "hayat_saglik_sigortasi_tutar",
+    "diger_kesinti_tutar",
+    "dogum_askerlik_gv_indirim_tutar",
+    "hayat_sigortasi_gv_prim_tutar",
+    "saglik_sigortasi_gv_prim_tutar",
+    "nafaka_tutar",
+];
+
+const OPTIONAL_FINANCIAL_COLUMNS: [&str; 9] = [
+    "devir_kumulatif_gv_matrahi",
+    "devir_kumulatif_gv_matrahi_yili",
+    "devir_kumulatif_gv_matrahi_baslangic_ayi",
+    "devir_kumulatif_asgari_gv_matrahi",
+    "devir_kumulatif_asgari_gv_matrahi_yili",
+    "dogum_askerlik_gv_indirim_tutar",
+    "hayat_sigortasi_gv_prim_tutar",
+    "saglik_sigortasi_gv_prim_tutar",
+    "nafaka_tutar",
+];
+
+const DEVIR_FINANCIAL_COLUMNS: [&str; 5] = [
+    "devir_kumulatif_gv_matrahi",
+    "devir_kumulatif_gv_matrahi_yili",
+    "devir_kumulatif_gv_matrahi_baslangic_ayi",
+    "devir_kumulatif_asgari_gv_matrahi",
+    "devir_kumulatif_asgari_gv_matrahi_yili",
+];
+
+const GV_DEDUCTION_COLUMNS: [&str; 3] = [
+    "dogum_askerlik_gv_indirim_tutar",
+    "hayat_sigortasi_gv_prim_tutar",
+    "saglik_sigortasi_gv_prim_tutar",
+];
 
 pub struct PersonnelRepository;
 
@@ -111,11 +170,163 @@ impl PersonnelRepository {
         .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))
     }
 
+    pub fn get_existing_financial_status(
+        conn: &Connection,
+        id: &str,
+        new_p: &Personel,
+    ) -> Result<bool> {
+        let columns = Self::personnel_column_names(conn)?;
+        let missing_required = PERSONNEL_SELECT_COLUMNS
+            .iter()
+            .filter(|column| {
+                !OPTIONAL_FINANCIAL_COLUMNS.contains(column) && !columns.contains(**column)
+            })
+            .copied()
+            .collect::<Vec<_>>();
+        if !missing_required.is_empty() {
+            return Err(crate::domain::DomainError::InvalidData(format!(
+                "Personel finansal karşılaştırması için bilinmeyen/eksik SQLite şeması: {}.",
+                missing_required.join(", ")
+            )));
+        }
+
+        let devir_columns_present = DEVIR_FINANCIAL_COLUMNS
+            .iter()
+            .filter(|column| columns.contains(**column))
+            .count();
+        if devir_columns_present != 0 && devir_columns_present != DEVIR_FINANCIAL_COLUMNS.len() {
+            return Err(crate::domain::DomainError::InvalidData(
+                "Personel finansal karşılaştırması kısmi devir sütunları içeren desteklenmeyen SQLite şemasını reddetti.".into(),
+            ));
+        }
+
+        let gv_deduction_columns_present = GV_DEDUCTION_COLUMNS
+            .iter()
+            .filter(|column| columns.contains(**column))
+            .count();
+        if gv_deduction_columns_present != 0
+            && gv_deduction_columns_present != GV_DEDUCTION_COLUMNS.len()
+        {
+            return Err(crate::domain::DomainError::InvalidData(
+                "Personel finansal karşılaştırması kısmi vergi indirimi sütunları içeren desteklenmeyen SQLite şemasını reddetti.".into(),
+            ));
+        }
+
+        let has_complete_financial_schema = PERSONNEL_SELECT_COLUMNS
+            .iter()
+            .all(|column| columns.contains(*column));
+        if !has_complete_financial_schema {
+            Self::validate_missing_financial_columns(&columns, new_p)?;
+        }
+
+        let existing = if has_complete_financial_schema {
+            Self::get_by_id(conn, id)?
+        } else {
+            Self::get_by_id_with_known_legacy_columns(conn, id, &columns)?
+        };
+        Ok(existing.is_some_and(|existing_p| {
+            payroll_core::personnel_has_financial_changes(&existing_p, new_p)
+        }))
+    }
+
+    fn personnel_column_names(conn: &Connection) -> Result<HashSet<String>> {
+        let mut statement = conn
+            .prepare("PRAGMA table_info(personnel)")
+            .map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))?;
+        rows.map(|row| {
+            row.map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))
+        })
+        .collect()
+    }
+
+    fn validate_missing_financial_columns(
+        columns: &HashSet<String>,
+        personel: &Personel,
+    ) -> Result<()> {
+        let kesintiler = personel.kesintiler.as_ref();
+        let gv = kesintiler.and_then(|value| value.gvIndirimleri.as_ref());
+        let money_is_default = |value: Option<rust_decimal::Decimal>| {
+            value.is_none_or(|amount| amount == rust_decimal::Decimal::ZERO)
+        };
+        let unsupported_values = [
+            (
+                "devir_kumulatif_gv_matrahi",
+                money_is_default(personel.devirKumulatifGvMatrahi),
+            ),
+            (
+                "devir_kumulatif_gv_matrahi_yili",
+                personel.devirKumulatifGvMatrahiYili.is_none(),
+            ),
+            (
+                "devir_kumulatif_gv_matrahi_baslangic_ayi",
+                personel.devirKumulatifGvMatrahiBaslangicAyi.is_none(),
+            ),
+            (
+                "devir_kumulatif_asgari_gv_matrahi",
+                money_is_default(personel.devirKumulatifAsgariGvMatrahi),
+            ),
+            (
+                "devir_kumulatif_asgari_gv_matrahi_yili",
+                personel.devirKumulatifAsgariGvMatrahiYili.is_none(),
+            ),
+            (
+                "dogum_askerlik_gv_indirim_tutar",
+                money_is_default(gv.and_then(|value| value.dogumAskerlikGvIndirimTutar)),
+            ),
+            (
+                "hayat_sigortasi_gv_prim_tutar",
+                money_is_default(gv.and_then(|value| value.hayatSigortasiPrimiTutar)),
+            ),
+            (
+                "saglik_sigortasi_gv_prim_tutar",
+                money_is_default(gv.and_then(|value| value.saglikSigortasiPrimiTutar)),
+            ),
+            (
+                "nafaka_tutar",
+                money_is_default(kesintiler.and_then(|value| value.nafakaTutar)),
+            ),
+        ];
+        if let Some((column, _)) = unsupported_values
+            .iter()
+            .find(|(column, is_default)| !columns.contains(*column) && !is_default)
+        {
+            return Err(crate::domain::DomainError::InvalidData(format!(
+                "Personel finansal şeması {column} alanını saklayamıyor; güncelleme reddedildi."
+            )));
+        }
+        Ok(())
+    }
+
+    fn get_by_id_with_known_legacy_columns(
+        conn: &Connection,
+        id: &str,
+        columns: &HashSet<String>,
+    ) -> Result<Option<Personel>> {
+        let select = PERSONNEL_SELECT_COLUMNS
+            .iter()
+            .map(|column| {
+                if columns.contains(*column) {
+                    (*column).to_owned()
+                } else {
+                    format!("NULL AS {column}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        conn.query_row(
+            &format!("SELECT {select} FROM personnel WHERE id = ?1"),
+            params![id],
+            Self::from_row,
+        )
+        .optional()
+        .map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))
+    }
+
     pub fn save(conn: &Connection, p: &Personel) -> Result<()> {
         with_transaction(conn, |tx| {
-            // Do not load the full row here: the write method intentionally
-            // supports pre-devir SQLite fixtures whose newer columns do not
-            // exist yet.
             let existing = tx
                 .query_row(
                     "SELECT 1 FROM personnel WHERE id = ?1",
@@ -125,7 +336,9 @@ impl PersonnelRepository {
                 .optional()
                 .map_err(|error| crate::domain::DomainError::DatabaseError(error.to_string()))?
                 .is_some();
-            let impact = existing
+            let has_financial_change =
+                existing && Self::get_existing_financial_status(tx, &p.id, p)?;
+            let impact = has_financial_change
                 .then(|| {
                     PayrollInvalidationRepository::assert_mutation_allowed(
                         tx,

@@ -52,7 +52,9 @@ pub fn save_personnel_and_tax_opening(
         .optional()
         .map_err(|e| DomainError::DatabaseError(e.to_string()))?
         .is_some();
-    let person_impact = existing
+    let has_financial_change = existing
+        && PersonnelRepository::get_existing_financial_status(&tx, &personel.id, &personel)?;
+    let person_impact = has_financial_change
         .then(|| {
             PayrollInvalidationRepository::assert_mutation_allowed(
                 &tx,

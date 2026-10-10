@@ -18,7 +18,7 @@ import {
 
 interface BrowserPersistenceAdapter {
   markClean: () => void;
-  savePayload: (
+  replacePayload: (
     payload: string,
     sourceFormat?: 'current' | 'legacy' | 'unknown'
   ) => Promise<void>;
@@ -150,10 +150,7 @@ export function useBackupController({
         return;
       }
 
-      if (isDataLoaded) {
-        await evaluateBrowserMutations({ kind: 'ALL' });
-      }
-      await browserPersistence.savePayload(serializePayrollStorage(payload));
+      await browserPersistence.replacePayload(serializePayrollStorage(payload));
       commitBrowserPayload(payload);
       onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
     } catch (err) {
@@ -192,15 +189,12 @@ export function useBackupController({
       retroAllocations: [],
     });
     try {
-      if (isDataLoaded) {
-        await evaluateBrowserMutations({ kind: 'ALL' });
-      }
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
         await reloadPersistedBackup(loadData);
         return;
       }
-      await browserPersistence.savePayload(serializePayrollStorage(payload));
+      await browserPersistence.replacePayload(serializePayrollStorage(payload));
       commitBrowserPayload(payload);
     } catch (err) {
       const message = formatBackupOperationFailure('Veriler sıfırlanamadı', err);
@@ -256,12 +250,9 @@ export function useBackupController({
         if (hasV5Authority) {
           await verifyCurrentPayrollBackupReplay(payload, payrollEngine);
         }
-        if (isDataLoaded) {
-          await evaluateBrowserMutations({ kind: 'ALL' });
-        }
         // Import is a user-visible commit point. Verify the IndexedDB write
         // before replacing the in-memory dataset or announcing success.
-        await browserPersistence.savePayload(
+        await browserPersistence.replacePayload(
           serializePayrollStorage(payload),
           hasV5Authority ? 'current' : 'legacy'
         );

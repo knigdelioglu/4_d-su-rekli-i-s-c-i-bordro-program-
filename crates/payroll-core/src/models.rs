@@ -10,7 +10,7 @@ use std::collections::HashMap;
 /// unbounded, so this is only a persistence-safe sentinel.
 pub const OPEN_ENDED_TAX_BRACKET_LIMIT: i64 = 1_000_000_000_000_000;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GvIndirimGirdileri {
     /// Doğum/askerlik borçlanmasının cari bordroda GV matrahından indirime
@@ -22,7 +22,7 @@ pub struct GvIndirimGirdileri {
     pub saglikSigortasiPrimiTutar: Option<Decimal>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonelKesintileri {
     pub sendikaUyesi: Option<bool>,
@@ -41,7 +41,7 @@ pub struct PersonelKesintileri {
     pub gvIndirimleri: Option<GvIndirimGirdileri>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Personel {
     pub id: String,

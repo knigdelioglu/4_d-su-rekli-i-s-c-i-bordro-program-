@@ -6,6 +6,7 @@ use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepositor
 use crate::repositories::payroll_repo::PayrollRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::retro_repo;
+use crate::repositories::settings_repo::SettingsRepository;
 use crate::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate, Utc};
 use payroll_core::{
@@ -461,6 +462,170 @@ impl<T> CompensationPolicyOperationResult<T> {
 pub struct CompensationPolicyService;
 
 impl CompensationPolicyService {
+    /// Saves the legacy work-premium-group setting through the dated policy
+    /// timeline. Existing groups remain immutable; changes begin at the start
+    /// of the active period, or correct the active leaf when one already starts
+    /// on the selected effective date.
+    pub fn save_work_premium_groups(conn: &Connection, groups: &[IsPrimiGrupItem]) -> Result<()> {
+        Self::validate_work_premium_groups(groups)?;
+        let groups_json = serde_json::to_string(groups)
+            .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+        crate::repositories::transaction::with_transaction(conn, |tx| {
+            Self::save_work_premium_groups_in_transaction(tx, groups, &groups_json)
+        })
+    }
+
+    fn validate_work_premium_groups(groups: &[IsPrimiGrupItem]) -> Result<()> {
+        if groups.is_empty() {
+            return Err(DomainError::InvalidData(
+                "İş primi grupları boş olamaz.".into(),
+            ));
+        }
+        let mut identifiers = BTreeMap::<String, usize>::new();
+        for (index, group) in groups.iter().enumerate() {
+            if group.id.trim().is_empty()
+                || group.ad.trim().is_empty()
+                || group.id.trim() != group.id
+                || group.ad.trim() != group.ad
+                || group.oran < rust_decimal::Decimal::ZERO
+                || group.oran > rust_decimal::Decimal::from(100)
+            {
+                return Err(DomainError::InvalidData(
+                    "İş primi grubu id/ad alanları boşluksuz olmalı; oran %0–%100 arasında olmalıdır.".into(),
+                ));
+            }
+            if !group.aktif {
+                continue;
+            }
+            for identifier in [&group.id, &group.ad] {
+                if identifiers
+                    .insert(identifier.clone(), index)
+                    .is_some_and(|owner| owner != index)
+                {
+                    return Err(DomainError::InvalidData(format!(
+                        "Aktif iş primi gruplarında yinelenen veya belirsiz id/ad: {identifier}."
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn save_work_premium_groups_in_transaction(
+        tx: &Connection,
+        groups: &[IsPrimiGrupItem],
+        groups_json: &str,
+    ) -> Result<()> {
+        let versions = CompensationPolicyRepository::get_all_versions(tx)?;
+        if versions.is_empty() {
+            return SettingsRepository::set_app_setting_in_transaction(
+                tx,
+                "is_primi_gruplari",
+                groups_json,
+            );
+        }
+
+        let periods = PeriodRepository::get_all(tx)?;
+        let active_period_id = SettingsRepository::get_app_setting(tx, "active_period_id")?;
+        let period = active_period_id
+            .as_deref()
+            .and_then(|active_id| periods.iter().find(|period| period.id == active_id))
+            .cloned()
+            .or_else(|| {
+                periods
+                    .into_iter()
+                    .max_by(|left, right| left.baslangicTarihi.cmp(&right.baslangicTarihi))
+            });
+        let Some(period) = period else {
+            return SettingsRepository::set_app_setting_in_transaction(
+                tx,
+                "is_primi_gruplari",
+                groups_json,
+            );
+        };
+
+        let active = Self::active_versions(&versions);
+        let latest_in_period = active
+            .iter()
+            .rfind(|version| {
+                version.effectiveFrom >= period.baslangicTarihi
+                    && version.effectiveFrom <= period.bitisTarihi
+            })
+            .cloned();
+        let effective_from = latest_in_period
+            .as_ref()
+            .map(|version| version.effectiveFrom.clone())
+            .unwrap_or_else(|| period.baslangicTarihi.clone());
+        let source = active
+            .iter()
+            .rfind(|version| version.effectiveFrom <= effective_from)
+            .cloned();
+        let Some(source) = source else {
+            return SettingsRepository::set_app_setting_in_transaction(
+                tx,
+                "is_primi_gruplari",
+                groups_json,
+            );
+        };
+        let policy_groups = groups
+            .iter()
+            .map(|group| CompensationPolicyGroup {
+                id: group.id.clone(),
+                ad: group.ad.clone(),
+                oran: group.oran,
+                aktif: group.aktif,
+            })
+            .collect::<Vec<_>>();
+        if source.state.isPrimiGruplari == policy_groups {
+            return SettingsRepository::set_app_setting_in_transaction(
+                tx,
+                "is_primi_gruplari",
+                groups_json,
+            );
+        }
+
+        let mut state = source.state.clone();
+        state.isPrimiGruplari = policy_groups;
+        let operation = if source.effectiveFrom == effective_from {
+            CompensationPolicyWriteOperation::SameDateCorrection {
+                effectiveFrom: effective_from.clone(),
+                state,
+                roadRoundingMode: source.roadRoundingMode,
+                reason: "İş primi grupları güncellendi".into(),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                changeIntent: "FULL_STATE_CHANGE".into(),
+                supersedesVersionId: source.id,
+            }
+        } else {
+            CompensationPolicyWriteOperation::NewEffectiveDate {
+                effectiveFrom: effective_from.clone(),
+                state,
+                roadRoundingMode: source.roadRoundingMode,
+                reason: "İş primi grupları güncellendi".into(),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                changeIntent: "FULL_STATE_CHANGE".into(),
+            }
+        };
+        let scope = CompensationPolicyReadScope {
+            institutionScope: "CURRENT_INSTITUTION".into(),
+            periodId: period.id,
+            periodStartInclusive: period.baslangicTarihi,
+            periodEndInclusive: period.bitisTarihi,
+            projectionDate: effective_from,
+        };
+        let preview = Self::preview_inner(tx, &scope, &operation).map_err(api_error_to_domain)?;
+        Self::save_inner(
+            tx,
+            &CompensationPolicySaveRequest {
+                scope,
+                operation,
+                previewToken: preview.previewToken,
+                initialBaselineConfirmation: None,
+            },
+        )?;
+        Ok(())
+    }
+
     pub fn load(
         conn: &Connection,
         request: &CompensationPolicyLoadRequest,
@@ -854,6 +1019,26 @@ impl CompensationPolicyService {
         candidate.push(version.clone());
         validate_compensation_policy_timeline(&candidate)?;
         CompensationPolicyRepository::insert_version_in_transaction(tx, &version)?;
+        if let Some(latest) = CompensationPolicyRepository::get_all_versions(tx)?.last() {
+            let groups = latest
+                .state
+                .isPrimiGruplari
+                .iter()
+                .map(|group| IsPrimiGrupItem {
+                    id: group.id.clone(),
+                    ad: group.ad.clone(),
+                    oran: group.oran,
+                    aktif: group.aktif,
+                })
+                .collect::<Vec<_>>();
+            let groups_json = serde_json::to_string(&groups)
+                .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+            SettingsRepository::set_app_setting_in_transaction(
+                tx,
+                "is_primi_gruplari",
+                &groups_json,
+            )?;
+        }
 
         let mut mutable_impact = impact.clone();
         let payroll_by_key = PayrollRepository::get_all(tx)?

@@ -638,6 +638,31 @@ async function prepareRetroBaseline() {
   };
 }
 
+async function exerciseWorkPremiumGroupSave() {
+  const lifecycle = await prepareRetroBaseline();
+  const beforeSnapshot = await browserPayrollStore.loadSnapshot();
+  if (!beforeSnapshot) throw new Error('Work-premium group fixture snapshot is missing.');
+  const before = JSON.parse(beforeSnapshot.payload) as PayrollStorageDto;
+  const original = before.compensationPolicyVersions[0];
+  if (!original) throw new Error('Work-premium group fixture policy is missing.');
+  const groups: CompensationPolicyStateWire['isPrimiGruplari'] = [
+    { id: '1. Grup', ad: 'Grup 1', oran: '11', aktif: true },
+  ];
+  const result = await getCompensationPolicyApi().saveWorkPremiumGroups(groups);
+  const afterSnapshot = await browserPayrollStore.loadSnapshot();
+  if (!afterSnapshot) throw new Error('Work-premium group save removed the browser snapshot.');
+  const after = JSON.parse(afterSnapshot.payload) as PayrollStorageDto;
+  return {
+    result,
+    original,
+    versions: after.compensationPolicyVersions,
+    groups: after.isPrimiGruplari,
+    payrollStatuses: after.bordrolar.map((payroll) => payroll.status),
+    retroStatuses: after.retroBatches.map((batch) => batch.status),
+    lifecycle: lifecycle.lifecycle,
+  };
+}
+
 async function readAuthoritativeSnapshot() {
   const snapshot = await browserPayrollStore.loadSnapshot();
   if (!snapshot) return null;
@@ -953,7 +978,7 @@ function BrowserAcceptanceApplication() {
     isDataLoaded,
     browserPersistence: {
       markClean: browserPersistence.markClean,
-      savePayload: browserPersistence.savePayload,
+      replacePayload: browserPersistence.replacePayload,
     },
     evaluateBrowserMutations,
     payrollEngine,
@@ -1125,8 +1150,19 @@ function BrowserAcceptanceApplication() {
           compensationRevisionOverrides: [],
           retroBatches: [],
           retroAllocations: [],
+          compensationPolicyVersions: authoritativePayload.compensationPolicyVersions.length > 0
+            ? [{
+              ...authoritativePayload.compensationPolicyVersions[0],
+              id: 'sentinel-unrelated-policy-history',
+              effectiveFrom: '2028-01-15',
+              supersedesVersionId: null,
+            }]
+            : [],
         };
-        await persistApplicationPayload(sentinel);
+        await browserPersistence.replacePayload(serializePayrollStorage(sentinel), 'current');
+        browserPersistence.markClean();
+        setAuthoritativePayload(sentinel);
+        setIsDataLoaded(true);
         return browserAcceptanceSummary(sentinel, true, null);
       },
       importV6BackupOverSentinel: async () => {
@@ -1289,6 +1325,23 @@ function BrowserAcceptanceApplication() {
       },
       runV5RestoreBaselineGate: async () => {
         const currentPayload = makeBrowserAcceptancePayload();
+        const preexistingV6: PayrollStorageDto = {
+          ...currentPayload,
+          bordrolar: [],
+          compensationPolicyVersions: [{
+            id: 'unrelated-v6-history-before-v5-restore',
+            effectiveFrom: currentPayload.donemler[0].baslangicTarihi,
+            state: browserAcceptanceState(),
+            boundaryScope: 'FULL_EARNING',
+            roadRoundingMode: 'PER_COMPENSATION_SLICE',
+            createdAt: '2026-10-06T00:00:00.000Z',
+            source: 'RESTORE_FIXTURE',
+            reason: 'V5 restore replacement fixture',
+            supersedesVersionId: null,
+          }],
+        };
+        await browserPersistence.replacePayload(serializePayrollStorage(preexistingV6), 'current');
+        browserPersistence.markClean();
         const v5Object: Record<string, unknown> = {
           ...currentPayload,
           backupVersion: 5,
@@ -1471,6 +1524,7 @@ declare global {
       exerciseRoadRoundingRecovery(): ReturnType<typeof exerciseRoadRoundingRecovery>;
       prepareBaseline(): ReturnType<typeof prepareBaseline>;
       prepareRetroBaseline(): ReturnType<typeof prepareRetroBaseline>;
+      exerciseWorkPremiumGroupSave(): ReturnType<typeof exerciseWorkPremiumGroupSave>;
       previewBaseline(periodId: string): ReturnType<typeof previewBaseline>;
       saveBaseline(prepared: Awaited<ReturnType<typeof previewBaseline>>): ReturnType<typeof saveBaseline>;
       readAuthoritativeSnapshot(): ReturnType<typeof readAuthoritativeSnapshot>;
@@ -1508,6 +1562,7 @@ window.__compensationPolicyBrowserApiTest = {
   exerciseRoadRoundingRecovery,
   prepareBaseline,
   prepareRetroBaseline,
+  exerciseWorkPremiumGroupSave,
   previewBaseline,
   saveBaseline,
   readAuthoritativeSnapshot,

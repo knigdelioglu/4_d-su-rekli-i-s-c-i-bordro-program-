@@ -35,6 +35,7 @@ import { useBrowserPayrollPersistence } from './services/storage/useBrowserPayro
 import { usePayrollMutationController } from './hooks/usePayrollMutationController';
 import { useBackupController } from './hooks/useBackupController';
 import { useCompensationPolicyController } from './hooks/useCompensationPolicyController';
+import { getCompensationPolicyApi } from './services/compensationPolicy/api';
 import { usePayrollNotices } from './components/PayrollNoticeCenter';
 import { DEFAULT_PRODUCTION_KURUM_DEGERLERI } from './utils/payrollPresentation';
 import { CheckCircle2, RotateCcw } from 'lucide-react';
@@ -520,11 +521,13 @@ export default function App() {
   const handleSaveIsPrimiGruplari = async (groups: IsPrimiGrupItem[]) => {
     const normalized = normalizePremiumGroups(groups);
     if (!normalized) throw new Error('İş primi grupları geçerli değil.');
-    const exactGroups = toPayrollBoundaryDto(normalized);
-    if (tauriBridge.isTauriAvailable()) {
-      await tauriBridge.setAppSetting('is_primi_gruplari', JSON.stringify(exactGroups));
-    }
-    updateAuthoritativePayload((current) => ({ ...current, isPrimiGruplari: exactGroups }));
+    const exactGroups = toPayrollBoundaryDto(normalized).map((group) => ({
+      ...group,
+      aktif: group.aktif ?? true,
+    }));
+    const result = await getCompensationPolicyApi().saveWorkPremiumGroups(exactGroups);
+    if (result.ok === false) throw new Error(result.error.message);
+    await loadData();
   };
 
   const aktifDonem = donemler.find((d) => d.id === aktifDonemId) || donemler[0];
@@ -544,14 +547,7 @@ export default function App() {
         compensationRevisionOverrides: authoritativePayload.compensationRevisionOverrides ?? [],
         retroBatches: authoritativePayload.retroBatches ?? [],
         retroAllocations: authoritativePayload.retroAllocations ?? [],
-        compensationPolicyVersions: (authoritativePayload.compensationPolicyVersions ?? []).map((version) => ({
-          ...version,
-          state: {
-            ...version.state,
-            isPrimiGruplari: (authoritativePayload.isPrimiGruplari ?? toPayrollBoundaryDto(DEFAULT_IS_PRIMI_GRUPLARI))
-              .map((group) => ({ ...group, aktif: group.aktif ?? true })),
-          },
-        })),
+        compensationPolicyVersions: authoritativePayload.compensationPolicyVersions ?? [],
       };
     }
     return toPayrollBoundaryDto(EMPTY_UI_DATASET) as unknown as PayrollDatasetSnapshot;

@@ -1,6 +1,5 @@
 use crate::domain::models::{
-    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, CompensationPolicyGroup,
-    CompensationPolicyVersion, DevredenPekKaydi, DonemselKurumDegerleri, IsPrimiGrupItem,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
     ManualPayrollIncomeInput, PayrollAccrualInput, RetroAdjustmentBatch, RetroAllocation,
 };
 use crate::domain::{DomainError, Result};
@@ -24,35 +23,6 @@ pub use payroll_core::payroll_engine::{
 pub struct PayrollService;
 
 impl PayrollService {
-    fn apply_global_premium_groups(
-        conn: &Connection,
-        versions: &mut [CompensationPolicyVersion],
-    ) -> Result<()> {
-        let Some(serialized) = SettingsRepository::get_app_setting(conn, "is_primi_gruplari")?
-        else {
-            return Ok(());
-        };
-        let groups: Vec<IsPrimiGrupItem> = serde_json::from_str(&serialized).map_err(|error| {
-            DomainError::InvalidData(format!("İş primi grupları ayarı okunamadı: {error}"))
-        })?;
-        if groups.is_empty() {
-            return Ok(());
-        }
-        let policy_groups = groups
-            .into_iter()
-            .map(|group| CompensationPolicyGroup {
-                id: group.id,
-                ad: group.ad,
-                oran: group.oran,
-                aktif: group.aktif,
-            })
-            .collect::<Vec<_>>();
-        for version in versions {
-            version.state.isPrimiGruplari = policy_groups.clone();
-        }
-        Ok(())
-    }
-
     fn active_institution_settings(
         settings: std::collections::HashMap<String, DonemselKurumDegerleri>,
     ) -> std::collections::HashMap<String, payroll_core::PayrollPeriodInstitutionSettings> {
@@ -290,13 +260,12 @@ impl PayrollService {
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let mut versions = crate::repositories::compensation_policy_repo::CompensationPolicyRepository::
+        let versions = crate::repositories::compensation_policy_repo::CompensationPolicyRepository::
             get_versions_for_period(
                 conn,
                 &active_period.baslangicTarihi,
                 &active_period.bitisTarihi,
             )?;
-        Self::apply_global_premium_groups(conn, &mut versions)?;
 
         Ok(payroll_core::PayrollDatasetSnapshot {
             personnel: vec![personnel],
@@ -1040,38 +1009,52 @@ impl PayrollService {
         accrual_id: Option<&str>,
         status: BordroStatus,
     ) -> Result<()> {
-        if status == BordroStatus::FINALIZED {
-            return Err(DomainError::ValidationError(
-                "FINALIZED geçişi için finalize_payroll API'si kullanılmalıdır.".into(),
-            ));
-        }
-        let resolved_accrual_id = match accrual_id {
-            Some(value) => value.to_owned(),
-            None => PayrollRepository::get_normal_accrual_id(conn, personnel_id, period_id)?
-                .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?,
-        };
-        let current = PayrollRepository::get_status_and_created_at_for_accrual(
-            conn,
-            personnel_id,
-            period_id,
-            &resolved_accrual_id,
-        )?;
-        let Some((current_status, _)) = current else {
-            return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
-        };
+        crate::repositories::transaction::with_transaction(conn, |tx| {
+            let resolved_accrual_id = match accrual_id {
+                Some(value) => value.to_owned(),
+                None => PayrollRepository::get_normal_accrual_id(tx, personnel_id, period_id)?
+                    .ok_or_else(|| DomainError::NotFound("Bordro kaydı bulunamadı.".into()))?,
+            };
+            let current = PayrollRepository::get_status_and_created_at_for_accrual(
+                tx,
+                personnel_id,
+                period_id,
+                &resolved_accrual_id,
+            )?;
+            let Some((current_status, _)) = current else {
+                return Err(DomainError::NotFound("Bordro kaydı bulunamadı.".into()));
+            };
 
-        if current_status == BordroStatus::FINALIZED && status != BordroStatus::FINALIZED {
-            return Err(DomainError::PayrollFinalized(
-                "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into(),
-            ));
-        }
-        PayrollRepository::update_status_for_accrual(
-            conn,
-            personnel_id,
-            period_id,
-            &resolved_accrual_id,
-            status,
-        )
+            payroll_core::validate_payroll_status_transition(current_status, status)?;
+
+            if current_status == status {
+                return Ok(());
+            }
+
+            let impact = crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::assert_mutation_allowed(
+                tx,
+                &payroll_core::PayrollMutation::AccrualCalculation {
+                    personnelId: personnel_id.to_owned(),
+                    periodId: period_id.to_owned(),
+                    accrualId: resolved_accrual_id.clone(),
+                },
+            )?;
+
+            PayrollRepository::update_status_for_accrual(
+                tx,
+                personnel_id,
+                period_id,
+                &resolved_accrual_id,
+                status,
+            )?;
+
+            crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
+                tx,
+                &impact,
+            )?;
+
+            Ok(())
+        })
     }
 
     pub fn calculate_incoming_devreden_pek(

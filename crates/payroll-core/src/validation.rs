@@ -462,3 +462,150 @@ pub fn validate_annual_payroll_parameters(parameters: &AnnualPayrollParameters) 
 
     Ok(())
 }
+
+fn opt_dec_equals_or_zero(a: Option<Decimal>, b: Option<Decimal>) -> bool {
+    let a_val = a.unwrap_or(Decimal::ZERO);
+    let b_val = b.unwrap_or(Decimal::ZERO);
+    a_val == b_val
+}
+
+fn opt_bool_equals_or_false(a: Option<bool>, b: Option<bool>) -> bool {
+    a.unwrap_or(false) == b.unwrap_or(false)
+}
+
+fn gv_indirimleri_have_financial_changes(
+    a: Option<&GvIndirimGirdileri>,
+    b: Option<&GvIndirimGirdileri>,
+) -> bool {
+    let (d1, h1, s1) = match a {
+        None => (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO),
+        Some(g) => (
+            g.dogumAskerlikGvIndirimTutar.unwrap_or(Decimal::ZERO),
+            g.hayatSigortasiPrimiTutar.unwrap_or(Decimal::ZERO),
+            g.saglikSigortasiPrimiTutar.unwrap_or(Decimal::ZERO),
+        ),
+    };
+    let (d2, h2, s2) = match b {
+        None => (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO),
+        Some(g) => (
+            g.dogumAskerlikGvIndirimTutar.unwrap_or(Decimal::ZERO),
+            g.hayatSigortasiPrimiTutar.unwrap_or(Decimal::ZERO),
+            g.saglikSigortasiPrimiTutar.unwrap_or(Decimal::ZERO),
+        ),
+    };
+    d1 != d2 || h1 != h2 || s1 != s2
+}
+
+fn kesintiler_is_effectively_empty(k: &PersonelKesintileri) -> bool {
+    !k.sendikaUyesi.unwrap_or(false)
+        && k.sabitSendikaAidati.unwrap_or(Decimal::ZERO).is_zero()
+        && !k.besUyesi.unwrap_or(false)
+        && k.oksOraniYuzde.unwrap_or(Decimal::ZERO).is_zero()
+        && k.sabitBesTutar.unwrap_or(Decimal::ZERO).is_zero()
+        && k.icraTutar.unwrap_or(Decimal::ZERO).is_zero()
+        && k.nafakaTutar.unwrap_or(Decimal::ZERO).is_zero()
+        && k.kisiBorcuTutar.unwrap_or(Decimal::ZERO).is_zero()
+        && k.dogumAskerlikBorclanmasiTutar
+            .unwrap_or(Decimal::ZERO)
+            .is_zero()
+        && k.hayatSaglikSigortasiTutar
+            .unwrap_or(Decimal::ZERO)
+            .is_zero()
+        && k.digerKesintiTutar.unwrap_or(Decimal::ZERO).is_zero()
+        && match &k.gvIndirimleri {
+            None => true,
+            Some(g) => {
+                g.dogumAskerlikGvIndirimTutar
+                    .unwrap_or(Decimal::ZERO)
+                    .is_zero()
+                    && g.hayatSigortasiPrimiTutar
+                        .unwrap_or(Decimal::ZERO)
+                        .is_zero()
+                    && g.saglikSigortasiPrimiTutar
+                        .unwrap_or(Decimal::ZERO)
+                        .is_zero()
+            }
+        }
+}
+
+fn kesintiler_have_financial_changes(
+    a: Option<&PersonelKesintileri>,
+    b: Option<&PersonelKesintileri>,
+) -> bool {
+    match (a, b) {
+        (None, None) => false,
+        (Some(k1), None) => !kesintiler_is_effectively_empty(k1),
+        (None, Some(k2)) => !kesintiler_is_effectively_empty(k2),
+        (Some(k1), Some(k2)) => {
+            !opt_bool_equals_or_false(k1.sendikaUyesi, k2.sendikaUyesi)
+                || !opt_dec_equals_or_zero(k1.sabitSendikaAidati, k2.sabitSendikaAidati)
+                || !opt_bool_equals_or_false(k1.besUyesi, k2.besUyesi)
+                || !opt_dec_equals_or_zero(k1.oksOraniYuzde, k2.oksOraniYuzde)
+                || !opt_dec_equals_or_zero(k1.sabitBesTutar, k2.sabitBesTutar)
+                || !opt_dec_equals_or_zero(k1.icraTutar, k2.icraTutar)
+                || !opt_dec_equals_or_zero(k1.nafakaTutar, k2.nafakaTutar)
+                || !opt_dec_equals_or_zero(k1.kisiBorcuTutar, k2.kisiBorcuTutar)
+                || !opt_dec_equals_or_zero(
+                    k1.dogumAskerlikBorclanmasiTutar,
+                    k2.dogumAskerlikBorclanmasiTutar,
+                )
+                || !opt_dec_equals_or_zero(
+                    k1.hayatSaglikSigortasiTutar,
+                    k2.hayatSaglikSigortasiTutar,
+                )
+                || !opt_dec_equals_or_zero(k1.digerKesintiTutar, k2.digerKesintiTutar)
+                || gv_indirimleri_have_financial_changes(
+                    k1.gvIndirimleri.as_ref(),
+                    k2.gvIndirimleri.as_ref(),
+                )
+        }
+    }
+}
+
+pub fn personnel_has_financial_changes(current: &Personel, updated: &Personel) -> bool {
+    current.grup != updated.grup
+        || current.hizmetYili != updated.hizmetYili
+        || !opt_dec_equals_or_zero(
+            current.devirKumulatifGvMatrahi,
+            updated.devirKumulatifGvMatrahi,
+        )
+        || current.devirKumulatifGvMatrahiYili != updated.devirKumulatifGvMatrahiYili
+        || current.devirKumulatifGvMatrahiBaslangicAyi
+            != updated.devirKumulatifGvMatrahiBaslangicAyi
+        || !opt_dec_equals_or_zero(
+            current.devirKumulatifAsgariGvMatrahi,
+            updated.devirKumulatifAsgariGvMatrahi,
+        )
+        || current.devirKumulatifAsgariGvMatrahiYili != updated.devirKumulatifAsgariGvMatrahiYili
+        || kesintiler_have_financial_changes(
+            current.kesintiler.as_ref(),
+            updated.kesintiler.as_ref(),
+        )
+}
+
+pub fn validate_payroll_status_transition(current: BordroStatus, next: BordroStatus) -> Result<()> {
+    if next == BordroStatus::FINALIZED {
+        return Err(DomainError::ValidationError(
+            "FINALIZED geçişi için finalize_payroll API'si kullanılmalıdır.".into(),
+        ));
+    }
+    if current == next {
+        return Ok(());
+    }
+    if current == BordroStatus::FINALIZED {
+        return Err(DomainError::PayrollFinalized(
+            "Kesinleştirilmiş (FINALIZED) bordronun durumu değiştirilemez.".into(),
+        ));
+    }
+    if current == BordroStatus::STALE && next == BordroStatus::CALCULATED {
+        return Err(DomainError::ValidationError(
+            "Yeniden hesaplanmamış STALE kayıt doğrudan CALCULATED yapılamaz; bordro yeniden hesaplanmalıdır.".into(),
+        ));
+    }
+    if current == BordroStatus::DRAFT && next == BordroStatus::CALCULATED {
+        return Err(DomainError::ValidationError(
+            "DRAFT kayıt doğrudan CALCULATED yapılamaz; bordro hesaplanmalıdır.".into(),
+        ));
+    }
+    Ok(())
+}

@@ -213,7 +213,8 @@ function writeSnapshotToDatabase(
   database: IDBDatabase,
   payload: string,
   expectedRevision: number,
-  sourceFormat: BrowserSnapshotSourceFormat
+  sourceFormat: BrowserSnapshotSourceFormat,
+  allowPolicyHistoryReplacement = false
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(OBJECT_STORE, 'readwrite');
@@ -252,7 +253,7 @@ function writeSnapshotToDatabase(
           return;
         }
 
-        if (current) {
+        if (current && !allowPolicyHistoryReplacement) {
           const existing = JSON.parse(parseStoredSnapshotPayload(current).payload) as PayrollStorageDto;
           const incoming = parseCurrentBrowserSnapshot(
             payload,
@@ -273,6 +274,27 @@ function writeSnapshotToDatabase(
           );
           writeRequest.onerror = () =>
             fail(writeRequest.error ?? new Error('IndexedDB kaydı yazılamadı.'));
+          writeRequest.onsuccess = () => {
+            const verifyRequest = store.get(CURRENT_SNAPSHOT_KEY);
+            verifyRequest.onerror = () =>
+              fail(verifyRequest.error ?? new Error('IndexedDB geri yükleme doğrulaması okunamadı.'));
+            verifyRequest.onsuccess = () => {
+              try {
+                const verified = decodeStoredSnapshot(verifyRequest.result);
+                if (
+                  !verified ||
+                  verified.payload !== payload ||
+                  verified.revision !== nextRevision ||
+                  verified.sourceFormat !== sourceFormat
+                ) {
+                  throw new Error('IndexedDB transaction içi snapshot doğrulaması başarısız.');
+                }
+              } catch (error) {
+                transaction.abort();
+                fail(error);
+              }
+            };
+          };
         }
       } catch (error) {
         transaction.abort();
@@ -286,14 +308,17 @@ async function writeAndVerify(
   database: IDBDatabase,
   payload: string,
   expectedRevision: number,
-  sourceFormat: BrowserSnapshotSourceFormat
+  sourceFormat: BrowserSnapshotSourceFormat,
+  allowPolicyHistoryReplacement = false
 ): Promise<number> {
   const revision = await writeSnapshotToDatabase(
     database,
     payload,
     expectedRevision,
-    sourceFormat
+    sourceFormat,
+    allowPolicyHistoryReplacement
   );
+  if (allowPolicyHistoryReplacement) return revision;
   const readBack = await readSnapshotFromDatabase(database);
   if (
     !readBack
@@ -484,6 +509,45 @@ export class BrowserPayrollStore {
           payload,
           expectedRevision ?? this.knownRevision ?? 0,
           sourceFormat
+        );
+        this.knownRevision = revision;
+        this.channel?.postMessage({ payload, revision, sourceFormat });
+        return revision;
+      } finally {
+        database.close();
+      }
+    });
+  }
+
+  /**
+   * Replaces the complete validated backup snapshot. This is reserved for
+   * explicit recovery/import flows; ordinary saves and domain mutations keep
+   * immutable policy-history preservation enabled.
+   */
+  async replacePayload(
+    payload: string,
+    expectedRevision?: number,
+    sourceFormat: BrowserSnapshotSourceFormat = 'current'
+  ): Promise<number> {
+    if (!hasIndexedDb()) {
+      throw new Error(
+        'Tarayıcı bordro verisi geri yüklenemedi: IndexedDB desteği bulunamadı. Payroll persistence devre dışı bırakıldı.'
+      );
+    }
+    parseCurrentBrowserSnapshot(
+      payload,
+      sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }
+    );
+
+    return this.writeQueue.enqueue(async () => {
+      const database = await openDatabase();
+      try {
+        const revision = await writeAndVerify(
+          database,
+          payload,
+          expectedRevision ?? this.knownRevision ?? 0,
+          sourceFormat,
+          true
         );
         this.knownRevision = revision;
         this.channel?.postMessage({ payload, revision, sourceFormat });

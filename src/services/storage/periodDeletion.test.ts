@@ -44,7 +44,7 @@ test('deleting one tax opening period clears only its independent opening compon
   parseCurrentBrowserSnapshot(serializePayrollStorage(result));
 });
 
-test('deleting an inactive prior period invalidates affected finalized history without changing selection', () => {
+test('deleting a period is rejected when downstream finalized records would be affected', () => {
   const original = fixture();
   original.bordrolar[0].status = 'FINALIZED';
   const payroll = original.bordrolar[0];
@@ -52,11 +52,19 @@ test('deleting an inactive prior period invalidates affected finalized history w
     ...emptyImpact,
     blockedByFinalized: [{ personnelId: payroll.personelId, periodId: payroll.donemId, accrualId: payroll.accrualId }],
   };
-  const result = deletePeriodFromPayload(original, '2025-12', impact);
-  expect(result.aktifDonemId).toBe(original.aktifDonemId);
-  expect(result.bordrolar[0].status).toBe('STALE');
-  expect(result.bordrolar[1].status).toBe(original.bordrolar[1].status);
-  parseCurrentBrowserSnapshot(serializePayrollStorage(result));
+  expect(() => deletePeriodFromPayload(original, '2025-12', impact)).toThrow(
+    'Dönem silme işlemi sonraki kesinleştirilmiş bordro veya retro kayıtlarını etkilediği için izin verilmez.'
+  );
+  expect(original.bordrolar[0].status).toBe('FINALIZED');
+});
+
+test('deleting a period containing a finalized payroll is rejected', () => {
+  const original = fixture();
+  original.bordrolar[0].status = 'FINALIZED';
+  expect(() => deletePeriodFromPayload(original, original.bordrolar[0].donemId, emptyImpact)).toThrow(
+    'Kesinleştirilmiş (FINALIZED) bordro içeren dönem silinemez.'
+  );
+  expect(original.bordrolar[0].status).toBe('FINALIZED');
 });
 
 test('last period clears selection and missing periods fail visibly', () => {

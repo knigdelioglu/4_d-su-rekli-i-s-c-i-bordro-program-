@@ -13,7 +13,7 @@ use bordro_programi_lib::repositories::settings_repo::SettingsRepository;
 use bordro_programi_lib::repositories::{money_to_kurus, opt_money_to_kurus};
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
@@ -119,6 +119,145 @@ fn setup_payroll_inputs(
     AnnualPayrollParametersRepository::save(conn, &annual)?;
     AttendanceRepository::save(conn, &attendance_for(p, &personnel.id))?;
     Ok(())
+}
+
+fn legacy_personnel_connection(omit_financial_column: Option<&str>) -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    let financial_columns = [
+        ("grup", "TEXT NOT NULL"),
+        ("hizmet_yili", "INTEGER NOT NULL"),
+        ("sendika_uyesi", "INTEGER NOT NULL"),
+        ("sabit_sendika_aidati", "INTEGER"),
+        ("bes_uyesi", "INTEGER NOT NULL"),
+        ("oks_orani_yuzde", "INTEGER"),
+        ("sabit_bes_tutar", "INTEGER"),
+        ("icra_tutar", "INTEGER"),
+        ("kisi_borcu_tutar", "INTEGER"),
+        ("dogum_askerlik_borclanmasi_tutar", "INTEGER"),
+        ("hayat_saglik_sigortasi_tutar", "INTEGER"),
+        ("diger_kesinti_tutar", "INTEGER"),
+    ];
+    let definitions = financial_columns
+        .iter()
+        .filter(|(name, _)| Some(*name) != omit_financial_column)
+        .map(|(name, definition)| format!("{name} {definition}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute_batch(&format!(
+        "CREATE TABLE personnel (
+            id TEXT PRIMARY KEY,
+            tc_no TEXT NOT NULL,
+            ad TEXT NOT NULL,
+            soyad TEXT NOT NULL,
+            unvan TEXT,
+            sgk_sicil_no TEXT NOT NULL,
+            iban TEXT NOT NULL,
+            aciklama TEXT,
+            {definitions}
+        );"
+    ))
+    .unwrap();
+    let present = |name: &str| Some(name) != omit_financial_column;
+    let mut names = vec![
+        "tc_no",
+        "ad",
+        "soyad",
+        "unvan",
+        "sgk_sicil_no",
+        "iban",
+        "aciklama",
+    ];
+    names.extend(
+        financial_columns
+            .iter()
+            .filter(|(name, _)| present(name))
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+    );
+    let columns = names.join(", ");
+    let placeholders = (1..=names.len() + 1)
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut values: Vec<rusqlite::types::Value> = vec![String::from("legacy-person").into()];
+    for name in &names {
+        let value: rusqlite::types::Value = match *name {
+            "tc_no" => String::from("10000000098").into(),
+            "ad" => String::from("Legacy").into(),
+            "soyad" => String::from("Person").into(),
+            "grup" => String::from("1. Grup").into(),
+            "hizmet_yili" => 5.into(),
+            "sgk_sicil_no" => String::from("sgk").into(),
+            "iban" => String::from("TR00").into(),
+            "sendika_uyesi" | "bes_uyesi" => 0.into(),
+            "oks_orani_yuzde" => 0.into(),
+            _ => rusqlite::types::Value::Null,
+        };
+        values.push(value);
+    }
+    conn.execute(
+        &format!("INSERT INTO personnel (id, {columns}) VALUES ({placeholders})"),
+        rusqlite::params_from_iter(values),
+    )
+    .unwrap();
+    conn
+}
+
+#[test]
+fn personnel_financial_comparison_reads_known_legacy_schema_without_losing_deductions() {
+    let conn = legacy_personnel_connection(Some("nafaka_tutar"));
+    let mut updated = person("legacy-person");
+    assert!(
+        !PersonnelRepository::get_existing_financial_status(&conn, &updated.id, &updated).unwrap()
+    );
+
+    updated.ad = "Nonfinancial change".into();
+    assert!(
+        !PersonnelRepository::get_existing_financial_status(&conn, &updated.id, &updated).unwrap()
+    );
+    updated.kesintiler.as_mut().unwrap().sabitSendikaAidati = Some(dec!(12));
+    assert!(
+        PersonnelRepository::get_existing_financial_status(&conn, &updated.id, &updated)
+            .expect("legacy comparison should include every stored financial field")
+    );
+}
+
+#[test]
+fn personnel_financial_comparison_rejects_unknown_incomplete_schema() {
+    let conn = legacy_personnel_connection(Some("sabit_sendika_aidati"));
+    let updated = person("legacy-person");
+    let error = PersonnelRepository::get_existing_financial_status(&conn, &updated.id, &updated)
+        .expect_err("an unrecognized missing financial column must fail closed");
+    assert!(error.to_string().contains("şema") || error.to_string().contains("financial"));
+}
+
+#[test]
+fn personnel_financial_comparison_rejects_partial_known_legacy_column_group() {
+    let conn = legacy_personnel_connection(None);
+    conn.execute_batch("ALTER TABLE personnel ADD COLUMN dogum_askerlik_gv_indirim_tutar INTEGER;")
+        .unwrap();
+    let updated = person("legacy-person");
+    let error = PersonnelRepository::get_existing_financial_status(&conn, &updated.id, &updated)
+        .expect_err(
+            "partial GV deduction migration group must not be treated as a supported schema",
+        );
+    assert!(error.to_string().contains("kısmi vergi indirimi"));
+}
+
+#[test]
+fn personnel_financial_comparison_propagates_existing_row_read_errors() {
+    let conn = legacy_personnel_connection(Some("nafaka_tutar"));
+    conn.execute(
+        "UPDATE personnel SET sabit_sendika_aidati = 'not-a-money-value' WHERE id = ?1",
+        ["legacy-person"],
+    )
+    .unwrap();
+
+    let updated = person("legacy-person");
+    assert!(
+        PersonnelRepository::get_existing_financial_status(&conn, &updated.id, &updated).is_err(),
+        "an existing-row decode error must not fall back to comparing only group and service years"
+    );
 }
 
 #[test]

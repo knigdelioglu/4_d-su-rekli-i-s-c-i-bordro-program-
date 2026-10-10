@@ -194,6 +194,48 @@ export function useBrowserPayrollPersistence({
     [persistPayload]
   );
 
+  const replacePayload = useCallback(
+    async (
+      payload: string,
+      sourceFormat: 'current' | 'legacy' | 'unknown' = 'current'
+    ): Promise<void> => {
+      pendingWriteCount.current += 1;
+      const persist = saveChain.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            const canonicalPayload = parseCurrentBrowserSnapshot(
+              payload,
+              sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }
+            );
+            await validatePayrollMetadataThroughCore(canonicalPayload);
+            if (sourceFormat === 'current') {
+              await verifyCurrentPayrollBackupReplay(canonicalPayload, payrollEngine);
+            }
+            const revision = await browserPayrollStore.replacePayload(
+              payload,
+              snapshotRevision.current,
+              sourceFormat
+            );
+            snapshotRevision.current = revision;
+            markClean();
+          } catch (error) {
+            if (error instanceof BrowserSnapshotConflictError) {
+              recordExternalConflict(null, error.actualRevision);
+            }
+            throw error;
+          }
+        });
+      saveChain.current = persist.then(() => undefined, () => undefined);
+      try {
+        await persist;
+      } finally {
+        pendingWriteCount.current = Math.max(0, pendingWriteCount.current - 1);
+      }
+    },
+    [markClean, payrollEngine, recordExternalConflict]
+  );
+
   const reloadExternalSnapshot = useCallback(async (): Promise<void> => {
     const saved = await browserPayrollStore.loadSnapshot();
     await verifyStoredSnapshot(saved);
@@ -285,6 +327,7 @@ export function useBrowserPayrollPersistence({
     markClean,
     markDirty,
     savePayload,
+    replacePayload,
     hasExternalConflict,
     externalRevision,
     reloadExternalSnapshot,

@@ -51,7 +51,9 @@ function createMemoryIndexedDb(initialSnapshot?: unknown) {
             values.set(key, structuredClone(value));
             queueMicrotask(() => {
               (request.onsuccess as ((event: Event) => void) | undefined)?.(new Event('success'));
-              (transaction.oncomplete as ((event: Event) => void) | undefined)?.(new Event('complete'));
+              queueMicrotask(() =>
+                (transaction.oncomplete as ((event: Event) => void) | undefined)?.(new Event('complete'))
+              );
             });
             return request;
           },
@@ -663,6 +665,67 @@ describe('BrowserPayrollStore', () => {
     }
   });
 
+  test('keeps normal policy history immutable but permits a validated full snapshot replacement', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const fakeDatabase = createMemoryIndexedDb();
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { indexedDB: fakeDatabase.indexedDB },
+    });
+
+    try {
+      await browserPayrollStore.loadSnapshot();
+      const policy = {
+        id: 'restore-source-policy',
+        effectiveFrom: '2026-01-15',
+        state: {
+          gunlukTabanUcret: '100', gunlukYemek: '20', birlestirilmisSosyalYardim: '10',
+          gunlukVasitaYol: '5', giyimYardimi: '0', hizmetZammiBirimi: '0',
+          isPrimiYuzde: '9', isPrimiGruplari: [{ id: 'group-1', ad: '1. Grup', oran: '9', aktif: true }],
+          geceCalismaPrimiYuzde: '0', geceCalismaTatiliPrimiYuzde: '0', ekOdeme: '0', digerGelirVarsayilan: '0',
+        },
+        boundaryScope: 'FULL_EARNING',
+        roadRoundingMode: 'PERIOD_TOTAL',
+        createdAt: '2026-02-14T10:00:00.000Z',
+        source: 'TEST',
+        reason: 'Restore fixture',
+        supersedesVersionId: null,
+      };
+      const validSnapshot = makeRealisticSnapshot();
+      const base = {
+        ...validSnapshot,
+        bordrolar: [{ ...validSnapshot.bordrolar[0], netOdeme: '3000.00' }],
+      };
+      const original = { ...base, compensationPolicyVersions: [policy] };
+      const originalPayload = serializePayrollStorage(original);
+      const revision = await browserPayrollStore.savePayload(originalPayload);
+      const replacement = {
+        ...base,
+        exportedAt: '2026-10-09T10:00:00.000Z',
+        compensationPolicyVersions: [],
+      };
+
+      await expect(browserPayrollStore.savePayload(serializePayrollStorage(replacement), revision))
+        .rejects.toThrow('Immutable policy restore');
+      expect(fakeDatabase.values.get('current')).toMatchObject({
+        payload: originalPayload,
+        revision,
+      });
+      const restoredRevision = await browserPayrollStore.replacePayload(
+        serializePayrollStorage(replacement), revision, 'current'
+      );
+
+      expect(restoredRevision).toBe(revision + 1);
+      const restored = await browserPayrollStore.loadSnapshot();
+      expect(restored?.revision).toBeGreaterThan(restoredRevision - 1);
+      expect(parseCurrentBrowserSnapshot(restored!.payload).compensationPolicyVersions).toEqual([]);
+      expect(parseCurrentBrowserSnapshot(restored!.payload).bordrolar[0].id).toBe('person-1_2026-01');
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as { window?: unknown }).window;
+    }
+  });
+
   test('rejects malformed or unsupported legacy payloads before migration', () => {
     expect(isMigratableBackupPayload('{not-json')).toBe(false);
     expect(isMigratableBackupPayload(JSON.stringify({ backupVersion: 4 }))).toBe(false);
@@ -833,6 +896,21 @@ describe('BrowserPayrollStore', () => {
     const snapshot = metadata.snapshot as TestRecord;
     snapshot.snapshotSchemaVersion = 1;
     await expect(validatePayrollMetadataThroughCore(forged)).rejects.toThrow();
+  });
+
+  test('accepts the current WASM payroll snapshot calculation version at the V6 restore boundary', () => {
+    const payload = parseTestSnapshot(makeV2Snapshot());
+    const fixture = JSON.parse(readFileSync(
+      new URL('../../../crates/payroll-core/tests/fixtures/v6-current-engine-snapshot.json', import.meta.url),
+      'utf8'
+    )) as TestRecord;
+    payload.bordrolar = [firstRecord(fixture, 'bordrolar')];
+    payload.donemler = fixture.donemler as PayrollStorageDto['donemler'];
+    payload.compensationPolicyVersions = fixture.compensationPolicyVersions as PayrollStorageDto['compensationPolicyVersions'];
+    const metadata = payload.bordrolar[0].calculationMetadata as unknown as TestRecord;
+    (metadata.snapshot as TestRecord).calculationVersion = 'compensation-engine-v2';
+
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
   });
 
   test('persists a separate nafaka amount through the current browser backup contract', () => {

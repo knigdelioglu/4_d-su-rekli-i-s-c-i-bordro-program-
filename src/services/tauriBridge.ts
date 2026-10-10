@@ -425,4 +425,18 @@ export const tauriCompensationPolicyApi: CompensationPolicyApi = {
   load: (request) => tauriBridge.loadCompensationPolicy(request),
   preview: (request) => tauriBridge.previewCompensationPolicy(request),
   save: (request) => tauriBridge.saveCompensationPolicy(request),
+  async saveWorkPremiumGroups(groups) {
+    try {
+      await tauriBridge.setAppSetting('is_primi_gruplari', JSON.stringify(groups));
+      return { ok: true, value: null };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          code: 'UNAVAILABLE',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  },
 };

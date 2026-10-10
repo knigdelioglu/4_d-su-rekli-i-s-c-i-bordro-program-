@@ -20,6 +20,9 @@ import {
   applyBrowserPayrollImpact,
   applyBrowserRetroBatchImpact,
   assertBrowserMutationImpactAllowed,
+  personnelHasFinancialChanges,
+  taxOpeningHasFinancialChanges,
+  validatePayrollStatusTransition,
 } from '../services/storage/browserPayrollPolicies';
 import {
   MutationImpact,
@@ -302,11 +305,16 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
-    const impact = await evaluateBrowserMutations({ kind: 'PERSON', personnelId: newPersonel.id });
+    const existing = authoritativePayload.personeller.find((person) => person.id === newPersonel.id);
+    const hasFinancialChange =
+      !existing || personnelHasFinancialChanges(existing, newPersonel as Personel);
+    const impact = hasFinancialChange
+      ? await evaluateBrowserMutations({ kind: 'PERSON', personnelId: newPersonel.id })
+      : undefined;
     updateAuthoritativePayload((current) => {
-      const existing = current.personeller.find((person) => person.id === newPersonel.id);
-      const exactPersonel = mergePayrollUiIntoBoundary(existing, newPersonel);
-      const personeller = existing
+      const existingInCurrent = current.personeller.find((person) => person.id === newPersonel.id);
+      const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, newPersonel);
+      const personeller = existingInCurrent
         ? current.personeller.map((person) =>
             person.id === newPersonel.id ? exactPersonel : person
           )
@@ -314,8 +322,8 @@ export function usePayrollMutationController({
       return {
         ...current,
         personeller,
-        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
-        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
+        bordrolar: impact ? applyBrowserPayrollImpact(current.bordrolar, impact) : current.bordrolar,
+        retroBatches: impact ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact) : current.retroBatches,
       };
     });
   };
@@ -340,18 +348,35 @@ export function usePayrollMutationController({
       return;
     }
 
-    const impact = await evaluateBrowserMutations([
-      { kind: 'PERSON', personnelId: newPersonel.id },
-      {
+    const existingPersonel = authoritativePayload.personeller.find((person) => person.id === newPersonel.id);
+    const personHasFinancialChange =
+      !existingPersonel || personnelHasFinancialChanges(existingPersonel, newPersonel as Personel);
+
+    const existingOpening = authoritativePayload.taxOpenings?.find(
+      (o) => o.personnelId === opening.personnelId && o.year === opening.year
+    );
+    const openingHasFinancialChange = taxOpeningHasFinancialChanges(
+      existingOpening,
+      opening as PersonelTaxOpening
+    );
+
+    const mutations: PayrollMutation[] = [];
+    if (personHasFinancialChange) {
+      mutations.push({ kind: 'PERSON', personnelId: newPersonel.id });
+    }
+    if (openingHasFinancialChange) {
+      mutations.push({
         kind: 'PERSON_TAX_YEAR',
         personnelId: opening.personnelId,
         taxYear: opening.year,
-      },
-    ]);
+      });
+    }
+
+    const impact = mutations.length > 0 ? await evaluateBrowserMutations(mutations) : undefined;
     updateAuthoritativePayload((current) => {
-      const existingPersonel = current.personeller.find((person) => person.id === newPersonel.id);
-      const exactPersonel = mergePayrollUiIntoBoundary(existingPersonel, newPersonel);
-      const personeller = existingPersonel
+      const existingInCurrent = current.personeller.find((person) => person.id === newPersonel.id);
+      const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, newPersonel);
+      const personeller = existingInCurrent
         ? current.personeller.map((person) =>
             person.id === newPersonel.id ? exactPersonel : person
           )
@@ -360,8 +385,8 @@ export function usePayrollMutationController({
         ...current,
         personeller,
         taxOpenings: mergeBrowserTaxOpening(current.taxOpenings, opening),
-        bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
-        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
+        bordrolar: impact ? applyBrowserPayrollImpact(current.bordrolar, impact) : current.bordrolar,
+        retroBatches: impact ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact) : current.retroBatches,
       };
     });
   };
@@ -407,6 +432,7 @@ export function usePayrollMutationController({
       taxYear: period.taxYear,
       taxMonth: period.taxMonth,
     }, latestPayrollDataset.current);
+    assertBrowserMutationImpactAllowed(impact);
     updateAuthoritativePayload((current) => deletePeriodFromPayload(current, periodId, impact));
   };
 
@@ -771,6 +797,9 @@ export function usePayrollMutationController({
     const existing = policySnapshot.payrolls.find(
       (payroll) => payroll.id === updatedBordro.id || payroll.accrualId === updatedBordro.accrualId
     );
+    if (!calculationSnapshot && existing) {
+      validatePayrollStatusTransition(existing.status, updatedBordro.status);
+    }
     const mutation: PayrollMutation = existing
       ? {
           kind: 'ACCRUAL_CALCULATION',

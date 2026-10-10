@@ -66,6 +66,21 @@ function same(left: unknown, right: unknown): boolean {
   return JSON.stringify(stable(left)) === JSON.stringify(stable(right));
 }
 
+function sameDecimalValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  const canonical = (value: string) => {
+    const match = /^([+-]?)(\d+)(?:\.(\d+))?$/u.exec(value);
+    if (!match) return null;
+    const whole = match[2].replace(/^0+(?=\d)/u, '') || '0';
+    const fraction = (match[3] ?? '').replace(/0+$/u, '');
+    const negative = match[1] === '-' && (whole !== '0' || fraction.length > 0);
+    return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}`;
+  };
+  const leftValue = canonical(left);
+  return leftValue !== null && leftValue === canonical(right);
+}
+
 function errorResult<T>(error: unknown): CompensationPolicyOperationResult<T> {
   if (error instanceof PolicyApiFailure) return failure(error.apiError);
   if (error instanceof BrowserSnapshotConflictError) {
@@ -224,6 +239,45 @@ function activeVersions(versions: CompensationPolicyVersionWire[]): Compensation
   const ordered = orderedVersions(versions);
   const superseded = new Set(ordered.flatMap((version) => version.supersedesVersionId ?? []));
   return ordered.filter((version) => !superseded.has(version.id));
+}
+
+function validateWorkPremiumGroups(
+  groups: CompensationPolicyStateWire['isPrimiGruplari']
+): void {
+  if (!Array.isArray(groups) || groups.length === 0) {
+    raise('INVALID_REQUEST', 'İş primi grupları boş olamaz.');
+  }
+  const identifiers = new Map<string, number>();
+  groups.forEach((group, index) => {
+    const rate = /^([+-]?)(\d+)(?:\.(\d+))?$/u.exec(group.oran);
+    if (
+      !group.id.trim() || !group.ad.trim() || group.id !== group.id.trim() || group.ad !== group.ad.trim() ||
+      !rate || (rate[1] === '-' && /[1-9]/u.test(`${rate[2]}${rate[3] ?? ''}`)) ||
+      BigInt(rate[2]) > 100n || (BigInt(rate[2]) === 100n && /[1-9]/u.test(rate[3] ?? ''))
+    ) {
+      raise('INVALID_REQUEST', 'İş primi grubu id/ad alanları boşluksuz olmalı; oran %0–%100 arasında olmalıdır.');
+    }
+    if (!group.aktif) return;
+    for (const identifier of [group.id, group.ad]) {
+      const previousIndex = identifiers.get(identifier);
+      if (previousIndex !== undefined && previousIndex !== index) {
+        raise('INVALID_REQUEST', `Aktif iş primi gruplarında yinelenen veya belirsiz id/ad: ${identifier}.`);
+      }
+      identifiers.set(identifier, index);
+    }
+  });
+}
+
+function sameWorkPremiumGroups(
+  left: CompensationPolicyStateWire['isPrimiGruplari'] | undefined,
+  right: CompensationPolicyStateWire['isPrimiGruplari']
+): boolean {
+  if (!left || left.length !== right.length) return false;
+  return left.every((group, index) => {
+    const other = right[index];
+    return group.id === other.id && group.ad === other.ad && group.aktif === other.aktif &&
+      sameDecimalValue(group.oran, other.oran);
+  });
 }
 
 function roadRoundingIssues(versions: CompensationPolicyVersionWire[]) {
@@ -807,6 +861,8 @@ const browserCompensationPolicyApi: CompensationPolicyApi = {
         const staleBatchIds = new Set(staleRetroEffects.map((effect) => effect.batchId));
         const stalePaymentEventIds = new Set(staleRetroEffects.flatMap((effect) => effect.linkedPaymentEventIds));
         const staleNow = new Date().toISOString();
+        const nextPolicyVersions = [...current.compensationPolicyVersions, version];
+        const latestActivePolicy = activeVersions(nextPolicyVersions).at(-1);
         receipt = {
           version,
           invalidatedPayrolls: current.bordrolar.flatMap((payroll) => {
@@ -826,7 +882,8 @@ const browserCompensationPolicyApi: CompensationPolicyApi = {
         };
         return {
           ...current,
-          compensationPolicyVersions: [...current.compensationPolicyVersions, version],
+          isPrimiGruplari: latestActivePolicy?.state.isPrimiGruplari ?? current.isPrimiGruplari,
+          compensationPolicyVersions: nextPolicyVersions,
           retroBatches: current.retroBatches.map((batch) =>
             staleBatchIds.has(batch.id) && batch.status === 'CALCULATED'
               ? { ...batch, status: 'STALE' }
@@ -842,6 +899,74 @@ const browserCompensationPolicyApi: CompensationPolicyApi = {
       });
       if (!receipt) raise('PERSISTENCE', 'Kaydetme sonucu oluşturulamadı.');
       return success({ ...receipt, authoritativeReloadRequired: true as const });
+    } catch (error) {
+      return errorResult(error);
+    }
+  },
+
+  async saveWorkPremiumGroups(groups) {
+    try {
+      validateWorkPremiumGroups(groups);
+      const payload = await loadBrowserPayload();
+      const mirrorGroups = payload.isPrimiGruplari as CompensationPolicyStateWire['isPrimiGruplari'] | undefined;
+      const persistMirrorOnly = async () => {
+        if (!sameWorkPremiumGroups(mirrorGroups, groups)) {
+          await browserPayrollStore.mutateSnapshot((current) => ({
+            ...current,
+            isPrimiGruplari: groups,
+          }));
+        }
+        return success<CompensationPolicySaveReceipt | null>(null);
+      };
+      const periods = payload.donemler;
+      const period = periods.find((item) => item.id === payload.aktifDonemId) ??
+        [...periods].sort((left, right) => left.baslangicTarihi.localeCompare(right.baslangicTarihi)).at(-1);
+      const versions = orderedVersions(payload.compensationPolicyVersions);
+      if (!period || versions.length === 0) return await persistMirrorOnly();
+
+      const active = activeVersions(versions);
+      const latestInPeriod = active.filter((version) =>
+        version.effectiveFrom >= period.baslangicTarihi && version.effectiveFrom <= period.bitisTarihi
+      ).at(-1);
+      const effectiveFrom = latestInPeriod?.effectiveFrom ?? period.baslangicTarihi;
+      const source = active.filter((version) => version.effectiveFrom <= effectiveFrom).at(-1);
+      if (!source || sameWorkPremiumGroups(source.state.isPrimiGruplari, groups)) {
+        return await persistMirrorOnly();
+      }
+
+      const scope: CompensationPolicyLoadRequest['scope'] = {
+        institutionScope: 'CURRENT_INSTITUTION',
+        periodId: period.id,
+        periodStartInclusive: period.baslangicTarihi,
+        periodEndInclusive: period.bitisTarihi,
+        projectionDate: effectiveFrom,
+      };
+      const operation: CompensationPolicyPreviewRequest['operation'] = source.effectiveFrom === effectiveFrom
+        ? {
+          kind: 'SAME_DATE_CORRECTION',
+          effectiveFrom,
+          state: { ...source.state, isPrimiGruplari: groups },
+          boundaryScope: 'FULL_EARNING',
+          changeIntent: 'FULL_STATE_CHANGE',
+          roadRoundingMode: source.roadRoundingMode,
+          reason: 'İş primi grupları güncellendi',
+          supersedesVersionId: source.id,
+        }
+        : {
+          kind: 'NEW_EFFECTIVE_DATE',
+          effectiveFrom,
+          state: { ...source.state, isPrimiGruplari: groups },
+          boundaryScope: 'FULL_EARNING',
+          changeIntent: 'FULL_STATE_CHANGE',
+          roadRoundingMode: source.roadRoundingMode,
+          reason: 'İş primi grupları güncellendi',
+        };
+      const preview = calculatePreview(payload, scope, operation, await getWasmRuntime());
+      return await browserCompensationPolicyApi.save({
+        scope,
+        operation,
+        previewToken: preview.previewToken,
+      });
     } catch (error) {
       return errorResult(error);
     }
