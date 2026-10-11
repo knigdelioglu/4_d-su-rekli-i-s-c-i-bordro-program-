@@ -2,7 +2,7 @@
  * 4/D Sürekli İşçi Bordro Programı - Excel Export Utility
  */
 
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { tauriBridge } from '../services/tauriBridge';
 
 export interface ExcelExportColumn {
@@ -11,6 +11,8 @@ export interface ExcelExportColumn {
   width?: number;
   /** Derives the width from the header and all exported cell values. */
   autoWidth?: { min?: number; max?: number };
+  /** Persists Excel's wrap-text alignment for values that exceed the column width. */
+  wrapText?: boolean;
   numFmt?: string;
 }
 
@@ -70,10 +72,20 @@ export async function exportToExcel<T extends Record<string, any>>(
   const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
 
   columns.forEach((column, columnIndex) => {
-    if (!column.numFmt) return;
     for (let rowIndex = 1; rowIndex < worksheetData.length; rowIndex += 1) {
       const cell = worksheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })];
-      if (cell && typeof cell.v === 'number') cell.z = column.numFmt;
+      if (!cell) continue;
+      if (column.numFmt && typeof cell.v === 'number') cell.z = column.numFmt;
+      if (column.wrapText && typeof cell.v === 'string') {
+        cell.s = {
+          ...cell.s,
+          alignment: {
+            ...cell.s?.alignment,
+            vertical: 'top',
+            wrapText: true,
+          },
+        };
+      }
     }
   });
 
@@ -97,7 +109,7 @@ export async function exportToExcel<T extends Record<string, any>>(
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   if (typeof document !== 'undefined') {
-    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array', cellStyles: true });
     if (tauriBridge.isTauriAvailable()) {
       const excelBytes = Array.from(new Uint8Array(excelBuffer));
       return tauriBridge.exportExcel(excelBytes, `${fileName}.xlsx`);

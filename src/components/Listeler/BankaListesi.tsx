@@ -24,7 +24,7 @@ interface BankaListesiProps {
 
 export const BANKA_EXCEL_COLUMNS: ExcelExportColumn[] = [
   { header: 'T.C. Kimlik No', key: 'tcNo', width: 18 },
-  { header: 'Ad Soyad', key: 'adSoyad', autoWidth: { min: 26, max: 80 } },
+  { header: 'Ad Soyad', key: 'adSoyad', autoWidth: { min: 26, max: 80 }, wrapText: true },
   { header: 'İş Primi Grubu', key: 'unvan', width: 22 },
   { header: 'IBAN', key: 'iban', width: 32 },
   { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },

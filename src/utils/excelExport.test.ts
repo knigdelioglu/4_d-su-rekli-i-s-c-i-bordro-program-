@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { strFromU8, unzipSync } from 'fflate';
 import * as XLSX from 'xlsx';
 import { exportToExcel, printElement } from './excelExport';
 import {
@@ -279,6 +280,58 @@ describe('exportToExcel', () => {
       expect(sheet.G3).toMatchObject({ t: 'n', v: 1_744_659.78, z: '#,##0.00' });
       expect(sheet['!cols']?.[1]?.wch).toBe(Array.from(longName).length + 2);
       expect(sheet['!cols']?.[1]?.wch).toBeGreaterThan(26);
+    } finally {
+      (globalThis as any).document = originalDoc;
+      (globalThis as any).window = originalWindow;
+    }
+  });
+
+  test('persists wrap-text for names beyond the capped bank column width without truncating the value', async () => {
+    const originalDoc = (globalThis as any).document;
+    const originalWindow = (globalThis as any).window;
+    let xlsxBytes: number[] | undefined;
+    const veryLongName = `${'Çağıl Özçelik '.repeat(8)}Yılmaz`;
+    expect(Array.from(veryLongName).length).toBeGreaterThan(80);
+    const nameSplit = veryLongName.lastIndexOf(' ');
+    const entries = [{
+      personel: {
+        tcNo: '12345678901',
+        ad: veryLongName.slice(0, nameSplit),
+        soyad: veryLongName.slice(nameSplit + 1),
+        grup: '1. Grup',
+        iban: 'TR330006100519786457841326',
+      },
+      paymentDate: '2028-06-30',
+      accrualTypeLabel: 'Normal Maaş',
+      bordro: { netOdeme: 125.5 },
+    }] as any;
+    const rows = buildBankaExcelRows(entries);
+    const summary = buildBankaExcelSummary(rows.reduce((sum, row) => sum + row.netOdeme, 0));
+
+    (globalThis as any).document = { createElement: () => ({ click() {} }), body: { appendChild() {}, removeChild() {} } };
+    (globalThis as any).window = {
+      __TAURI_INTERNALS__: {
+        invoke: async (_command: string, args: { excelBytes: number[] }) => {
+          xlsxBytes = args.excelBytes;
+          return true;
+        },
+      },
+    };
+
+    try {
+      await exportToExcel('wrapped_bank_names', 'Banka Listesi', BANKA_EXCEL_COLUMNS, rows, summary);
+      expect(xlsxBytes).toBeDefined();
+      const workbook = XLSX.read(new Uint8Array(xlsxBytes!), { type: 'array', cellStyles: true });
+      const sheet = workbook.Sheets['Banka Listesi'];
+      expect(sheet.B2).toMatchObject({ t: 's', v: veryLongName });
+      const xlsxFiles = unzipSync(new Uint8Array(xlsxBytes!));
+      const stylesXml = strFromU8(xlsxFiles['xl/styles.xml']);
+      const sheetXml = strFromU8(xlsxFiles['xl/worksheets/sheet1.xml']);
+      expect(stylesXml).toMatch(/<alignment[^>]*wrapText="(?:1|true)"/);
+      expect(sheetXml).toMatch(/<c[^>]*r="B2"[^>]*s="\d+"/);
+      expect(sheet['!cols']?.[1]?.wch).toBe(80);
+      expect(sheet.G2).toMatchObject({ t: 'n', v: 125.5, z: '#,##0.00' });
+      expect(sheet.G3).toMatchObject({ t: 'n', v: 125.5, z: '#,##0.00' });
     } finally {
       (globalThis as any).document = originalDoc;
       (globalThis as any).window = originalWindow;
