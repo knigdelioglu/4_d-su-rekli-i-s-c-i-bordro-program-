@@ -7,6 +7,7 @@ type WasmExports = {
   calculate_compensation_policy_payroll_json: (requestJson: string) => string;
   resolve_compensation_policy_timeline_json: (requestJson: string) => string;
   find_compensation_policy_rounding_issues_json: (requestJson: string) => string;
+  validate_no_new_compensation_policy_rounding_conflicts_json: (requestJson: string) => void;
   calculate_retro_preview_json: (requestJson: string) => string;
   finalize_payroll_json: (requestJson: string) => string;
   finalize_compensation_policy_payroll_json: (requestJson: string) => string;

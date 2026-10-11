@@ -105,7 +105,10 @@ type StoredAnnualPayrollParameters = {
 
 type StoredSnapshot = {
   bordrolar: StoredPayroll[];
+  aktifDonemId?: string;
   puantajlar: Array<{ personelId: string; donemId: string; gunler: Record<string, string> }>;
+  retroBatches?: unknown[];
+  retroAllocations?: unknown[];
   compensationPolicyVersions?: Array<Record<string, unknown>>;
   isPrimiGruplari?: Array<{ id: string; ad: string; oran: string | number; aktif: boolean }>;
   taxOpenings?: Array<{
@@ -1822,9 +1825,27 @@ test('service period içinde iki yol tutarı değişikliği doğru tarihlerden h
 });
 
 
-test('period deletion confirms, removes finalized history, persists and supports an empty period list', async ({ page }) => {
+test('period deletion preserves finalized history and removes an allowed unfinalized period', async ({ page }) => {
   await page.goto('/');
   await loadSampleDataset(page);
+
+  const initial = await readStoredSnapshot(page);
+  const allowedPeriod = initial?.donemler.find((period) => period.id !== initial.aktifDonemId);
+  expect(allowedPeriod).toBeDefined();
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-donemler').click();
+  await page.getByTestId(`delete-period-${allowedPeriod!.id}`).click();
+  const allowedConfirmation = page.getByRole('region', { name: 'Dönem silme onayı' });
+  await expect(allowedConfirmation).toContainText('Kesinleştirilmiş bordro veya retro içeren dönemler');
+  await allowedConfirmation.getByRole('button', { name: 'Evet, Dönemi Sil' }).click();
+  await expect(page.getByTestId(`period-row-${allowedPeriod!.id}`)).toHaveCount(0);
+  await expect.poll(async () => {
+    const data = await readStoredSnapshot(page);
+    return !data?.donemler.some((period) => period.id === allowedPeriod!.id) &&
+      !data?.puantajlar.some((attendance) => attendance.donemId === allowedPeriod!.id) &&
+      !data?.kurumDegerleriMap[allowedPeriod!.id];
+  }).toBe(true);
+
   const periodId = await openPayrollScreen(page);
   await calculateP1(page, periodId);
   const row = page.locator('tbody tr').filter({ hasText: 'Ahmet Yılmaz' }).first();
@@ -1834,26 +1855,38 @@ test('period deletion confirms, removes finalized history, persists and supports
   await waitForPayrollStatus(page, periodId, 'FINALIZED');
   await page.getByTestId('nav-parametrelar').click();
   await page.getByTestId('nav-parametre-donemler').click();
+  const immutableSnapshotBefore = await readStoredPayload(page);
+  const immutableDataBefore = JSON.parse(immutableSnapshotBefore!) as StoredSnapshot;
   await page.getByTestId(`delete-period-${periodId}`).click();
   const confirmation = page.getByRole('region', { name: 'Dönem silme onayı' });
-  await expect(confirmation).toContainText('kesinleşmiş olanlar dahil');
-  await confirmation.getByRole('button', { name: 'Vazgeç' }).click();
+  await expect(confirmation).toContainText('Kesinleştirilmiş bordro veya retro içeren dönemler');
+  await confirmation.getByRole('button', { name: 'Evet, Dönemi Sil' }).click();
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('Dönem silinemedi:');
+  await expect(alert).toContainText('Kesinleştirilmiş bordro/retro tarihçesini etkileyen veri değiştirilemez');
+  await expect(alert).toContainText('Geriye Dönük Farklar ekranını kullanın.');
   await expect(page.getByTestId(`period-row-${periodId}`)).toBeVisible();
   await waitForPayrollStatus(page, periodId, 'FINALIZED');
-  await page.getByTestId(`delete-period-${periodId}`).click();
-  await confirmation.getByRole('button', { name: 'Evet, Dönemi Sil' }).click();
-  await expect(page.getByTestId(`period-row-${periodId}`)).toHaveCount(0);
-  await expect.poll(async () => {
-    const data = JSON.parse((await readStoredPayload(page))!);
-    return !data.donemler.some((p: { id: string }) => p.id === periodId) &&
-      !data.bordrolar.some((p: { donemId: string }) => p.donemId === periodId) &&
-      !data.puantajlar.some((p: { donemId: string }) => p.donemId === periodId) &&
-      !data.kurumDegerleriMap[periodId] && data.aktifDonemId !== periodId;
-  }).toBe(true);
+  const immutableSnapshotAfter = await readStoredPayload(page);
+  expect(immutableSnapshotAfter).toBe(immutableSnapshotBefore);
+  const immutableDataAfter = JSON.parse(immutableSnapshotAfter!) as StoredSnapshot;
+  expect(immutableDataAfter.bordrolar).toEqual(immutableDataBefore.bordrolar);
+  expect(immutableDataAfter.retroBatches).toEqual(immutableDataBefore.retroBatches);
+  expect(immutableDataAfter.retroAllocations).toEqual(immutableDataBefore.retroAllocations);
+  expect(immutableDataAfter.donemler).toEqual(immutableDataBefore.donemler);
   await page.reload();
-  await expect(page.getByTestId(`period-row-${periodId}`)).toHaveCount(0);
-  const data = JSON.parse((await readStoredPayload(page))!);
-  for (const period of data.donemler) {
+  await expect(page.getByTestId(`period-row-${periodId}`)).toBeVisible();
+  await waitForPayrollStatus(page, periodId, 'FINALIZED');
+});
+
+test('period deletion supports an empty unfinalized period list', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  await page.getByTestId('nav-parametrelar').click();
+  await page.getByTestId('nav-parametre-donemler').click();
+  const data = await readStoredSnapshot(page);
+  expect(data?.bordrolar ?? []).toHaveLength(0);
+  for (const period of [...(data?.donemler ?? [])]) {
     await page.getByTestId(`delete-period-${period.id}`).click();
     await page.getByRole('button', { name: 'Evet, Dönemi Sil' }).click();
     await expect(page.getByTestId(`period-row-${period.id}`)).toHaveCount(0);

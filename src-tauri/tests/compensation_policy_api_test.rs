@@ -510,6 +510,144 @@ fn native_preview_rejects_mid_period_rounding_change_and_load_shows_repair_targe
 }
 
 #[test]
+fn native_preview_rejects_new_rounding_conflict_in_a_future_service_period() {
+    let conn = create_in_memory_connection().unwrap();
+    let december = synthetic_period(2026, 12);
+    let january = synthetic_period(2027, 1);
+    let february = synthetic_period(2027, 2);
+    for service_period in [&december, &january, &february] {
+        PeriodRepository::save(&conn, service_period).unwrap();
+    }
+    for (id, effective_from) in [
+        ("baseline-december", "2026-12-15"),
+        ("future-march", "2027-03-01"),
+    ] {
+        CompensationPolicyRepository::insert_version(
+            &conn,
+            &CompensationPolicyVersion {
+                id: id.into(),
+                effectiveFrom: effective_from.into(),
+                state: policy_state(dec!(100), dec!(5)),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                createdAt: "2026-12-01T00:00:00Z".into(),
+                source: "TEST".into(),
+                reason: "Synthetic policy timeline".into(),
+                supersedesVersionId: None,
+            },
+        )
+        .unwrap();
+    }
+
+    let result = CompensationPolicyService::preview(
+        &conn,
+        &CompensationPolicyPreviewRequest {
+            scope: scope_for_period(&january),
+            operation: CompensationPolicyWriteOperation::NewEffectiveDate {
+                effectiveFrom: "2027-01-15".into(),
+                state: policy_state(dec!(105), dec!(5)),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                changeIntent: "FULL_STATE_CHANGE".into(),
+                roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+                reason: "Regression: this would break the following service period".into(),
+            },
+        },
+    );
+
+    let CompensationPolicyOperationResult::Failure { error, .. } = result else {
+        panic!("preview must reject a rounding conflict created in Feb 15–Mar 14 2027");
+    };
+    let CompensationPolicyApiError::InvalidPolicy { message } = error else {
+        panic!("future-period rounding conflict should be reported as InvalidPolicy: {error:?}");
+    };
+    assert!(message.contains("2027-02-15"), "{message}");
+    assert!(message.contains("2027-03-14"), "{message}");
+    assert!(message.contains("2027-03-01"), "{message}");
+    assert!(message.contains("2027-02"), "{message}");
+    assert!(message.contains("future-march"), "{message}");
+    assert!(
+        message.contains("__compensation-policy-preview__"),
+        "{message}"
+    );
+
+    let safe_operation = CompensationPolicyWriteOperation::NewEffectiveDate {
+        effectiveFrom: "2027-01-15".into(),
+        state: policy_state(dec!(105), dec!(5)),
+        boundaryScope: CompensationBoundaryScope::FullEarning,
+        changeIntent: "FULL_STATE_CHANGE".into(),
+        roadRoundingMode: RoadRoundingMode::PeriodTotal,
+        reason: "Valid same-mode policy candidate".into(),
+    };
+    let safe_preview = CompensationPolicyService::preview(
+        &conn,
+        &CompensationPolicyPreviewRequest {
+            scope: scope_for_period(&january),
+            operation: safe_operation.clone(),
+        },
+    );
+    let CompensationPolicyOperationResult::Success {
+        value: safe_preview,
+        ..
+    } = safe_preview
+    else {
+        panic!("same-mode preview should pass before the authoritative timeline changes: {safe_preview:?}");
+    };
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &CompensationPolicyVersion {
+            id: "future-march-correction".into(),
+            effectiveFrom: "2027-03-01".into(),
+            state: policy_state(dec!(100), dec!(5)),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2027-02-02T00:00:00Z".into(),
+            source: "TEST".into(),
+            reason: "Concurrent immutable correction changes the future mode".into(),
+            supersedesVersionId: Some("future-march".into()),
+        },
+    )
+    .unwrap();
+    let stale_save = CompensationPolicyService::save(
+        &conn,
+        &CompensationPolicySaveRequest {
+            scope: scope_for_period(&january),
+            operation: safe_operation,
+            previewToken: safe_preview.previewToken,
+            initialBaselineConfirmation: None,
+        },
+    );
+    let CompensationPolicyOperationResult::Failure { error, .. } = stale_save else {
+        panic!("save must revalidate the current future timeline: {stale_save:?}");
+    };
+    let CompensationPolicyApiError::InvalidPolicy { message } = error else {
+        panic!("save should reject the newly conflicting future timeline: {error:?}");
+    };
+    assert!(message.contains("2027-02-15"), "{message}");
+    assert!(message.contains("2027-03-14"), "{message}");
+    assert!(message.contains("2027-03-01"), "{message}");
+    assert!(message.contains("future-march-correction"), "{message}");
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM compensation_policy_versions",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        3,
+        "rejected save must not persist the candidate",
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM compensation_policy_versions WHERE id = '__compensation-policy-preview__'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0,
+    );
+}
+
+#[test]
 fn native_policy_preview_and_save_cover_four_salary_dates_ten_road_dates_and_correction() {
     let conn = create_in_memory_connection().unwrap();
     let periods = (2027..=2028)

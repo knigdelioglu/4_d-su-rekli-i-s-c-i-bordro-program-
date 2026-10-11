@@ -291,6 +291,20 @@ export function validate_annual_payroll_parameters_json(parameters_json) {
 }
 
 /**
+ * Rejects only newly introduced rounding conflicts across all persisted
+ * service periods. Existing conflicts remain eligible for explicit repair.
+ * @param {string} request_json
+ */
+export function validate_no_new_compensation_policy_rounding_conflicts_json(request_json) {
+    const ptr0 = passStringToWasm0(request_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.validate_no_new_compensation_policy_rounding_conflicts_json(ptr0, len0);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
+}
+
+/**
  * Validates V6 compensation policy graph links and every payroll envelope
  * against its parent period with the same core authority as native restore.
  * This checks structure and input consistency only; it does not replay payroll.

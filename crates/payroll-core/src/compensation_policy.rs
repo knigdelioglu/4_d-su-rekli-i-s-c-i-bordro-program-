@@ -7,14 +7,14 @@
 
 use crate::errors::DomainError;
 use crate::models::{
-    BordroKaydi, CompensationBoundaryScope, CompensationPolicyState, CompensationPolicyVersion,
-    ResolvedCompensationSegment,
+    BordroDonemi, BordroKaydi, CompensationBoundaryScope, CompensationPolicyState,
+    CompensationPolicyVersion, ResolvedCompensationSegment,
 };
 use crate::Result;
 use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -424,6 +424,79 @@ pub fn find_road_rounding_issues(
             })
         })
         .collect())
+}
+
+/// Rejects policy candidates that introduce a road-rounding transition inside
+/// any existing payroll service period. Conflicts already present in the
+/// stored timeline are tolerated here so explicit same-date corrections can
+/// repair them without making unrelated edits impossible.
+pub fn validate_no_new_road_rounding_conflicts(
+    periods: &[BordroDonemi],
+    existing_versions: &[CompensationPolicyVersion],
+    candidate_versions: &[CompensationPolicyVersion],
+) -> Result<()> {
+    let existing_versions = order_compensation_policy_versions(existing_versions)?;
+    let candidate_versions = order_compensation_policy_versions(candidate_versions)?;
+    let mut existing_conflicts = BTreeSet::new();
+
+    for period in periods {
+        match find_road_rounding_issues(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            &existing_versions,
+        ) {
+            Ok(issues) => existing_conflicts.extend(issues.into_iter().map(|issue| {
+                (
+                    period.id.clone(),
+                    issue.effective_from,
+                    issue.expected_mode.as_wire_token(),
+                    issue.actual_mode.as_wire_token(),
+                    issue.expected_version_id,
+                    issue.actual_version_id,
+                )
+            })),
+            // Periods before the initial baseline have no policy to validate.
+            Err(DomainError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    for period in periods {
+        let issues = match find_road_rounding_issues(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            &candidate_versions,
+        ) {
+            Ok(issues) => issues,
+            Err(DomainError::NotFound(_)) => continue,
+            Err(error) => return Err(error),
+        };
+        for issue in issues {
+            let signature = (
+                period.id.clone(),
+                issue.effective_from.clone(),
+                issue.expected_mode.as_wire_token(),
+                issue.actual_mode.as_wire_token(),
+                issue.expected_version_id.clone(),
+                issue.actual_version_id.clone(),
+            );
+            if existing_conflicts.contains(&signature) {
+                continue;
+            }
+            return Err(invalid_graph(format!(
+                "Yeni yol yuvarlama çakışması: {} hizmet dönemi {}–{} içinde {} tarihli {} sürümü ({}) ile {} sürümü ({}) yuvarlama modunu değiştiriyor. Aday politika bu dönemi geçersiz kılıyor.",
+                period.id,
+                period.baslangicTarihi,
+                period.bitisTarihi,
+                issue.effective_from,
+                issue.actual_version_id,
+                issue.actual_mode.as_wire_token(),
+                issue.expected_version_id,
+                issue.expected_mode.as_wire_token(),
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Resolves a fully inclusive work-date range using only its date inputs and

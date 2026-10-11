@@ -108,8 +108,8 @@ export const PeriodListSection: React.FC<PeriodListSectionProps> = ({
                   <div className="border-t border-rose-100 bg-rose-50 p-4" role="region" aria-label="Dönem silme onayı">
                     <p className="text-sm font-semibold text-slate-900">{donem.donemAdi} dönemi silinsin mi?</p>
                     <p className="mt-1 text-xs leading-relaxed text-slate-700">
-                      Bu dönemin bordroları (kesinleşmiş olanlar dahil), puantajları, parametreleri ve döneme bağlı vergi devir kayıtları kalıcı olarak silinir.
-                      Etkilenen geriye dönük fark kayıtları ve ödemeleri de silinir. Etkilenen sonraki bordrolar yeniden hesaplanmalıdır. Bu işlem geri alınamaz.
+                      Kesinleştirilmiş bordro veya retro içeren dönemler ve bu kayıtları etkileyecek dönemler silinemez.
+                      Silinmesine izin verilen dönemin puantajları, parametreleri ve bağlı açık retro kayıtları silinir; etkilenen bordrolar yeniden hesaplanmalıdır.
                     </p>
                     <div className="mt-3 flex gap-2">
                       <button type="button" disabled={isDeleting} onClick={() => { setPendingDeleteId(null); setError(null); }} className="rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-700 disabled:opacity-50">Vazgeç</button>

@@ -24,13 +24,21 @@ export interface PuantajBulkPlan {
   preservedRows: PuantajBulkPreviewRow[];
 }
 
+/** The user's bulk edit is replayed against authoritative data at commit time. */
+export interface PuantajBulkCommitIntent {
+  periodId: string;
+  personnelIds: string[];
+  dates: string[];
+  code: PuantajKodu;
+}
+
 /**
  * Creates a read-only preview and the exact attendance records for one atomic
  * batch save. R codes and dates covered by sick-leave records are never
  * replaced; an existing report/code mismatch blocks the whole batch.
  */
 export function createPuantajBulkPlan(args: {
-  personnel: Personel[];
+  personnel: Array<Pick<Personel, 'id' | 'ad' | 'soyad'>>;
   attendances: PersonelPuantaj[];
   sickLeaveRecords: SickLeaveRecord[];
   periodId: string;

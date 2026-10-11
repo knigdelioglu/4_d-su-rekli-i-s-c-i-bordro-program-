@@ -11,11 +11,11 @@ use crate::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate, Utc};
 use payroll_core::{
     find_road_rounding_issues, order_compensation_policy_versions, resolve_compensation_segments,
-    validate_compensation_policy_timeline, BordroDonemi, BordroKaydi, BordroStatus,
-    CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
-    CompensationPolicyVersion, IsPrimiGrupItem, MutationImpact, PayrollKey, PayrollMutation,
-    ResolvedCompensationSegment, RetroMutationAction, RetroMutationEffect, RoadRoundingIssue,
-    RoadRoundingMode,
+    validate_compensation_policy_timeline, validate_no_new_road_rounding_conflicts, BordroDonemi,
+    BordroKaydi, BordroStatus, CompensationBoundaryScope, CompensationPolicyGroup,
+    CompensationPolicyState, CompensationPolicyVersion, IsPrimiGrupItem, MutationImpact,
+    PayrollKey, PayrollMutation, ResolvedCompensationSegment, RetroMutationAction,
+    RetroMutationEffect, RoadRoundingIssue, RoadRoundingMode,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -857,13 +857,10 @@ impl CompensationPolicyService {
         }
         let versions =
             CompensationPolicyRepository::get_all_versions(conn).map_err(map_domain_error)?;
-        Self::validate_operation(scope, &period, operation, &versions)?;
+        let all_periods = PeriodRepository::get_all(conn).map_err(map_domain_error)?;
+        Self::validate_operation(scope, &period, operation, &versions, &all_periods)?;
         let targetState = Self::target_state(&versions, operation.effective_from());
-        let directCompensationEffects = Self::direct_effects(
-            &PeriodRepository::get_all(conn).map_err(map_domain_error)?,
-            &versions,
-            operation,
-        )?;
+        let directCompensationEffects = Self::direct_effects(&all_periods, &versions, operation)?;
         let direct_period_ids = directCompensationEffects
             .iter()
             .flat_map(|effect| {
@@ -988,8 +985,15 @@ impl CompensationPolicyService {
         }
         let period = Self::validate_scope(tx, &request.scope).map_err(api_error_to_domain)?;
         let versions = CompensationPolicyRepository::get_all_versions(tx)?;
-        Self::validate_operation(&request.scope, &period, &request.operation, &versions)
-            .map_err(api_error_to_domain)?;
+        let all_periods = PeriodRepository::get_all(tx)?;
+        Self::validate_operation(
+            &request.scope,
+            &period,
+            &request.operation,
+            &versions,
+            &all_periods,
+        )
+        .map_err(api_error_to_domain)?;
         let effect = preview.directCompensationEffects.first().ok_or_else(|| {
             DomainError::InvalidData("Politika doğrudan etki aralığı üretmedi.".into())
         })?;
@@ -1190,6 +1194,7 @@ impl CompensationPolicyService {
         period: &BordroDonemi,
         operation: &CompensationPolicyWriteOperation,
         versions: &[CompensationPolicyVersion],
+        all_periods: &[BordroDonemi],
     ) -> std::result::Result<(), CompensationPolicyApiError> {
         if !operation.change_intent_matches() {
             return Err(CompensationPolicyApiError::InvalidRequest {
@@ -1304,6 +1309,11 @@ impl CompensationPolicyService {
                 });
             }
         };
+        validate_no_new_road_rounding_conflicts(all_periods, versions, &candidate).map_err(
+            |error| CompensationPolicyApiError::InvalidPolicy {
+                message: error.to_string(),
+            },
+        )?;
         resolve_compensation_segments(&period.baslangicTarihi, &period.bitisTarihi, &candidate)
             .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
                 message: error.to_string(),

@@ -57,6 +57,7 @@ import {
   syncPuantajForSickLeaveDelete,
   syncPuantajForSickLeaveSave,
 } from '../utils/sickLeaveSync';
+import { createPuantajBulkPlan, type PuantajBulkCommitIntent } from '../utils/puantajBulkPlan';
 
 export interface PayrollMutationControllerOptions {
   isNative: boolean;
@@ -74,7 +75,7 @@ export interface PayrollMutationControllerOptions {
     update: (current: PayrollStorageDto) => PayrollStorageDto
   ) => void;
   commitAuthoritativePayload?: (
-    update: (current: PayrollStorageDto) => PayrollStorageDto
+    update: (current: PayrollStorageDto) => PayrollStorageDto | Promise<PayrollStorageDto>
   ) => Promise<void>;
   loadData: () => Promise<void>;
 }
@@ -95,6 +96,24 @@ function sameRevisionDefinition(
     left!.scope === right.scope &&
     JSON.stringify(left!.personnelIds ?? []) === JSON.stringify(right.personnelIds ?? []) &&
     left!.personnelGroup === right.personnelGroup;
+}
+
+function payrollDatasetFromPayload(payload: PayrollStorageDto): PayrollDatasetSnapshot {
+  return {
+    personnel: payload.personeller,
+    periods: payload.donemler,
+    institutionSettings: payload.kurumDegerleriMap,
+    attendances: payload.puantajlar,
+    payrolls: payload.bordrolar,
+    taxOpenings: payload.taxOpenings,
+    sickLeaveRecords: payload.sickLeaveRecords,
+    annualPayrollParameters: payload.annualPayrollParameters,
+    compensationRevisions: payload.compensationRevisions,
+    compensationRevisionOverrides: payload.compensationRevisionOverrides,
+    retroBatches: payload.retroBatches,
+    retroAllocations: payload.retroAllocations,
+    compensationPolicyVersions: payload.compensationPolicyVersions,
+  } as unknown as PayrollDatasetSnapshot;
 }
 
 function sameRevisionOverrides(
@@ -428,8 +447,8 @@ export function usePayrollMutationController({
     }
     const period = latestPayrollDataset.current.periods.find((item) => item.id === periodId);
     if (!period) throw new Error('Silinecek dönem bulunamadı.');
-    // Deletion explicitly permits discarding finalized history. Other mutation
-    // paths retain their existing finalized guards.
+    // The shared mutation policy blocks deletion of finalized history and any
+    // deletion that would invalidate downstream finalized payroll or retro data.
     const impact = await payrollEngine.evaluateMutationPolicy({
       kind: 'PERIOD_FROM_POSITION',
       startDate: period.baslangicTarihi,
@@ -578,7 +597,10 @@ export function usePayrollMutationController({
     });
   };
 
-  const handleSavePuantajBatch = async (updatedAttendances: PersonelPuantaj[]) => {
+  const handleSavePuantajBatch = async (
+    updatedAttendances: PersonelPuantaj[],
+    bulkIntent?: PuantajBulkCommitIntent
+  ) => {
     if (updatedAttendances.length === 0) return;
 
     const seen = new Set<string>();
@@ -597,18 +619,15 @@ export function usePayrollMutationController({
       return;
     }
 
-    const impact = await evaluateBrowserMutations(
-      updatedAttendances.map((attendance) => ({
-        kind: 'PERSON_PERIOD' as const,
-        personnelId: attendance.personelId,
-        periodId: attendance.donemId,
-      }))
-    );
-    const applyBatch = (current: PayrollStorageDto): PayrollStorageDto => {
+    const applyBatch = (
+      current: PayrollStorageDto,
+      impact: MutationImpact,
+      batchAttendances: PersonelPuantaj[]
+    ): PayrollStorageDto => {
       const attendancesById = new Map(
         current.puantajlar.map((attendance) => [attendance.id, attendance] as const)
       );
-      for (const attendance of updatedAttendances) {
+      for (const attendance of batchAttendances) {
         const exactAttendance = mergePayrollUiIntoBoundary(
           attendancesById.get(attendance.id),
           attendance
@@ -622,8 +641,49 @@ export function usePayrollMutationController({
         retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     };
-    if (commitAuthoritativePayload) await commitAuthoritativePayload(applyBatch);
-    else updateAuthoritativePayload(applyBatch);
+    if (commitAuthoritativePayload) {
+      await commitAuthoritativePayload(async (current) => {
+        let batchAttendances = updatedAttendances;
+        if (bulkIntent) {
+          const period = current.donemler.find((item) => item.id === bulkIntent.periodId);
+          if (!period) throw new Error('Toplu puantajın hizmet dönemi güncel snapshotta bulunamadı.');
+          const targetPersonnel = current.personeller.filter((person) =>
+            bulkIntent.personnelIds.includes(person.id)
+          );
+          const latestPlan = createPuantajBulkPlan({
+            personnel: targetPersonnel,
+            attendances: current.puantajlar,
+            sickLeaveRecords: current.sickLeaveRecords,
+            periodId: period.id,
+            periodStartInclusive: period.baslangicTarihi,
+            periodEndInclusive: period.bitisTarihi,
+            dates: bulkIntent.dates,
+            code: bulkIntent.code,
+          });
+          if (latestPlan.reportMismatches.length > 0) {
+            throw new Error(
+              `Toplu kayıt durduruldu: ${latestPlan.reportMismatches.length} hastalık raporu günü R koduyla eşleşmiyor. Önce rapor ve puantaj kaydını düzeltin.`
+            );
+          }
+          batchAttendances = latestPlan.updates;
+        }
+        const mutations = batchAttendances.map((attendance) => ({
+          kind: 'PERSON_PERIOD' as const,
+          personnelId: attendance.personelId,
+          periodId: attendance.donemId,
+        }));
+        const impact = await evaluateBrowserMutations(mutations, payrollDatasetFromPayload(current));
+        return applyBatch(current, impact, batchAttendances);
+      });
+    } else {
+      const mutations = updatedAttendances.map((attendance) => ({
+        kind: 'PERSON_PERIOD' as const,
+        personnelId: attendance.personelId,
+        periodId: attendance.donemId,
+      }));
+      const impact = await evaluateBrowserMutations(mutations);
+      updateAuthoritativePayload((current) => applyBatch(current, impact, updatedAttendances));
+    }
   };
 
   const handleSaveTaxOpening = async (

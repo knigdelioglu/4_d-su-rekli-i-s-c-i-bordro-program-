@@ -155,6 +155,7 @@ export function useBrowserPayrollPersistence({
         .catch(() => undefined)
         .then(async () => {
           try {
+            if (generation !== undefined && generation !== persistenceGeneration.current) return;
             const canonicalPayload = parseCurrentBrowserSnapshot(
               payload,
               sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }

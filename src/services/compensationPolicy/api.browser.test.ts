@@ -185,6 +185,36 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
     });
   });
 
+  test('rejects a future-period rounding conflict in preview and rechecks it at save', async () => {
+    const page = await openPolicyApiTab();
+    const result = await page.evaluate(() =>
+      window.__compensationPolicyBrowserApiTest.exerciseFuturePeriodRoundingConflict());
+
+    expect(result.rejectedPreview).toMatchObject({ code: 'INVALID_POLICY' });
+    expect(result.rejectedPreview?.message).toContain('2027-02');
+    expect(result.rejectedPreview?.message).toContain('2027-02-15');
+    expect(result.rejectedPreview?.message).toContain('2027-03-14');
+    expect(result.rejectedPreview?.message).toContain('2027-03-01');
+    expect(result.rejectedPreview?.message).toContain('future-rounding-march-policy');
+    expect(result.rejectedPreview?.message).toContain('__compensation-policy-preview__');
+    expect(result.validPreview).toBe(true);
+    expect(result.rejectedSave).toMatchObject({ code: 'INVALID_POLICY' });
+    expect(result.rejectedSave?.message).toContain('2027-02-15');
+    expect(result.rejectedSave?.message).toContain('2027-03-14');
+    expect(result.rejectedSave?.message).toContain('2027-03-01');
+    expect(result.rejectedSave?.message).toContain('future-rounding-march-correction');
+    expect(result.storedPolicyIds).toEqual([
+      'future-rounding-december-baseline',
+      'future-rounding-march-policy',
+      'future-rounding-march-correction',
+    ]);
+    expect(result.expectedPeriod).toEqual({
+      id: '2027-02',
+      start: '2027-02-15',
+      end: '2027-03-14',
+    });
+  });
+
   testWithTimeout('previews, saves and reloads the four salary and ten ROAD_ONLY dates through 15–14 periods', async () => {
     const page = await openPolicyApiTab();
     const result = await page.evaluate(() =>

@@ -31,7 +31,7 @@ import {
 import { exportToExcel } from '../utils/excelExport';
 import { formatPayrollError } from './useBordroCalculationController';
 import { describeError } from '../utils/errorMessage';
-import { createPuantajBulkPlan } from '../utils/puantajBulkPlan';
+import { createPuantajBulkPlan, type PuantajBulkCommitIntent } from '../utils/puantajBulkPlan';
 
 type BulkApplyRequest =
   | { scope: 'all' | 'range'; dates: string[]; code: PuantajKodu }
@@ -43,7 +43,10 @@ interface PuantajGridProps {
   puantajlar: PersonelPuantaj[];
   sickLeaveRecords: SickLeaveRecord[];
   onSavePuantaj: (puantaj: PersonelPuantaj) => Promise<void> | void;
-  onSavePuantajBatch: (puantajlar: PersonelPuantaj[]) => Promise<void> | void;
+  onSavePuantajBatch: (
+    puantajlar: PersonelPuantaj[],
+    intent: PuantajBulkCommitIntent
+  ) => Promise<void> | void;
   onSelectPersonelForBordro?: (personelId: string) => void;
 }
 
@@ -159,10 +162,13 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     }
   };
 
-  const persistPuantajBatch = async (updated: PersonelPuantaj[]) => {
+  const persistPuantajBatch = async (
+    updated: PersonelPuantaj[],
+    intent: PuantajBulkCommitIntent
+  ) => {
     setPuantajError(null);
     try {
-      await onSavePuantajBatch(updated);
+      await onSavePuantajBatch(updated, intent);
       return true;
     } catch (err) {
       setPuantajError(`Toplu puantaj kaydedilemedi: ${formatPayrollError(err)}`);
@@ -271,7 +277,15 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
 
     setIsApplyingBulkCode(true);
     try {
-      const saved = await persistPuantajBatch(bulkPlan.updates);
+      const targetPersonnel = bulkApplyRequest.scope === 'personnel'
+        ? personeller
+        : activePersonel ? [activePersonel] : [];
+      const saved = await persistPuantajBatch(bulkPlan.updates, {
+        periodId: aktifDonem.id,
+        personnelIds: targetPersonnel.map((person) => person.id),
+        dates: bulkApplyRequest.dates,
+        code: bulkApplyRequest.code,
+      });
       if (!saved) return;
       if (bulkApplyRequest.scope === 'personnel') setQuickEntryDates([]);
       setBulkApplyRequest(null);

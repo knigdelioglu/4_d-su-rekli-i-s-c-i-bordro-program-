@@ -375,6 +375,119 @@ async function exerciseRoadRoundingRecovery() {
   };
 }
 
+async function exerciseFuturePeriodRoundingConflict() {
+  await resetBrowserPayrollDatabase();
+  const data = getInitialDataset();
+  const december = createBordroDonemi(2026, 12);
+  const january = createBordroDonemi(2027, 1);
+  const february = createBordroDonemi(2027, 2);
+  const periods = [december, january, february];
+  const sourceSettings = data.kurumDegerleriMap[data.aktifDonemId];
+  if (!sourceSettings) throw new Error('Future rounding fixture has no institution settings.');
+  const scope: Scope = {
+    institutionScope: 'CURRENT_INSTITUTION',
+    periodId: january.id,
+    periodStartInclusive: january.baslangicTarihi,
+    periodEndInclusive: january.bitisTarihi,
+    projectionDate: january.baslangicTarihi,
+  };
+  const state: CompensationPolicyStateWire = {
+    ...browserAcceptanceState(),
+    gunlukVasitaYol: '136.44',
+  };
+  const baseline: CompensationPolicyVersionWire = {
+    id: 'future-rounding-december-baseline',
+    effectiveFrom: '2026-12-15',
+    state,
+    boundaryScope: 'FULL_EARNING',
+    roadRoundingMode: 'PERIOD_TOTAL',
+    createdAt: '2026-12-01T00:00:00.000Z',
+    source: 'TEST',
+    reason: 'December service-period baseline',
+    supersedesVersionId: null,
+  };
+  const marchVersion: CompensationPolicyVersionWire = {
+    ...baseline,
+    id: 'future-rounding-march-policy',
+    effectiveFrom: '2027-03-01',
+    createdAt: '2027-02-01T00:00:00.000Z',
+    reason: 'March policy remains on the established mode',
+  };
+  const seed = async (versions: CompensationPolicyVersionWire[]) => {
+    const institutionSettings = { ...data.kurumDegerleriMap };
+    for (const period of periods) {
+      institutionSettings[period.id] = { ...sourceSettings, donemId: period.id };
+    }
+    const payload = toPayrollBoundaryDto({
+      backupVersion: BACKUP_FORMAT_VERSION,
+      exportedAt: '2026-12-01T00:00:00.000Z',
+      ...data,
+      donemler: [
+        ...data.donemler.filter((item) => !periods.some((candidate) => candidate.id === item.id)),
+        ...periods,
+      ],
+      kurumDegerleriMap: institutionSettings,
+      compensationPolicyVersions: versions,
+      compensationRevisions: [],
+      compensationRevisionOverrides: [],
+      retroBatches: [],
+      retroAllocations: [],
+    }) as unknown as PayrollStorageDto;
+    await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+  };
+
+  await seed([baseline, marchVersion]);
+  const invalidOperation: CompensationPolicyWriteOperation = {
+    kind: 'NEW_EFFECTIVE_DATE',
+    effectiveFrom: '2027-01-15',
+    state: { ...state, gunlukTabanUcret: '2125.13' },
+    boundaryScope: 'FULL_EARNING',
+    changeIntent: 'FULL_STATE_CHANGE',
+    roadRoundingMode: 'PER_COMPENSATION_SLICE',
+    reason: 'Regression: this creates a future service-period conflict',
+  };
+  const rejectedPreview = await getCompensationPolicyApi().preview({ scope, operation: invalidOperation });
+
+  const validOperation: CompensationPolicyWriteOperation = {
+    ...invalidOperation,
+    roadRoundingMode: 'PERIOD_TOTAL',
+    reason: 'Same mode is valid in the affected service periods',
+  };
+  const validPreview = await getCompensationPolicyApi().preview({ scope, operation: validOperation });
+  if (validPreview.ok === false) throw new Error(`Valid same-mode preview failed: ${validPreview.error.message}`);
+
+  // Model a newer authoritative policy arriving after preview. Save must run
+  // the shared validator again against the snapshot inside its IndexedDB write.
+  await browserPayrollStore.mutateSnapshot((currentPayload) => ({
+    ...currentPayload,
+    compensationPolicyVersions: [
+      ...currentPayload.compensationPolicyVersions,
+      {
+        ...marchVersion,
+        id: 'future-rounding-march-correction',
+        roadRoundingMode: 'PER_COMPENSATION_SLICE',
+        createdAt: '2027-02-02T00:00:00.000Z',
+        reason: 'Concurrent immutable correction changes the future mode',
+        supersedesVersionId: marchVersion.id,
+      },
+    ],
+  }));
+  const rejectedSave = await getCompensationPolicyApi().save({
+    scope,
+    operation: validOperation,
+    previewToken: validPreview.value.previewToken,
+  });
+  const after = await browserPayrollStore.loadSnapshot();
+  const stored = after ? JSON.parse(after.payload) as PayrollStorageDto : null;
+  return {
+    rejectedPreview: rejectedPreview.ok === false ? rejectedPreview.error : null,
+    validPreview: validPreview.ok,
+    rejectedSave: rejectedSave.ok === false ? rejectedSave.error : null,
+    storedPolicyIds: stored?.compensationPolicyVersions.map((version) => version.id) ?? [],
+    expectedPeriod: { id: february.id, start: february.baslangicTarihi, end: february.bitisTarihi },
+  };
+}
+
 async function exerciseSyntheticPolicySchedule() {
   await resetBrowserPayrollDatabase();
   const source = getInitialDataset();
@@ -1703,6 +1816,7 @@ declare global {
     __compensationPolicyBrowserApiTest: {
       loadArchivedSeptemberPrefill(): ReturnType<typeof loadArchivedSeptemberPrefill>;
       exerciseRoadRoundingRecovery(): ReturnType<typeof exerciseRoadRoundingRecovery>;
+      exerciseFuturePeriodRoundingConflict(): ReturnType<typeof exerciseFuturePeriodRoundingConflict>;
       exerciseSyntheticPolicySchedule(): ReturnType<typeof exerciseSyntheticPolicySchedule>;
       prepareBaseline(): ReturnType<typeof prepareBaseline>;
       prepareRetroBaseline(): ReturnType<typeof prepareRetroBaseline>;
@@ -1742,6 +1856,7 @@ window.__compensationAcceptanceBrowserApp = {
 window.__compensationPolicyBrowserApiTest = {
   loadArchivedSeptemberPrefill,
   exerciseRoadRoundingRecovery,
+  exerciseFuturePeriodRoundingConflict,
   exerciseSyntheticPolicySchedule,
   prepareBaseline,
   prepareRetroBaseline,

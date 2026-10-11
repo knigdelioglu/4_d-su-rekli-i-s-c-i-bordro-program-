@@ -372,11 +372,21 @@ function validateOperation(
     reason: operation.reason.trim(),
     supersedesVersionId: operation.kind === 'SAME_DATE_CORRECTION' ? operation.supersedesVersionId : null,
   };
+  const candidateTimeline = orderedVersions([...versions, candidate]);
+  try {
+    runtime.validate_no_new_compensation_policy_rounding_conflicts_json(JSON.stringify({
+      periods: payload.donemler,
+      existingVersions: versions,
+      candidateVersions: candidateTimeline,
+    }));
+  } catch (error) {
+    raise('INVALID_POLICY', readableErrorMessage(error));
+  }
   try {
     runtime.resolve_compensation_policy_timeline_json(JSON.stringify({
       startInclusive: period.baslangicTarihi,
       endInclusive: period.bitisTarihi,
-      versions: orderedVersions([...versions, candidate]),
+      versions: candidateTimeline,
     }));
   } catch (error) {
     const descendantRoadOnly = operation.kind === 'SAME_DATE_CORRECTION'

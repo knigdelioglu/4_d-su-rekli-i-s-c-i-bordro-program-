@@ -77,4 +77,43 @@ describe('createPuantajBulkPlan', () => {
     }]);
     expect(plan.updates[0].gunler['2027-01-16']).toBe('T');
   });
+
+  test('replanning against the latest snapshot preserves a new report and other same-row edits', () => {
+    const personnel = [person('a')];
+    const intent = { dates: ['2027-01-15', '2027-01-16'], code: 'T' as const };
+    const preview = createPuantajBulkPlan({
+      ...period,
+      personnel,
+      attendances: [attendance('a', {
+        '2027-01-15': 'Ç', '2027-01-16': 'Ç', '2027-01-17': 'Ç', '2027-01-18': 'Ç',
+      })],
+      sickLeaveRecords: [],
+      ...intent,
+    });
+    expect(preview.updates[0].gunler['2027-01-16']).toBe('T');
+
+    const latestPlan = createPuantajBulkPlan({
+      ...period,
+      personnel,
+      attendances: [attendance('a', {
+        '2027-01-15': 'Ç', '2027-01-16': 'R', '2027-01-17': 'İ', '2027-01-18': 'GÇ',
+      })],
+      sickLeaveRecords: [{
+        id: 'report-a', personnelId: 'a', startDate: '2027-01-16', endDate: '2027-01-16',
+      }],
+      ...intent,
+    });
+    expect(latestPlan.reportMismatches).toEqual([]);
+    expect(latestPlan.preservedRows.map(({ date, previousCode, status }) => ({
+      date, previousCode, status,
+    }))).toEqual([{
+      date: '2027-01-16', previousCode: 'R', status: 'PRESERVED_R',
+    }]);
+    expect(latestPlan.updates[0].gunler).toMatchObject({
+      '2027-01-15': 'T',
+      '2027-01-16': 'R',
+      '2027-01-17': 'İ',
+      '2027-01-18': 'GÇ',
+    });
+  });
 });
