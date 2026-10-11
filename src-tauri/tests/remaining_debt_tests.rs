@@ -29,7 +29,7 @@ fn person(id: &str) -> Personel {
         grup: "1. Grup".into(),
         unvan: None,
         sgkSicilNo: String::new(),
-        iban: String::new(),
+        iban: "TR330006100519786457841326".into(),
         hizmetYili: 1,
         aciklama: None,
         devirKumulatifGvMatrahi: None,

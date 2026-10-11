@@ -101,7 +101,7 @@ function makeRealisticSnapshot(): PayrollStorageDto {
     grup: '1. Grup',
     unvan: 'İşçi',
     sgkSicilNo: 'SGK-1',
-    iban: 'TR000000000000000000000001',
+    iban: 'TR330006100519786457841326',
     hizmetYili: 4,
     aciklama: 'Temsilî production kaydı',
     devirKumulatifGvMatrahi: '0.00',
@@ -665,6 +665,78 @@ describe('BrowserPayrollStore', () => {
     }
   });
 
+  test('validates changed Browser personnel at commit and keeps unchanged legacy IBAN data readable', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const fakeDatabase = createMemoryIndexedDb();
+    const legacyCurrent = parseCurrentBrowserSnapshot(makeV2Snapshot());
+    legacyCurrent.personeller[0].iban = 'TR';
+    fakeDatabase.values.set('current', {
+      payload: serializePayrollStorage(legacyCurrent),
+      revision: 1,
+      sourceFormat: 'legacy',
+    });
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { indexedDB: fakeDatabase.indexedDB },
+    });
+
+    try {
+      const loadedLegacy = await browserPayrollStore.loadSnapshot();
+      expect(loadedLegacy?.revision).toBe(1);
+      expect(parseCurrentBrowserSnapshot(loadedLegacy!.payload).personeller[0].iban).toBe('TR');
+
+      const unrelatedWrite = await browserPayrollStore.mutateSnapshot((current) => ({
+        ...current,
+        exportedAt: '2026-10-11T12:00:00.000Z',
+      }));
+      expect(parseCurrentBrowserSnapshot(unrelatedWrite.payload).personeller[0].iban).toBe('TR');
+
+      await expect(browserPayrollStore.mutateSnapshot((current) => ({
+        ...current,
+        personeller: current.personeller.map((person, index) =>
+          index === 0 ? { ...person, ad: 'Adı değiştirildi' } : person
+        ),
+      }))).rejects.toThrow('IBAN');
+
+      await expect(browserPayrollStore.mutateSnapshot((current) => ({
+        ...current,
+        personeller: [...current.personeller, {
+          ...current.personeller[0],
+          id: 'duplicate-person',
+          iban: 'TR330006100519786457841326',
+        }],
+      }))).rejects.toThrow('Bu T.C. kimlik numarasıyla kayıtlı');
+
+      const validPerson = {
+        ...legacyCurrent.personeller[0],
+        id: 'new-person',
+        tcNo: '20000000000',
+        ad: 'Yeni',
+        iban: 'TR 33 0006 1005 1978 6457 8413 26',
+      };
+      const added = await browserPayrollStore.mutateSnapshot((current) => ({
+        ...current,
+        personeller: [...current.personeller, validPerson],
+      }));
+      expect(parseCurrentBrowserSnapshot(added.payload).personeller.at(-1)?.iban)
+        .toBe('TR330006100519786457841326');
+
+      const revisionBeforeInvalidDeduction = added.revision;
+      await expect(browserPayrollStore.mutateSnapshot((current) => ({
+        ...current,
+        personeller: current.personeller.map((person) =>
+          person.id === 'new-person'
+            ? { ...person, kesintiler: { ...person.kesintiler, icraTutar: '-1' } }
+            : person
+        ),
+      }))).rejects.toThrow('Kesinti tutarı negatif olamaz');
+      expect(fakeDatabase.values.get('current')).toMatchObject({ revision: revisionBeforeInvalidDeduction });
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as { window?: unknown }).window;
+    }
+  });
+
   test('applies a queued local mutation to a newer IndexedDB revision without losing another tab update', async () => {
     const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     const fakeDatabase = createMemoryIndexedDb();
@@ -680,7 +752,7 @@ describe('BrowserPayrollStore', () => {
         ...initial.personeller[0],
         id: 'person-2',
         tcNo: '20000000000',
-        iban: 'TR000000000000000000000002',
+        iban: 'TR330006100519786457841326',
         sgkSicilNo: 'SGK-2',
       };
       initial.personeller.push(secondPerson);
@@ -743,7 +815,7 @@ describe('BrowserPayrollStore', () => {
         ...initial.personeller[0],
         id: 'person-2',
         tcNo: '20000000000',
-        iban: 'TR000000000000000000000002',
+        iban: 'TR330006100519786457841326',
         sgkSicilNo: 'SGK-2',
       };
       initial.personeller.push(secondPerson);

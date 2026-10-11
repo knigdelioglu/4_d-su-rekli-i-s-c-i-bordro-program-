@@ -518,6 +518,7 @@ export const PeriodSettingsPage: React.FC<PeriodSettingsPageProps> = ({
         <DeductionLegalRatesSection
           aktifDonemId={aktifDonem.id}
           activePeriodForParams={activePeriodForParams}
+          annualPayrollParameters={annualPayrollParameters}
           paramsForm={paramsForm}
           setParamsForm={setParamsForm}
           savedSuccess={savedSuccess}

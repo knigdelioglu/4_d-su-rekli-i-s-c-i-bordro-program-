@@ -4,9 +4,15 @@
 
 import React, { useState, useEffect } from 'react';
 import { User, Save, X, CreditCard, Shield, Briefcase, Calendar, Layers } from 'lucide-react';
-import { IsPrimiGrupItem, Personel } from '../types/payroll';
+import { GvIndirimGirdileri, IsPrimiGrupItem, Personel, PersonelKesintiBilgileri } from '../types/payroll';
 import { DEFAULT_PRODUCTION_KURUM_DEGERLERI, formatTL, getGrupIsPrimiOraniDisplay } from '../utils/payrollPresentation';
-import { formatPersonnelSaveError } from '../utils/personnelError';
+import { formatPersonnelSaveError, isDuplicateTcNoError } from '../utils/personnelError';
+import {
+  INVALID_TURKISH_IBAN_MESSAGE,
+  normalizeTurkishIban,
+  parseNonNegativeAmountInput,
+  validatePersonnelForSave,
+} from '../utils/personnelValidation';
 
 interface PersonelFormModalProps {
   isOpen: boolean;
@@ -19,6 +25,51 @@ interface PersonelFormModalProps {
 }
 
 type PersonelFormSection = 'basic' | 'deductions' | 'advanced';
+type MoneyDraftField =
+  | 'sabitSendikaAidati'
+  | 'sabitBesTutar'
+  | 'icraTutar'
+  | 'nafakaTutar'
+  | 'kisiBorcuTutar'
+  | 'dogumAskerlikBorclanmasiTutar'
+  | 'hayatSaglikSigortasiTutar'
+  | 'digerKesintiTutar'
+  | keyof GvIndirimGirdileri;
+
+const MONEY_DRAFT_FIELDS: MoneyDraftField[] = [
+  'sabitSendikaAidati',
+  'sabitBesTutar',
+  'icraTutar',
+  'nafakaTutar',
+  'kisiBorcuTutar',
+  'dogumAskerlikBorclanmasiTutar',
+  'hayatSaglikSigortasiTutar',
+  'digerKesintiTutar',
+  'dogumAskerlikGvIndirimTutar',
+  'hayatSigortasiPrimiTutar',
+  'saglikSigortasiPrimiTutar',
+];
+
+const GV_MONEY_DRAFT_FIELDS = new Set<MoneyDraftField>([
+  'dogumAskerlikGvIndirimTutar',
+  'hayatSigortasiPrimiTutar',
+  'saglikSigortasiPrimiTutar',
+]);
+
+const moneyErrorKey = (field: MoneyDraftField) =>
+  GV_MONEY_DRAFT_FIELDS.has(field)
+    ? `kesintiler.gvIndirimleri.${field}`
+    : `kesintiler.${field}`;
+
+function getInitialMoneyDrafts(personel?: Personel | null): Record<MoneyDraftField, string> {
+  const deductions = personel?.kesintiler;
+  return Object.fromEntries(MONEY_DRAFT_FIELDS.map((field) => {
+    const value = GV_MONEY_DRAFT_FIELDS.has(field)
+      ? deductions?.gvIndirimleri?.[field as keyof GvIndirimGirdileri]
+      : deductions?.[field as keyof PersonelKesintiBilgileri];
+    return [field, value == null ? '' : String(value)];
+  })) as Record<MoneyDraftField, string>;
+}
 
 export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   isOpen,
@@ -54,12 +105,14 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
   });
 
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [moneyDrafts, setMoneyDrafts] = useState<Record<MoneyDraftField, string>>(() => getInitialMoneyDrafts(personelToEdit));
   const [isSaving, setIsSaving] = useState(false);
   const [activeFormSection, setActiveFormSection] = useState<PersonelFormSection>('basic');
 
   useEffect(() => {
     if (personelToEdit) {
       setFormData(personelToEdit);
+      setMoneyDrafts(getInitialMoneyDrafts(personelToEdit));
     } else {
       const defaultGrup = groups[0]?.ad || '';
       const defaultRate = groups[0]?.oran ?? 0;
@@ -78,12 +131,47 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
           besUyesi: false,
         },
       });
+      setMoneyDrafts(getInitialMoneyDrafts());
     }
-    setErrors({});
+    setErrors(
+      personelToEdit && !normalizeTurkishIban(personelToEdit.iban)
+        ? { iban: INVALID_TURKISH_IBAN_MESSAGE }
+        : {}
+    );
     setActiveFormSection('basic');
   }, [personelToEdit, isOpen, isPrimiGruplari]);
 
   if (!isOpen) return null;
+
+  const updateMoneyDraft = (field: MoneyDraftField, raw: string) => {
+    setMoneyDrafts((current) => ({ ...current, [field]: raw }));
+    const parsed = parseNonNegativeAmountInput(raw);
+    const errorKey = moneyErrorKey(field);
+    setErrors((current) => {
+      const next = { ...current };
+      if (parsed.valid === false) next[errorKey] = parsed.message;
+      else delete next[errorKey];
+      return next;
+    });
+    if (parsed.valid === false) return;
+
+    setFormData((current) => {
+      const deductions = current.kesintiler || {};
+      if (GV_MONEY_DRAFT_FIELDS.has(field)) {
+        return {
+          ...current,
+          kesintiler: {
+            ...deductions,
+            gvIndirimleri: {
+              ...(deductions.gvIndirimleri || {}),
+              [field]: parsed.value,
+            },
+          },
+        };
+      }
+      return { ...current, kesintiler: { ...deductions, [field]: parsed.value } };
+    });
+  };
 
   const validate = (): boolean => {
     const errs: Record<string, string> = {};
@@ -100,8 +188,8 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       errs.soyad = 'Soyad alanı zorunludur.';
     }
 
-    if (!formData.iban || !formData.iban.startsWith('TR')) {
-      errs.iban = 'Görünür IBAN "TR" ile başlamalıdır.';
+    if (!normalizeTurkishIban(formData.iban)) {
+      errs.iban = INVALID_TURKISH_IBAN_MESSAGE;
     }
 
     if ((formData.hizmetYili ?? 0) < 0) {
@@ -117,7 +205,21 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       errs.oksOraniYuzde = 'OKS özel oranı %3-%100 arasında olmalıdır.';
     }
 
+    for (const field of MONEY_DRAFT_FIELDS) {
+      const parsed = parseNonNegativeAmountInput(moneyDrafts[field]);
+      if (parsed.valid === false) errs[moneyErrorKey(field)] = parsed.message;
+    }
+    const backendValidation = validatePersonnelForSave(formData);
+    if (backendValidation) errs[backendValidation.field] = backendValidation.message;
+
     setErrors(errs);
+    if (Object.keys(errs).some((field) => field.startsWith('kesintiler.gvIndirimleri.'))) {
+      setActiveFormSection('advanced');
+    } else if (Object.keys(errs).some((field) => field.startsWith('kesintiler.'))) {
+      setActiveFormSection('deductions');
+    } else if (errs.tcNo || errs.iban || errs.ad || errs.soyad) {
+      setActiveFormSection('basic');
+    }
     return Object.keys(errs).length === 0;
   };
 
@@ -136,7 +238,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       grup: selGrup,
       unvan: `${selGrup} (%${rate} İş Primi)`,
       sgkSicilNo: formData.sgkSicilNo?.trim() || '',
-      iban: formData.iban?.trim().toUpperCase() || 'TR',
+      iban: normalizeTurkishIban(formData.iban) || '',
       hizmetYili: Number(formData.hizmetYili) || 0,
       aciklama: formData.aciklama?.trim() || '',
       devirKumulatifGvMatrahi: Number(formData.devirKumulatifGvMatrahi) || 0,
@@ -162,7 +264,12 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
       await onSave(newPersonel);
       onClose();
     } catch (err) {
-      setErrors({ form: `Kayıt başarısız: ${formatPersonnelSaveError(err)}` });
+      if (isDuplicateTcNoError(err)) {
+        setActiveFormSection('basic');
+        setErrors({ tcNo: formatPersonnelSaveError(err) });
+      } else {
+        setErrors({ form: `Kayıt başarısız: ${formatPersonnelSaveError(err)}` });
+      }
     } finally {
       setIsSaving(false);
     }
@@ -201,7 +308,7 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
         </div>
 
         {/* Form */}
-        <form onSubmit={handleSubmit} className="flex-1 flex flex-col overflow-hidden">
+        <form onSubmit={handleSubmit} noValidate className="flex-1 flex flex-col overflow-hidden">
           <div className="p-6 space-y-4 overflow-y-auto flex-1">
           {errors.form && (
             <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs font-semibold">
@@ -247,10 +354,12 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                   setFormData({ ...formData, tcNo: e.target.value.replace(/\D/g, '') })
                 }
                 placeholder="11 Haneli T.C. No"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                aria-invalid={Boolean(errors.tcNo)}
+                aria-describedby={errors.tcNo ? 'personel-tc-error' : undefined}
+                className={`w-full px-3 py-2 bg-slate-50 border rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 ${errors.tcNo ? 'border-rose-500' : 'border-slate-300'}`}
               />
               {errors.tcNo && (
-                <p className="text-[11px] text-rose-600 mt-0.5 font-medium">{errors.tcNo}</p>
+                <p id="personel-tc-error" role="alert" className="text-[11px] text-rose-600 mt-0.5 font-medium">{errors.tcNo}</p>
               )}
             </div>
 
@@ -364,14 +473,24 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
               <input
                 type="text"
                 value={formData.iban || ''}
-                onChange={(e) =>
-                  setFormData({ ...formData, iban: e.target.value.toUpperCase() })
-                }
+                onChange={(e) => {
+                  const iban = e.target.value.toUpperCase();
+                  setFormData({ ...formData, iban });
+                  if (normalizeTurkishIban(iban)) {
+                    setErrors((current) => {
+                      const next = { ...current };
+                      delete next.iban;
+                      return next;
+                    });
+                  }
+                }}
                 placeholder="TR00 0000 0000 0000 0000 0000 00"
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500"
+                aria-invalid={Boolean(errors.iban)}
+                aria-describedby={errors.iban ? 'personel-iban-error' : undefined}
+                className={`w-full px-3 py-2 bg-slate-50 border rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:ring-2 focus:ring-indigo-500 ${errors.iban ? 'border-rose-500' : 'border-slate-300'}`}
               />
               {errors.iban && (
-                <p className="text-[11px] text-rose-600 mt-0.5 font-medium">{errors.iban}</p>
+                <p id="personel-iban-error" role="alert" className="text-[11px] text-rose-600 mt-0.5 font-medium">{errors.iban}</p>
               )}
             </div>
 
@@ -437,21 +556,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                         Kişiye Özel Sendika Aidatı Tutarı (TL)
                       </label>
                       <input
-                        type="number"
-                        step="0.01"
+                        type="text"
+                        inputMode="decimal"
                         placeholder="Boş bırakın: otomatik % hesabı"
-                        value={formData.kesintiler?.sabitSendikaAidati ?? ''}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            kesintiler: {
-                              ...(formData.kesintiler || {}),
-                              sabitSendikaAidati: parseFloat(e.target.value) || 0,
-                            },
-                          })
-                        }
+                        value={moneyDrafts.sabitSendikaAidati}
+                        onChange={(e) => updateMoneyDraft('sabitSendikaAidati', e.target.value)}
+                        aria-invalid={Boolean(errors['kesintiler.sabitSendikaAidati'])}
                         className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500"
                       />
+                      {errors['kesintiler.sabitSendikaAidati'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.sabitSendikaAidati']}</p>}
                       {(formData.kesintiler?.sabitSendikaAidati ?? 0) > 0 && (
                         <p className="mt-1 text-[10px] text-amber-700">
                           Kişiye özel sabit tutar otomatik hesabı geçersiz kılar. Otomatik % hesabı için alanı sıfırlayın.
@@ -520,21 +633,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                           İstisnai Maktu Sabit OKS Tutarı (TL)
                         </label>
                         <input
-                          type="number"
-                          step="0.01"
+                          type="text"
+                          inputMode="decimal"
                           placeholder="Boş kalırsa PEK x Oran hesaplanır"
-                          value={formData.kesintiler?.sabitBesTutar ?? ''}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              kesintiler: {
-                                ...(formData.kesintiler || {}),
-                                sabitBesTutar: parseFloat(e.target.value) || 0,
-                              },
-                            })
-                          }
+                          value={moneyDrafts.sabitBesTutar}
+                          onChange={(e) => updateMoneyDraft('sabitBesTutar', e.target.value)}
+                          aria-invalid={Boolean(errors['kesintiler.sabitBesTutar'])}
                           className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-800 focus:bg-white focus:ring-2 focus:ring-emerald-500"
                         />
+                        {errors['kesintiler.sabitBesTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.sabitBesTutar']}</p>}
                       </div>
                     </div>
                   )}
@@ -548,21 +655,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     İcra Kesintisi (TL)
                   </label>
                   <input
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
-                    value={formData.kesintiler?.icraTutar ?? ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          icraTutar: parseFloat(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    value={moneyDrafts.icraTutar}
+                    onChange={(e) => updateMoneyDraft('icraTutar', e.target.value)}
+                    aria-invalid={Boolean(errors['kesintiler.icraTutar'])}
                     className="w-full px-2.5 py-1.5 bg-white border border-rose-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-rose-500"
                   />
+                  {errors['kesintiler.icraTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.icraTutar']}</p>}
                 </div>
 
                 <div>
@@ -570,22 +671,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     Nafaka Kesintisi (TL)
                   </label>
                   <input
-                    type="number"
-                    min={0}
-                    step="0.01"
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
-                    value={formData.kesintiler?.nafakaTutar ?? ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          nafakaTutar: parseFloat(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    value={moneyDrafts.nafakaTutar}
+                    onChange={(e) => updateMoneyDraft('nafakaTutar', e.target.value)}
+                    aria-invalid={Boolean(errors['kesintiler.nafakaTutar'])}
                     className="w-full px-2.5 py-1.5 bg-white border border-pink-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-pink-500"
                   />
+                  {errors['kesintiler.nafakaTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.nafakaTutar']}</p>}
                   <p className="mt-1 text-[10px] text-pink-700">Kartta tanımlı aylık sabit tutar bordroya ayrı kesinti olarak yansır.</p>
                 </div>
 
@@ -594,21 +688,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     Kişi Borcu (TL)
                   </label>
                   <input
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
-                    value={formData.kesintiler?.kisiBorcuTutar ?? ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          kisiBorcuTutar: parseFloat(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    value={moneyDrafts.kisiBorcuTutar}
+                    onChange={(e) => updateMoneyDraft('kisiBorcuTutar', e.target.value)}
+                    aria-invalid={Boolean(errors['kesintiler.kisiBorcuTutar'])}
                     className="w-full px-2.5 py-1.5 bg-white border border-amber-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-amber-500"
                   />
+                  {errors['kesintiler.kisiBorcuTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.kisiBorcuTutar']}</p>}
                 </div>
 
                 <div>
@@ -616,21 +704,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     Doğum/Askerlik (TL)
                   </label>
                   <input
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
-                    value={formData.kesintiler?.dogumAskerlikBorclanmasiTutar ?? ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          dogumAskerlikBorclanmasiTutar: parseFloat(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    value={moneyDrafts.dogumAskerlikBorclanmasiTutar}
+                    onChange={(e) => updateMoneyDraft('dogumAskerlikBorclanmasiTutar', e.target.value)}
+                    aria-invalid={Boolean(errors['kesintiler.dogumAskerlikBorclanmasiTutar'])}
                     className="w-full px-2.5 py-1.5 bg-white border border-purple-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-purple-500"
                   />
+                  {errors['kesintiler.dogumAskerlikBorclanmasiTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.dogumAskerlikBorclanmasiTutar']}</p>}
                 </div>
 
                 <div>
@@ -638,21 +720,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     Sağlık Sigortası (TL)
                   </label>
                   <input
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
-                    value={formData.kesintiler?.hayatSaglikSigortasiTutar ?? ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          hayatSaglikSigortasiTutar: parseFloat(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    value={moneyDrafts.hayatSaglikSigortasiTutar}
+                    onChange={(e) => updateMoneyDraft('hayatSaglikSigortasiTutar', e.target.value)}
+                    aria-invalid={Boolean(errors['kesintiler.hayatSaglikSigortasiTutar'])}
                     className="w-full px-2.5 py-1.5 bg-white border border-teal-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-teal-500"
                   />
+                  {errors['kesintiler.hayatSaglikSigortasiTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.hayatSaglikSigortasiTutar']}</p>}
                 </div>
 
                 <div>
@@ -660,21 +736,15 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                     Diğer Kesinti (TL)
                   </label>
                   <input
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="decimal"
                     placeholder="0.00"
-                    value={formData.kesintiler?.digerKesintiTutar ?? ''}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          digerKesintiTutar: parseFloat(e.target.value) || 0,
-                        },
-                      })
-                    }
+                    value={moneyDrafts.digerKesintiTutar}
+                    onChange={(e) => updateMoneyDraft('digerKesintiTutar', e.target.value)}
+                    aria-invalid={Boolean(errors['kesintiler.digerKesintiTutar'])}
                     className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-slate-500"
                   />
+                  {errors['kesintiler.digerKesintiTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.digerKesintiTutar']}</p>}
                 </div>
               </div>
 
@@ -694,63 +764,39 @@ export const PersonelFormModal: React.FC<PersonelFormModalProps> = ({
                   <div>
                     <label className="block text-[11px] font-semibold text-violet-900 mb-1">Doğum/Askerlik GV İndirimi (TL)</label>
                     <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={formData.kesintiler?.gvIndirimleri?.dogumAskerlikGvIndirimTutar ?? ''}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          gvIndirimleri: {
-                            ...(formData.kesintiler?.gvIndirimleri || {}),
-                            dogumAskerlikGvIndirimTutar: e.target.value === '' ? undefined : Number(e.target.value),
-                          },
-                        },
-                      })}
+                      type="text"
+                      inputMode="decimal"
+                      value={moneyDrafts.dogumAskerlikGvIndirimTutar}
+                      onChange={(e) => updateMoneyDraft('dogumAskerlikGvIndirimTutar', e.target.value)}
+                      aria-invalid={Boolean(errors['kesintiler.gvIndirimleri.dogumAskerlikGvIndirimTutar'])}
                       className="w-full px-2.5 py-1.5 bg-white border border-violet-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-violet-500"
                     />
+                    {errors['kesintiler.gvIndirimleri.dogumAskerlikGvIndirimTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.gvIndirimleri.dogumAskerlikGvIndirimTutar']}</p>}
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-violet-900 mb-1">Hayat Sigortası Primi (TL)</label>
                     <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={formData.kesintiler?.gvIndirimleri?.hayatSigortasiPrimiTutar ?? ''}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          gvIndirimleri: {
-                            ...(formData.kesintiler?.gvIndirimleri || {}),
-                            hayatSigortasiPrimiTutar: e.target.value === '' ? undefined : Number(e.target.value),
-                          },
-                        },
-                      })}
+                      type="text"
+                      inputMode="decimal"
+                      value={moneyDrafts.hayatSigortasiPrimiTutar}
+                      onChange={(e) => updateMoneyDraft('hayatSigortasiPrimiTutar', e.target.value)}
+                      aria-invalid={Boolean(errors['kesintiler.gvIndirimleri.hayatSigortasiPrimiTutar'])}
                       className="w-full px-2.5 py-1.5 bg-white border border-violet-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-violet-500"
                     />
+                    {errors['kesintiler.gvIndirimleri.hayatSigortasiPrimiTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.gvIndirimleri.hayatSigortasiPrimiTutar']}</p>}
                     <span className="text-[10px] text-violet-700 mt-1 block">GV adayı: primin %50'si.</span>
                   </div>
                   <div>
                     <label className="block text-[11px] font-semibold text-violet-900 mb-1">Sağlık/Şahıs Sigortası Primi (TL)</label>
                     <input
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={formData.kesintiler?.gvIndirimleri?.saglikSigortasiPrimiTutar ?? ''}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        kesintiler: {
-                          ...(formData.kesintiler || {}),
-                          gvIndirimleri: {
-                            ...(formData.kesintiler?.gvIndirimleri || {}),
-                            saglikSigortasiPrimiTutar: e.target.value === '' ? undefined : Number(e.target.value),
-                          },
-                        },
-                      })}
+                      type="text"
+                      inputMode="decimal"
+                      value={moneyDrafts.saglikSigortasiPrimiTutar}
+                      onChange={(e) => updateMoneyDraft('saglikSigortasiPrimiTutar', e.target.value)}
+                      aria-invalid={Boolean(errors['kesintiler.gvIndirimleri.saglikSigortasiPrimiTutar'])}
                       className="w-full px-2.5 py-1.5 bg-white border border-violet-200 rounded-lg text-xs font-mono text-slate-900 focus:ring-2 focus:ring-violet-500"
                     />
+                    {errors['kesintiler.gvIndirimleri.saglikSigortasiPrimiTutar'] && <p role="alert" className="mt-1 text-[10px] text-rose-700">{errors['kesintiler.gvIndirimleri.saglikSigortasiPrimiTutar']}</p>}
                     <span className="text-[10px] text-violet-700 mt-1 block">GV adayı: primin %100'ü; yasal aylık/yıllık limit ayrıca uygulanır.</span>
                   </div>
                 </div>

@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { getInitialDataset } from './sampleData';
+import { isValidTurkishIban } from './personnelValidation';
 
 describe('getInitialDataset', () => {
+  test('seeds valid Turkish IBANs for new sample personnel', () => {
+    const dataset = getInitialDataset();
+    expect(dataset.personeller.every((person) => isValidTurkishIban(person.iban))).toBe(true);
+  });
+
   test('starts the sample tax year with its preceding December reference period', () => {
     const dataset = getInitialDataset();
     const currentYear = new Date().getFullYear();

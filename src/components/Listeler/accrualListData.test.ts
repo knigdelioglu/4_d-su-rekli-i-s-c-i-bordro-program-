@@ -25,7 +25,7 @@ const person = {
   ad: 'Ali',
   soyad: 'Yılmaz',
   tcNo: '10000000000',
-  iban: 'TR000000000000000000000000',
+  iban: 'TR330006100519786457841326',
 } as Personel;
 
 function payroll(
@@ -106,6 +106,40 @@ describe('authoritative accrual list dataset', () => {
     expect(notice).toContain('1 hesaplanmış tahakkuk henüz kesinleştirilmedi');
     expect(notice).toContain('yeniden hesaplanmalı');
     expect(notice).toContain('banka listesine alınır');
+  });
+
+  test('excludes finalized records with invalid legacy IBANs and keeps year/date totals isolated', () => {
+    const june2028 = {
+      ...period,
+      id: '2028-06',
+      yil: 2028,
+      ay: 6,
+      baslangicTarihi: '2028-06-15',
+      bitisTarihi: '2028-07-14',
+      donemAdi: 'Haziran 2028',
+      taxYear: 2028,
+      taxMonth: 7,
+    };
+    const validSecondPerson = { ...person, id: 'p-2', ad: 'Ayşe' };
+    const legacyInvalidPerson = { ...person, id: 'p-3', ad: 'Eski', iban: 'TR' };
+    const rows = [
+      { ...payroll('NORMAL', 'june-normal', '2028-06-30', 0, 0, 'FINALIZED', 1_744_659.78), donemId: june2028.id },
+      { ...payroll('TEDIYE', 'july-payment', '2028-07-10', 1, 0, 'FINALIZED', 120), donemId: june2028.id, personelId: validSecondPerson.id },
+      { ...payroll('SUPPLEMENTAL', 'legacy-invalid', '2028-06-30', 2, 0, 'FINALIZED', 900), donemId: june2028.id, personelId: legacyInvalidPerson.id },
+    ];
+
+    const people = [person, validSecondPerson, legacyInvalidPerson];
+    const bankRows = getBankTransferableAccrualRows(june2028, people, rows);
+    const juneRows = filterAccrualRowsByPaymentDate(bankRows, '2028-06-30');
+    const juneTotal = juneRows.reduce((sum, row) => sum + row.bordro.netOdeme, 0);
+    const notice = describeBankExcludedAccruals(june2028, people, rows);
+
+    expect(bankRows.map((row) => row.accrualId)).toEqual(['june-normal', 'july-payment']);
+    expect(juneRows.map((row) => row.accrualId)).toEqual(['june-normal']);
+    expect(juneTotal).toBe(1_744_659.78);
+    expect(notice).toContain('Türk IBAN doğrulaması başarısız');
+    expect(notice).toContain('Eski Yılmaz');
+    expect(notice).toContain('banka talimatına aktarılmadı');
   });
 
   test('counts people by authoritative NORMAL accrual, not by total accrual count', () => {

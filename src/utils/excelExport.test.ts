@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import * as XLSX from 'xlsx';
 import { exportToExcel, printElement } from './excelExport';
+import {
+  BANKA_EXCEL_COLUMNS,
+  buildBankaExcelRows,
+  buildBankaExcelSummary,
+} from '../components/Listeler/BankaListesi';
 
 describe('printElement', () => {
   test('uses compact A4 rules while leaving long payslip sections free to paginate', async () => {
@@ -229,6 +234,57 @@ describe('printElement', () => {
 });
 
 describe('exportToExcel', () => {
+  test('round-trips a long Turkish bank recipient name, content width, identifiers, and the exact total', async () => {
+    const originalDoc = (globalThis as any).document;
+    const originalWindow = (globalThis as any).window;
+    let xlsxBytes: number[] | undefined;
+    const longName = ['Ayşegül', 'Çağıl', 'Şenol', 'Özçelik', 'Karaçınar', 'Yılmaz', 'Balcı'].join(' ');
+    expect(Array.from(longName).length >= 45).toBe(true);
+    expect(Array.from(longName).length <= 60).toBe(true);
+    const entries = [{
+      personel: {
+        tcNo: '12345678901',
+        ad: 'Ayşegül Çağıl Şenol',
+        soyad: 'Özçelik Karaçınar Yılmaz Balcı',
+        grup: '1. Grup',
+        iban: 'TR330006100519786457841326',
+      },
+      paymentDate: '2028-06-30',
+      accrualTypeLabel: 'Normal Maaş',
+      bordro: { netOdeme: 1_744_659.78 },
+    }] as any;
+    const rows = buildBankaExcelRows(entries);
+    const summary = buildBankaExcelSummary(rows.reduce((sum, row) => sum + row.netOdeme, 0));
+
+    (globalThis as any).document = { createElement: () => ({ click() {} }), body: { appendChild() {}, removeChild() {} } };
+    (globalThis as any).window = {
+      __TAURI_INTERNALS__: {
+        invoke: async (_command: string, args: { excelBytes: number[] }) => {
+          xlsxBytes = args.excelBytes;
+          return true;
+        },
+      },
+    };
+
+    try {
+      await exportToExcel('long_bank_names', 'Banka Listesi', BANKA_EXCEL_COLUMNS, rows, summary);
+      expect(xlsxBytes).toBeDefined();
+      const workbook = XLSX.read(new Uint8Array(xlsxBytes!), { type: 'array', cellStyles: true });
+      const sheet = workbook.Sheets['Banka Listesi'];
+      expect(sheet.B2).toMatchObject({ t: 's', v: longName });
+      expect(sheet.A2).toMatchObject({ t: 's', v: '12345678901' });
+      expect(sheet.D2).toMatchObject({ t: 's', v: 'TR330006100519786457841326' });
+      expect(sheet.G2).toMatchObject({ t: 'n', v: 1_744_659.78, z: '#,##0.00' });
+      expect(sheet.A3).toMatchObject({ t: 's', v: 'TOPLAM' });
+      expect(sheet.G3).toMatchObject({ t: 'n', v: 1_744_659.78, z: '#,##0.00' });
+      expect(sheet['!cols']?.[1]?.wch).toBe(Array.from(longName).length + 2);
+      expect(sheet['!cols']?.[1]?.wch).toBeGreaterThan(26);
+    } finally {
+      (globalThis as any).document = originalDoc;
+      (globalThis as any).window = originalWindow;
+    }
+  });
+
   test('keeps bank payments numeric and applies grouped two-decimal format in browser and Tauri XLSX files', async () => {
     const originalDoc = (globalThis as any).document;
     const originalWindow = (globalThis as any).window;

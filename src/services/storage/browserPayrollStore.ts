@@ -10,6 +10,7 @@ import {
   parseImportedBackup,
   parseLegacyBackup,
 } from './payrollPayload';
+import { validatePersonnelSnapshotMutation } from '../../utils/personnelValidation';
 
 export { isSupportedLegacyBackupPayload as isMigratableBackupPayload } from './payrollPayload';
 
@@ -253,13 +254,32 @@ function writeSnapshotToDatabase(
           return;
         }
 
-        if (current && !allowPolicyHistoryReplacement) {
-          const existing = JSON.parse(parseStoredSnapshotPayload(current).payload) as PayrollStorageDto;
+        if (!allowPolicyHistoryReplacement) {
+          const existing = current
+            ? parseCurrentBrowserSnapshot(parseStoredSnapshotPayload(current).payload)
+            : null;
           const incoming = parseCurrentBrowserSnapshot(
             payload,
             sourceFormat === 'current' ? undefined : { allowLegacyMissingGvBase: true }
           );
-          assertPolicyHistoryPreserved(existing, incoming);
+          if (existing) assertPolicyHistoryPreserved(existing, incoming);
+          if (sourceFormat === 'current') {
+            const validated = validatePersonnelSnapshotMutation(existing, incoming);
+            const normalizedPersonnel = new Map(
+              validated.personeller.map((person) => [person.id, person])
+            );
+            const hasUnnormalizedIdentity = incoming.personeller.some((person) => {
+              const normalized = normalizedPersonnel.get(person.id);
+              return normalized && (
+                normalized.tcNo !== person.tcNo || normalized.iban !== person.iban
+              );
+            });
+            if (hasUnnormalizedIdentity) {
+              throw new Error(
+                'Personel kaydı doğrulanamadı: T.C. ve IBAN alanlarını normalize ederek tekrar kaydedin.'
+              );
+            }
+          }
         }
 
         const sameSnapshot = current?.payload === payload
@@ -580,7 +600,7 @@ export class BrowserPayrollStore {
         }
         const canonical = parseStoredSnapshotPayload(stored);
         const current = parseCurrentBrowserSnapshot(canonical.payload);
-        const next = mutate(current);
+        const next = validatePersonnelSnapshotMutation(current, mutate(current));
         const payload = serializePayrollStorage(next);
         parseCurrentBrowserSnapshot(payload);
         const revision = await writeAndVerify(

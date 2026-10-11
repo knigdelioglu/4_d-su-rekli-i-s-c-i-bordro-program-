@@ -29,7 +29,7 @@ mod tests {
             grup: "1. Grup".to_string(),
             unvan: None,
             sgkSicilNo: "12345".to_string(),
-            iban: "TR00".to_string(),
+            iban: "TR330006100519786457841326".to_string(),
             hizmetYili: 5,
             aciklama: None,
             devirKumulatifGvMatrahi: None,

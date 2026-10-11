@@ -409,6 +409,47 @@ pub fn validate_personnel_for_payroll(personel: &Personel) -> Result<()> {
     Ok(())
 }
 
+/// Returns the canonical compact representation of a Turkish IBAN after
+/// validating its country layout and ISO 13616/7064 MOD-97 check digits.
+/// Whitespace used to group a printed IBAN is accepted and removed.
+pub fn normalize_turkish_iban(value: &str) -> Result<String> {
+    let normalized = value
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .map(|character| character.to_ascii_uppercase())
+        .collect::<String>();
+    let bytes = normalized.as_bytes();
+    let structurally_valid = bytes.len() == 26
+        && &bytes[0..2] == b"TR"
+        && bytes[2..9].iter().all(u8::is_ascii_digit)
+        && bytes[9] == b'0'
+        && bytes[10..]
+            .iter()
+            .all(|character| character.is_ascii_digit() || character.is_ascii_uppercase());
+    if !structurally_valid {
+        return Err(DomainError::ValidationError(
+            "Türk IBAN’ı 26 karakter olmalı, TR ile başlamalı ve alan yapısı geçerli olmalıdır."
+                .into(),
+        ));
+    }
+
+    let mut remainder = 0_u32;
+    for character in normalized[4..].bytes().chain(normalized[..4].bytes()) {
+        if character.is_ascii_digit() {
+            remainder = (remainder * 10 + u32::from(character - b'0')) % 97;
+        } else {
+            let numeric_value = u32::from(character - b'A') + 10;
+            remainder = (remainder * 100 + numeric_value) % 97;
+        }
+    }
+    if remainder != 1 {
+        return Err(DomainError::ValidationError(
+            "Türk IBAN’ının kontrol basamağı geçersizdir.".into(),
+        ));
+    }
+    Ok(normalized)
+}
+
 pub fn validate_annual_payroll_parameters(parameters: &AnnualPayrollParameters) -> Result<()> {
     if parameters.year <= 0 || parameters.gelirVergisiDilimleri.is_empty() {
         return Err(DomainError::ValidationError(

@@ -9,7 +9,27 @@ export interface ExcelExportColumn {
   header: string;
   key: string;
   width?: number;
+  /** Derives the width from the header and all exported cell values. */
+  autoWidth?: { min?: number; max?: number };
   numFmt?: string;
+}
+
+export function calculateExcelColumnWidth(
+  header: string,
+  values: readonly unknown[],
+  bounds: { min?: number; max?: number } = {}
+): number {
+  const min = bounds.min ?? 12;
+  const max = bounds.max ?? 80;
+  const longest = [header, ...values].reduce<number>((width, value) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    const longestLine = text.split(/\r?\n/u).reduce(
+      (lineWidth, line) => Math.max(lineWidth, Array.from(line).length),
+      0
+    );
+    return Math.max(width, longestLine);
+  }, 0);
+  return Math.min(max, Math.max(min, longest + 2));
 }
 
 /**
@@ -57,9 +77,17 @@ export async function exportToExcel<T extends Record<string, any>>(
     }
   });
 
-  // Set column widths
-  worksheet['!cols'] = columns.map((col) => ({
-    wch: col.width || Math.max(col.header.length + 5, 15),
+  // Set fixed widths where requested and derive content-aware widths for
+  // columns such as bank recipient names. Array.from counts Turkish Unicode
+  // code points instead of UTF-16 code units.
+  worksheet['!cols'] = columns.map((col, columnIndex) => ({
+    wch: col.autoWidth
+      ? calculateExcelColumnWidth(
+          col.header,
+          worksheetData.slice(1).map((row) => row[columnIndex]),
+          col.autoWidth
+        )
+      : col.width || Math.max(Array.from(col.header).length + 5, 15),
   }));
 
   const workbook = XLSX.utils.book_new();
