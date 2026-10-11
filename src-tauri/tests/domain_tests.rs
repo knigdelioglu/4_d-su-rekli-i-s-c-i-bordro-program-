@@ -2570,6 +2570,37 @@ mod tests {
     }
 
     #[test]
+    fn test_empty_tax_opening_insert_and_noop_update_skip_payroll_invalidation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = create_in_memory_connection()?;
+        let person = setup_test_person("test-empty-tax-opening");
+        PersonnelRepository::save(&conn, &person)?;
+
+        let opening = PersonelTaxOpening {
+            id: "test-empty-tax-opening_2026".into(),
+            personnelId: person.id.clone(),
+            year: 2026,
+            gvCumulativeOpening: None,
+            effectiveFromPeriodId: None,
+            asgariGvCumulativeOpening: None,
+            asgariGvEffectiveFromPeriodId: None,
+            createdAt: None,
+            updatedAt: None,
+        };
+
+        TaxOpeningRepository::save(&conn, &opening)?;
+        TaxOpeningRepository::save(&conn, &opening)?;
+
+        let saved = TaxOpeningRepository::get_by_personnel_and_year(&conn, &person.id, 2026)?
+            .expect("empty tax opening should persist");
+        assert_eq!(saved.gvCumulativeOpening, None);
+        assert_eq!(saved.effectiveFromPeriodId, None);
+        assert_eq!(saved.asgariGvCumulativeOpening, None);
+        assert_eq!(saved.asgariGvEffectiveFromPeriodId, None);
+        Ok(())
+    }
+
+    #[test]
     fn test_asgari_only_opening_does_not_create_synthetic_normal_opening(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let conn = create_in_memory_connection()?;
