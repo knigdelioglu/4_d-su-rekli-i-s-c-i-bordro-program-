@@ -7,13 +7,26 @@
 
 use crate::errors::DomainError;
 use crate::models::{
-    BordroKaydi, CompensationBoundaryScope, CompensationPolicyState, CompensationPolicyVersion,
-    ResolvedCompensationSegment,
+    BordroDonemi, BordroKaydi, CompensationBoundaryScope, CompensationPolicyState,
+    CompensationPolicyVersion, ResolvedCompensationSegment,
 };
 use crate::Result;
 use chrono::{Duration, NaiveDate};
 use rust_decimal::Decimal;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadRoundingIssue {
+    pub effective_from: String,
+    pub expected_mode: crate::models::RoadRoundingMode,
+    pub actual_mode: crate::models::RoadRoundingMode,
+    pub expected_version_id: String,
+    pub actual_version_id: String,
+    pub period_start_inclusive: String,
+    pub period_end_inclusive: String,
+}
 
 fn invalid(message: impl Into<String>) -> DomainError {
     DomainError::ValidationError(message.into())
@@ -331,14 +344,11 @@ pub fn validate_compensation_snapshot_policy_links(
     Ok(())
 }
 
-/// Resolves a fully inclusive work-date range using only its date inputs and
-/// the supplied policy versions. Input must be ordered by effectiveFrom
-/// ascending, with same-date corrections ordered supersedes ancestor first.
-pub fn resolve_compensation_segments(
+fn active_policy_versions_for_period<'a>(
     start_inclusive: &str,
     end_inclusive: &str,
-    versions: &[CompensationPolicyVersion],
-) -> Result<Vec<ResolvedCompensationSegment>> {
+    versions: &'a [CompensationPolicyVersion],
+) -> Result<Vec<&'a CompensationPolicyVersion>> {
     let start = parse_canonical_work_date(start_inclusive, "Dönem başlangıç tarihi")?;
     let end = parse_canonical_work_date(end_inclusive, "Dönem bitiş tarihi")?;
     if start > end {
@@ -357,13 +367,13 @@ pub fn resolve_compensation_segments(
         ));
     }
 
-    let mut active_by_date: BTreeMap<&str, &CompensationPolicyVersion> = BTreeMap::new();
     let mut superseded = HashSet::new();
     for version in versions {
         if let Some(parent) = version.supersedesVersionId.as_deref() {
             superseded.insert(parent);
         }
     }
+    let mut active_by_date: BTreeMap<&str, &CompensationPolicyVersion> = BTreeMap::new();
     for version in versions {
         if !superseded.contains(version.id.as_str()) {
             active_by_date.insert(version.effectiveFrom.as_str(), version);
@@ -379,7 +389,6 @@ pub fn resolve_compensation_segments(
                 "Bu tarih için ücret politikası tanımlı değil: {start_inclusive}."
             ))
         })?;
-
     let mut selected = vec![baseline];
     selected.extend(
         active_by_date
@@ -387,14 +396,146 @@ pub fn resolve_compensation_segments(
             .filter(|(date, _)| **date > start_inclusive && **date <= end_inclusive)
             .map(|(_, version)| *version),
     );
+    Ok(selected)
+}
 
-    let road_modes = selected
-        .iter()
-        .map(|version| version.roadRoundingMode)
-        .collect::<HashSet<_>>();
-    if road_modes.len() != 1 {
+/// Returns the active rounding-mode transitions that fall inside one inclusive
+/// payroll service period. Superseded versions and transitions on the period
+/// start are not conflicts.
+pub fn find_road_rounding_issues(
+    start_inclusive: &str,
+    end_inclusive: &str,
+    versions: &[CompensationPolicyVersion],
+) -> Result<Vec<RoadRoundingIssue>> {
+    let selected = active_policy_versions_for_period(start_inclusive, end_inclusive, versions)?;
+    Ok(selected
+        .windows(2)
+        .filter_map(|pair| {
+            let previous = pair[0];
+            let current = pair[1];
+            (previous.roadRoundingMode != current.roadRoundingMode).then(|| RoadRoundingIssue {
+                effective_from: current.effectiveFrom.clone(),
+                expected_mode: previous.roadRoundingMode,
+                actual_mode: current.roadRoundingMode,
+                expected_version_id: previous.id.clone(),
+                actual_version_id: current.id.clone(),
+                period_start_inclusive: start_inclusive.to_owned(),
+                period_end_inclusive: end_inclusive.to_owned(),
+            })
+        })
+        .collect())
+}
+
+/// Rejects policy candidates that introduce a road-rounding transition inside
+/// any existing payroll service period. Conflicts already present in the
+/// stored timeline are tolerated here so explicit same-date corrections can
+/// repair them without making unrelated edits impossible.
+pub fn validate_no_new_road_rounding_conflicts(
+    periods: &[BordroDonemi],
+    existing_versions: &[CompensationPolicyVersion],
+    candidate_versions: &[CompensationPolicyVersion],
+) -> Result<()> {
+    let existing_versions = order_compensation_policy_versions(existing_versions)?;
+    let candidate_versions = order_compensation_policy_versions(candidate_versions)?;
+    let mut existing_conflicts = BTreeSet::new();
+
+    for period in periods {
+        match find_road_rounding_issues(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            &existing_versions,
+        ) {
+            Ok(issues) => existing_conflicts.extend(issues.into_iter().map(|issue| {
+                (
+                    period.id.clone(),
+                    issue.effective_from,
+                    issue.expected_mode.as_wire_token(),
+                    issue.actual_mode.as_wire_token(),
+                    issue.expected_version_id,
+                    issue.actual_version_id,
+                )
+            })),
+            // Periods before the initial baseline have no policy to validate.
+            Err(DomainError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    for period in periods {
+        let issues = match find_road_rounding_issues(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            &candidate_versions,
+        ) {
+            Ok(issues) => issues,
+            Err(DomainError::NotFound(_)) => continue,
+            Err(error) => return Err(error),
+        };
+        for issue in issues {
+            let signature = (
+                period.id.clone(),
+                issue.effective_from.clone(),
+                issue.expected_mode.as_wire_token(),
+                issue.actual_mode.as_wire_token(),
+                issue.expected_version_id.clone(),
+                issue.actual_version_id.clone(),
+            );
+            if existing_conflicts.contains(&signature) {
+                continue;
+            }
+            return Err(invalid_graph(format!(
+                "Yeni yol yuvarlama çakışması: {} hizmet dönemi {}–{} içinde {} tarihli {} sürümü ({}) ile {} sürümü ({}) yuvarlama modunu değiştiriyor. Aday politika bu dönemi geçersiz kılıyor.",
+                period.id,
+                period.baslangicTarihi,
+                period.bitisTarihi,
+                issue.effective_from,
+                issue.actual_version_id,
+                issue.actual_mode.as_wire_token(),
+                issue.expected_version_id,
+                issue.expected_mode.as_wire_token(),
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Resolves a fully inclusive work-date range using only its date inputs and
+/// the supplied policy versions. Input must be ordered by effectiveFrom
+/// ascending, with same-date corrections ordered supersedes ancestor first.
+pub fn resolve_compensation_segments(
+    start_inclusive: &str,
+    end_inclusive: &str,
+    versions: &[CompensationPolicyVersion],
+) -> Result<Vec<ResolvedCompensationSegment>> {
+    let start = parse_canonical_work_date(start_inclusive, "Dönem başlangıç tarihi")?;
+    let end = parse_canonical_work_date(end_inclusive, "Dönem bitiş tarihi")?;
+    if start > end {
+        return Err(invalid(
+            "Dönem başlangıç tarihi bitiş tarihinden sonra olamaz.",
+        ));
+    }
+    let selected = active_policy_versions_for_period(start_inclusive, end_inclusive, versions)?;
+    let rounding_issues = find_road_rounding_issues(start_inclusive, end_inclusive, versions)?;
+    if !rounding_issues.is_empty() {
+        let details = rounding_issues
+            .iter()
+            .map(|issue| {
+                format!(
+                    "{} tarihli {} sürümü ({}) önceki {} sürümüyle ({}) çelişiyor",
+                    issue.effective_from,
+                    issue.actual_version_id,
+                    issue.actual_mode.as_wire_token(),
+                    issue.expected_version_id,
+                    issue.expected_mode.as_wire_token(),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
         return Err(invalid_graph(
-            "Road rounding mode bir bordro hizmet dönemi içinde değişemez.",
+            format!(
+                "Yol yuvarlama biçimi {}–{} bordro hizmet dönemi içinde değişemez: {}. Çakışan etkin sürüm aynı effectiveFrom tarihinde, önceki mod korunarak düzeltilmelidir.",
+                start_inclusive, end_inclusive, details
+            ),
         ));
     }
     for pair in selected.windows(2) {

@@ -209,7 +209,8 @@ interface UseBordroCalculationControllerOptions {
   onOpenCompensationPolicy?: () => void;
   onSaveBordro: (
     bordro: PayrollBoundaryPayroll,
-    calculationSnapshot?: PayrollDatasetSnapshot
+    calculationSnapshot?: PayrollDatasetSnapshot,
+    saveSource?: 'ENGINE_FINALIZATION'
   ) => Promise<void> | void;
 }
 
@@ -1205,7 +1206,7 @@ export function useBordroCalculationController({
   };
 
   const handleFinalizeSuccess = async (person: Personel, finalizedBordro: PayrollBoundaryPayroll) => {
-    await onSaveBordro(finalizedBordro);
+    await onSaveBordro(finalizedBordro, undefined, 'ENGINE_FINALIZATION');
     setErrorMessage(null);
     setSuccessMessage(`${person.ad} ${person.soyad} bordrosu kesinleştirildi.`);
     setTimeout(() => setSuccessMessage(null), 3500);

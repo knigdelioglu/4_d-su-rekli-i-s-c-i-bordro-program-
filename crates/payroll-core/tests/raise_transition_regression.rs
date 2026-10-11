@@ -1,6 +1,6 @@
 use chrono::{Duration, NaiveDate};
 use payroll_core::*;
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
@@ -535,6 +535,245 @@ fn missing_previous_period_missing_settings_gaps_and_invalid_raise_months_fail_c
     assert!(matches!(error, DomainError::NotFound(_)));
 
     assert!(calculate_payroll(&original).is_ok());
+}
+
+#[test]
+fn october_2027_and_january_2028_single_and_batch_style_calculations_accept_valid_policy_timeline()
+{
+    // These service periods contain first-of-month earning changes, while the
+    // road rounding mode stays constant. Both the single calculation path and
+    // the batch controller's per-person engine call must accept that timeline.
+    for (year, month, expected_boundary) in [(2027, 10, "2027-11-01"), (2028, 1, "2028-02-01")] {
+        let mut source = request(year, month);
+        for version in &mut source.dataset.compensationPolicyVersions {
+            version.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+        }
+
+        let single = calculate_payroll_with_compensation_policy_checked(&source)
+            .expect("valid October 2027/January 2028 policy timeline should calculate");
+        assert_eq!(single.donemId, source.periodId);
+        let snapshot = single
+            .calculationMetadata
+            .as_ref()
+            .and_then(|metadata| metadata.snapshot.as_ref())
+            .expect("authoritative compensation snapshot");
+        assert_eq!(snapshot.compensation.segments.len(), 2);
+        assert_eq!(
+            snapshot.compensation.segments[1].startDate,
+            expected_boundary
+        );
+        assert!(snapshot
+            .compensation
+            .segments
+            .iter()
+            .all(|segment| { segment.roadRoundingMode == RoadRoundingMode::PeriodTotal }));
+
+        let batch_style = vec![source.clone(), source.clone()]
+            .into_iter()
+            .map(|request| calculate_payroll_with_compensation_policy_checked(&request))
+            .collect::<Result<Vec<_>>>();
+        assert_eq!(batch_style.expect("batch per-person calculations").len(), 2);
+
+        let mut conflicting = source;
+        conflicting.dataset.compensationPolicyVersions[1].roadRoundingMode =
+            RoadRoundingMode::PerCompensationSlice;
+        let error = calculate_payroll_with_compensation_policy_checked(&conflicting)
+            .expect_err("a real in-period rounding change must still be rejected");
+        let detail = error.to_string();
+        assert!(detail.contains(expected_boundary), "{detail}");
+        assert!(detail.contains("test-policy-"), "{detail}");
+    }
+}
+
+#[test]
+fn isolated_uat_cohort_calculates_twenty_months_for_twenty_five_personnel() {
+    let mut seed = request(2027, 2);
+    let mut state = seed.dataset.compensationPolicyVersions[0].state.clone();
+    state.gunlukTabanUcret = dec!(1000.00);
+    state.gunlukVasitaYol = dec!(75.125);
+    let mut versions = vec![CompensationPolicyVersion {
+        id: "uat-baseline-2027-01-15".into(),
+        effectiveFrom: "2027-01-15".into(),
+        state: state.clone(),
+        boundaryScope: CompensationBoundaryScope::FullEarning,
+        roadRoundingMode: RoadRoundingMode::PeriodTotal,
+        createdAt: "2026-10-11T00:00:00Z".into(),
+        source: "SYNTHETIC_UAT".into(),
+        reason: "Isolated synthetic cohort baseline".into(),
+        supersedesVersionId: None,
+    }];
+    let mut actions = [
+        ("2027-02-01", Some(dec!(7.08))),
+        ("2027-09-01", Some(dec!(11.35))),
+        ("2028-02-01", Some(dec!(6.25))),
+        ("2028-09-01", Some(dec!(9.50))),
+    ]
+    .into_iter()
+    .chain(
+        [
+            "2027-03-15",
+            "2027-04-15",
+            "2027-05-15",
+            "2027-06-15",
+            "2027-07-15",
+            "2027-10-15",
+            "2027-11-15",
+            "2028-03-15",
+            "2028-05-15",
+            "2028-07-15",
+        ]
+        .map(|date| (date, None)),
+    )
+    .collect::<Vec<_>>();
+    actions.sort_by_key(|(date, _)| *date);
+    for (date, salary_percent) in actions {
+        if let Some(percent) = salary_percent {
+            state.gunlukTabanUcret = (state.gunlukTabanUcret
+                * (Decimal::ONE + percent / dec!(100)))
+            .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero);
+            let version_id = format!("uat-salary-{date}");
+            versions.push(CompensationPolicyVersion {
+                id: version_id.clone(),
+                effectiveFrom: date.into(),
+                state: state.clone(),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                createdAt: "2026-10-11T00:00:00Z".into(),
+                source: "SYNTHETIC_UAT".into(),
+                reason: format!("Synthetic salary increase {percent}%"),
+                supersedesVersionId: None,
+            });
+            if date == "2027-02-01" {
+                state.gunlukTabanUcret += dec!(1.00);
+                versions.push(CompensationPolicyVersion {
+                    id: "uat-salary-2027-02-01-correction".into(),
+                    effectiveFrom: date.into(),
+                    state: state.clone(),
+                    boundaryScope: CompensationBoundaryScope::FullEarning,
+                    roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                    createdAt: "2026-10-11T00:00:01Z".into(),
+                    source: "SYNTHETIC_UAT".into(),
+                    reason: "Synthetic same-date correction".into(),
+                    supersedesVersionId: Some(version_id),
+                });
+            }
+        } else {
+            state.gunlukVasitaYol += dec!(0.125);
+            versions.push(CompensationPolicyVersion {
+                id: format!("uat-road-{date}"),
+                effectiveFrom: date.into(),
+                state: state.clone(),
+                boundaryScope: CompensationBoundaryScope::RoadOnly,
+                roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                createdAt: "2026-10-11T00:00:00Z".into(),
+                source: "SYNTHETIC_UAT".into(),
+                reason: "Synthetic road-only increase".into(),
+                supersedesVersionId: None,
+            });
+        }
+    }
+    validate_compensation_policy_timeline(&versions).expect("synthetic timeline is valid");
+
+    let old_person_id = seed.personnelId.clone();
+    seed.dataset.compensationPolicyVersions = versions;
+    let mut calculated_count = 0;
+    for personnel_index in 0..25 {
+        let personnel_id = format!("uat-person-{personnel_index:02}");
+        let mut request = seed.clone();
+        request.personnelId = personnel_id.clone();
+        for person in &mut request.dataset.personnel {
+            if person.id == old_person_id {
+                person.id = personnel_id.clone();
+                person.tcNo = format!("100000000{personnel_index:02}");
+            }
+        }
+        for attendance in &mut request.dataset.attendances {
+            if attendance.personelId == old_person_id {
+                attendance.personelId = personnel_id.clone();
+                attendance.id = format!("{personnel_id}_{}", attendance.donemId);
+            }
+        }
+        for record in &mut request.dataset.sickLeaveRecords {
+            if record.personnelId == old_person_id {
+                record.personnelId = personnel_id.clone();
+            }
+        }
+        for opening in &mut request.dataset.taxOpenings {
+            if opening.personnelId == old_person_id {
+                opening.personnelId = personnel_id.clone();
+                opening.id = format!("{personnel_id}_{}", opening.year);
+            }
+        }
+        for payroll in &mut request.dataset.payrolls {
+            if payroll.personelId == old_person_id {
+                payroll.personelId = personnel_id.clone();
+            }
+        }
+        if let Some(accrual) = request.accrual.as_mut() {
+            accrual.accrualId = format!("{personnel_id}_{}", request.periodId);
+        }
+
+        for _ in 0..20 {
+            let payroll = calculate_payroll_with_compensation_policy_checked(&request)
+                .unwrap_or_else(|error| {
+                    panic!("{} {} failed: {error}", personnel_id, request.periodId)
+                });
+            if request.periodId == "2027-10" || request.periodId == "2028-01" {
+                assert_eq!(payroll.personelId, personnel_id);
+                assert!(payroll
+                    .calculationMetadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.snapshot.as_ref())
+                    .is_some_and(|snapshot| snapshot.compensation.segments.iter().all(
+                        |segment| { segment.roadRoundingMode == RoadRoundingMode::PeriodTotal }
+                    )));
+            }
+            request.dataset.payrolls.push(payroll);
+            calculated_count += 1;
+
+            let current = request
+                .dataset
+                .periods
+                .iter()
+                .find(|period| period.id == request.periodId)
+                .expect("current synthetic period")
+                .clone();
+            let month = current.ay as u32;
+            let next = if month == 12 {
+                period(current.yil + 1, 1)
+            } else {
+                period(current.yil, month + 1)
+            };
+            let mut settings = request.dataset.institutionSettings[&current.id].clone();
+            settings.donemId = next.id.clone();
+            request
+                .dataset
+                .institutionSettings
+                .insert(next.id.clone(), settings);
+            request
+                .dataset
+                .attendances
+                .push(attendance(&personnel_id, &next));
+            request.dataset.periods.push(next.clone());
+            request.dataset.taxOpenings.clear();
+            if !request
+                .dataset
+                .annualPayrollParameters
+                .iter()
+                .any(|annual| annual.year == next.taxYear)
+            {
+                let mut annual = AnnualPayrollParameters::default_for_2026();
+                annual.year = next.taxYear;
+                request.dataset.annualPayrollParameters.push(annual);
+            }
+            request.periodId = next.id.clone();
+            if let Some(accrual) = request.accrual.as_mut() {
+                accrual.accrualId = format!("{personnel_id}_{}", next.id);
+                accrual.paymentDate = format!("{}-25", next.id);
+            }
+        }
+    }
+    assert_eq!(calculated_count, 25 * 20);
 }
 
 #[test]

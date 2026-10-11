@@ -665,6 +665,138 @@ describe('BrowserPayrollStore', () => {
     }
   });
 
+  test('applies a queued local mutation to a newer IndexedDB revision without losing another tab update', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const fakeDatabase = createMemoryIndexedDb();
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { indexedDB: fakeDatabase.indexedDB },
+    });
+
+    try {
+      await browserPayrollStore.loadSnapshot();
+      const initial = parseCurrentBrowserSnapshot(makeV2Snapshot());
+      const secondPerson = {
+        ...initial.personeller[0],
+        id: 'person-2',
+        tcNo: '20000000000',
+        iban: 'TR000000000000000000000002',
+        sgkSicilNo: 'SGK-2',
+      };
+      initial.personeller.push(secondPerson);
+      const initialPeriod = initial.donemler[0];
+      initial.puantajlar.push({
+        id: `person-2_${initialPeriod.id}`,
+        personelId: secondPerson.id,
+        donemId: initialPeriod.id,
+        gunler: { '2026-01-16': 'Ç' },
+      });
+      const localRevision = await browserPayrollStore.savePayload(serializePayrollStorage(initial));
+
+      // Simulate a different browser tab committing a newer revision before
+      // this tab's bulk mutation begins.
+      const remote = structuredClone(initial);
+      remote.puantajlar = remote.puantajlar.map((attendance) =>
+        attendance.personelId === secondPerson.id
+          ? { ...attendance, gunler: { ...attendance.gunler, '2026-01-17': 'T' } }
+          : attendance
+      );
+      const remoteRevision = localRevision + 1;
+      fakeDatabase.values.set('current', {
+        payload: serializePayrollStorage(remote),
+        revision: remoteRevision,
+        sourceFormat: 'current',
+      });
+
+      const committed = await browserPayrollStore.mutateSnapshot((current) => ({
+        ...current,
+        puantajlar: current.puantajlar.map((attendance) =>
+          attendance.personelId === 'person-1'
+            ? { ...attendance, gunler: { ...attendance.gunler, '2026-01-18': 'G' } }
+            : attendance
+        ),
+      }));
+      const payload = parseCurrentBrowserSnapshot(committed.payload);
+      expect(committed.revision).toBe(remoteRevision + 1);
+      expect(payload.puantajlar.find((attendance) => attendance.personelId === 'person-1')?.gunler['2026-01-18']).toBe('G');
+      expect(payload.puantajlar.find((attendance) => attendance.personelId === 'person-2')?.gunler['2026-01-17']).toBe('T');
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as { window?: unknown }).window;
+    }
+  });
+
+  test('blocks a stale bulk snapshot after another tab commits, then preserves both changes on retry', async () => {
+    const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+    const fakeDatabase = createMemoryIndexedDb();
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { indexedDB: fakeDatabase.indexedDB },
+    });
+
+    try {
+      await browserPayrollStore.loadSnapshot();
+      const initial = parseCurrentBrowserSnapshot(makeV2Snapshot());
+      const firstAttendance = initial.puantajlar[0];
+      const localDate = Object.keys(firstAttendance.gunler)[0];
+      const secondPerson = {
+        ...initial.personeller[0],
+        id: 'person-2',
+        tcNo: '20000000000',
+        iban: 'TR000000000000000000000002',
+        sgkSicilNo: 'SGK-2',
+      };
+      initial.personeller.push(secondPerson);
+      initial.puantajlar.push({
+        id: `person-2_${firstAttendance.donemId}`,
+        personelId: secondPerson.id,
+        donemId: firstAttendance.donemId,
+        gunler: { [localDate]: 'Ç' },
+      });
+      const localBulkPayload = structuredClone(initial);
+      localBulkPayload.puantajlar[0].gunler[localDate] = 'İ';
+      const firstRevision = await browserPayrollStore.savePayload(serializePayrollStorage(initial));
+
+      const remote = structuredClone(initial);
+      remote.puantajlar[1].gunler[localDate] = 'GÇ';
+      const remoteRevision = firstRevision + 1;
+      const remoteSerialized = serializePayrollStorage(remote);
+      fakeDatabase.values.set('current', {
+        payload: remoteSerialized,
+        revision: remoteRevision,
+        sourceFormat: 'current',
+      });
+
+      let conflict: unknown;
+      try {
+        await browserPayrollStore.savePayload(serializePayrollStorage(localBulkPayload), firstRevision);
+      } catch (error) {
+        conflict = error;
+      }
+      expect(conflict instanceof BrowserSnapshotConflictError).toBe(true);
+      expect(fakeDatabase.values.get('current')).toEqual({
+        payload: remoteSerialized,
+        revision: remoteRevision,
+        sourceFormat: 'current',
+      });
+
+      const reloaded = await browserPayrollStore.loadSnapshot();
+      const retryPayload = parseCurrentBrowserSnapshot(reloaded!.payload);
+      retryPayload.puantajlar[0].gunler[localDate] = 'İ';
+      const retriedRevision = await browserPayrollStore.savePayload(
+        serializePayrollStorage(retryPayload),
+        remoteRevision
+      );
+      const finalPayload = parseCurrentBrowserSnapshot((await browserPayrollStore.loadSnapshot())!.payload);
+      expect(retriedRevision).toBe(remoteRevision + 1);
+      expect(finalPayload.puantajlar[0].gunler[localDate]).toBe('İ');
+      expect(finalPayload.puantajlar[1].gunler[localDate]).toBe('GÇ');
+    } finally {
+      if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+      else delete (globalThis as { window?: unknown }).window;
+    }
+  });
+
   test('keeps normal policy history immutable but permits a validated full snapshot replacement', async () => {
     const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     const fakeDatabase = createMemoryIndexedDb();

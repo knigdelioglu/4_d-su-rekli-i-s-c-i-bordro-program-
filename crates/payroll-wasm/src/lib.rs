@@ -40,6 +40,14 @@ struct CompensationTimelineRequest {
     versions: Vec<CompensationPolicyVersion>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompensationPolicyPeriodValidationRequest {
+    periods: Vec<BordroDonemi>,
+    existing_versions: Vec<CompensationPolicyVersion>,
+    candidate_versions: Vec<CompensationPolicyVersion>,
+}
+
 fn deserialize_contract_json<T: DeserializeOwned>(json: &str) -> Result<T, serde_json::Error> {
     serde_json::from_str(json)
 }
@@ -248,6 +256,52 @@ pub fn resolve_compensation_policy_timeline_json(request_json: &str) -> Result<S
             "Ücret politikası timeline sonucu serileştirilemedi: {error}"
         ))
     })
+}
+
+/// Returns conflicts between active policy rounding modes for the supplied
+/// payroll service period. This shares the exact period and supersession rules
+/// used by payroll resolution.
+#[wasm_bindgen]
+pub fn find_compensation_policy_rounding_issues_json(
+    request_json: &str,
+) -> Result<String, JsValue> {
+    let request: CompensationTimelineRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Ücret politikası timeline isteği geçersiz JSON içeriyor: {error}"
+            )))
+        })?;
+    let issues = payroll_core::find_road_rounding_issues(
+        &request.start_inclusive,
+        &request.end_inclusive,
+        &request.versions,
+    )
+    .map_err(error_to_js)?;
+    serde_json::to_string(&issues).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Ücret politikası rounding diagnostics sonucu serileştirilemedi: {error}"
+        ))
+    })
+}
+
+/// Rejects only newly introduced rounding conflicts across all persisted
+/// service periods. Existing conflicts remain eligible for explicit repair.
+#[wasm_bindgen]
+pub fn validate_no_new_compensation_policy_rounding_conflicts_json(
+    request_json: &str,
+) -> Result<(), JsValue> {
+    let request: CompensationPolicyPeriodValidationRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Ücret politikası dönem doğrulama isteği geçersiz JSON içeriyor: {error}"
+            )))
+        })?;
+    payroll_core::validate_no_new_road_rounding_conflicts(
+        &request.periods,
+        &request.existing_versions,
+        &request.candidate_versions,
+    )
+    .map_err(error_to_js)
 }
 
 /// Returns the core-owned invalidation impact for one browser mutation.

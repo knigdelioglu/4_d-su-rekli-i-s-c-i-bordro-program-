@@ -67,6 +67,48 @@ test('deleting a period containing a finalized payroll is rejected', () => {
   expect(original.bordrolar[0].status).toBe('FINALIZED');
 });
 
+test('deleting a period linked to finalized retro history preserves its batch and allocations', () => {
+  const original = fixture();
+  const periodId = original.donemler[0].id;
+  original.retroBatches = [{
+    id: 'final-retro-batch',
+    revisionId: 'revision-1',
+    personnelId: original.personeller[0].id,
+    paymentDate: '2026-01-30',
+    status: 'FINALIZED',
+    settlementStatus: 'SETTLED_BY_OFFSET',
+    totalGrossDelta: '100',
+    payableSettlementAmount: '100',
+    offsetSettlementAmount: '0',
+    recoveredAmount: '0',
+    recoverableAmount: '0',
+    outstandingReceivable: '0',
+  } as typeof original.retroBatches[number]];
+  original.retroAllocations = [{
+    id: 'final-retro-allocation',
+    batchId: 'final-retro-batch',
+    personnelId: original.personeller[0].id,
+    sourcePeriodId: periodId,
+    earningCode: 'BASE_WAGE',
+    originalRecognizedAmount: '0',
+    previousAuthoritativeRetroAmount: '0',
+    targetAmount: '100',
+    deltaAmount: '100',
+    sgkTreatment: 'WAGE_SOURCE_MONTH',
+    incomeTaxTreatment: 'TAXABLE',
+    stampTaxTreatment: 'TAXABLE',
+  } as typeof original.retroAllocations[number]];
+  const batchesBefore = structuredClone(original.retroBatches);
+  const allocationsBefore = structuredClone(original.retroAllocations);
+
+  expect(() => deletePeriodFromPayload(original, periodId, emptyImpact)).toThrow(
+    'Kesinleştirilmiş (FINALIZED) geriye dönük fark içeren dönem silinemez.'
+  );
+  expect(original.retroBatches).toEqual(batchesBefore);
+  expect(original.retroAllocations).toEqual(allocationsBefore);
+  expect(original.donemler.some((period) => period.id === periodId)).toBe(true);
+});
+
 test('last period clears selection and missing periods fail visibly', () => {
   const original = fixture();
   let result = original;

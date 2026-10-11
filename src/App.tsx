@@ -26,12 +26,17 @@ import { tauriBridge } from './services/tauriBridge';
 import { getPayrollEngine } from './services/payrollEngine';
 import type { PayrollDatasetSnapshot } from './services/payrollEngine';
 import {
+  serializePayrollStorage,
   toPayrollBoundaryDto,
   toPayrollUiModel,
   type PayrollStorageDto,
   type PayrollStorageFields,
 } from './services/payrollEngine/decimalBoundary';
 import { useBrowserPayrollPersistence } from './services/storage/useBrowserPayrollPersistence';
+import {
+  queueAuthoritativePayloadCommit,
+  type AuthoritativePayloadCommitQueue,
+} from './services/storage/authoritativePayloadCommit';
 import { usePayrollMutationController } from './hooks/usePayrollMutationController';
 import { useBackupController } from './hooks/useBackupController';
 import { useCompensationPolicyController } from './hooks/useCompensationPolicyController';
@@ -263,7 +268,14 @@ export default function App() {
     getInitialActivePayrollView
   );
 
-  const [authoritativePayload, setAuthoritativePayload] = useState<PayrollStorageDto | null>(null);
+  const [authoritativePayload, setAuthoritativePayloadState] = useState<PayrollStorageDto | null>(null);
+  const authoritativePayloadRef = useRef<PayrollStorageDto | null>(null);
+  const payloadMutationGeneration = useRef(0);
+  const payloadCommitQueue = useRef<AuthoritativePayloadCommitQueue>({ current: Promise.resolve() });
+  const setAuthoritativePayload = useCallback((payload: PayrollStorageDto) => {
+    authoritativePayloadRef.current = payload;
+    setAuthoritativePayloadState(payload);
+  }, []);
   const dataLoadGeneration = useRef(0);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -376,19 +388,41 @@ export default function App() {
 
   const applyDataset = useCallback((data: DatasetFields) => {
     browserPersistence.markClean();
+    payloadMutationGeneration.current += 1;
     setAuthoritativePayload(makeBackupPayload(data));
-  }, [browserPersistence.markClean]);
+  }, [browserPersistence.markClean, setAuthoritativePayload]);
 
   const updateAuthoritativePayload = useCallback(
     (update: (current: PayrollStorageDto) => PayrollStorageDto) => {
       browserPersistence.markDirty();
-      setAuthoritativePayload((current) => {
-        if (!current) return current;
-        const next = update(current);
-        return { ...next, exportedAt: new Date().toISOString() };
-      });
+      payloadMutationGeneration.current += 1;
+      const current = authoritativePayloadRef.current;
+      if (!current) return;
+      const next = { ...update(current), exportedAt: new Date().toISOString() };
+      setAuthoritativePayload(next);
     },
-    [browserPersistence.markDirty]
+    [browserPersistence.markDirty, setAuthoritativePayload]
+  );
+
+  const commitAuthoritativePayload = useCallback(
+    (update: (current: PayrollStorageDto) => PayrollStorageDto | Promise<PayrollStorageDto>) => {
+      return queueAuthoritativePayloadCommit(
+        payloadCommitQueue.current,
+        {
+          getCurrent: () => authoritativePayloadRef.current,
+          getGeneration: () => payloadMutationGeneration.current,
+          markDirty: () => {
+            browserPersistence.markDirty();
+            payloadMutationGeneration.current += 1;
+          },
+          persist: (payload) => browserPersistence.savePayload(serializePayrollStorage(payload)),
+          publish: setAuthoritativePayload,
+          missingPayloadMessage: 'Puantaj kaydedilemedi: geçerli veri snapshotı bulunamadı.',
+        },
+        update
+      );
+    },
+    [browserPersistence.markDirty, browserPersistence.savePayload, setAuthoritativePayload]
   );
 
   const loadData = useCallback(async (): Promise<boolean> => {
@@ -575,6 +609,7 @@ export default function App() {
     compensationRevisionOverrides,
     retroBatches,
     updateAuthoritativePayload,
+    commitAuthoritativePayload,
     loadData,
   });
   const {
@@ -905,6 +940,7 @@ export default function App() {
                     aktifDonem={aktifDonem}
                     personeller={personeller}
                     puantajlar={puantajlar}
+                    sickLeaveRecords={sickLeaveRecords}
                     onSavePuantaj={handleSavePuantaj}
                     onSavePuantajBatch={handleSavePuantajBatch}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}

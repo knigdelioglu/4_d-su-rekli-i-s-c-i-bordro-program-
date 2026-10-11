@@ -10,11 +10,12 @@ use crate::repositories::settings_repo::SettingsRepository;
 use crate::services::payroll_service::PayrollService;
 use chrono::{Duration, NaiveDate, Utc};
 use payroll_core::{
-    order_compensation_policy_versions, resolve_compensation_segments,
-    validate_compensation_policy_timeline, BordroDonemi, BordroKaydi, BordroStatus,
-    CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
-    CompensationPolicyVersion, IsPrimiGrupItem, MutationImpact, PayrollKey, PayrollMutation,
-    ResolvedCompensationSegment, RetroMutationAction, RetroMutationEffect, RoadRoundingMode,
+    find_road_rounding_issues, order_compensation_policy_versions, resolve_compensation_segments,
+    validate_compensation_policy_timeline, validate_no_new_road_rounding_conflicts, BordroDonemi,
+    BordroKaydi, BordroStatus, CompensationBoundaryScope, CompensationPolicyGroup,
+    CompensationPolicyState, CompensationPolicyVersion, IsPrimiGrupItem, MutationImpact,
+    PayrollKey, PayrollMutation, ResolvedCompensationSegment, RetroMutationAction,
+    RetroMutationEffect, RoadRoundingIssue, RoadRoundingMode,
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -217,6 +218,7 @@ pub struct CompensationPolicyTimelineData {
     pub versions: Vec<CompensationPolicyVersion>,
     pub resolvedSegments: Vec<ResolvedCompensationSegment>,
     pub resolution: String,
+    pub roadRoundingIssues: Vec<RoadRoundingIssue>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -678,10 +680,21 @@ impl CompensationPolicyService {
         .map_err(map_domain_error)?;
         let resolved =
             resolve_compensation_segments(&period.baslangicTarihi, &period.bitisTarihi, &versions);
-        let (resolution, resolvedSegments) = match resolved {
-            Ok(segments) => ("RESOLVED", segments),
-            Err(DomainError::NotFound(_)) => ("MISSING_START_POLICY", Vec::new()),
-            Err(error) => return Err(map_domain_error(error)),
+        let (resolution, resolvedSegments, roadRoundingIssues) = match resolved {
+            Ok(segments) => ("RESOLVED", segments, Vec::new()),
+            Err(DomainError::NotFound(_)) => ("MISSING_START_POLICY", Vec::new(), Vec::new()),
+            Err(error) => {
+                let issues = find_road_rounding_issues(
+                    &period.baslangicTarihi,
+                    &period.bitisTarihi,
+                    &versions,
+                )
+                .map_err(map_domain_error)?;
+                if issues.is_empty() {
+                    return Err(map_domain_error(error));
+                }
+                ("INVALID_ROAD_ROUNDING", Vec::new(), issues)
+            }
         };
         let active = Self::active_versions(&versions);
         let projection = active
@@ -698,6 +711,7 @@ impl CompensationPolicyService {
                 versions,
                 resolvedSegments,
                 resolution: resolution.into(),
+                roadRoundingIssues,
             },
             activePolicyProjection: projection.map_or_else(
                 || ActivePolicyProjection::Missing {
@@ -843,13 +857,10 @@ impl CompensationPolicyService {
         }
         let versions =
             CompensationPolicyRepository::get_all_versions(conn).map_err(map_domain_error)?;
-        Self::validate_operation(scope, &period, operation, &versions)?;
+        let all_periods = PeriodRepository::get_all(conn).map_err(map_domain_error)?;
+        Self::validate_operation(scope, &period, operation, &versions, &all_periods)?;
         let targetState = Self::target_state(&versions, operation.effective_from());
-        let directCompensationEffects = Self::direct_effects(
-            &PeriodRepository::get_all(conn).map_err(map_domain_error)?,
-            &versions,
-            operation,
-        )?;
+        let directCompensationEffects = Self::direct_effects(&all_periods, &versions, operation)?;
         let direct_period_ids = directCompensationEffects
             .iter()
             .flat_map(|effect| {
@@ -974,8 +985,15 @@ impl CompensationPolicyService {
         }
         let period = Self::validate_scope(tx, &request.scope).map_err(api_error_to_domain)?;
         let versions = CompensationPolicyRepository::get_all_versions(tx)?;
-        Self::validate_operation(&request.scope, &period, &request.operation, &versions)
-            .map_err(api_error_to_domain)?;
+        let all_periods = PeriodRepository::get_all(tx)?;
+        Self::validate_operation(
+            &request.scope,
+            &period,
+            &request.operation,
+            &versions,
+            &all_periods,
+        )
+        .map_err(api_error_to_domain)?;
         let effect = preview.directCompensationEffects.first().ok_or_else(|| {
             DomainError::InvalidData("Politika doğrudan etki aralığı üretmedi.".into())
         })?;
@@ -1176,6 +1194,7 @@ impl CompensationPolicyService {
         period: &BordroDonemi,
         operation: &CompensationPolicyWriteOperation,
         versions: &[CompensationPolicyVersion],
+        all_periods: &[BordroDonemi],
     ) -> std::result::Result<(), CompensationPolicyApiError> {
         if !operation.change_intent_matches() {
             return Err(CompensationPolicyApiError::InvalidRequest {
@@ -1265,28 +1284,40 @@ impl CompensationPolicyService {
                 });
             }
         }
-        let mut candidate = versions.to_vec();
-        candidate.push(Self::preview_version(operation));
-        if let Err(error) = validate_compensation_policy_timeline(&candidate) {
-            if let CompensationPolicyWriteOperation::SameDateCorrection { .. } = operation {
-                if let Some(descendant) =
-                    Self::active_versions(versions).into_iter().find(|version| {
-                        version.effectiveFrom.as_str() > operation.effective_from()
-                            && version.boundaryScope == CompensationBoundaryScope::RoadOnly
-                    })
-                {
-                    return Err(CompensationPolicyApiError::RoadOnlyStateConflict {
-                        message: error.to_string(),
-                        proposedEffectiveFrom: operation.effective_from().into(),
-                        conflictingVersionId: Some(descendant.id.clone()),
-                        reason: "DESCENDANT_ROAD_ONLY_INVALIDATED".into(),
-                    });
+        let mut candidate_input = versions.to_vec();
+        candidate_input.push(Self::preview_version(operation));
+        let candidate = match validate_compensation_policy_timeline(&candidate_input) {
+            Ok(ordered) => ordered,
+            Err(error) => {
+                if let CompensationPolicyWriteOperation::SameDateCorrection { .. } = operation {
+                    if let Some(descendant) =
+                        Self::active_versions(versions).into_iter().find(|version| {
+                            version.effectiveFrom.as_str() > operation.effective_from()
+                                && version.boundaryScope == CompensationBoundaryScope::RoadOnly
+                        })
+                    {
+                        return Err(CompensationPolicyApiError::RoadOnlyStateConflict {
+                            message: error.to_string(),
+                            proposedEffectiveFrom: operation.effective_from().into(),
+                            conflictingVersionId: Some(descendant.id.clone()),
+                            reason: "DESCENDANT_ROAD_ONLY_INVALIDATED".into(),
+                        });
+                    }
                 }
+                return Err(CompensationPolicyApiError::InvalidPolicy {
+                    message: error.to_string(),
+                });
             }
-            return Err(CompensationPolicyApiError::InvalidPolicy {
+        };
+        validate_no_new_road_rounding_conflicts(all_periods, versions, &candidate).map_err(
+            |error| CompensationPolicyApiError::InvalidPolicy {
                 message: error.to_string(),
-            });
-        }
+            },
+        )?;
+        resolve_compensation_segments(&period.baslangicTarihi, &period.bitisTarihi, &candidate)
+            .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
+                message: error.to_string(),
+            })?;
         let _ = scope;
         Ok(())
     }

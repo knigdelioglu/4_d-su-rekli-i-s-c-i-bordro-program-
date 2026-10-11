@@ -86,7 +86,8 @@ interface BordroHesaplamaProps {
   onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
   onSaveBordro: (
     bordro: PayrollBoundaryPayroll,
-    calculationSnapshot?: PayrollDatasetSnapshot
+    calculationSnapshot?: PayrollDatasetSnapshot,
+    saveSource?: 'ENGINE_FINALIZATION'
   ) => Promise<void> | void;
   onSavePersonelAndTaxOpening: (
     personel: Personel | PayrollBoundaryPersonel,

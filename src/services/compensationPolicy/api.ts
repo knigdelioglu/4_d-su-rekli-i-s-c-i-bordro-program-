@@ -54,6 +54,22 @@ function failure<T>(error: CompensationPolicyApiError): CompensationPolicyOperat
   return { ok: false, error };
 }
 
+function readableErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const value = error as Record<string, unknown>;
+    if (typeof value.message === 'string' && value.message.length > 0) return value.message;
+    if (typeof value.error === 'string' && value.error.length > 0) return value.error;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      // Fall through to the generic representation for non-JSON values.
+    }
+  }
+  return String(error);
+}
+
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);
   if (!value || typeof value !== 'object') return value;
@@ -89,7 +105,7 @@ function errorResult<T>(error: unknown): CompensationPolicyOperationResult<T> {
       message: `Tarayıcı snapshotı değişti (beklenen revizyon ${error.expectedRevision}, mevcut ${error.actualRevision}); verileri yeniden yükleyin.`,
     });
   }
-  return failure({ code: 'UNAVAILABLE', message: error instanceof Error ? error.message : String(error) });
+  return failure({ code: 'UNAVAILABLE', message: readableErrorMessage(error) });
 }
 
 function raise(code: CompensationPolicyApiError['code'], message: string, extra = {}): never {
@@ -280,65 +296,6 @@ function sameWorkPremiumGroups(
   });
 }
 
-function roadRoundingIssues(versions: CompensationPolicyVersionWire[]) {
-  const active = activeVersions(versions);
-  return active.slice(1).flatMap((version, index) => {
-    const previous = active[index];
-    if (
-      previous.roadRoundingMode === version.roadRoundingMode ||
-      version.effectiveFrom.slice(-2) === '15'
-    ) return [];
-    return [{
-      effectiveFrom: version.effectiveFrom,
-      expectedMode: previous.roadRoundingMode,
-      actualMode: version.roadRoundingMode,
-    }];
-  });
-}
-
-function validateRoadRoundingBoundary(
-  versions: CompensationPolicyVersionWire[],
-  operation: CompensationPolicyPreviewRequest['operation']
-): void {
-  if (operation.kind === 'INITIAL_BASELINE') return;
-  const active = activeVersions(versions);
-  const source = operation.kind === 'SAME_DATE_CORRECTION'
-    ? active.find((version) => version.effectiveFrom === operation.effectiveFrom)
-    : active.filter((version) => version.effectiveFrom < operation.effectiveFrom).at(-1);
-  const previous = active.filter((version) => version.effectiveFrom < operation.effectiveFrom).at(-1);
-  const repairsMixedMode = operation.kind === 'SAME_DATE_CORRECTION'
-    && previous?.roadRoundingMode === operation.roadRoundingMode;
-  if (
-    source &&
-    source.roadRoundingMode !== operation.roadRoundingMode &&
-    operation.effectiveFrom.slice(-2) !== '15' &&
-    !repairsMixedMode
-  ) {
-    raise(
-      'INVALID_POLICY',
-      'Yol yuvarlama biçimi yalnız ayın 15’inde başlayan yeni hizmet döneminde değiştirilebilir. Mevcut modu koruyun veya geçerlilik tarihini ayın 15’ine alın.'
-    );
-  }
-}
-
-function validateNoNewRoadRoundingIssues(
-  versions: CompensationPolicyVersionWire[],
-  candidate: CompensationPolicyVersionWire
-): void {
-  const existing = new Set(roadRoundingIssues(versions).map((issue) =>
-    `${issue.effectiveFrom}\u0000${issue.expectedMode}\u0000${issue.actualMode}`
-  ));
-  const introduced = roadRoundingIssues([...versions, candidate]).find((issue) =>
-    !existing.has(`${issue.effectiveFrom}\u0000${issue.expectedMode}\u0000${issue.actualMode}`)
-  );
-  if (introduced) {
-    raise(
-      'INVALID_POLICY',
-      `${introduced.effectiveFrom} tarihli değişiklik sonraki sürümde yeni bir dönem içi yuvarlama uyuşmazlığı oluşturuyor. Her yuvarlama modu değişikliği bir hizmet dönemi başlangıcında (ayın 15’inde) yapılmalıdır.`
-    );
-  }
-}
-
 function targetState(
   versions: CompensationPolicyVersionWire[],
   effectiveFrom: string
@@ -394,7 +351,6 @@ function validateOperation(
       });
     }
   }
-  validateRoadRoundingBoundary(versions, operation);
   if (operation.boundaryScope === 'ROAD_ONLY') {
     const previous = active.filter((version) => version.effectiveFrom < operation.effectiveFrom).at(-1);
     if (previous && !sameExceptRoad(previous.state, operation.state)) {
@@ -416,25 +372,34 @@ function validateOperation(
     reason: operation.reason.trim(),
     supersedesVersionId: operation.kind === 'SAME_DATE_CORRECTION' ? operation.supersedesVersionId : null,
   };
-  validateNoNewRoadRoundingIssues(versions, candidate);
+  const candidateTimeline = orderedVersions([...versions, candidate]);
+  try {
+    runtime.validate_no_new_compensation_policy_rounding_conflicts_json(JSON.stringify({
+      periods: payload.donemler,
+      existingVersions: versions,
+      candidateVersions: candidateTimeline,
+    }));
+  } catch (error) {
+    raise('INVALID_POLICY', readableErrorMessage(error));
+  }
   try {
     runtime.resolve_compensation_policy_timeline_json(JSON.stringify({
       startInclusive: period.baslangicTarihi,
       endInclusive: period.bitisTarihi,
-      versions: [...versions, candidate],
+      versions: candidateTimeline,
     }));
   } catch (error) {
     const descendantRoadOnly = operation.kind === 'SAME_DATE_CORRECTION'
       ? active.find((version) => version.effectiveFrom > operation.effectiveFrom && version.boundaryScope === 'ROAD_ONLY')
       : undefined;
     if (descendantRoadOnly) {
-      raise('ROAD_ONLY_STATE_CONFLICT', String(error), {
+      raise('ROAD_ONLY_STATE_CONFLICT', readableErrorMessage(error), {
         proposedEffectiveFrom: operation.effectiveFrom,
         conflictingVersionId: descendantRoadOnly.id,
         reason: 'DESCENDANT_ROAD_ONLY_INVALIDATED',
       });
     }
-    raise('INVALID_POLICY', String(error));
+    raise('INVALID_POLICY', readableErrorMessage(error));
   }
   return versions;
 }
@@ -668,7 +633,7 @@ function calculatePreview(
   try {
     impact = JSON.parse(runtime.evaluate_mutation_policy_json(JSON.stringify({ dataset, mutation }))) as CoreImpact;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = readableErrorMessage(error);
     if (message.includes('UNSUPPORTED_HISTORICAL_REPLAY')) {
       raise('UNSUPPORTED_HISTORICAL_REPLAY', message);
     }
@@ -769,23 +734,34 @@ async function loadBrowserPolicy(
     );
     let resolvedSegments: ResolvedCompensationSegmentWire[] = [];
     let resolution: CompensationPolicyLoadData['timeline']['resolution'] = 'RESOLVED';
-    const roundingIssues = roadRoundingIssues(scoped);
+    let roundingIssues: NonNullable<CompensationPolicyLoadData['timeline']['roadRoundingIssues']> = [];
     if (!baselineDate) {
       resolution = 'MISSING_START_POLICY';
-    } else if (roundingIssues.length > 0) {
-      // Keep a mixed-mode legacy timeline editable so the user can create an
-      // explicit same-date correction. Payroll resolution remains fail-closed.
-      resolution = 'INVALID_ROAD_ROUNDING';
     } else {
       const runtime = await getWasmRuntime();
       try {
-        resolvedSegments = JSON.parse(runtime.resolve_compensation_policy_timeline_json(JSON.stringify({
+        roundingIssues = JSON.parse(runtime.find_compensation_policy_rounding_issues_json(JSON.stringify({
           startInclusive: period.baslangicTarihi,
           endInclusive: period.bitisTarihi,
           versions: scoped,
-        }))) as ResolvedCompensationSegmentWire[];
+        }))) as NonNullable<CompensationPolicyLoadData['timeline']['roadRoundingIssues']>;
       } catch (error) {
-        raise('INVALID_POLICY', String(error));
+        raise('INVALID_POLICY', readableErrorMessage(error));
+      }
+      if (roundingIssues.length > 0) {
+        // Keep a mixed-mode legacy timeline editable so the user can create an
+        // explicit same-date correction. Payroll resolution remains fail-closed.
+        resolution = 'INVALID_ROAD_ROUNDING';
+      } else {
+        try {
+          resolvedSegments = JSON.parse(runtime.resolve_compensation_policy_timeline_json(JSON.stringify({
+            startInclusive: period.baslangicTarihi,
+            endInclusive: period.bitisTarihi,
+            versions: scoped,
+          }))) as ResolvedCompensationSegmentWire[];
+        } catch (error) {
+          raise('INVALID_POLICY', readableErrorMessage(error));
+        }
       }
     }
     const projection = active.filter((version) => version.effectiveFrom <= request.scope.projectionDate).at(-1);

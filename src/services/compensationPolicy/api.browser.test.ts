@@ -144,13 +144,19 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
       window.__compensationPolicyBrowserApiTest.exerciseRoadRoundingRecovery());
 
     expect(result.rejected).toMatchObject({ code: 'INVALID_POLICY' });
-    expect(result.rejected?.message).toContain('ayın 15’inde');
+    expect(result.rejected?.message).toContain('2028-01-01');
+    expect(result.rejected?.message).toContain('road-rounding-december-baseline');
+    expect(result.rejected?.message).toContain('__compensation-policy-preview__');
     expect(result.loadedInvalid).toMatchObject({
       resolution: 'INVALID_ROAD_ROUNDING',
       roadRoundingIssues: [{
         effectiveFrom: '2028-01-01',
         expectedMode: 'PERIOD_TOTAL',
         actualMode: 'PER_COMPENSATION_SLICE',
+        expectedVersionId: 'road-rounding-december-baseline',
+        actualVersionId: 'road-rounding-invalid-january-policy',
+        periodStartInclusive: '2027-12-15',
+        periodEndInclusive: '2028-01-14',
       }],
       error: null,
     });
@@ -178,6 +184,69 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
       periodEndInclusive: '2028-01-14',
     });
   });
+
+  test('rejects a future-period rounding conflict in preview and rechecks it at save', async () => {
+    const page = await openPolicyApiTab();
+    const result = await page.evaluate(() =>
+      window.__compensationPolicyBrowserApiTest.exerciseFuturePeriodRoundingConflict());
+
+    expect(result.rejectedPreview).toMatchObject({ code: 'INVALID_POLICY' });
+    expect(result.rejectedPreview?.message).toContain('2027-02');
+    expect(result.rejectedPreview?.message).toContain('2027-02-15');
+    expect(result.rejectedPreview?.message).toContain('2027-03-14');
+    expect(result.rejectedPreview?.message).toContain('2027-03-01');
+    expect(result.rejectedPreview?.message).toContain('future-rounding-march-policy');
+    expect(result.rejectedPreview?.message).toContain('__compensation-policy-preview__');
+    expect(result.validPreview).toBe(true);
+    expect(result.rejectedSave).toMatchObject({ code: 'INVALID_POLICY' });
+    expect(result.rejectedSave?.message).toContain('2027-02-15');
+    expect(result.rejectedSave?.message).toContain('2027-03-14');
+    expect(result.rejectedSave?.message).toContain('2027-03-01');
+    expect(result.rejectedSave?.message).toContain('future-rounding-march-correction');
+    expect(result.storedPolicyIds).toEqual([
+      'future-rounding-december-baseline',
+      'future-rounding-march-policy',
+      'future-rounding-march-correction',
+    ]);
+    expect(result.expectedPeriod).toEqual({
+      id: '2027-02',
+      start: '2027-02-15',
+      end: '2027-03-14',
+    });
+  });
+
+  testWithTimeout('previews, saves and reloads the four salary and ten ROAD_ONLY dates through 15–14 periods', async () => {
+    const page = await openPolicyApiTab();
+    const result = await page.evaluate(() =>
+      window.__compensationPolicyBrowserApiTest.exerciseSyntheticPolicySchedule());
+
+    expect(result.salaryValues).toEqual([
+      { date: '2027-02-01', value: '1070.80' },
+      { date: '2027-09-01', value: '1193.45' },
+      { date: '2028-02-01', value: '1268.04' },
+      { date: '2028-09-01', value: '1388.50' },
+    ]);
+    expect(result.roadValues).toEqual([
+      { date: '2027-03-15', value: '75.250' },
+      { date: '2027-04-15', value: '75.375' },
+      { date: '2027-05-15', value: '75.500' },
+      { date: '2027-06-15', value: '75.625' },
+      { date: '2027-07-15', value: '75.750' },
+      { date: '2027-10-15', value: '75.875' },
+      { date: '2027-11-15', value: '76.000' },
+      { date: '2028-03-15', value: '76.125' },
+      { date: '2028-05-15', value: '76.250' },
+      { date: '2028-07-15', value: '76.375' },
+    ]);
+    expect(result).toMatchObject({
+      savedVersionCount: 17,
+      storedVersionCount: 17,
+      resolution: 'RESOLVED',
+      finalRoadMode: 'PERIOD_TOTAL',
+      finalRoadAmount: '76.375',
+      previewSaveRoutes: ['INITIAL_BASELINE', 'NEW_EFFECTIVE_DATE', 'SAME_DATE_CORRECTION'],
+    });
+  }, 90_000);
 
   testWithTimeout('single and batch NORMAL UI routes navigate to policy without saving when baseline is missing', async () => {
     const singlePage = await openMissingBaselineUiTab();
