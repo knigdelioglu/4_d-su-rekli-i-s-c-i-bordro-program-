@@ -9,6 +9,11 @@ use db::{create_connection, DbState};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
+#[cfg(all(debug_assertions, feature = "native-webdriver"))]
+fn should_enable_native_webdriver(ci_value: Option<&str>) -> bool {
+    ci_value == Some("true")
+}
+
 fn configure_builder<R: tauri::Runtime>(
     builder: tauri::Builder<R>,
     state: DbState,
@@ -84,7 +89,7 @@ pub fn run() {
 
     let builder = configure_builder(tauri::Builder::default(), state);
     #[cfg(all(debug_assertions, feature = "native-webdriver"))]
-    let builder = if std::env::var("CI").is_ok_and(|value| value == "true") {
+    let builder = if should_enable_native_webdriver(std::env::var("CI").ok().as_deref()) {
         builder.plugin(tauri_plugin_wdio_webdriver::init())
     } else {
         builder
@@ -110,6 +115,14 @@ mod ipc_tests {
     use std::collections::HashMap;
     use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime, INVOKE_KEY};
     use tauri::webview::InvokeRequest;
+
+    #[cfg(all(debug_assertions, feature = "native-webdriver"))]
+    #[test]
+    fn native_webdriver_plugin_is_enabled_only_for_ci_true() {
+        assert!(should_enable_native_webdriver(Some("true")));
+        assert!(!should_enable_native_webdriver(Some("false")));
+        assert!(!should_enable_native_webdriver(None));
+    }
 
     fn invoke<W: AsRef<tauri::Webview<MockRuntime>>>(
         webview: &W,
