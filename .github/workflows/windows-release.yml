@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the installer to the versioned GitHub Release
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -102,6 +108,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish installer to GitHub Release
+        if: github.event_name != 'workflow_dispatch' || inputs.publish_release == true
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

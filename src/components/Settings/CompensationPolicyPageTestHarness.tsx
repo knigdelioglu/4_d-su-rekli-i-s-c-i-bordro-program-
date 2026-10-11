@@ -280,6 +280,10 @@ function mixedRoundingLoad(): CompensationPolicyLoadData {
         effectiveFrom: invalid.effectiveFrom,
         expectedMode: baseline.roadRoundingMode,
         actualMode: invalid.roadRoundingMode,
+        expectedVersionId: baseline.id,
+        actualVersionId: invalid.id,
+        periodStartInclusive: scope.periodStartInclusive,
+        periodEndInclusive: scope.periodEndInclusive,
       }],
     },
     activePolicyProjection: { kind: 'ACTIVE', asOfDate: scope.projectionDate, version: baseline },
@@ -546,6 +550,11 @@ const Harness: React.FC = () => {
             action: 'IMMUTABLE_BLOCKER',
             blockers: ['FINALIZED_BATCH', 'SETTLED_BATCH'],
           }],
+        } });
+      } else if (scenario === 'roundingvalidation') {
+        setPreviewState({ status: 'error', error: {
+          code: 'INVALID_POLICY',
+          message: 'Yol yuvarlama biçimi 2026-09-15–2026-10-14 bordro hizmet dönemi içinde değişemez: 2026-10-01 tarihli rounding-invalid (PER_COMPENSATION_SLICE) sürümü rounding-baseline (PERIOD_TOTAL) ile çelişiyor.',
         } });
       } else {
         setPreviewState({ status: 'ready', value: previewFor(operation, data, scenario) });

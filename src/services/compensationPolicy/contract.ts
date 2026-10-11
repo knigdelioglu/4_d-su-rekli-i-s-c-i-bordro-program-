@@ -210,11 +210,15 @@ export interface CompensationPolicyLoadData {
     versions: CompensationPolicyVersionWire[];
     resolvedSegments: ResolvedCompensationSegmentWire[];
     resolution: 'RESOLVED' | 'MISSING_START_POLICY' | 'INVALID_ROAD_ROUNDING';
-    /** Off-boundary rounding changes that need an explicit same-date correction. */
+    /** Active mode changes inside this exact inclusive payroll service period. */
     roadRoundingIssues?: Array<{
       effectiveFrom: string;
       expectedMode: RoadRoundingMode;
       actualMode: RoadRoundingMode;
+      expectedVersionId: string;
+      actualVersionId: string;
+      periodStartInclusive: string;
+      periodEndInclusive: string;
     }>;
   };
   activePolicyProjection:

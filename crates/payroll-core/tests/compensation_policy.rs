@@ -1,5 +1,5 @@
 use payroll_core::{
-    order_compensation_policy_versions, resolve_compensation_segments,
+    find_road_rounding_issues, order_compensation_policy_versions, resolve_compensation_segments,
     validate_compensation_policy_state, validate_compensation_policy_timeline,
     CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
     CompensationPolicyVersion, PayrollDatasetSnapshot, ResolvedCompensationSegment,
@@ -403,12 +403,36 @@ fn road_modes_must_match_active_projection_but_superseded_flags_are_inert() {
     let baseline = version("base", "2026-01-15", dec!(100), None);
     let mut changed = version("changed", "2026-02-01", dec!(110), None);
     changed.roadRoundingMode = RoadRoundingMode::PeriodTotal;
-    assert!(resolve_compensation_segments(
+    let error = resolve_compensation_segments(
         "2026-01-15",
         "2026-02-14",
         &[baseline.clone(), changed]
     )
-    .is_err());
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("2026-02-01"));
+    assert!(message.contains("base"));
+    assert!(message.contains("changed"));
+    assert!(message.contains("2026-01-15–2026-02-14"));
+    let issues = find_road_rounding_issues(
+        "2026-01-15",
+        "2026-02-14",
+        &[
+            baseline.clone(),
+            {
+                let mut active = version("changed", "2026-02-01", dec!(110), None);
+                active.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+                active
+            },
+        ],
+    )
+    .unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].expected_version_id, "base");
+    assert_eq!(issues[0].actual_version_id, "changed");
+    assert_eq!(issues[0].effective_from, "2026-02-01");
+    assert_eq!(issues[0].period_start_inclusive, "2026-01-15");
+    assert_eq!(issues[0].period_end_inclusive, "2026-02-14");
 
     let old = version("old", "2026-01-15", dec!(100), None);
     let mut active_fix = version("fix", "2026-01-15", dec!(100), Some("old"));
@@ -424,6 +448,29 @@ fn road_modes_must_match_active_projection_but_superseded_flags_are_inert() {
     let mut differing_ancestor = old;
     differing_ancestor.roadRoundingMode = RoadRoundingMode::PeriodTotal;
     assert!(validate_compensation_policy_timeline(&[differing_ancestor, active_fix, next]).is_ok());
+}
+
+#[test]
+fn rounding_mode_change_on_actual_service_period_start_is_valid() {
+    let mut previous = version("previous", "2026-01-01", dec!(100), None);
+    previous.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+    let mut at_boundary = version("at-boundary", "2026-01-15", dec!(100), None);
+    at_boundary.roadRoundingMode = RoadRoundingMode::PerCompensationSlice;
+
+    let issues = find_road_rounding_issues(
+        "2026-01-15",
+        "2026-02-14",
+        &[previous, at_boundary.clone()],
+    )
+    .unwrap();
+    assert!(issues.is_empty());
+    let segments = resolve(
+        "2026-01-15",
+        "2026-02-14",
+        &[version("old", "2026-01-01", dec!(100), None), at_boundary],
+    );
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].versionId, "at-boundary");
 }
 
 #[test]

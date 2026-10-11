@@ -250,6 +250,32 @@ pub fn resolve_compensation_policy_timeline_json(request_json: &str) -> Result<S
     })
 }
 
+/// Returns conflicts between active policy rounding modes for the supplied
+/// payroll service period. This shares the exact period and supersession rules
+/// used by payroll resolution.
+#[wasm_bindgen]
+pub fn find_compensation_policy_rounding_issues_json(
+    request_json: &str,
+) -> Result<String, JsValue> {
+    let request: CompensationTimelineRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Ücret politikası timeline isteği geçersiz JSON içeriyor: {error}"
+            )))
+        })?;
+    let issues = payroll_core::find_road_rounding_issues(
+        &request.start_inclusive,
+        &request.end_inclusive,
+        &request.versions,
+    )
+    .map_err(error_to_js)?;
+    serde_json::to_string(&issues).map_err(|error| {
+        JsValue::from_str(&format!(
+            "Ücret politikası rounding diagnostics sonucu serileştirilemedi: {error}"
+        ))
+    })
+}
+
 /// Returns the core-owned invalidation impact for one browser mutation.
 #[wasm_bindgen]
 pub fn evaluate_mutation_policy_json(request_json: &str) -> Result<String, JsValue> {

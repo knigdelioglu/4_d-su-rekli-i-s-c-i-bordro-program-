@@ -136,6 +136,20 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     expect((await events(page)).filter((entry) => entry.type === 'load').length).toBe(2);
   });
 
+  test('keeps dates, policy ids, and modes visible when the policy API rejects a rounding conflict', async () => {
+    const page = await openPolicyPage();
+    await page.evaluate(() => window.__compensationPolicyTest.useExistingTimeline());
+    await selectExistingChangeFlags(page);
+    await page.evaluate(() => window.__compensationPolicyTest.setScenario('roundingvalidation'));
+    await page.getByRole('button', { name: /Etkileri önizle/ }).click();
+    await page.getByRole('heading', { name: 'Yol yuvarlama biçimleri hizmet dönemiyle uyuşmuyor.' }).waitFor({ state: 'visible' });
+    const error = await page.getByRole('alert').last().innerText();
+    for (const detail of ['2026-10-01', 'rounding-invalid', 'rounding-baseline', 'PER_COMPENSATION_SLICE', 'PERIOD_TOTAL']) {
+      expect(error).toContain(detail);
+    }
+    expect(await page.getByRole('button', { name: 'Önizlenen değişikliği kaydet' }).count()).toBe(0);
+  });
+
   test('loads the available draft immediately, confirms the exact date/state, resets consent on date change, and supports cancel', async () => {
     const page = await openPolicyPage();
     await page.evaluate(() => window.__compensationPolicyTest.usePrecisionPrefill());

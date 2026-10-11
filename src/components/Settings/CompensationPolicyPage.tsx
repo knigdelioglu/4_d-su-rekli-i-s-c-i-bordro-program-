@@ -57,7 +57,7 @@ function titleCaseApiError(error: CompensationPolicyApiError): { title: string; 
         message: error.reason === 'NON_ROAD_FIELDS_DIFFER'
           ? 'Yalnız yol tutarı seçildiğinde diğer ücret kalemleri önceki kayıtla aynı kalmalıdır.'
           : 'Bu tarih, daha sonraki yol tutarı değişiklikleriyle çakışıyor. Sonraki kayıtlar değiştirilmedi.',
-        detail: `Önerilen geçerlilik tarihi: ${error.proposedEffectiveFrom}`,
+        detail: `Önerilen geçerlilik tarihi: ${error.proposedEffectiveFrom} · Çakışan sürüm: ${error.conflictingVersionId ?? 'belirtilmedi'} · ${error.message}`,
       };
     case 'FINALIZED_BLOCKER':
       return {
@@ -75,6 +75,7 @@ function titleCaseApiError(error: CompensationPolicyApiError): { title: string; 
       return {
         title: 'Önizlemeden sonra ücret geçmişi değişti.',
         message: 'Bu kayıt yapılmadı. Ücret geçmişini yenileyip etkileri tekrar önizleyin.',
+        detail: error.message,
       };
     case 'UNSUPPORTED_HISTORICAL_REPLAY':
       return {
@@ -84,13 +85,14 @@ function titleCaseApiError(error: CompensationPolicyApiError): { title: string; 
     case 'INVALID_POLICY':
       if (/road rounding mode|yol yuvarlama/i.test(error.message)) {
         return {
-          title: 'Yol yuvarlama biçimi dönem ortasında değiştirilemez.',
-          message: 'Yöntemi mevcut ücret politikasından koruyun. Değiştirmek gerekiyorsa geçerlilik tarihini ayın 15’ine alın; kayıtlı yanlış bir sürüm varsa aynı tarihte düzeltin.',
+          title: 'Yol yuvarlama biçimleri hizmet dönemiyle uyuşmuyor.',
+          message: 'Yöntem bordro hizmet döneminin içinde değiştirilemez. Kayıtlı bir sürümü düzeltirken aynı tarihi seçip önceki etkin yöntemi kullanın.',
+          detail: error.message,
         };
       }
-      return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.' };
+      return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.', detail: error.message };
     case 'INVALID_REQUEST':
-      return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.' };
+      return { title: 'Ücret değişikliği doğrulanamadı.', message: 'Formdaki tutarları, tarih ve açıklamayı gözden geçirin.', detail: error.message };
     case 'UNAUTHORIZED':
       return { title: 'Bu işlemi yapma yetkisi doğrulanamadı.', message: 'Ayarları yenileyin veya yetkili kullanıcıyla giriş yapın.' };
     case 'NOT_FOUND':
@@ -99,7 +101,7 @@ function titleCaseApiError(error: CompensationPolicyApiError): { title: string; 
       return { title: 'Güncel bordro bilgisi eksik.', message: 'Ücret değişikliği bu bordro durumunda uygulanamadı.' };
     case 'PERSISTENCE':
     case 'UNAVAILABLE':
-      return { title: 'Ücret değişikliği tamamlanamadı.', message: 'Bağlantıyı veya kaydetme durumunu kontrol edip yeniden deneyin.' };
+      return { title: 'Ücret değişikliği tamamlanamadı.', message: 'Kaydetme işlemi başarısız oldu. Önizlemeyi yenileyip tekrar deneyin.', detail: error.message };
   }
 }
 
@@ -817,15 +819,15 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
       {authoritativeLoad?.timeline.resolution === 'INVALID_ROAD_ROUNDING' && (
         <div data-testid="policy-road-rounding-recovery" role="alert" className={errorBoxClass}>
           <h2 className="font-bold">Bu hizmet döneminde yol yuvarlama biçimleri uyuşmuyor.</h2>
-          <p className="mt-1">Bordro hesaplaması güvenli sonuç üretemediği için durduruldu. Her farklı modu, önceki etkin sürümle aynı yapacak şekilde aynı tarih düzeltmesiyle onarın; mod değişikliği gerekiyorsa yeni hizmet dönemi ayın 15’inde başlamalıdır.</p>
+          <p className="mt-1">Bordro hesaplaması güvenli sonuç üretemediği için durduruldu. Listelenen etkin sürümü aynı tarihte düzeltip önceki sürümün yuvarlama biçimini seçin. Yeni bir biçim gerekiyorsa yürürlük tarihini ilgili bordro hizmet döneminin başlangıcına alın.</p>
           <ul className="mt-2 list-disc pl-5 text-xs">
             {(authoritativeLoad.timeline.roadRoundingIssues ?? []).map((issue) => (
-              <li key={`${issue.effectiveFrom}:${issue.actualMode}`}>
-                {shortDate(issue.effectiveFrom)} tarihli sürüm: {roundingLabel(issue.actualMode)} · önceki etkin sürüm: {roundingLabel(issue.expectedMode)}
+              <li key={`${issue.periodStartInclusive}:${issue.actualVersionId}`}>
+                {shortDate(issue.periodStartInclusive)}–{shortDate(issue.periodEndInclusive)} hizmet dönemi: {issue.actualVersionId} sürümü ({shortDate(issue.effectiveFrom)} · {roundingLabel(issue.actualMode)}) · önceki {issue.expectedVersionId} sürümü ({roundingLabel(issue.expectedMode)})
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-xs">Düzeltme için işlem türünü “Aynı tarihte düzeltme” seçin, listedeki tarihi açın ve yuvarlama biçimini önceki sürümle eşleştirin. Kesinleşmiş bordrolar için mevcut retro engelleri ayrıca uygulanır.</p>
+          <p className="mt-2 text-xs">Düzeltme için işlem türünü “Aynı tarihte düzeltme” seçin, uyuşmayan sürümün tarihini kullanın ve önceki sürümdeki biçimi seçin. Kesinleşmiş bordrolar için mevcut retro engelleri ayrıca uygulanır.</p>
         </div>
       )}
 

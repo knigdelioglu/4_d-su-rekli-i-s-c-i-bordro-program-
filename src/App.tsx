@@ -26,6 +26,7 @@ import { tauriBridge } from './services/tauriBridge';
 import { getPayrollEngine } from './services/payrollEngine';
 import type { PayrollDatasetSnapshot } from './services/payrollEngine';
 import {
+  serializePayrollStorage,
   toPayrollBoundaryDto,
   toPayrollUiModel,
   type PayrollStorageDto,
@@ -391,6 +392,16 @@ export default function App() {
     [browserPersistence.markDirty]
   );
 
+  const commitAuthoritativePayload = useCallback(
+    async (update: (current: PayrollStorageDto) => PayrollStorageDto) => {
+      if (!authoritativePayload) throw new Error('Puantaj kaydedilemedi: geçerli veri snapshotı bulunamadı.');
+      const next = { ...update(authoritativePayload), exportedAt: new Date().toISOString() };
+      await browserPersistence.savePayload(serializePayrollStorage(next));
+      setAuthoritativePayload(next);
+    },
+    [authoritativePayload, browserPersistence.savePayload]
+  );
+
   const loadData = useCallback(async (): Promise<boolean> => {
     const generation = ++dataLoadGeneration.current;
     const isLatestLoad = () => generation === dataLoadGeneration.current;
@@ -575,6 +586,7 @@ export default function App() {
     compensationRevisionOverrides,
     retroBatches,
     updateAuthoritativePayload,
+    commitAuthoritativePayload,
     loadData,
   });
   const {
@@ -905,6 +917,7 @@ export default function App() {
                     aktifDonem={aktifDonem}
                     personeller={personeller}
                     puantajlar={puantajlar}
+                    sickLeaveRecords={sickLeaveRecords}
                     onSavePuantaj={handleSavePuantaj}
                     onSavePuantajBatch={handleSavePuantajBatch}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}

@@ -2,7 +2,7 @@
  * Section 3: Puantaj (15-14 Period Attendance Grid)
  */
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Calendar,
@@ -21,6 +21,7 @@ import {
   PersonelPuantaj,
   PUANTAJ_KODLARI,
   PuantajKodu,
+  SickLeaveRecord,
 } from '../types/payroll';
 import {
   calculatePuantajOzeti,
@@ -30,15 +31,17 @@ import {
 import { exportToExcel } from '../utils/excelExport';
 import { formatPayrollError } from './useBordroCalculationController';
 import { describeError } from '../utils/errorMessage';
+import { createPuantajBulkPlan } from '../utils/puantajBulkPlan';
 
 type BulkApplyRequest =
   | { scope: 'all' | 'range'; dates: string[]; code: PuantajKodu }
-  | { scope: 'personnel'; dates: string[]; code: PuantajKodu; personnelCount: number };
+  | { scope: 'personnel'; dates: string[]; code: PuantajKodu };
 
 interface PuantajGridProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
+  sickLeaveRecords: SickLeaveRecord[];
   onSavePuantaj: (puantaj: PersonelPuantaj) => Promise<void> | void;
   onSavePuantajBatch: (puantajlar: PersonelPuantaj[]) => Promise<void> | void;
   onSelectPersonelForBordro?: (personelId: string) => void;
@@ -48,6 +51,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   aktifDonem,
   personeller,
   puantajlar,
+  sickLeaveRecords,
   onSavePuantaj,
   onSavePuantajBatch,
   onSelectPersonelForBordro,
@@ -118,12 +122,40 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   };
   const isAttendanceCreated = Boolean(savedPuantaj);
 
+  const bulkPlan = useMemo(() => {
+    if (!bulkApplyRequest) return null;
+    const selectedPersonnel = bulkApplyRequest.scope === 'personnel'
+      ? personeller
+      : activePersonel ? [activePersonel] : [];
+    return createPuantajBulkPlan({
+      personnel: selectedPersonnel,
+      attendances: puantajlar,
+      sickLeaveRecords,
+      periodId: aktifDonem.id,
+      periodStartInclusive: aktifDonem.baslangicTarihi,
+      periodEndInclusive: aktifDonem.bitisTarihi,
+      dates: bulkApplyRequest.dates,
+      code: bulkApplyRequest.code,
+    });
+  }, [
+    activePersonel,
+    aktifDonem.baslangicTarihi,
+    aktifDonem.bitisTarihi,
+    aktifDonem.id,
+    bulkApplyRequest,
+    personeller,
+    puantajlar,
+    sickLeaveRecords,
+  ]);
+
   const persistPuantaj = async (updated: PersonelPuantaj) => {
     setPuantajError(null);
     try {
       await onSavePuantaj(updated);
+      return true;
     } catch (err) {
       setPuantajError(`Puantaj kaydedilemedi: ${formatPayrollError(err)}`);
+      return false;
     }
   };
 
@@ -158,14 +190,27 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       );
       if (!confirmed) return;
     }
+    const resetDays = { ...defaultGunler };
+    for (const day of periodDays) {
+      const existingCode = activePuantaj.gunler[day.dateStr];
+      const hasReport = sickLeaveRecords.some((record) =>
+        record.personnelId === selectedPersonelId && record.startDate <= day.dateStr && record.endDate >= day.dateStr
+      );
+      if (hasReport && existingCode !== 'R') {
+        setPuantajError(`${day.dateStr} tarihinde hastalık raporu var ancak puantaj kodu ${existingCode ?? 'yok'}. Varsayılan puantaj uygulanmadı; önce rapor ve gün kodunu eşleştirin.`);
+        return;
+      }
+      if (existingCode === 'R') resetDays[day.dateStr] = 'R';
+    }
     await persistPuantaj({
       ...activePuantaj,
-      gunler: defaultGunler,
+      gunler: resetDays,
     });
   };
 
   const handleApplyBulkCodeToAll = () => {
     if (!savedPuantaj) return;
+    setPuantajError(null);
     setBulkApplyRequest({
       scope: 'all',
       dates: periodDays.map((day) => day.dateStr),
@@ -185,6 +230,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       alert('Seçilen aralık bu dönemin içinde değil.');
       return;
     }
+    setPuantajError(null);
     setBulkApplyRequest({
       scope: 'range',
       dates: selectedDays.map((day) => day.dateStr),
@@ -194,13 +240,13 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
 
   const handleApplyQuickEntryToPersonnel = () => {
     if (personeller.length === 0 || quickEntryDates.length === 0) return;
+    setPuantajError(null);
     setBulkApplyRequest({
       scope: 'personnel',
       dates: periodDays
         .filter((day) => quickEntryDates.includes(day.dateStr))
         .map((day) => day.dateStr),
       code: activeBulkCode,
-      personnelCount: personeller.length,
     });
     setIsQuickCalendarOpen(false);
   };
@@ -211,45 +257,25 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       (bulkApplyRequest.scope !== 'personnel' && !savedPuantaj) ||
       isApplyingBulkCode
     ) return;
+    if (!bulkPlan) return;
+    if (bulkPlan.reportMismatches.length > 0) {
+      setPuantajError(
+        `Toplu kayıt durduruldu: ${bulkPlan.reportMismatches.length} hastalık raporu günü R koduyla eşleşmiyor. Önce rapor ve puantaj kaydını düzeltin.`
+      );
+      return;
+    }
+    if (bulkPlan.updates.length === 0) {
+      setPuantajError('Kaydedilecek gün değişikliği yok. Raporlu günler korundu; seçilen diğer günler zaten bu kodda.');
+      return;
+    }
 
     setIsApplyingBulkCode(true);
     try {
-      if (bulkApplyRequest.scope === 'personnel') {
-        const defaultDays = generateDefaultPuantajGunler(
-          aktifDonem.baslangicTarihi,
-          aktifDonem.bitisTarihi
-        );
-        const updates = personeller.map((personel) => {
-          const existing = puantajlar.find(
-            (attendance) =>
-              attendance.personelId === personel.id && attendance.donemId === aktifDonem.id
-          );
-          const gunler = { ...(existing?.gunler ?? defaultDays) };
-          bulkApplyRequest.dates.forEach((dateStr) => {
-            gunler[dateStr] = bulkApplyRequest.code;
-          });
-          return {
-            id: existing?.id ?? `${personel.id}_${aktifDonem.id}`,
-            personelId: personel.id,
-            donemId: aktifDonem.id,
-            gunler,
-          };
-        });
-        const saved = await persistPuantajBatch(updates);
-        if (saved) {
-          setQuickEntryDates([]);
-        }
-        setBulkApplyRequest(null);
-        return;
-      }
-
-      const newGunler: Record<string, PuantajKodu> =
-        bulkApplyRequest.scope === 'all' ? {} : { ...activePuantaj.gunler };
-      bulkApplyRequest.dates.forEach((dateStr) => {
-        newGunler[dateStr] = bulkApplyRequest.code;
-      });
-      await persistPuantaj({ ...activePuantaj, gunler: newGunler });
+      const saved = await persistPuantajBatch(bulkPlan.updates);
+      if (!saved) return;
+      if (bulkApplyRequest.scope === 'personnel') setQuickEntryDates([]);
       setBulkApplyRequest(null);
+      setPuantajError(null);
     } finally {
       setIsApplyingBulkCode(false);
     }
@@ -903,32 +929,61 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                   Puantaj kodları değiştirilsin mi?
                 </h3>
                 <p id="bulk-apply-confirm-description" className="mt-2 text-sm leading-relaxed text-slate-700">
-                  {bulkApplyRequest.scope === 'personnel' ? (
-                    <>
-                      Takvimden seçtiğiniz tarihlerde, hafta sonları dahil, tüm{' '}
-                      {bulkApplyRequest.personnelCount} personelin puantajına{' '}
-                      <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
-                      girilecek. Puantajı olmayan personeller için de kayıt oluşturulacak.
-                    </>
-                  ) : (
-                    <>
-                      {bulkApplyRequest.scope === 'all'
-                        ? `Bu dönemdeki tüm ${bulkApplyRequest.dates.length} gün`
-                        : `Seçtiğiniz tarih aralığındaki tüm ${bulkApplyRequest.dates.length} gün`}{' '}
-                      (hafta sonları dahil) <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>{' '}
-                      olarak işaretlenecek.
-                    </>
-                  )}{' '}
-                  Seçilen günlerdeki mevcut puantaj kodları değiştirilecek.
+                  {bulkApplyRequest.scope === 'personnel'
+                    ? `${personeller.length} personelin seçili tarihleri incelendi.`
+                    : `${activePersonel?.ad ?? ''} ${activePersonel?.soyad ?? ''} için ${bulkApplyRequest.dates.length} tarih incelendi.`}{' '}
+                  {bulkPlan?.rows.filter((row) => row.status === 'APPLY').length ?? 0} gün değiştirilecek ve{' '}
+                  {bulkPlan?.updates.length ?? 0} personel kaydı tek işlemde kaydedilecek. Hedef kod:{' '}
+                  <strong>{bulkApplyRequest.code} — {PUANTAJ_KODLARI[bulkApplyRequest.code].tanim}</strong>.
                 </p>
-                {bulkApplyRequest.scope === 'personnel' && (
+                {bulkPlan && bulkPlan.preservedRows.length > 0 && (
                   <p className="mt-2 rounded-lg bg-white/80 px-3 py-2 text-xs font-semibold text-slate-700">
-                    Tarihler: {bulkApplyRequest.dates
-                      .map((dateStr) => dateStr.split('-').reverse().join('.'))
-                      .join(', ')}
+                    {bulkPlan.preservedRows.length} mevcut R günü korundu ve toplu kayda alınmadı.
+                  </p>
+                )}
+                {bulkPlan && bulkPlan.reportMismatches.length > 0 && (
+                  <p role="alert" className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                    {bulkPlan.reportMismatches.length} hastalık raporu günü R koduyla eşleşmiyor. Hiçbir personel kaydedilmez; önce bu kayıtları düzeltin.
+                  </p>
+                )}
+                {puantajError && (
+                  <p role="alert" className="mt-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+                    {puantajError}
                   </p>
                 )}
               </div>
+            </div>
+            <div className="max-h-64 overflow-auto border-b border-slate-200">
+              {bulkPlan?.rows.length ? (
+                <table className="w-full text-left text-xs" aria-label="Toplu puantaj değişiklik önizlemesi">
+                  <thead className="sticky top-0 bg-slate-100 text-slate-600">
+                    <tr>
+                      <th scope="col" className="p-2">Personel</th>
+                      <th scope="col" className="p-2">Tarih</th>
+                      <th scope="col" className="p-2">Eski → yeni</th>
+                      <th scope="col" className="p-2">İşlem</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {bulkPlan.rows.map((row) => (
+                      <tr
+                        key={`${row.personnelId}:${row.date}`}
+                        data-testid={`bulk-apply-preview-row-${row.personnelId}-${row.date}`}
+                        className={row.status === 'REPORT_MISMATCH' ? 'bg-rose-50' : row.status === 'PRESERVED_R' ? 'bg-amber-50/70' : ''}
+                      >
+                        <th scope="row" className="p-2 font-semibold text-slate-800">{row.personnelName}</th>
+                        <td className="whitespace-nowrap p-2 text-slate-700">{row.date.split('-').reverse().join('.')}</td>
+                        <td className="whitespace-nowrap p-2 font-mono font-bold text-slate-800">{row.previousCode} → {row.nextCode}</td>
+                        <td className="p-2 text-slate-700">
+                          {row.status === 'APPLY' ? 'Uygulanacak' : row.status === 'PRESERVED_R' ? 'R korundu' : 'Rapor / kod uyuşmuyor'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="p-4 text-sm text-slate-600">Seçilen kodda değişecek gün yok.</p>
+              )}
             </div>
             <div className="flex justify-end gap-2 bg-slate-50 p-4">
               <button
@@ -944,10 +999,10 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                 type="button"
                 data-testid="bulk-apply-confirm"
                 onClick={() => void handleConfirmBulkApply()}
-                disabled={isApplyingBulkCode}
+                disabled={isApplyingBulkCode || !bulkPlan || bulkPlan.reportMismatches.length > 0 || bulkPlan.updates.length === 0}
                 className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60"
               >
-                {isApplyingBulkCode ? 'Uygulanıyor…' : 'Evet, Uygula'}
+                {isApplyingBulkCode ? 'Kaydediliyor…' : 'Önizlenen değişiklikleri kaydet'}
               </button>
             </div>
           </div>

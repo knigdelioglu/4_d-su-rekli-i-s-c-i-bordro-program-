@@ -73,6 +73,9 @@ export interface PayrollMutationControllerOptions {
   updateAuthoritativePayload: (
     update: (current: PayrollStorageDto) => PayrollStorageDto
   ) => void;
+  commitAuthoritativePayload?: (
+    update: (current: PayrollStorageDto) => PayrollStorageDto
+  ) => Promise<void>;
   loadData: () => Promise<void>;
 }
 
@@ -224,6 +227,7 @@ export function usePayrollMutationController({
   compensationRevisionOverrides,
   retroBatches,
   updateAuthoritativePayload,
+  commitAuthoritativePayload,
   loadData,
 }: PayrollMutationControllerOptions) {
   const latestPayrollDataset = useRef(payrollDataset);
@@ -600,7 +604,7 @@ export function usePayrollMutationController({
         periodId: attendance.donemId,
       }))
     );
-    updateAuthoritativePayload((current) => {
+    const applyBatch = (current: PayrollStorageDto): PayrollStorageDto => {
       const attendancesById = new Map(
         current.puantajlar.map((attendance) => [attendance.id, attendance] as const)
       );
@@ -617,7 +621,9 @@ export function usePayrollMutationController({
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
         retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
-    });
+    };
+    if (commitAuthoritativePayload) await commitAuthoritativePayload(applyBatch);
+    else updateAuthoritativePayload(applyBatch);
   };
 
   const handleSaveTaxOpening = async (
@@ -779,7 +785,8 @@ export function usePayrollMutationController({
 
   const handleSaveBordro = async (
     updatedBordro: PayrollBoundaryPayroll,
-    calculationSnapshot?: PayrollDatasetSnapshot
+    calculationSnapshot?: PayrollDatasetSnapshot,
+    saveSource?: 'ENGINE_FINALIZATION'
   ) => {
     if (isNative) {
       // Native persistence already invalidates downstream calculated rows in
@@ -797,7 +804,11 @@ export function usePayrollMutationController({
     const existing = policySnapshot.payrolls.find(
       (payroll) => payroll.id === updatedBordro.id || payroll.accrualId === updatedBordro.accrualId
     );
-    if (!calculationSnapshot && existing) {
+    if (saveSource === 'ENGINE_FINALIZATION') {
+      if (!existing || existing.status !== 'CALCULATED' || updatedBordro.status !== 'FINALIZED') {
+        throw new Error('Yalnız hesaplanmış bordro, yetkili finalize_payroll sonucu ile kesinleştirilebilir.');
+      }
+    } else if (!calculationSnapshot && existing) {
       validatePayrollStatusTransition(existing.status, updatedBordro.status);
     }
     const mutation: PayrollMutation = existing

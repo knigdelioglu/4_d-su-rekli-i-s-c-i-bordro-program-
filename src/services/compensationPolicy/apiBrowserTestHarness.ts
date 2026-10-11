@@ -375,6 +375,187 @@ async function exerciseRoadRoundingRecovery() {
   };
 }
 
+async function exerciseSyntheticPolicySchedule() {
+  await resetBrowserPayrollDatabase();
+  const source = getInitialDataset();
+  const sourceSettings = source.kurumDegerleriMap[source.aktifDonemId];
+  const annual2026 = getDefaultAnnualPayrollParameters(2026);
+  if (!source.personeller[0] || !sourceSettings || !annual2026) {
+    throw new Error('Synthetic policy schedule fixture is incomplete.');
+  }
+  const periods = [
+    ...[9, 10, 11, 12].map((month) => createBordroDonemi(2026, month, 2026, month)),
+    ...Array.from({ length: 12 }, (_, index) => createBordroDonemi(2027, index + 1, 2027, index + 1)),
+    ...Array.from({ length: 9 }, (_, index) => createBordroDonemi(2028, index + 1, 2028, index + 1)),
+  ];
+  const periodByDate = (effectiveFrom: string) => {
+    const period = periods.find((item) => item.baslangicTarihi <= effectiveFrom && item.bitisTarihi >= effectiveFrom);
+    if (!period) throw new Error(`No synthetic service period contains ${effectiveFrom}.`);
+    return period;
+  };
+  const settings = Object.fromEntries(periods.map((period) => [period.id, {
+    ...sourceSettings,
+    donemId: period.id,
+  }]));
+  const annual2027 = { ...annual2026, year: 2027, sigortaGvYillikBrutAsgariUcretTavani: 180000 };
+  const annual2028 = { ...annual2026, year: 2028, sigortaGvYillikBrutAsgariUcretTavani: 190000 };
+  const payload = toPayrollBoundaryDto({
+    backupVersion: BACKUP_FORMAT_VERSION,
+    exportedAt: '2026-10-11T00:00:00Z',
+    ...source,
+    aktifDonemId: '2026-09',
+    donemler: periods,
+    kurumDegerleriMap: settings,
+    puantajlar: [],
+    bordrolar: [],
+    taxOpenings: [],
+    sickLeaveRecords: [],
+    annualPayrollParameters: [annual2026, annual2027, annual2028],
+    compensationRevisions: [],
+    compensationRevisionOverrides: [],
+    retroBatches: [],
+    retroAllocations: [],
+    compensationPolicyVersions: [],
+  }) as unknown as PayrollStorageDto;
+  await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+
+  const api = getCompensationPolicyApi();
+  let state: CompensationPolicyStateWire = {
+    ...browserAcceptanceState(),
+    gunlukTabanUcret: '1000.00',
+    gunlukVasitaYol: '75.125',
+  };
+  const savedVersions: CompensationPolicyVersionWire[] = [];
+  const save = async (operation: CompensationPolicyWriteOperation) => {
+    const scope = acceptanceScope(periodByDate(operation.effectiveFrom));
+    const preview = await api.preview({ scope, operation });
+    if (preview.ok === false) throw new Error(`Preview ${operation.effectiveFrom} failed: ${preview.error.code}: ${preview.error.message}`);
+    const result = operation.kind === 'INITIAL_BASELINE'
+      ? await api.save({
+        scope,
+        operation,
+        previewToken: preview.value.previewToken,
+        initialBaselineConfirmation: { confirmed: true, effectiveFrom: operation.effectiveFrom },
+      })
+      : await api.save({ scope, operation, previewToken: preview.value.previewToken });
+    if (result.ok === false) throw new Error(`Save ${operation.effectiveFrom} failed: ${result.error.code}: ${result.error.message}`);
+    savedVersions.push(result.value.version);
+    return result.value.version;
+  };
+
+  await save({
+    kind: 'INITIAL_BASELINE',
+    effectiveFrom: '2027-01-15',
+    state,
+    boundaryScope: 'FULL_EARNING',
+    roadRoundingMode: 'PERIOD_TOTAL',
+    reason: 'Synthetic confirmed starting policy',
+  });
+
+  const addPercent = (value: string, percentageBasisPoints: bigint) => {
+    const [whole, fraction = ''] = value.split('.');
+    const cents = BigInt(whole) * 100n + BigInt(`${fraction}00`.slice(0, 2));
+    const increase = (cents * percentageBasisPoints + 5000n) / 10000n;
+    const updated = cents + increase;
+    return `${updated / 100n}.${String(updated % 100n).padStart(2, '0')}`;
+  };
+  const salaryRaises = [
+    { date: '2027-02-01', basisPoints: 708n },
+    { date: '2027-09-01', basisPoints: 1135n },
+    { date: '2028-02-01', basisPoints: 625n },
+    { date: '2028-09-01', basisPoints: 950n },
+  ];
+  const roadDates = [
+    '2027-03-15', '2027-04-15', '2027-05-15', '2027-06-15', '2027-07-15',
+    '2027-10-15', '2027-11-15', '2028-03-15', '2028-05-15', '2028-07-15',
+  ];
+  const schedule = [
+    ...salaryRaises.map((item) => ({ date: item.date, kind: 'SALARY' as const, basisPoints: item.basisPoints })),
+    ...roadDates.map((date) => ({ date, kind: 'ROAD' as const })),
+  ].sort((left, right) => left.date.localeCompare(right.date));
+  const salaryValues: Array<{ date: string; value: string }> = [];
+  const roadValues: Array<{ date: string; value: string }> = [];
+  let roadMilliunits = 75125n;
+
+  for (const item of schedule) {
+    if (item.kind === 'SALARY') {
+      state = { ...state, gunlukTabanUcret: addPercent(state.gunlukTabanUcret, item.basisPoints) };
+      salaryValues.push({ date: item.date, value: state.gunlukTabanUcret });
+      const saved = await save({
+        kind: 'NEW_EFFECTIVE_DATE',
+        effectiveFrom: item.date,
+        state,
+        boundaryScope: 'FULL_EARNING',
+        changeIntent: 'FULL_STATE_CHANGE',
+        roadRoundingMode: 'PERIOD_TOTAL',
+        reason: `Synthetic ${item.basisPoints.toString()} basis-point salary increase`,
+      });
+      if (item.date === '2027-02-01') {
+        const [whole, fraction = ''] = state.gunlukTabanUcret.split('.');
+        const correctedCents = BigInt(whole) * 100n + BigInt(`${fraction}00`.slice(0, 2)) + 100n;
+        state = { ...state, gunlukTabanUcret: `${correctedCents / 100n}.${String(correctedCents % 100n).padStart(2, '0')}` };
+        await save({
+          kind: 'SAME_DATE_CORRECTION',
+          effectiveFrom: item.date,
+          state,
+          boundaryScope: 'FULL_EARNING',
+          changeIntent: 'FULL_STATE_CHANGE',
+          roadRoundingMode: 'PERIOD_TOTAL',
+          reason: 'Synthetic same-date salary correction',
+          supersedesVersionId: saved.id,
+        });
+      }
+    } else {
+      roadMilliunits += 125n;
+      state = {
+        ...state,
+        gunlukVasitaYol: `${roadMilliunits / 1000n}.${String(roadMilliunits % 1000n).padStart(3, '0')}`,
+      };
+      roadValues.push({ date: item.date, value: state.gunlukVasitaYol });
+      await save({
+        kind: 'NEW_EFFECTIVE_DATE',
+        effectiveFrom: item.date,
+        state,
+        boundaryScope: 'ROAD_ONLY',
+        changeIntent: 'ROAD_AMOUNT_ONLY',
+        roadRoundingMode: 'PERIOD_TOTAL',
+        reason: 'Synthetic road allowance change',
+      });
+    }
+  }
+
+  const septemberLeaf = [...savedVersions].reverse().find((version) => version.effectiveFrom === '2027-09-01');
+  if (!septemberLeaf) throw new Error('Synthetic September policy correction fixture is missing.');
+  await save({
+    kind: 'SAME_DATE_CORRECTION',
+    effectiveFrom: septemberLeaf.effectiveFrom,
+    state: septemberLeaf.state,
+    boundaryScope: 'FULL_EARNING',
+    changeIntent: 'FULL_STATE_CHANGE',
+    roadRoundingMode: septemberLeaf.roadRoundingMode,
+    reason: 'Synthetic late same-date correction with future policy versions',
+    supersedesVersionId: septemberLeaf.id,
+  });
+
+  const finalPeriod = periodByDate('2028-09-15');
+  const finalScope = acceptanceScope(finalPeriod);
+  const loaded = await api.load({ scope: finalScope });
+  if (loaded.ok === false) throw new Error(`Final policy reload failed: ${loaded.error.code}: ${loaded.error.message}`);
+  const stored = await browserPayrollStore.loadSnapshot();
+  if (!stored) throw new Error('Synthetic policy snapshot disappeared after successful saves.');
+  const storedPayload = JSON.parse(stored.payload) as PayrollStorageDto;
+  return {
+    salaryValues,
+    roadValues,
+    savedVersionCount: savedVersions.length,
+    storedVersionCount: storedPayload.compensationPolicyVersions.length,
+    resolution: loaded.value.timeline.resolution,
+    finalRoadMode: loaded.value.timeline.resolvedSegments.at(-1)?.roadRoundingMode ?? null,
+    finalRoadAmount: loaded.value.timeline.resolvedSegments.at(-1)?.state.gunlukVasitaYol ?? null,
+    previewSaveRoutes: ['INITIAL_BASELINE', 'NEW_EFFECTIVE_DATE', 'SAME_DATE_CORRECTION'],
+  };
+}
+
 async function previewRoadOnlyScaleChange(periodId: string) {
   const snapshot = await browserPayrollStore.loadSnapshot();
   if (!snapshot) throw new Error('Seed browser snapshot is missing.');
@@ -1522,6 +1703,7 @@ declare global {
     __compensationPolicyBrowserApiTest: {
       loadArchivedSeptemberPrefill(): ReturnType<typeof loadArchivedSeptemberPrefill>;
       exerciseRoadRoundingRecovery(): ReturnType<typeof exerciseRoadRoundingRecovery>;
+      exerciseSyntheticPolicySchedule(): ReturnType<typeof exerciseSyntheticPolicySchedule>;
       prepareBaseline(): ReturnType<typeof prepareBaseline>;
       prepareRetroBaseline(): ReturnType<typeof prepareRetroBaseline>;
       exerciseWorkPremiumGroupSave(): ReturnType<typeof exerciseWorkPremiumGroupSave>;
@@ -1560,6 +1742,7 @@ window.__compensationAcceptanceBrowserApp = {
 window.__compensationPolicyBrowserApiTest = {
   loadArchivedSeptemberPrefill,
   exerciseRoadRoundingRecovery,
+  exerciseSyntheticPolicySchedule,
   prepareBaseline,
   prepareRetroBaseline,
   exerciseWorkPremiumGroupSave,

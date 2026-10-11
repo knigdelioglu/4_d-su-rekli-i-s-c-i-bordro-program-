@@ -21,6 +21,7 @@ use bordro_programi_lib::services::compensation_policy_service::{
 };
 use bordro_programi_lib::services::payroll_service::PayrollService;
 use rust_decimal_macros::dec;
+use rust_decimal::{Decimal, RoundingStrategy};
 use std::collections::HashMap;
 
 fn period() -> BordroDonemi {
@@ -45,6 +46,79 @@ fn scope() -> bordro_programi_lib::services::compensation_policy_service::Compen
         periodEndInclusive: "2026-02-14".into(),
         projectionDate: "2026-01-15".into(),
     }
+}
+
+fn synthetic_period(year: i32, month: i32) -> BordroDonemi {
+    let start = chrono::NaiveDate::from_ymd_opt(year, month as u32, 15).unwrap();
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let end = chrono::NaiveDate::from_ymd_opt(next_year, next_month as u32, 14).unwrap();
+    BordroDonemi {
+        id: format!("{year}-{month:02}"),
+        yil: year,
+        ay: month,
+        baslangicTarihi: start.format("%Y-%m-%d").to_string(),
+        bitisTarihi: end.format("%Y-%m-%d").to_string(),
+        donemAdi: format!("{year}-{month:02}"),
+        taxYear: year,
+        taxMonth: month,
+    }
+}
+
+fn scope_for_period(
+    period: &BordroDonemi,
+) -> bordro_programi_lib::services::compensation_policy_service::CompensationPolicyReadScope {
+    bordro_programi_lib::services::compensation_policy_service::CompensationPolicyReadScope {
+        institutionScope: "CURRENT_INSTITUTION".into(),
+        periodId: period.id.clone(),
+        periodStartInclusive: period.baslangicTarihi.clone(),
+        periodEndInclusive: period.bitisTarihi.clone(),
+        projectionDate: period.baslangicTarihi.clone(),
+    }
+}
+
+fn preview_and_save_policy(
+    conn: &rusqlite::Connection,
+    period: &BordroDonemi,
+    operation: CompensationPolicyWriteOperation,
+) -> bordro_programi_lib::domain::models::CompensationPolicyVersion {
+    let operation_date = match &operation {
+        CompensationPolicyWriteOperation::InitialBaseline { effectiveFrom, .. }
+        | CompensationPolicyWriteOperation::NewEffectiveDate { effectiveFrom, .. }
+        | CompensationPolicyWriteOperation::SameDateCorrection { effectiveFrom, .. } => effectiveFrom.clone(),
+    };
+    let preview = CompensationPolicyService::preview(
+        conn,
+        &CompensationPolicyPreviewRequest {
+            scope: scope_for_period(period),
+            operation: operation.clone(),
+        },
+    );
+    let CompensationPolicyOperationResult::Success { value: preview, .. } = preview else {
+        panic!("synthetic preview at {operation_date} failed: {preview:?}");
+    };
+    let baseline_confirmation = match &operation {
+        CompensationPolicyWriteOperation::InitialBaseline { effectiveFrom, .. } => {
+            Some(InitialBaselineConfirmation { confirmed: true, effectiveFrom: effectiveFrom.clone() })
+        }
+        _ => None,
+    };
+    let saved = CompensationPolicyService::save(
+        conn,
+        &CompensationPolicySaveRequest {
+            scope: scope_for_period(period),
+            operation,
+            previewToken: preview.previewToken,
+            initialBaselineConfirmation: baseline_confirmation,
+        },
+    );
+    let CompensationPolicyOperationResult::Success { value, .. } = saved else {
+        panic!("synthetic save at {operation_date} failed: {saved:?}");
+    };
+    value.version
 }
 
 fn policy_state(
@@ -302,6 +376,250 @@ fn native_api_loads_previews_and_atomically_appends_exact_baseline() {
         .unwrap(),
         1
     );
+}
+
+#[test]
+fn native_preview_accepts_full_earning_change_inside_period_when_rounding_mode_is_unchanged() {
+    let conn = create_in_memory_connection().unwrap();
+    PeriodRepository::save(&conn, &period()).unwrap();
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &CompensationPolicyVersion {
+            id: "baseline-rounding".into(),
+            effectiveFrom: "2026-01-15".into(),
+            state: policy_state(dec!(100), dec!(5)),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PeriodTotal,
+            createdAt: "2026-01-01T00:00:00Z".into(),
+            source: "TEST".into(),
+            reason: "Baseline".into(),
+            supersedesVersionId: None,
+        },
+    )
+    .unwrap();
+
+    let preview = CompensationPolicyService::preview(
+        &conn,
+        &CompensationPolicyPreviewRequest {
+            scope: scope(),
+            operation: policy_change(),
+        },
+    );
+    assert!(matches!(preview, CompensationPolicyOperationResult::Success { .. }));
+}
+
+#[test]
+fn native_preview_rejects_mid_period_rounding_change_and_load_shows_repair_targets() {
+    let conn = create_in_memory_connection().unwrap();
+    PeriodRepository::save(&conn, &period()).unwrap();
+    for (id, date, base, mode, parent) in [
+        ("baseline-rounding", "2026-01-15", dec!(100), RoadRoundingMode::PeriodTotal, None),
+        ("conflicting-rounding", "2026-02-01", dec!(110), RoadRoundingMode::PerCompensationSlice, None),
+    ] {
+        CompensationPolicyRepository::insert_version(
+            &conn,
+            &CompensationPolicyVersion {
+                id: id.into(),
+                effectiveFrom: date.into(),
+                state: policy_state(base, dec!(5)),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: mode,
+                createdAt: "2026-01-01T00:00:00Z".into(),
+                source: "TEST".into(),
+                reason: "Synthetic policy".into(),
+                supersedesVersionId: parent.map(str::to_owned),
+            },
+        )
+        .unwrap();
+    }
+
+    let rejected = CompensationPolicyService::preview(
+        &conn,
+        &CompensationPolicyPreviewRequest {
+            scope: scope(),
+            operation: CompensationPolicyWriteOperation::NewEffectiveDate {
+                effectiveFrom: "2026-02-02".into(),
+                state: policy_state(dec!(110), dec!(5)),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                changeIntent: "FULL_STATE_CHANGE".into(),
+                roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+                reason: "Reject a mode change inside the service period".into(),
+            },
+        },
+    );
+    let CompensationPolicyOperationResult::Failure { error, .. } = rejected else {
+        panic!("native preview must reject a rounding change inside Jan 15–Feb 14");
+    };
+    let CompensationPolicyApiError::InvalidPolicy { message } = error else {
+        panic!("rounding conflict should retain its policy error type: {error:?}");
+    };
+    assert!(message.contains("2026-02-01"));
+    assert!(message.contains("baseline-rounding"));
+    assert!(message.contains("conflicting-rounding"));
+
+    let loaded = CompensationPolicyService::load(
+        &conn,
+        &CompensationPolicyLoadRequest {
+            scope: scope(),
+            nonAuthoritativePrefill: None,
+        },
+    );
+    let CompensationPolicyOperationResult::Success { value, .. } = loaded else {
+        panic!("native load must expose the bad records so the operator can correct them: {loaded:?}");
+    };
+    assert_eq!(value.timeline.resolution, "INVALID_ROAD_ROUNDING");
+    assert_eq!(value.timeline.roadRoundingIssues.len(), 1);
+    assert_eq!(value.timeline.roadRoundingIssues[0].expected_version_id, "baseline-rounding");
+    assert_eq!(value.timeline.roadRoundingIssues[0].actual_version_id, "conflicting-rounding");
+    assert_eq!(value.timeline.roadRoundingIssues[0].period_start_inclusive, "2026-01-15");
+    assert_eq!(value.timeline.roadRoundingIssues[0].period_end_inclusive, "2026-02-14");
+}
+
+#[test]
+fn native_policy_preview_and_save_cover_four_salary_dates_ten_road_dates_and_correction() {
+    let conn = create_in_memory_connection().unwrap();
+    let periods = (2027..=2028)
+        .flat_map(|year| {
+            let last_month = if year == 2027 { 12 } else { 9 };
+            (1..=last_month).map(move |month| synthetic_period(year, month))
+        })
+        .collect::<Vec<_>>();
+    for period in &periods {
+        PeriodRepository::save(&conn, period).unwrap();
+    }
+    let period_for_date = |date: &str| {
+        periods
+            .iter()
+            .find(|period| period.baslangicTarihi.as_str() <= date && period.bitisTarihi.as_str() >= date)
+            .unwrap_or_else(|| panic!("No 15–14 period contains {date}"))
+    };
+
+    let mut state = policy_state(dec!(1000), dec!(75.125));
+    state.gunlukTabanUcret = dec!(1000.00);
+    let baseline_period = period_for_date("2027-01-15");
+    preview_and_save_policy(
+        &conn,
+        baseline_period,
+        CompensationPolicyWriteOperation::InitialBaseline {
+            effectiveFrom: "2027-01-15".into(),
+            state: state.clone(),
+            roadRoundingMode: RoadRoundingMode::PeriodTotal,
+            reason: "Synthetic starting policy".into(),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+        },
+    );
+
+    let salary_raises = [
+        ("2027-02-01", dec!(7.08)),
+        ("2027-09-01", dec!(11.35)),
+        ("2028-02-01", dec!(6.25)),
+        ("2028-09-01", dec!(9.50)),
+    ];
+    let road_dates = [
+        "2027-03-15", "2027-04-15", "2027-05-15", "2027-06-15", "2027-07-15",
+        "2027-10-15", "2027-11-15", "2028-03-15", "2028-05-15", "2028-07-15",
+    ];
+    let mut actions = salary_raises
+        .iter()
+        .map(|(date, percent)| (*date, true, *percent))
+        .chain(road_dates.iter().map(|date| (*date, false, Decimal::ZERO)))
+        .collect::<Vec<_>>();
+    actions.sort_by_key(|(date, _, _)| *date);
+
+    for (date, is_salary_raise, amount) in actions {
+        let target_period = period_for_date(date);
+        if is_salary_raise {
+            state.gunlukTabanUcret = (state.gunlukTabanUcret
+                * (Decimal::ONE + amount / dec!(100)))
+                .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero);
+            let saved = preview_and_save_policy(
+                &conn,
+                target_period,
+                CompensationPolicyWriteOperation::NewEffectiveDate {
+                    effectiveFrom: date.into(),
+                    state: state.clone(),
+                    boundaryScope: CompensationBoundaryScope::FullEarning,
+                    changeIntent: "FULL_STATE_CHANGE".into(),
+                    roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                    reason: format!("Synthetic salary increase {amount}%"),
+                },
+            );
+            if date == "2027-02-01" {
+                state.gunlukTabanUcret += dec!(1.00);
+                preview_and_save_policy(
+                    &conn,
+                    target_period,
+                    CompensationPolicyWriteOperation::SameDateCorrection {
+                        effectiveFrom: date.into(),
+                        state: state.clone(),
+                        boundaryScope: CompensationBoundaryScope::FullEarning,
+                        changeIntent: "FULL_STATE_CHANGE".into(),
+                        roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                        reason: "Synthetic same-date salary correction".into(),
+                        supersedesVersionId: saved.id,
+                    },
+                );
+            }
+        } else {
+            state.gunlukVasitaYol += dec!(0.125);
+            preview_and_save_policy(
+                &conn,
+                target_period,
+                CompensationPolicyWriteOperation::NewEffectiveDate {
+                    effectiveFrom: date.into(),
+                    state: state.clone(),
+                    boundaryScope: CompensationBoundaryScope::RoadOnly,
+                    changeIntent: "ROAD_AMOUNT_ONLY".into(),
+                    roadRoundingMode: RoadRoundingMode::PeriodTotal,
+                    reason: "Synthetic road allowance increase".into(),
+                },
+            );
+        }
+    }
+
+    let timeline = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    let september_leaf = payroll_core::validate_compensation_policy_timeline(&timeline)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|version| version.effectiveFrom == "2027-09-01")
+        .unwrap();
+    preview_and_save_policy(
+        &conn,
+        period_for_date("2027-09-01"),
+        CompensationPolicyWriteOperation::SameDateCorrection {
+            effectiveFrom: september_leaf.effectiveFrom.clone(),
+            state: september_leaf.state.clone(),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            changeIntent: "FULL_STATE_CHANGE".into(),
+            roadRoundingMode: september_leaf.roadRoundingMode,
+            reason: "Synthetic late same-date correction with future policy versions".into(),
+            supersedesVersionId: september_leaf.id.clone(),
+        },
+    );
+
+    let timeline = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    let active = payroll_core::validate_compensation_policy_timeline(&timeline).unwrap();
+    assert_eq!(timeline.len(), 17);
+    assert_eq!(active.iter().filter(|version| version.boundaryScope == CompensationBoundaryScope::RoadOnly).count(), 10);
+    assert_eq!(
+        active.iter().rev().find(|version| version.effectiveFrom == "2027-02-01").unwrap().state.gunlukTabanUcret,
+        dec!(1071.80)
+    );
+    assert_eq!(
+        active.iter().find(|version| version.effectiveFrom == "2027-09-01").unwrap().state.gunlukTabanUcret,
+        dec!(1193.45)
+    );
+    assert_eq!(
+        active.iter().find(|version| version.effectiveFrom == "2028-02-01").unwrap().state.gunlukTabanUcret,
+        dec!(1268.04)
+    );
+    assert_eq!(
+        active.iter().find(|version| version.effectiveFrom == "2028-09-01").unwrap().state.gunlukTabanUcret,
+        dec!(1388.50)
+    );
+    assert_eq!(active.last().unwrap().state.gunlukVasitaYol, dec!(76.375));
+    assert!(active.iter().all(|version| version.roadRoundingMode == RoadRoundingMode::PeriodTotal));
 }
 
 #[test]

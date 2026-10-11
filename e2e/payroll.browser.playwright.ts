@@ -611,7 +611,9 @@ test('quick attendance uses a floating calendar and confirms dates before applyi
 
   const confirmation = page.getByTestId('bulk-apply-confirmation');
   await expect(confirmation).toBeVisible();
-  await expect(confirmation).toContainText('tüm 5 personelin puantajına');
+  await expect(confirmation).toContainText('5 personelin seçili tarihleri');
+  await expect(confirmation).toContainText('5 gün değiştirilecek');
+  await expect(confirmation).toContainText('Uygulanacak');
   await expect(confirmation).toContainText('İ — Ücretli İzin');
   await expect(confirmation).toContainText(selectedDate.split('-').reverse().join('.'));
   expect(await readStoredSnapshot(page)).toEqual(beforeConfirmation);
@@ -1655,7 +1657,9 @@ test('dönem ortası %6,25 ücret artışı yuvarlamayı korur ve başka modu re
   await sliceRounding.check();
   const actionBar = page.getByTestId('compensation-policy-action-bar');
   await actionBar.getByRole('button', { name: 'Etkileri önizle' }).click();
-  await expect(page.getByText('Yol yuvarlama biçimi dönem ortasında değiştirilemez.')).toBeVisible();
+  const roundingConflict = page.getByRole('heading', { name: 'Yol yuvarlama biçimleri hizmet dönemiyle uyuşmuyor.' });
+  await expect(roundingConflict).toBeVisible();
+  await expect(page.getByRole('alert')).toContainText(effectiveDate);
   expect((await readStoredSnapshot(page))?.compensationPolicyVersions)
     .toEqual(before?.compensationPolicyVersions);
 
