@@ -403,12 +403,9 @@ fn road_modes_must_match_active_projection_but_superseded_flags_are_inert() {
     let baseline = version("base", "2026-01-15", dec!(100), None);
     let mut changed = version("changed", "2026-02-01", dec!(110), None);
     changed.roadRoundingMode = RoadRoundingMode::PeriodTotal;
-    let error = resolve_compensation_segments(
-        "2026-01-15",
-        "2026-02-14",
-        &[baseline.clone(), changed]
-    )
-    .unwrap_err();
+    let error =
+        resolve_compensation_segments("2026-01-15", "2026-02-14", &[baseline.clone(), changed])
+            .unwrap_err();
     let message = error.to_string();
     assert!(message.contains("2026-02-01"));
     assert!(message.contains("base"));
@@ -417,14 +414,11 @@ fn road_modes_must_match_active_projection_but_superseded_flags_are_inert() {
     let issues = find_road_rounding_issues(
         "2026-01-15",
         "2026-02-14",
-        &[
-            baseline.clone(),
-            {
-                let mut active = version("changed", "2026-02-01", dec!(110), None);
-                active.roadRoundingMode = RoadRoundingMode::PeriodTotal;
-                active
-            },
-        ],
+        &[baseline.clone(), {
+            let mut active = version("changed", "2026-02-01", dec!(110), None);
+            active.roadRoundingMode = RoadRoundingMode::PeriodTotal;
+            active
+        }],
     )
     .unwrap();
     assert_eq!(issues.len(), 1);
@@ -457,12 +451,9 @@ fn rounding_mode_change_on_actual_service_period_start_is_valid() {
     let mut at_boundary = version("at-boundary", "2026-01-15", dec!(100), None);
     at_boundary.roadRoundingMode = RoadRoundingMode::PerCompensationSlice;
 
-    let issues = find_road_rounding_issues(
-        "2026-01-15",
-        "2026-02-14",
-        &[previous, at_boundary.clone()],
-    )
-    .unwrap();
+    let issues =
+        find_road_rounding_issues("2026-01-15", "2026-02-14", &[previous, at_boundary.clone()])
+            .unwrap();
     assert!(issues.is_empty());
     let segments = resolve(
         "2026-01-15",

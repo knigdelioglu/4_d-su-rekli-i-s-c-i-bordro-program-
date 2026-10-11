@@ -1304,14 +1304,10 @@ impl CompensationPolicyService {
                 });
             }
         };
-        resolve_compensation_segments(
-            &period.baslangicTarihi,
-            &period.bitisTarihi,
-            &candidate,
-        )
-        .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
-            message: error.to_string(),
-        })?;
+        resolve_compensation_segments(&period.baslangicTarihi, &period.bitisTarihi, &candidate)
+            .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
+                message: error.to_string(),
+            })?;
         let _ = scope;
         Ok(())
     }

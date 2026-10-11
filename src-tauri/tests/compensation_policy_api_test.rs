@@ -20,8 +20,8 @@ use bordro_programi_lib::services::compensation_policy_service::{
     CompensationPolicyService, CompensationPolicyWriteOperation, InitialBaselineConfirmation,
 };
 use bordro_programi_lib::services::payroll_service::PayrollService;
-use rust_decimal_macros::dec;
 use rust_decimal::{Decimal, RoundingStrategy};
+use rust_decimal_macros::dec;
 use std::collections::HashMap;
 
 fn period() -> BordroDonemi {
@@ -88,7 +88,9 @@ fn preview_and_save_policy(
     let operation_date = match &operation {
         CompensationPolicyWriteOperation::InitialBaseline { effectiveFrom, .. }
         | CompensationPolicyWriteOperation::NewEffectiveDate { effectiveFrom, .. }
-        | CompensationPolicyWriteOperation::SameDateCorrection { effectiveFrom, .. } => effectiveFrom.clone(),
+        | CompensationPolicyWriteOperation::SameDateCorrection { effectiveFrom, .. } => {
+            effectiveFrom.clone()
+        }
     };
     let preview = CompensationPolicyService::preview(
         conn,
@@ -102,7 +104,10 @@ fn preview_and_save_policy(
     };
     let baseline_confirmation = match &operation {
         CompensationPolicyWriteOperation::InitialBaseline { effectiveFrom, .. } => {
-            Some(InitialBaselineConfirmation { confirmed: true, effectiveFrom: effectiveFrom.clone() })
+            Some(InitialBaselineConfirmation {
+                confirmed: true,
+                effectiveFrom: effectiveFrom.clone(),
+            })
         }
         _ => None,
     };
@@ -405,7 +410,10 @@ fn native_preview_accepts_full_earning_change_inside_period_when_rounding_mode_i
             operation: policy_change(),
         },
     );
-    assert!(matches!(preview, CompensationPolicyOperationResult::Success { .. }));
+    assert!(matches!(
+        preview,
+        CompensationPolicyOperationResult::Success { .. }
+    ));
 }
 
 #[test]
@@ -413,8 +421,20 @@ fn native_preview_rejects_mid_period_rounding_change_and_load_shows_repair_targe
     let conn = create_in_memory_connection().unwrap();
     PeriodRepository::save(&conn, &period()).unwrap();
     for (id, date, base, mode, parent) in [
-        ("baseline-rounding", "2026-01-15", dec!(100), RoadRoundingMode::PeriodTotal, None),
-        ("conflicting-rounding", "2026-02-01", dec!(110), RoadRoundingMode::PerCompensationSlice, None),
+        (
+            "baseline-rounding",
+            "2026-01-15",
+            dec!(100),
+            RoadRoundingMode::PeriodTotal,
+            None,
+        ),
+        (
+            "conflicting-rounding",
+            "2026-02-01",
+            dec!(110),
+            RoadRoundingMode::PerCompensationSlice,
+            None,
+        ),
     ] {
         CompensationPolicyRepository::insert_version(
             &conn,
@@ -465,14 +485,28 @@ fn native_preview_rejects_mid_period_rounding_change_and_load_shows_repair_targe
         },
     );
     let CompensationPolicyOperationResult::Success { value, .. } = loaded else {
-        panic!("native load must expose the bad records so the operator can correct them: {loaded:?}");
+        panic!(
+            "native load must expose the bad records so the operator can correct them: {loaded:?}"
+        );
     };
     assert_eq!(value.timeline.resolution, "INVALID_ROAD_ROUNDING");
     assert_eq!(value.timeline.roadRoundingIssues.len(), 1);
-    assert_eq!(value.timeline.roadRoundingIssues[0].expected_version_id, "baseline-rounding");
-    assert_eq!(value.timeline.roadRoundingIssues[0].actual_version_id, "conflicting-rounding");
-    assert_eq!(value.timeline.roadRoundingIssues[0].period_start_inclusive, "2026-01-15");
-    assert_eq!(value.timeline.roadRoundingIssues[0].period_end_inclusive, "2026-02-14");
+    assert_eq!(
+        value.timeline.roadRoundingIssues[0].expected_version_id,
+        "baseline-rounding"
+    );
+    assert_eq!(
+        value.timeline.roadRoundingIssues[0].actual_version_id,
+        "conflicting-rounding"
+    );
+    assert_eq!(
+        value.timeline.roadRoundingIssues[0].period_start_inclusive,
+        "2026-01-15"
+    );
+    assert_eq!(
+        value.timeline.roadRoundingIssues[0].period_end_inclusive,
+        "2026-02-14"
+    );
 }
 
 #[test]
@@ -490,7 +524,9 @@ fn native_policy_preview_and_save_cover_four_salary_dates_ten_road_dates_and_cor
     let period_for_date = |date: &str| {
         periods
             .iter()
-            .find(|period| period.baslangicTarihi.as_str() <= date && period.bitisTarihi.as_str() >= date)
+            .find(|period| {
+                period.baslangicTarihi.as_str() <= date && period.bitisTarihi.as_str() >= date
+            })
             .unwrap_or_else(|| panic!("No 15–14 period contains {date}"))
     };
 
@@ -516,8 +552,16 @@ fn native_policy_preview_and_save_cover_four_salary_dates_ten_road_dates_and_cor
         ("2028-09-01", dec!(9.50)),
     ];
     let road_dates = [
-        "2027-03-15", "2027-04-15", "2027-05-15", "2027-06-15", "2027-07-15",
-        "2027-10-15", "2027-11-15", "2028-03-15", "2028-05-15", "2028-07-15",
+        "2027-03-15",
+        "2027-04-15",
+        "2027-05-15",
+        "2027-06-15",
+        "2027-07-15",
+        "2027-10-15",
+        "2027-11-15",
+        "2028-03-15",
+        "2028-05-15",
+        "2028-07-15",
     ];
     let mut actions = salary_raises
         .iter()
@@ -529,8 +573,7 @@ fn native_policy_preview_and_save_cover_four_salary_dates_ten_road_dates_and_cor
     for (date, is_salary_raise, amount) in actions {
         let target_period = period_for_date(date);
         if is_salary_raise {
-            state.gunlukTabanUcret = (state.gunlukTabanUcret
-                * (Decimal::ONE + amount / dec!(100)))
+            state.gunlukTabanUcret = (state.gunlukTabanUcret * (Decimal::ONE + amount / dec!(100)))
                 .round_dp_with_strategy(2, RoundingStrategy::MidpointAwayFromZero);
             let saved = preview_and_save_policy(
                 &conn,
@@ -601,25 +644,54 @@ fn native_policy_preview_and_save_cover_four_salary_dates_ten_road_dates_and_cor
     let timeline = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
     let active = payroll_core::validate_compensation_policy_timeline(&timeline).unwrap();
     assert_eq!(timeline.len(), 17);
-    assert_eq!(active.iter().filter(|version| version.boundaryScope == CompensationBoundaryScope::RoadOnly).count(), 10);
     assert_eq!(
-        active.iter().rev().find(|version| version.effectiveFrom == "2027-02-01").unwrap().state.gunlukTabanUcret,
+        active
+            .iter()
+            .filter(|version| version.boundaryScope == CompensationBoundaryScope::RoadOnly)
+            .count(),
+        10
+    );
+    assert_eq!(
+        active
+            .iter()
+            .rev()
+            .find(|version| version.effectiveFrom == "2027-02-01")
+            .unwrap()
+            .state
+            .gunlukTabanUcret,
         dec!(1071.80)
     );
     assert_eq!(
-        active.iter().find(|version| version.effectiveFrom == "2027-09-01").unwrap().state.gunlukTabanUcret,
+        active
+            .iter()
+            .find(|version| version.effectiveFrom == "2027-09-01")
+            .unwrap()
+            .state
+            .gunlukTabanUcret,
         dec!(1193.45)
     );
     assert_eq!(
-        active.iter().find(|version| version.effectiveFrom == "2028-02-01").unwrap().state.gunlukTabanUcret,
+        active
+            .iter()
+            .find(|version| version.effectiveFrom == "2028-02-01")
+            .unwrap()
+            .state
+            .gunlukTabanUcret,
         dec!(1268.04)
     );
     assert_eq!(
-        active.iter().find(|version| version.effectiveFrom == "2028-09-01").unwrap().state.gunlukTabanUcret,
+        active
+            .iter()
+            .find(|version| version.effectiveFrom == "2028-09-01")
+            .unwrap()
+            .state
+            .gunlukTabanUcret,
         dec!(1388.50)
     );
     assert_eq!(active.last().unwrap().state.gunlukVasitaYol, dec!(76.375));
-    assert!(active.iter().all(|version| version.roadRoundingMode == RoadRoundingMode::PeriodTotal));
+    assert!(active
+        .iter()
+        .all(|version| version.roadRoundingMode == RoadRoundingMode::PeriodTotal));
 }
 
 #[test]
