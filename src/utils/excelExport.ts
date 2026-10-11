@@ -2,14 +2,36 @@
  * 4/D Sürekli İşçi Bordro Programı - Excel Export Utility
  */
 
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { tauriBridge } from '../services/tauriBridge';
 
 export interface ExcelExportColumn {
   header: string;
   key: string;
   width?: number;
+  /** Derives the width from the header and all exported cell values. */
+  autoWidth?: { min?: number; max?: number };
+  /** Persists Excel's wrap-text alignment for values that exceed the column width. */
+  wrapText?: boolean;
   numFmt?: string;
+}
+
+export function calculateExcelColumnWidth(
+  header: string,
+  values: readonly unknown[],
+  bounds: { min?: number; max?: number } = {}
+): number {
+  const min = bounds.min ?? 12;
+  const max = bounds.max ?? 80;
+  const longest = [header, ...values].reduce<number>((width, value) => {
+    const text = value === null || value === undefined ? '' : String(value);
+    const longestLine = text.split(/\r?\n/u).reduce(
+      (lineWidth, line) => Math.max(lineWidth, Array.from(line).length),
+      0
+    );
+    return Math.max(width, longestLine);
+  }, 0);
+  return Math.min(max, Math.max(min, longest + 2));
 }
 
 /**
@@ -50,16 +72,34 @@ export async function exportToExcel<T extends Record<string, any>>(
   const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
 
   columns.forEach((column, columnIndex) => {
-    if (!column.numFmt) return;
     for (let rowIndex = 1; rowIndex < worksheetData.length; rowIndex += 1) {
       const cell = worksheet[XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex })];
-      if (cell && typeof cell.v === 'number') cell.z = column.numFmt;
+      if (!cell) continue;
+      if (column.numFmt && typeof cell.v === 'number') cell.z = column.numFmt;
+      if (column.wrapText && typeof cell.v === 'string') {
+        cell.s = {
+          ...cell.s,
+          alignment: {
+            ...cell.s?.alignment,
+            vertical: 'top',
+            wrapText: true,
+          },
+        };
+      }
     }
   });
 
-  // Set column widths
-  worksheet['!cols'] = columns.map((col) => ({
-    wch: col.width || Math.max(col.header.length + 5, 15),
+  // Set fixed widths where requested and derive content-aware widths for
+  // columns such as bank recipient names. Array.from counts Turkish Unicode
+  // code points instead of UTF-16 code units.
+  worksheet['!cols'] = columns.map((col, columnIndex) => ({
+    wch: col.autoWidth
+      ? calculateExcelColumnWidth(
+          col.header,
+          worksheetData.slice(1).map((row) => row[columnIndex]),
+          col.autoWidth
+        )
+      : col.width || Math.max(Array.from(col.header).length + 5, 15),
   }));
 
   const workbook = XLSX.utils.book_new();
@@ -69,7 +109,7 @@ export async function exportToExcel<T extends Record<string, any>>(
   await new Promise((resolve) => setTimeout(resolve, 0));
 
   if (typeof document !== 'undefined') {
-    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array', cellStyles: true });
     if (tauriBridge.isTauriAvailable()) {
       const excelBytes = Array.from(new Uint8Array(excelBuffer));
       return tauriBridge.exportExcel(excelBytes, `${fileName}.xlsx`);

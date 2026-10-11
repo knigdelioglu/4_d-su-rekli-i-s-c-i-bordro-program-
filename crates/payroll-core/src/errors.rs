@@ -14,6 +14,10 @@ pub enum DomainError {
     #[error("Kayıt bulunamadı: {0}")]
     NotFound(String),
 
+    #[serde(rename = "DUPLICATE_TC_NO")]
+    #[error("{0}")]
+    DuplicateTcNo(String),
+
     #[error("Bordro kesinleştirilmiş: {0}")]
     PayrollFinalized(String),
 

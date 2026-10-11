@@ -37,6 +37,7 @@ pub fn save_personnel_and_tax_opening(
             "Personel ile vergi opening aynı personel kimliğini taşımalıdır.".into(),
         ));
     }
+    let personel = PersonnelRepository::prepare_for_registration(&personel)?;
     let mut conn = db.lock().map_err(|e| {
         DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {e}"))
     })?;

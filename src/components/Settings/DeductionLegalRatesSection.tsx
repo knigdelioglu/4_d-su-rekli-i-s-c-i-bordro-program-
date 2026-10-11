@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { Award, Percent, Plus, Save, ShieldAlert, Trash2, Check } from 'lucide-react';
-import type { BordroDonemi, PayrollPeriodInstitutionSettings } from '../../types/payroll';
+import type {
+  AnnualPayrollParameters,
+  BordroDonemi,
+  PayrollPeriodInstitutionSettings,
+  StatutoryParameterSnapshot,
+} from '../../types/payroll';
 import { formatDateTR, formatTL } from '../../utils/payrollPresentation';
 
 type StatutoryField =
@@ -25,6 +30,7 @@ export const applySendikaAidatiYontemi = (
 interface DeductionLegalRatesSectionProps {
   aktifDonemId: string;
   activePeriodForParams?: BordroDonemi;
+  annualPayrollParameters?: AnnualPayrollParameters[];
   paramsForm: PayrollPeriodInstitutionSettings;
   setParamsForm: React.Dispatch<React.SetStateAction<PayrollPeriodInstitutionSettings>>;
   savedSuccess: boolean;
@@ -34,6 +40,7 @@ interface DeductionLegalRatesSectionProps {
 export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProps> = ({
   aktifDonemId,
   activePeriodForParams,
+  annualPayrollParameters = [],
   paramsForm,
   setParamsForm,
   savedSuccess,
@@ -111,6 +118,17 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
   };
 
   const segments = paramsForm.statutoryParameterSegments || [];
+  const statutorySnapshot: StatutoryParameterSnapshot | undefined =
+    paramsForm.statutoryParameterSnapshot;
+  const taxYear = activePeriodForParams?.taxYear;
+  const taxMonth = activePeriodForParams?.taxMonth;
+  const savedAnnualParameters = taxYear === undefined
+    ? undefined
+    : annualPayrollParameters.find((parameters) => parameters.year === taxYear);
+  const serviceYear = activePeriodForParams?.yil ?? Number(aktifDonemId.slice(0, 4));
+  const formatAmount = (value: number | undefined) =>
+    value === undefined ? 'kayıtlı değil' : formatTL(value);
+  const sourceSegments = statutorySnapshot?.statutoryParameterSegments ?? segments;
 
   return (
     <section data-testid="period-settings-kesinti" className="space-y-5">
@@ -156,7 +174,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Yasal Standart: %14 (SGK Matrahı üzerinden)
+                Dönem oranı girdisi: %{paramsForm.sgkIsciOraniYuzde ?? 'kayıtlı değil'}. Kaynak doğrulaması bu kayda bağlı değildir.
               </span>
             </div>
 
@@ -172,7 +190,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Yasal Standart: %1 (SGK Matrahı üzerinden)
+                Dönem oranı girdisi: %{paramsForm.issizlikIsciOraniYuzde ?? 'kayıtlı değil'}. Kaynak doğrulaması bu kayda bağlı değildir.
               </span>
             </div>
 
@@ -200,7 +218,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Yasal Standart: 7.59 ‰ (%0.759 Brüt Toplam üzerinden)
+                Dönem oranı girdisi: {paramsForm.damgaVergisiOraniBinde ?? 'kayıtlı değil'} ‰. Kaynak doğrulaması bu kayda bağlı değildir.
               </span>
             </div>
 
@@ -216,7 +234,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Yasal Standart: %21,75 (PEK Matrahı üzerinden işveren payı)
+                Dönem oranı girdisi: %{paramsForm.sgkIsverenOraniYuzde ?? 'kayıtlı değil'}. Kaynak doğrulaması bu kayda bağlı değildir.
               </span>
             </div>
 
@@ -232,7 +250,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono font-bold focus:ring-2 focus:ring-rose-500"
               />
               <span className="text-[11px] text-slate-500 mt-0.5 block">
-                Yasal Standart: %2,00 (PEK Matrahı üzerinden işveren payı)
+                Dönem oranı girdisi: %{paramsForm.issizlikIsverenOraniYuzde ?? 'kayıtlı değil'}. Kaynak doğrulaması bu kayda bağlı değildir.
               </span>
             </div>
           </div>
@@ -381,8 +399,70 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
 
           <div className="pt-4 border-t border-slate-200">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3">
-              SGK Prime Esas Kazanç (PEK) Parametreleri (2026)
+              SGK Prime Esas Kazanç (PEK) Parametreleri — Hizmet dönemi {serviceYear}
             </h3>
+            <div
+              data-testid="statutory-parameter-context"
+              className="mb-4 rounded-lg border border-slate-200 bg-white p-3 text-[11px] leading-relaxed text-slate-700"
+            >
+              <p>
+                <strong>Hizmet dönemi:</strong>{' '}
+                {activePeriodForParams
+                  ? `${activePeriodForParams.id} (${activePeriodForParams.baslangicTarihi}–${activePeriodForParams.bitisTarihi})`
+                  : aktifDonemId}
+                {' · '}
+                <strong>Ödeme/vergi dönemi:</strong>{' '}
+                {taxYear === undefined
+                  ? 'dönem kaydı yok'
+                  : `${taxYear}-${String(taxMonth ?? 0).padStart(2, '0')} (${taxYear} vergi yılı)`}
+              </p>
+              {statutorySnapshot ? (
+                <>
+                  <p className="mt-1 font-semibold text-indigo-800">
+                    Bordro motoru kayıtlı dönem yasal parametre snapshot’ını kullanıyor. Alttaki girişler dönem ayarlarıdır; snapshot değerleri değişmez.
+                  </p>
+                  <div data-testid="statutory-engine-snapshot" className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                    <span>Snapshot günlük asgari ücret: {formatAmount(statutorySnapshot.gunlukAsgariUcret)}</span>
+                    <span>Snapshot PEK tavan katsayısı: {statutorySnapshot.pekTavanKatsayisi}</span>
+                    <span>Snapshot SGK yemek istisnası: {formatAmount(statutorySnapshot.gunlukYemekIstisnasiSGK)} / gün</span>
+                    <span>Snapshot GV yemek istisnası: {formatAmount(statutorySnapshot.gunlukYemekIstisnasiGV)} / gün</span>
+                    <span>Snapshot SGK işçi primi: %{statutorySnapshot.sgkIsciOraniYuzde ?? 'kayıtlı değil'}</span>
+                    <span>Snapshot işsizlik işçi primi: %{statutorySnapshot.issizlikIsciOraniYuzde ?? 'kayıtlı değil'}</span>
+                  </div>
+                  {sourceSegments.length > 0 && (
+                    <ul className="mt-2 list-disc pl-4">
+                      {sourceSegments.map((segment, index) => (
+                        <li key={`${segment.effectiveFrom}-${index}`}>
+                          {segment.effectiveFrom} yürürlük: günlük asgari ücret {formatAmount(segment.gunlukAsgariUcret)}, PEK katsayısı {segment.pekTavanKatsayisi ?? 'değişmiyor'}, SGK yemek {formatAmount(segment.gunlukYemekIstisnasiSGK)}, GV yemek {formatAmount(segment.gunlukYemekIstisnasiGV)}.
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <p className="mt-1 text-amber-800">
+                    Bu snapshot’ta mevzuat yayını, kaynak bağlantısı veya sürüm bilgisi kayıtlı değil.
+                  </p>
+                </>
+              ) : (
+                <p className="mt-1 font-semibold text-amber-800">
+                  Kayıtlı yasal snapshot yok; bordro motoru dönem ayarları ve dönem içi segmentleri kullanır. Bu girdilerin mevzuat kaynağı ve sürümü kayıtlı olmadığından doğrulanmış yasal değer olarak gösterilmez.
+                </p>
+              )}
+              <p className="mt-2">
+                {taxYear === undefined ? (
+                  'Ödeme/vergi yılı belirlenemediği için yıllık gelir vergisi parametre durumu gösterilemiyor.'
+                ) : savedAnnualParameters ? (
+                  <>
+                    {taxYear} vergi yılı gelir vergisi parametre kaydı mevcut
+                    {savedAnnualParameters.updatedAt
+                      ? `; son güncelleme ${savedAnnualParameters.updatedAt}`
+                      : '; kayıtlı güncelleme tarihi yok'}.
+                    {' '}Mevzuat yayın kaynağı bu kayıtta tutulmuyor.
+                  </>
+                ) : (
+                  <strong>{taxYear} vergi yılı gelir vergisi parametre kaydı bulunmuyor; bordro motoru bu yıl için tarife bulamaz.</strong>
+                )}
+              </p>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -396,7 +476,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
                 />
                 <span className="text-[11px] text-slate-500 mt-0.5 block">
-                  2026-08 dönemi için 300,00 TL (17.04.2026 sonrası)
+                  Dönem ayarı girdisi: {formatAmount(paramsForm.gunlukYemekIstisnasiSGK)} / gün. Kaynak doğrulaması bu kayda bağlı değildir.
                 </span>
               </div>
 
@@ -418,7 +498,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  PEK Tavan Katsayısı (2026)
+                  PEK Tavan Katsayısı
                 </label>
                 <input
                   type="number"
@@ -428,7 +508,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
                 />
                 <span className="text-[11px] text-slate-500 mt-0.5 block">
-                  2026 için tavan katsayısı: 9
+                  Dönem ayarı katsayısı: {paramsForm.pekTavanKatsayisi ?? 'kayıtlı değil'}. Mevzuat kaynağı bu kayda bağlı değildir.
                 </span>
               </div>
 
@@ -444,7 +524,7 @@ export const DeductionLegalRatesSection: React.FC<DeductionLegalRatesSectionProp
                   className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-900 font-mono focus:ring-2 focus:ring-indigo-500"
                 />
                 <span className="text-[11px] text-slate-500 mt-0.5 block">
-                  PEK Alt Sınırı = 1.101,00 TL (30 gün = 33.030 TL)
+                  Dönem ayarı günlük tutarı: {formatAmount(paramsForm.gunlukAsgariUcret)}. Mevzuat kaynağı bu kayda bağlı değildir.
                 </span>
               </div>
             </div>

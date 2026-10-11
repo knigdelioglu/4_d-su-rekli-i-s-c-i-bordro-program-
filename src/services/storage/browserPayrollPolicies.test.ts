@@ -174,6 +174,35 @@ describe('personnelHasFinancialChanges', () => {
     expect(personnelHasFinancialChanges(baseline, { ...baseline, kesintiler: { ...k, gvIndirimleri: { ...k.gvIndirimleri, hayatSigortasiPrimiTutar: 20 } } })).toBe(true);
     expect(personnelHasFinancialChanges(baseline, { ...baseline, kesintiler: { ...k, gvIndirimleri: { ...k.gvIndirimleri, saglikSigortasiPrimiTutar: 30 } } })).toBe(true);
   });
+
+  test('treats an enforcement change as financial and invalidates mutable payroll and retro dependencies', () => {
+    const changed = {
+      ...baseline,
+      kesintiler: { ...baseline.kesintiler, icraTutar: 125.5 },
+    };
+    expect(personnelHasFinancialChanges(baseline, changed)).toBe(true);
+
+    const impact = {
+      affectedPayrolls: [
+        { personnelId: 'person-1', periodId: '2028-01' },
+        { personnelId: 'person-1', periodId: '2028-02' },
+      ],
+      blockedByFinalized: [],
+      affectedRetroBatches: ['retro-calculated', 'retro-finalized'],
+      blockedByFinalizedRetroBatches: [],
+    };
+    const payrolls = applyBrowserPayrollImpact([
+      payroll('2028-01', 'CALCULATED'),
+      payroll('2028-02', 'FINALIZED'),
+    ], impact);
+    const retroBatches = applyBrowserRetroBatchImpact([
+      { id: 'retro-calculated', status: 'CALCULATED' },
+      { id: 'retro-finalized', status: 'FINALIZED' },
+    ], impact);
+
+    expect(payrolls.map((item) => item.status)).toEqual(['STALE', 'FINALIZED']);
+    expect(retroBatches.map((item) => item.status)).toEqual(['STALE', 'FINALIZED']);
+  });
 });
 
 describe('taxOpeningHasFinancialChanges', () => {

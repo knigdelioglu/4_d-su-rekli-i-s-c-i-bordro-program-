@@ -64,7 +64,7 @@ mod smoke_tests {
                 grup: "1. Grup".to_string(),
                 unvan: Some("1. Grup (%9 İş Primi)".to_string()),
                 sgkSicilNo: "48201938201".to_string(),
-                iban: "TR120006200000012345678901".to_string(),
+                iban: "TR330006100519786457841326".to_string(),
                 hizmetYili: 5,
                 aciklama: Some("Destek Hizmetleri".to_string()),
                 devirKumulatifGvMatrahi: None,

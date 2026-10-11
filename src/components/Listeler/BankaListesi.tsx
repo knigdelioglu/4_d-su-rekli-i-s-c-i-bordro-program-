@@ -6,7 +6,7 @@ import React, { useState } from 'react';
 import { Building2, Download, Printer, Copy, Check, Search } from 'lucide-react';
 import { BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
 import { formatTL } from '../../utils/payrollPresentation';
-import { exportToExcel, printElement } from '../../utils/excelExport';
+import { exportToExcel, printElement, type ExcelExportColumn } from '../../utils/excelExport';
 import {
   AuthoritativeAccrualRow,
   filterAccrualRowsByPaymentDate,
@@ -20,6 +20,40 @@ interface BankaListesiProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   bordrolar: BordroKaydi[];
+}
+
+export const BANKA_EXCEL_COLUMNS: ExcelExportColumn[] = [
+  { header: 'T.C. Kimlik No', key: 'tcNo', width: 18 },
+  { header: 'Ad Soyad', key: 'adSoyad', autoWidth: { min: 26, max: 80 }, wrapText: true },
+  { header: 'İş Primi Grubu', key: 'unvan', width: 22 },
+  { header: 'IBAN', key: 'iban', width: 32 },
+  { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
+  { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
+  { header: 'Net Ödeme (TL)', key: 'netOdeme', width: 18, numFmt: '#,##0.00' },
+];
+
+export function buildBankaExcelRows(entries: readonly AuthoritativeAccrualRow[]) {
+  return entries.map((entry) => ({
+    tcNo: entry.personel.tcNo,
+    adSoyad: `${entry.personel.ad} ${entry.personel.soyad}`,
+    unvan: (entry.personel.grup || entry.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, ''),
+    iban: entry.personel.iban,
+    paymentDate: entry.paymentDate,
+    accrualType: entry.accrualTypeLabel,
+    netOdeme: entry.bordro.netOdeme,
+  }));
+}
+
+export function buildBankaExcelSummary(total: number) {
+  return [{
+    tcNo: 'TOPLAM',
+    adSoyad: '',
+    unvan: '',
+    iban: '',
+    paymentDate: '',
+    accrualType: '',
+    netOdeme: total,
+  }];
 }
 
 export const BankaListesi: React.FC<BankaListesiProps> = ({
@@ -47,44 +81,15 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
   );
 
   const handleExportExcel = () => {
-    const cols = [
-      { header: 'T.C. Kimlik No', key: 'tcNo', width: 18 },
-      { header: 'Ad Soyad', key: 'adSoyad', width: 26 },
-      { header: 'İş Primi Grubu', key: 'unvan', width: 22 },
-      { header: 'IBAN', key: 'iban', width: 32 },
-      { header: 'Ödeme Tarihi', key: 'paymentDate', width: 16 },
-      { header: 'Tahakkuk Türü', key: 'accrualType', width: 18 },
-      { header: 'Net Ödeme (TL)', key: 'netOdeme', width: 18, numFmt: '#,##0.00' },
-    ];
-
-    const data = filteredEntries.map((e) => ({
-      tcNo: e.personel.tcNo,
-      adSoyad: `${e.personel.ad} ${e.personel.soyad}`,
-      unvan: (e.personel.grup || e.personel.unvan || '1. Grup').replace(/\s*\(.*?\)/, ''),
-      iban: e.personel.iban,
-      paymentDate: e.paymentDate,
-      accrualType: e.accrualTypeLabel,
-      netOdeme: e.bordro.netOdeme,
-    }));
-
-    const summaryRows = [
-      {
-        tcNo: 'TOPLAM',
-        adSoyad: '',
-        unvan: '',
-        iban: '',
-        paymentDate: '',
-        accrualType: '',
-        netOdeme: toplamBankaOdemesi,
-      },
-    ];
+    const data = buildBankaExcelRows(filteredEntries);
+    const summaryRows = buildBankaExcelSummary(toplamBankaOdemesi);
 
     const dateSuffix = paymentDateFilter === 'all' ? 'Tumu' : paymentDateFilter;
 
     exportToExcel(
       `Banka_Odeme_Listesi_${aktifDonem.id}_${dateSuffix}`,
       'Banka Listesi',
-      cols,
+      BANKA_EXCEL_COLUMNS,
       data,
       summaryRows
     );
@@ -229,7 +234,7 @@ export const BankaListesi: React.FC<BankaListesiProps> = ({
                 <tr key={`${e.personel.id}-${e.accrualId}`} className="hover:bg-slate-50/80">
                   <td className="p-3 text-slate-400 font-sans">{index + 1}</td>
                   <td className="p-3 font-bold text-slate-900">{e.personel.tcNo}</td>
-                  <td className="p-3 font-sans font-bold text-slate-900">
+                  <td className="p-3 font-sans font-bold text-slate-900 break-words whitespace-normal [overflow-wrap:anywhere]">
                     {e.personel.ad} {e.personel.soyad}
                   </td>
                   <td className="p-3 font-sans font-semibold text-slate-800">

@@ -58,6 +58,10 @@ import {
   syncPuantajForSickLeaveSave,
 } from '../utils/sickLeaveSync';
 import { createPuantajBulkPlan, type PuantajBulkCommitIntent } from '../utils/puantajBulkPlan';
+import {
+  assertUniqueTcNo,
+  preparePersonnelForSave,
+} from '../utils/personnelValidation';
 
 export interface PayrollMutationControllerOptions {
   isNative: boolean;
@@ -323,23 +327,59 @@ export function usePayrollMutationController({
   };
 
   const handleSavePersonel = async (newPersonel: Personel | PayrollBoundaryPersonel) => {
+    const preparedPersonel = preparePersonnelForSave(newPersonel);
     if (isNative) {
-      await tauriBridge.savePersonnel(toPayrollBoundaryDto(newPersonel) as unknown as Personel);
+      await tauriBridge.savePersonnel(toPayrollBoundaryDto(preparedPersonel) as unknown as Personel);
       await loadData();
       return;
     }
-    const existing = authoritativePayload.personeller.find((person) => person.id === newPersonel.id);
+
+    if (!authoritativePayload) throw new Error('Personel kaydedilemedi: yetkili veri snapshotı bulunamadı.');
+    assertUniqueTcNo(authoritativePayload.personeller, preparedPersonel);
+    if (commitAuthoritativePayload) {
+      await commitAuthoritativePayload(async (current) => {
+        assertUniqueTcNo(current.personeller, preparedPersonel);
+        const existing = current.personeller.find((person) => person.id === preparedPersonel.id);
+        const hasFinancialChange =
+          !existing || personnelHasFinancialChanges(existing, preparedPersonel as Personel);
+        const impact = hasFinancialChange
+          ? await evaluateBrowserMutations(
+              { kind: 'PERSON', personnelId: preparedPersonel.id },
+              payrollDatasetFromPayload(current)
+            )
+          : undefined;
+        const existingInCurrent = current.personeller.find((person) => person.id === preparedPersonel.id);
+        const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, preparedPersonel);
+        const personeller = existingInCurrent
+          ? current.personeller.map((person) =>
+              person.id === preparedPersonel.id ? exactPersonel : person
+            )
+          : [...current.personeller, exactPersonel];
+        return {
+          ...current,
+          personeller,
+          bordrolar: impact ? applyBrowserPayrollImpact(current.bordrolar, impact) : current.bordrolar,
+          retroBatches: impact
+            ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact)
+            : current.retroBatches,
+        };
+      });
+      return;
+    }
+
+    const existing = authoritativePayload.personeller.find((person) => person.id === preparedPersonel.id);
     const hasFinancialChange =
-      !existing || personnelHasFinancialChanges(existing, newPersonel as Personel);
+      !existing || personnelHasFinancialChanges(existing, preparedPersonel as Personel);
     const impact = hasFinancialChange
-      ? await evaluateBrowserMutations({ kind: 'PERSON', personnelId: newPersonel.id })
+      ? await evaluateBrowserMutations({ kind: 'PERSON', personnelId: preparedPersonel.id })
       : undefined;
     updateAuthoritativePayload((current) => {
-      const existingInCurrent = current.personeller.find((person) => person.id === newPersonel.id);
-      const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, newPersonel);
+      assertUniqueTcNo(current.personeller, preparedPersonel);
+      const existingInCurrent = current.personeller.find((person) => person.id === preparedPersonel.id);
+      const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, preparedPersonel);
       const personeller = existingInCurrent
         ? current.personeller.map((person) =>
-            person.id === newPersonel.id ? exactPersonel : person
+            person.id === preparedPersonel.id ? exactPersonel : person
           )
         : [...current.personeller, exactPersonel];
       return {
@@ -355,25 +395,81 @@ export function usePayrollMutationController({
     newPersonel: Personel | PayrollBoundaryPersonel,
     opening: PersonelTaxOpening | PayrollBoundaryTaxOpening
   ) => {
-    if (newPersonel.id !== opening.personnelId) {
+    const preparedPersonel = preparePersonnelForSave(newPersonel);
+    if (preparedPersonel.id !== opening.personnelId) {
       throw new Error('Personel ile vergi opening aynı personel kimliğini taşımalıdır.');
     }
-    // Validate the complete pair before evaluating or scheduling the single
-    // authoritative snapshot update. This keeps a malformed composite input
-    // from reaching either persistence adapter.
-    mergeBrowserTaxOpening(authoritativePayload.taxOpenings, opening);
     if (isNative) {
       await tauriBridge.savePersonnelAndTaxOpening(
-        toPayrollBoundaryDto(newPersonel) as unknown as Personel,
+        toPayrollBoundaryDto(preparedPersonel) as unknown as Personel,
         toPayrollBoundaryDto(opening) as unknown as PersonelTaxOpening
       );
       await loadData();
       return;
     }
 
-    const existingPersonel = authoritativePayload.personeller.find((person) => person.id === newPersonel.id);
+    if (!authoritativePayload) {
+      throw new Error('Personel kaydedilemedi: yetkili veri snapshotı bulunamadı.');
+    }
+
+    if (commitAuthoritativePayload) {
+      await commitAuthoritativePayload(async (current) => {
+        assertUniqueTcNo(current.personeller, preparedPersonel);
+        mergeBrowserTaxOpening(current.taxOpenings, opening);
+
+        const existingPersonel = current.personeller.find(
+          (person) => person.id === preparedPersonel.id
+        );
+        const personHasFinancialChange =
+          !existingPersonel || personnelHasFinancialChanges(existingPersonel, preparedPersonel as Personel);
+        const existingOpening = current.taxOpenings?.find(
+          (item) => item.personnelId === opening.personnelId && item.year === opening.year
+        );
+        const openingHasFinancialChange = taxOpeningHasFinancialChanges(
+          existingOpening,
+          opening as PersonelTaxOpening
+        );
+        const mutations: PayrollMutation[] = [];
+        if (personHasFinancialChange) {
+          mutations.push({ kind: 'PERSON', personnelId: preparedPersonel.id });
+        }
+        if (openingHasFinancialChange) {
+          mutations.push({
+            kind: 'PERSON_TAX_YEAR',
+            personnelId: opening.personnelId,
+            taxYear: opening.year,
+          });
+        }
+        const impact = mutations.length
+          ? await evaluateBrowserMutations(mutations, payrollDatasetFromPayload(current))
+          : undefined;
+        const existingInCurrent = current.personeller.find(
+          (person) => person.id === preparedPersonel.id
+        );
+        const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, preparedPersonel);
+        const personeller = existingInCurrent
+          ? current.personeller.map((person) =>
+              person.id === preparedPersonel.id ? exactPersonel : person
+            )
+          : [...current.personeller, exactPersonel];
+        return {
+          ...current,
+          personeller,
+          taxOpenings: mergeBrowserTaxOpening(current.taxOpenings, opening),
+          bordrolar: impact ? applyBrowserPayrollImpact(current.bordrolar, impact) : current.bordrolar,
+          retroBatches: impact
+            ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact)
+            : current.retroBatches,
+        };
+      });
+      return;
+    }
+
+    assertUniqueTcNo(authoritativePayload.personeller, preparedPersonel);
+    mergeBrowserTaxOpening(authoritativePayload.taxOpenings, opening);
+    const existingPersonel = authoritativePayload.personeller.find((person) => person.id === preparedPersonel.id);
     const personHasFinancialChange =
-      !existingPersonel || personnelHasFinancialChanges(existingPersonel, newPersonel as Personel);
+      !existingPersonel || personnelHasFinancialChanges(existingPersonel, preparedPersonel as Personel);
 
     const existingOpening = authoritativePayload.taxOpenings?.find(
       (o) => o.personnelId === opening.personnelId && o.year === opening.year
@@ -397,11 +493,13 @@ export function usePayrollMutationController({
 
     const impact = mutations.length > 0 ? await evaluateBrowserMutations(mutations) : undefined;
     updateAuthoritativePayload((current) => {
-      const existingInCurrent = current.personeller.find((person) => person.id === newPersonel.id);
-      const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, newPersonel);
+      assertUniqueTcNo(current.personeller, preparedPersonel);
+      mergeBrowserTaxOpening(current.taxOpenings, opening);
+      const existingInCurrent = current.personeller.find((person) => person.id === preparedPersonel.id);
+      const exactPersonel = mergePayrollUiIntoBoundary(existingInCurrent, preparedPersonel);
       const personeller = existingInCurrent
         ? current.personeller.map((person) =>
-            person.id === newPersonel.id ? exactPersonel : person
+            person.id === preparedPersonel.id ? exactPersonel : person
           )
         : [...current.personeller, exactPersonel];
       return {

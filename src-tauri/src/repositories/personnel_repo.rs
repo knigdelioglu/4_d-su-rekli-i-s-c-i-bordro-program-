@@ -67,11 +67,43 @@ const GV_DEDUCTION_COLUMNS: [&str; 3] = [
     "saglik_sigortasi_gv_prim_tutar",
 ];
 
+fn personnel_write_error(error: rusqlite::Error) -> crate::domain::DomainError {
+    let is_tc_no_unique = match &error {
+        rusqlite::Error::SqliteFailure(code, Some(message)) => {
+            code.code == rusqlite::ErrorCode::ConstraintViolation
+                && code.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE
+                && message
+                    .strip_prefix("UNIQUE constraint failed: ")
+                    .is_some_and(|columns| columns == "personnel.tc_no")
+        }
+        _ => false,
+    };
+    if is_tc_no_unique {
+        crate::domain::DomainError::DuplicateTcNo(
+            "Bu T.C. kimlik numarasıyla kayıtlı bir personel zaten bulunuyor. Lütfen numarayı kontrol edin."
+                .into(),
+        )
+    } else {
+        crate::domain::DomainError::DatabaseError(error.to_string())
+    }
+}
+
 pub struct PersonnelRepository;
 
 impl PersonnelRepository {
     fn validate(personel: &Personel) -> Result<()> {
         payroll_core::validate_personnel_for_payroll(personel)
+    }
+
+    /// Validates and normalizes data submitted through a person-registration API.
+    /// Legacy snapshot/backup restoration uses `save_in_transaction` directly
+    /// so old invalid IBANs remain readable and recoverable.
+    pub fn prepare_for_registration(personel: &Personel) -> Result<Personel> {
+        let mut prepared = personel.clone();
+        prepared.tcNo = prepared.tcNo.trim().to_string();
+        prepared.iban = payroll_core::normalize_turkish_iban(&prepared.iban)?;
+        Self::validate(&prepared)?;
+        Ok(prepared)
     }
 
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Personel> {
@@ -326,6 +358,7 @@ impl PersonnelRepository {
     }
 
     pub fn save(conn: &Connection, p: &Personel) -> Result<()> {
+        let prepared = Self::prepare_for_registration(p)?;
         with_transaction(conn, |tx| {
             let existing = tx
                 .query_row(
@@ -349,7 +382,7 @@ impl PersonnelRepository {
                 })
                 .transpose()?;
 
-            Self::save_in_transaction(tx, p)?;
+            Self::save_in_transaction(tx, &prepared)?;
             if let Some(impact) = impact {
                 PayrollInvalidationRepository::apply_impact(tx, &impact)?;
             }
@@ -426,7 +459,7 @@ impl PersonnelRepository {
                     icra, kisi_borcu, dogum, hayat, diger, now, now
                 ],
             )
-            .map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+            .map_err(personnel_write_error)?;
             return Ok(());
         }
 
@@ -457,7 +490,7 @@ impl PersonnelRepository {
                 p.devirKumulatifAsgariGvMatrahiYili, sendika_uyesi, sabit_sendika, bes_uyesi, oks_orani, sabit_bes,
                 icra, kisi_borcu, dogum, hayat, diger, dogum_gv_indirim, hayat_gv_prim, saglik_gv_prim, nafaka, now, now
             ],
-        ).map_err(|e| crate::domain::DomainError::DatabaseError(e.to_string()))?;
+        ).map_err(personnel_write_error)?;
 
         Ok(())
     }

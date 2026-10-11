@@ -477,6 +477,80 @@ async function loadSampleDataset(page: Page): Promise<void> {
   await installCalculableFixture(page);
 }
 
+test('browser personel form rejects invalid IBAN and deductions, reports duplicate T.C., then persists normalized inputs', async ({ page }) => {
+  await page.goto('/');
+  await loadSampleDataset(page);
+  const loadedPayload = await readStoredPayload(page);
+  const loaded = JSON.parse(loadedPayload!) as {
+    personeller: Array<{ iban: string }>;
+  };
+  loaded.personeller[0].iban = 'TR';
+  await writeStoredPayload(page, JSON.stringify(loaded));
+  await page.reload();
+  await page.getByTestId('nav-personel').click();
+  await page.getByRole('heading', { name: 'Ahmet Yılmaz' }).click();
+  await expect(page.getByText(/Türk IBAN’ı 26 karakter olmalı/)).toBeVisible();
+  await expect(page.getByPlaceholder('TR00 0000 0000 0000 0000 0000 00')).toHaveAttribute('aria-invalid', 'true');
+  await page.getByTitle('Kapat').click();
+
+  const initialPayload = await readStoredPayload(page);
+  const initial = JSON.parse(initialPayload!) as {
+    personeller: Array<{ tcNo: string }>;
+  };
+  const duplicateTcNo = initial.personeller[0].tcNo;
+
+  await page.getByRole('button', { name: 'Yeni Personel Ekle' }).click();
+  const modalHeading = page.getByRole('heading', { name: 'Yeni Personel Ekle' });
+  await expect(modalHeading).toBeVisible();
+  await page.getByPlaceholder('11 Haneli T.C. No').fill(duplicateTcNo);
+  await page.getByPlaceholder('Örn: Ahmet').fill('UAT Deneme');
+  await page.getByPlaceholder('Örn: Yılmaz').fill('Personel');
+  await page.getByRole('button', { name: 'Kaydet', exact: true }).click();
+  await expect(page.getByText(/Türk IBAN’ı 26 karakter olmalı/)).toBeVisible();
+  await expect(page.getByPlaceholder('TR00 0000 0000 0000 0000 0000 00')).toHaveAttribute('aria-invalid', 'true');
+  await expect(modalHeading).toBeVisible();
+  expect(await readStoredPayload(page)).toBe(initialPayload);
+
+  await page.getByPlaceholder('TR00 0000 0000 0000 0000 0000 00').fill('TR 33 0006 1005 1978 6457 8413 26');
+  await page.getByTestId('personel-form-tab-deductions').click();
+  // The first visible fixed-amount input in the deductions tab is enforcement.
+  const enforcementInput = page.getByPlaceholder('0.00').first();
+  for (const invalid of ['-1', '-0.01', 'abc']) {
+    await enforcementInput.fill(invalid);
+    await expect(enforcementInput).toHaveValue(invalid);
+    await expect(page.getByText(/Kesinti tutarı negatif olamaz|Tutar geçerli bir sayı olmalı/)).toBeVisible();
+    await page.getByRole('button', { name: 'Kaydet', exact: true }).click();
+    await expect(modalHeading).toBeVisible();
+    expect(await readStoredPayload(page)).toBe(initialPayload);
+  }
+  await enforcementInput.fill('');
+  await expect(page.getByText(/Kesinti tutarı negatif olamaz|Tutar geçerli bir sayı olmalı/)).toHaveCount(0);
+  await enforcementInput.fill('0.01');
+  await expect(page.getByText(/Kesinti tutarı negatif olamaz|Tutar geçerli bir sayı olmalı/)).toHaveCount(0);
+
+  await page.getByTestId('personel-form-tab-basic').click();
+  await page.getByRole('button', { name: 'Kaydet', exact: true }).click();
+  await expect(page.getByText(/Bu T.C. kimlik numarasıyla kayıtlı bir personel zaten bulunuyor/)).toBeVisible();
+  await expect(page.getByPlaceholder('11 Haneli T.C. No')).toHaveAttribute('aria-invalid', 'true');
+  await expect(modalHeading).toBeVisible();
+  expect(await readStoredPayload(page)).toBe(initialPayload);
+
+  await page.getByPlaceholder('11 Haneli T.C. No').fill('23456789012');
+  await page.getByRole('button', { name: 'Kaydet', exact: true }).click();
+  await expect(modalHeading).toHaveCount(0);
+  const saved = JSON.parse((await readStoredPayload(page))!) as {
+    personeller: Array<{ tcNo: string; iban: string; kesintiler: { icraTutar: string } }>;
+  };
+  const added = saved.personeller.find((person) => person.tcNo === '23456789012');
+  expect(added?.iban).toBe('TR330006100519786457841326');
+  expect(added?.kesintiler.icraTutar).toBe('0.01');
+
+  await page.reload();
+  const reopened = JSON.parse((await readStoredPayload(page))!) as typeof saved;
+  expect(reopened.personeller.find((person) => person.tcNo === '23456789012'))
+    .toMatchObject({ iban: 'TR330006100519786457841326', kesintiler: { icraTutar: '0.01' } });
+});
+
 async function openPayrollScreen(page: Page): Promise<string> {
   await page.getByTestId('nav-bordro').click();
   const screen = page.getByTestId('payroll-screen');

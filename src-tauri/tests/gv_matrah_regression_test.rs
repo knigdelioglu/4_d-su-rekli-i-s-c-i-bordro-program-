@@ -64,7 +64,7 @@ fn july_2026_gv_matrah_applies_meal_exemption_and_union_due(
         grup: "3. Grup".into(),
         unvan: Some("İşçi".into()),
         sgkSicilNo: "12345".into(),
-        iban: "TR000000000000000000000000".into(),
+        iban: "TR330006100519786457841326".into(),
         hizmetYili: 8,
         aciklama: None,
         devirKumulatifGvMatrahi: Some(dec!(400000)),

@@ -27,7 +27,7 @@ export const INITIAL_PERSONELLER: Personel[] = [
     grup: '1. Grup',
     unvan: '1. Grup (%9 İş Primi)',
     sgkSicilNo: '48201938201',
-    iban: 'TR120006200000012345678901',
+    iban: 'TR820006200000012345678901',
     hizmetYili: 5,
     aciklama: 'Destek Hizmetleri Birimi',
     kesintiler: {
@@ -43,7 +43,7 @@ export const INITIAL_PERSONELLER: Personel[] = [
     grup: '2. Grup',
     unvan: '2. Grup (%8 İş Primi)',
     sgkSicilNo: '48201938202',
-    iban: 'TR340006200000098765432109',
+    iban: 'TR130006200000098765432109',
     hizmetYili: 3,
     aciklama: 'A Blok Nöbet Birimi',
     kesintiler: {
@@ -60,7 +60,7 @@ export const INITIAL_PERSONELLER: Personel[] = [
     grup: '3. Grup',
     unvan: '3. Grup (%7 İş Primi)',
     sgkSicilNo: '48201938203',
-    iban: 'TR620006200000045678912304',
+    iban: 'TR040006200000045678912304',
     hizmetYili: 8,
     aciklama: 'Bilgi İşlem Merkezi',
     kesintiler: {
@@ -76,7 +76,7 @@ export const INITIAL_PERSONELLER: Personel[] = [
     grup: '2. Grup',
     unvan: '2. Grup (%8 İş Primi)',
     sgkSicilNo: '48201938204',
-    iban: 'TR880006200000032165498705',
+    iban: 'TR970006200000032165498705',
     hizmetYili: 10,
     aciklama: 'Elektrik & İklimlendirme Atölyesi',
     kesintiler: {
@@ -94,7 +94,7 @@ export const INITIAL_PERSONELLER: Personel[] = [
     grup: '3. Grup',
     unvan: '3. Grup (%7 İş Primi)',
     sgkSicilNo: '48201938205',
-    iban: 'TR990006200000065498732108',
+    iban: 'TR190006200000065498732108',
     hizmetYili: 2,
     aciklama: 'Yemekhane Hizmetleri',
     kesintiler: {

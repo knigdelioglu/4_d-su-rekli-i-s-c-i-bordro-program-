@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import * as XLSX from 'xlsx-js-style';
 import { BordroDonemi, BordroKaydi, Personel } from '../types/payroll';
 import { PayrollNotice } from '../types/payrollNotice';
 import { tauriBridge } from '../services/tauriBridge';

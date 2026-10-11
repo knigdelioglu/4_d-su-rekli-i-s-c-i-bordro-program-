@@ -28,7 +28,7 @@ fn legacy_personnel() -> Personel {
         grup: "1. Grup".into(),
         unvan: None,
         sgkSicilNo: "SGK-OLD".into(),
-        iban: "TR00".into(),
+        iban: "TR330006100519786457841326".into(),
         hizmetYili: 7,
         aciklama: Some("upgrade sırasında korunmalı".into()),
         devirKumulatifGvMatrahi: None,

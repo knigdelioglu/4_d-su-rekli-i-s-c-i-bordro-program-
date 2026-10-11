@@ -9,7 +9,7 @@ pub mod compensation_policy;
 pub fn request() -> PayrollCalculationRequest {
     let person: Personel = serde_json::from_value(json!({
         "id":"audit", "tcNo":"10000000000", "ad":"Audit", "soyad":"Fixture",
-        "grup":"1. Grup", "sgkSicilNo":"", "iban":"", "hizmetYili":0,
+        "grup":"1. Grup", "sgkSicilNo":"", "iban":"TR330006100519786457841326", "hizmetYili":0,
         "kesintiler":{"besUyesi":true}
     }))
     .unwrap();

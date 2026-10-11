@@ -1,6 +1,7 @@
 import { comparePaymentEvents } from '../../services/payrollEngine/paymentEventOrder';
 import type { AccrualType, BordroDonemi, BordroKaydi, Personel } from '../../types/payroll';
 import { getDefaultAccrualPaymentDate } from '../../utils/payrollPresentation';
+import { isValidTurkishIban } from '../../utils/personnelValidation';
 
 export const ACCRUAL_TYPE_LABELS: Record<AccrualType, string> = {
   NORMAL: 'Normal Maaş',
@@ -97,7 +98,9 @@ export function getBankTransferableAccrualRows(
   payrolls: BordroKaydi[]
 ): AuthoritativeAccrualRow[] {
   return getAuthoritativeAccrualRows(period, personnel, payrolls)
-    .filter(({ bordro }) => bordro.status === 'FINALIZED');
+    .filter(({ personel, bordro }) =>
+      bordro.status === 'FINALIZED' && isValidTurkishIban(personel.iban)
+    );
 }
 
 export function describeBankExcludedAccruals(
@@ -106,19 +109,30 @@ export function describeBankExcludedAccruals(
   payrolls: BordroKaydi[]
 ): string | null {
   const personnelById = new Map(personnel.map((person) => [person.id, person]));
-  const excluded = payrolls.filter((payroll) =>
+  const excludedByStatus = payrolls.filter((payroll) =>
     payroll.donemId === period.id && payroll.status !== 'FINALIZED'
   );
-  if (excluded.length === 0) return null;
+  const invalidIbanRows = getAuthoritativeAccrualRows(period, personnel, payrolls)
+    .filter(({ personel, bordro }) =>
+      bordro.status === 'FINALIZED' && !isValidTurkishIban(personel.iban)
+    );
+  if (excludedByStatus.length === 0 && invalidIbanRows.length === 0) return null;
 
-  const calculatedCount = excluded.filter((payroll) => payroll.status === 'CALCULATED').length;
-  const recalculationCount = excluded.length - calculatedCount;
-  const examples = excluded.slice(0, 4).map((payroll) => {
+  const calculatedCount = excludedByStatus.filter((payroll) => payroll.status === 'CALCULATED').length;
+  const recalculationCount = excludedByStatus.length - calculatedCount;
+  const statusExamples = excludedByStatus.slice(0, 4).map((payroll) => {
     const person = personnelById.get(payroll.personelId);
     const name = person ? `${person.ad} ${person.soyad}` : payroll.personelId;
     return `${name} – ${ACCRUAL_TYPE_LABELS[payroll.accrualType]} (${PAYROLL_STATUS_LABELS[payroll.status]})`;
   });
-  const more = excluded.length > examples.length ? ` ve ${excluded.length - examples.length} kayıt daha` : '';
+  const invalidIbanExamples = invalidIbanRows
+    .slice(0, Math.max(0, 4 - statusExamples.length))
+    .map(({ personel, bordro }) =>
+      `${personel.ad} ${personel.soyad} – ${ACCRUAL_TYPE_LABELS[bordro.accrualType]} (geçersiz IBAN)`
+    );
+  const examples = [...statusExamples, ...invalidIbanExamples];
+  const totalExcluded = excludedByStatus.length + invalidIbanRows.length;
+  const more = totalExcluded > examples.length ? ` ve ${totalExcluded - examples.length} kayıt daha` : '';
   const reasons = [
     calculatedCount > 0
       ? `${calculatedCount} hesaplanmış tahakkuk henüz kesinleştirilmedi ve banka aktarımına hazır değil`
@@ -126,8 +140,12 @@ export function describeBankExcludedAccruals(
     recalculationCount > 0
       ? `${recalculationCount} taslak veya güncelliğini yitirmiş tahakkuk yeniden hesaplanmalı`
       : '',
+    invalidIbanRows.length > 0
+      ? `${invalidIbanRows.length} kesinleşmiş tahakkukun Türk IBAN doğrulaması başarısız; banka talimatına aktarılmadı`
+      : '',
   ].filter(Boolean).join('; ');
-  return `${reasons}: ${examples.join(', ')}${more}. Kesinleştirilmiş kayıtlar banka listesine alınır.`;
+  const exampleText = examples.length > 0 ? `: ${examples.join(', ')}${more}` : '';
+  return `${reasons}${exampleText}. Geçerli IBAN ve kesinleştirme koşullarını sağlayan kayıtlar banka listesine alınır.`;
 }
 
 export function getPaymentDateOptions(rows: AuthoritativeAccrualRow[]): string[] {
