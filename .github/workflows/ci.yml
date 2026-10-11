@@ -78,7 +78,8 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            xvfb
+            xvfb \
+            dbus-x11
 
       - name: Rust workspace check
         run: cargo check --workspace
@@ -179,7 +180,12 @@ jobs:
       - name: Native Tauri WebView E2E smoke test
         env:
           TAURI_WEBVIEW_APP: target/debug/bordro-programi
-        run: xvfb-run --auto-servernum bun run test:e2e:native
+          GDK_BACKEND: x11
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          NO_AT_BRIDGE: "1"
+        run: dbus-run-session -- xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" bun run test:e2e:native
 
       - name: Measure Rust coverage and enforce critical module ratchet
         env:

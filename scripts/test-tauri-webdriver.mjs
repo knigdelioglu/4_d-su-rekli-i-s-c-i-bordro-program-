@@ -15,6 +15,8 @@ const defaultAppPath = resolve(
 );
 const appPath = resolve(process.env.TAURI_WEBVIEW_APP ?? defaultAppPath);
 const timeoutMs = 30_000;
+// WebKitGTK can need additional time to create its first WebView under Xvfb.
+const startupTimeoutMs = process.platform === 'linux' ? 90_000 : timeoutMs;
 
 if (!['linux', 'win32', 'darwin'].includes(process.platform)) {
   throw new Error('Native Tauri WebView E2E currently supports Linux, Windows, and macOS.');
@@ -73,7 +75,7 @@ async function command(path, { method = 'GET', body, requestTimeout = timeoutMs 
 }
 
 async function waitForWebDriver() {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + startupTimeoutMs;
   let lastError;
   while (Date.now() < deadline) {
     if (appSpawnError) {
