@@ -17,6 +17,7 @@ const appPath = resolve(process.env.TAURI_WEBVIEW_APP ?? defaultAppPath);
 const timeoutMs = 30_000;
 // WebKitGTK can need additional time to create its first WebView under Xvfb.
 const startupTimeoutMs = process.platform === 'linux' ? 90_000 : timeoutMs;
+const initialWebviewCommandTimeoutMs = process.platform === 'linux' ? 15_000 : 5_000;
 
 if (!['linux', 'win32', 'darwin'].includes(process.platform)) {
   throw new Error('Native Tauri WebView E2E currently supports Linux, Windows, and macOS.');
@@ -108,7 +109,7 @@ async function readAppState(sessionId) {
       };`,
       args: [],
     },
-    requestTimeout: 5_000,
+    requestTimeout: initialWebviewCommandTimeoutMs,
   });
 }
 
@@ -134,10 +135,25 @@ try {
     body: { script: timeoutMs, pageLoad: timeoutMs, implicit: 0 },
   });
 
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + startupTimeoutMs;
   let appState;
+  let lastReadError;
   while (Date.now() < deadline) {
-    appState = await readAppState(sessionId);
+    if (appSpawnError || appExitCode !== null) {
+      throw new Error(`The Tauri app stopped before rendering: ${appSpawnError?.message ?? appExitCode}`);
+    }
+    try {
+      appState = await readAppState(sessionId);
+      lastReadError = undefined;
+    } catch (error) {
+      // A freshly created WebKitGTK WebView may not answer its first script
+      // evaluation under Xvfb. Retry only startup timeouts, never protocol,
+      // storage, or IPC failures, and retain a firm overall deadline.
+      if (process.platform !== 'linux' || error?.name !== 'TimeoutError') throw error;
+      lastReadError = error;
+      await delay(500);
+      continue;
+    }
     if (appState?.storageError) {
       throw new Error(`Desktop storage failed during app startup: ${appState.storageError}`);
     }
@@ -145,6 +161,9 @@ try {
     await delay(300);
   }
 
+  if (!appState && lastReadError) {
+    throw new Error(`Linux WebView did not respond to startup script evaluation: ${lastReadError.message}`);
+  }
   assert.equal(appState?.title, '4/D Bordro', 'native WebView should load the payroll app title');
   assert.equal(appState?.loading, false, 'native app should finish loading its persisted data');
   assert.ok(appState?.rootText.trim(), 'React app should render into the native WebView');
