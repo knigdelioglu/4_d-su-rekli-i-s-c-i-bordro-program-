@@ -13,7 +13,7 @@ use crate::repositories::sick_leave_repo::SickLeaveRepository;
 use crate::repositories::tax_opening_repo::TaxOpeningRepository;
 use chrono::Utc;
 use payroll_core::{RetroCalculationRequest, RetroEntitlementEngine};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 pub use payroll_core::payroll_engine::{
     resolve_statutory_snapshot_for_period,
@@ -346,8 +346,10 @@ impl PayrollService {
                 "Yalnız CALCULATED retro batch payment event'e dönüştürülebilir.".into(),
             ));
         }
-        let tx = conn
-            .unchecked_transaction()
+        // Acquire SQLite's write reservation before reading the same-date
+        // payment list. Concurrent retro payments then serialize sequence
+        // allocation instead of racing on the same MAX(sequence) snapshot.
+        let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         let (canonical_batch, canonical_allocations) =
             Self::validate_retro_batch_input(&tx, batch, allocations)?;

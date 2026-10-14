@@ -3309,6 +3309,22 @@ mod snapshot_replay;
 
 pub(crate) use snapshot_replay::replay_saved_normal_financial_projection;
 
+/// Calculates the settings example with the same per-slice Rust rule used by
+/// payroll. The caller supplies a sample period and sample eligible-day count.
+pub fn calculate_social_benefit_preview(
+    monthly_amount: Decimal,
+    period_days: u32,
+    eligible_days: u32,
+    policy: Option<&BenefitAccrualPolicy>,
+) -> Result<Decimal> {
+    compensation::calculate_social_benefit_preview(
+        monthly_amount,
+        period_days,
+        eligible_days,
+        policy,
+    )
+}
+
 fn calculate_payroll_with_index_policy_override(
     request: &PayrollCalculationRequest,
     index: &PayrollDatasetIndex,

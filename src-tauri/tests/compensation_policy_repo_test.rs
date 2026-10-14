@@ -571,6 +571,7 @@ fn social_benefit_rules_round_trip_through_versioned_database_json() {
             method: BenefitPaymentMethod::Proportional,
             eligibleDayTypes: vec![BenefitDayType::Worked, BenefitDayType::PaidSickLeave],
             denominator: BenefitProrationDenominator::ThirtyDayMonth,
+            allowMonthlyAmountExcess: Some(false),
         }),
         ..Default::default()
     });

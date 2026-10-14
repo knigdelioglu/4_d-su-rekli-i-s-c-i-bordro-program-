@@ -19,6 +19,7 @@ import {
   draftToCompensationPolicyOperation,
   formatCompensationPolicyDecimalForUser,
   findScopedSameDateActiveLeaf,
+  getCompensationPolicyBenefitRuleErrors,
   validateCompensationPolicyDraft,
 } from './compensationPolicyDecimal';
 
@@ -582,6 +583,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
     props.onValidateDraft(props.draft);
     if (formReady && currentOperation) return true;
     setShowValidation(true);
+    const firstBenefitError = Object.keys(getCompensationPolicyBenefitRuleErrors(props.draft.socialBenefitAccrualPolicies))[0];
     if (!scopeSelectionFresh || !roundingSelectionFresh) {
       const targetId = !scopeSelectionFresh ? 'policy-boundary-scope-full' : 'policy-road-rounding-slice';
       requestAnimationFrame(() => {
@@ -592,6 +594,12 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
           target?.scrollIntoView({ block: 'center' });
           target?.focus();
         });
+      });
+    } else if (firstBenefitError) {
+      requestAnimationFrame(() => {
+        const fieldset = document.getElementById(`benefit-day-types-${firstBenefitError}`);
+        fieldset?.scrollIntoView({ block: 'center' });
+        (fieldset?.querySelector('input[type="checkbox"]') as HTMLInputElement | null)?.focus();
       });
     } else {
       requestAnimationFrame(() => validationSummaryRef.current?.focus());

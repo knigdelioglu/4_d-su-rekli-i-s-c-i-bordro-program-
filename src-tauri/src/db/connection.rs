@@ -1,6 +1,7 @@
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 pub type DbState = Arc<Mutex<Connection>>;
 
@@ -28,12 +29,14 @@ pub fn create_connection(
     };
 
     let mut conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
     super::migrations::initialize_db(&mut conn)?;
     Ok(conn)
 }
 
 pub fn create_in_memory_connection() -> Result<Connection, Box<dyn std::error::Error>> {
     let mut conn = Connection::open_in_memory()?;
+    conn.busy_timeout(Duration::from_secs(5))?;
     super::migrations::initialize_db(&mut conn)?;
     Ok(conn)
 }

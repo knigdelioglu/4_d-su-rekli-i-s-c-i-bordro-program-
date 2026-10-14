@@ -37,6 +37,7 @@ export type PayrollPeriodWire = Exactify<BordroDonemi>;
 export type {
   CompensationBoundaryScope,
   RoadRoundingMode,
+  SocialBenefitAccrualPolicies,
 };
 
 export type CompensationPolicyWriteOperationKind =
@@ -220,6 +221,7 @@ export function compensationPolicyStateEqualsExceptRoad(
         if (
           leftPolicy.method !== rightPolicy.method ||
           leftPolicy.denominator !== rightPolicy.denominator ||
+          leftPolicy.allowMonthlyAmountExcess !== rightPolicy.allowMonthlyAmountExcess ||
           leftPolicy.eligibleDayTypes.length !== rightPolicy.eligibleDayTypes.length ||
           leftPolicy.eligibleDayTypes.some((dayType) => !rightPolicy.eligibleDayTypes.includes(dayType))
         ) return false;

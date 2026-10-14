@@ -387,6 +387,7 @@ declare global {
       useRaiseSourceTimeline(): void;
       useMixedRoundingTimeline(): void;
       useEylulPrefill(): void;
+      useLegacyUncappedBenefitRule(): void;
       usePrecisionPrefill(): void;
       setLoadIdle(): void;
     };
@@ -474,6 +475,22 @@ const Harness: React.FC = () => {
       };
       const nextDraft = draftForBaseline(data);
       setLoadState({ status: 'ready', value: data });
+      setDraft(nextDraft);
+      setDraftValidation(validateCompensationPolicyDraft(nextDraft));
+      setInitialBaselineConfirmationRequired(true);
+      setPreviewState({ status: 'idle' });
+      setSaveState({ status: 'idle' });
+    },
+    useLegacyUncappedBenefitRule() {
+      const nextDraft = draftForBaseline();
+      nextDraft.socialBenefitAccrualPolicies = {
+        ...nextDraft.socialBenefitAccrualPolicies,
+        birlestirilmisSosyalYardim: {
+          method: 'PROPORTIONAL',
+          eligibleDayTypes: ['WORKED'],
+          denominator: 'THIRTY_DAY_MONTH',
+        },
+      };
       setDraft(nextDraft);
       setDraftValidation(validateCompensationPolicyDraft(nextDraft));
       setInitialBaselineConfirmationRequired(true);

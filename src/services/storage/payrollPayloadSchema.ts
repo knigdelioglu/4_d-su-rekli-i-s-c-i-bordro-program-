@@ -893,6 +893,9 @@ function validateCompensationPolicyState(value: UnknownRecord, path: string): vo
         assertRecord(rule, rulePath);
         requiredEnum(rule, 'method', BENEFIT_PAYMENT_METHOD_VALUES, rulePath);
         requiredEnum(rule, 'denominator', BENEFIT_PRORATION_DENOMINATOR_VALUES, rulePath);
+        if (Object.prototype.hasOwnProperty.call(rule, 'allowMonthlyAmountExcess')) {
+          assertBoolean(rule.allowMonthlyAmountExcess, fieldPath(rulePath, 'allowMonthlyAmountExcess'));
+        }
         const dayTypes = required(rule, 'eligibleDayTypes', rulePath);
         assertArray(dayTypes, fieldPath(rulePath, 'eligibleDayTypes'));
         dayTypes.forEach((dayType, index) => {

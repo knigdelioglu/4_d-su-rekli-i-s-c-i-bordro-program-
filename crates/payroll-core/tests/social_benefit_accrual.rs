@@ -15,6 +15,7 @@ fn policy(
         method,
         eligibleDayTypes: eligible_day_types,
         denominator,
+        allowMonthlyAmountExcess: None,
     }
 }
 
@@ -112,6 +113,220 @@ fn combined_aid_supports_all_four_methods_and_zero_eligible_days() {
             );
         }
     }
+}
+
+#[test]
+fn proportional_preview_covers_calendar_periods_and_explicit_thirty_day_cap() {
+    for (period_days, denominator, eligible_days, expected_capped, expected_uncapped) in [
+        (
+            28,
+            BenefitProrationDenominator::CalendarDays,
+            28,
+            dec!(3000),
+            dec!(3000),
+        ),
+        (
+            29,
+            BenefitProrationDenominator::CalendarDays,
+            29,
+            dec!(3000),
+            dec!(3000),
+        ),
+        (
+            30,
+            BenefitProrationDenominator::CalendarDays,
+            30,
+            dec!(3000),
+            dec!(3000),
+        ),
+        (
+            31,
+            BenefitProrationDenominator::CalendarDays,
+            31,
+            dec!(3000),
+            dec!(3000),
+        ),
+        (
+            28,
+            BenefitProrationDenominator::ThirtyDayMonth,
+            28,
+            dec!(2800),
+            dec!(2800),
+        ),
+        (
+            29,
+            BenefitProrationDenominator::ThirtyDayMonth,
+            29,
+            dec!(2900),
+            dec!(2900),
+        ),
+        (
+            30,
+            BenefitProrationDenominator::ThirtyDayMonth,
+            30,
+            dec!(3000),
+            dec!(3000),
+        ),
+        (
+            31,
+            BenefitProrationDenominator::ThirtyDayMonth,
+            31,
+            dec!(3000),
+            dec!(3100),
+        ),
+    ] {
+        let capped = policy(
+            BenefitPaymentMethod::Proportional,
+            vec![BenefitDayType::Worked],
+            denominator,
+        );
+        let mut uncapped = capped.clone();
+        uncapped.allowMonthlyAmountExcess = Some(true);
+        let mut capped = capped;
+        capped.allowMonthlyAmountExcess = Some(false);
+        assert_eq!(
+            calculate_social_benefit_preview(dec!(3000), period_days, eligible_days, Some(&capped))
+                .unwrap(),
+            expected_capped,
+            "capped {period_days} day period with {denominator:?}"
+        );
+        assert_eq!(
+            calculate_social_benefit_preview(
+                dec!(3000),
+                period_days,
+                eligible_days,
+                Some(&uncapped)
+            )
+            .unwrap(),
+            expected_uncapped,
+            "uncapped {period_days} day period with {denominator:?}"
+        );
+    }
+
+    let no_days = policy(
+        BenefitPaymentMethod::Proportional,
+        vec![BenefitDayType::Worked],
+        BenefitProrationDenominator::ThirtyDayMonth,
+    );
+    assert_eq!(
+        calculate_social_benefit_preview(dec!(3000), 31, 0, Some(&no_days)).unwrap(),
+        dec!(0)
+    );
+    assert!(calculate_social_benefit_preview(dec!(3000), 0, 0, Some(&no_days)).is_err());
+    assert!(calculate_social_benefit_preview(dec!(3000), 30, 31, Some(&no_days)).is_err());
+}
+
+#[test]
+fn explicit_cap_and_legacy_uncapped_policy_apply_to_each_mid_period_slice_once() {
+    let mut request = audit_support::request();
+    set_worked_days(&mut request, 31);
+    set_combined_aid(
+        &mut request,
+        policy(
+            BenefitPaymentMethod::Proportional,
+            vec![BenefitDayType::Worked],
+            BenefitProrationDenominator::ThirtyDayMonth,
+        ),
+    );
+    let first = &mut request.dataset.compensationPolicyVersions[0].state;
+    first
+        .socialBenefitAccrualPolicies
+        .as_mut()
+        .unwrap()
+        .birlestirilmisSosyalYardim
+        .as_mut()
+        .unwrap()
+        .allowMonthlyAmountExcess = Some(false);
+    let mut changed = request.dataset.compensationPolicyVersions[0].clone();
+    changed.id = "capped-aid-policy-mid-period".into();
+    changed.effectiveFrom = "2026-01-31".into();
+    changed.state.birlestirilmisSosyalYardim = dec!(6000);
+    changed.supersedesVersionId = None;
+    request.dataset.compensationPolicyVersions.push(changed);
+
+    let payroll = calculate_payroll_checked(&request).expect("capped split policy payroll");
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(4451.61)),
+        "the cap is the sum of each policy slice's monthly share"
+    );
+    let saved_segments = &payroll
+        .calculationMetadata
+        .as_ref()
+        .unwrap()
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .compensation
+        .segments;
+    assert_eq!(saved_segments.len(), 2);
+    assert!(saved_segments.iter().all(|segment| segment
+        .state
+        .socialBenefitAccrualPolicies
+        .as_ref()
+        .unwrap()
+        .birlestirilmisSosyalYardim
+        .as_ref()
+        .unwrap()
+        .allowMonthlyAmountExcess
+        == Some(false)));
+
+    let mut legacy = request.clone();
+    for version in &mut legacy.dataset.compensationPolicyVersions {
+        version
+            .state
+            .socialBenefitAccrualPolicies
+            .as_mut()
+            .unwrap()
+            .birlestirilmisSosyalYardim
+            .as_mut()
+            .unwrap()
+            .allowMonthlyAmountExcess = None;
+    }
+    assert_eq!(
+        calculate_payroll_checked(&legacy)
+            .unwrap()
+            .gelirler
+            .birlestirilmisSosyalYardim,
+        Some(dec!(4600)),
+        "missing option retains each historical 31/30 slice result"
+    );
+}
+
+#[test]
+fn full_if_eligible_day_is_slice_scoped_and_zero_eligible_slice_is_not_paid() {
+    let mut request = audit_support::request();
+    set_worked_days(&mut request, 15);
+    set_combined_aid(
+        &mut request,
+        policy(
+            BenefitPaymentMethod::FullIfEligibleDay,
+            vec![BenefitDayType::Worked],
+            BenefitProrationDenominator::CalendarDays,
+        ),
+    );
+    let mut changed = request.dataset.compensationPolicyVersions[0].clone();
+    changed.id = "full-if-aid-mid-period".into();
+    changed.effectiveFrom = "2026-01-31".into();
+    changed.state.birlestirilmisSosyalYardim = dec!(6000);
+    changed
+        .state
+        .socialBenefitAccrualPolicies
+        .as_mut()
+        .unwrap()
+        .birlestirilmisSosyalYardim
+        .as_mut()
+        .unwrap()
+        .method = BenefitPaymentMethod::FullIfEligibleDay;
+    changed.supersedesVersionId = None;
+    request.dataset.compensationPolicyVersions.push(changed);
+
+    let payroll = calculate_payroll_checked(&request).expect("slice-scoped full-if payroll");
+    assert_eq!(
+        payroll.gelirler.birlestirilmisSosyalYardim,
+        Some(dec!(1548.39)),
+        "15 eligible days in the first 16-day slice pays that slice's share only"
+    );
 }
 
 #[test]
@@ -229,6 +444,16 @@ fn old_compensation_policy_json_without_accrual_rules_remains_compatible() {
     let restored: CompensationPolicyState =
         serde_json::from_value(value).expect("missing optional rules should migrate as legacy");
     assert_eq!(restored.socialBenefitAccrualPolicies, None);
+
+    let old_rule_json = serde_json::json!({
+        "method": "PROPORTIONAL",
+        "eligibleDayTypes": ["WORKED"],
+        "denominator": "THIRTY_DAY_MONTH"
+    });
+    let old_rule: BenefitAccrualPolicy = serde_json::from_value(old_rule_json)
+        .expect("old rule without the cap field should deserialize");
+    assert_eq!(old_rule.allowMonthlyAmountExcess, None);
+
     let mut configured = restored.clone();
     configured.socialBenefitAccrualPolicies = Some(SocialBenefitAccrualPolicies {
         birlestirilmisSosyalYardim: Some(policy(
@@ -262,6 +487,18 @@ fn old_compensation_policy_json_without_accrual_rules_remains_compatible() {
         )
         .unwrap(),
         PayrollCalculationSnapshotDisposition::CurrentSnapshotValidated
+    );
+
+    let mut capped_case = request.clone();
+    set_worked_days(&mut capped_case, 31);
+    set_combined_aid(&mut capped_case, old_rule);
+    assert_eq!(
+        calculate_payroll_checked(&capped_case)
+            .unwrap()
+            .gelirler
+            .birlestirilmisSosyalYardim,
+        Some(dec!(3100)),
+        "old policy keeps its historical 31/30 result"
     );
 }
 

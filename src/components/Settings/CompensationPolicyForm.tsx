@@ -13,8 +13,11 @@ import {
   applyCompensationPolicyPercentageIncrease,
   formatCompensationPolicyDecimalForUser,
   findScopedSameDateActiveLeaf,
+  getCompensationPolicyBenefitRuleErrors,
   getCompensationPolicyDraftFieldErrors,
+  parseCompensationPolicyDecimal,
 } from './compensationPolicyDecimal';
+import { getWasmRuntime } from '../../services/payrollEngine/wasmRuntime';
 
 type Draft = CompensationPolicyPageProps['draft'];
 
@@ -55,7 +58,7 @@ const BENEFIT_DAY_TYPES: ReadonlyArray<{ value: BenefitDayType; label: string }>
 
 const PAYMENT_METHODS: ReadonlyArray<{ value: BenefitPaymentMethod; label: string; explanation: string }> = [
   { value: 'FULL', label: 'Tam öde', explanation: 'Bu geçerlilik diliminin tutarı puantaj günlerinden bağımsız tam uygulanır.' },
-  { value: 'FULL_IF_ELIGIBLE_DAY', label: 'Hak ediş varsa tam öde', explanation: 'Bu dilimde en az bir seçili hak günü varsa tam tutar uygulanır; sıfır günde ödeme yapılmaz.' },
+  { value: 'FULL_IF_ELIGIBLE_DAY', label: 'Hak ediş varsa tam öde', explanation: 'Seçilen gün türlerinden en az biri bu politika diliminde varsa dilimin aylık payı ödenir. Dönemin tamamı için otomatik tam tutar anlamına gelmez.' },
   { value: 'PROPORTIONAL', label: 'Orantılı öde', explanation: 'Yalnız seçili hak günleri için, belirlenen paydaya göre kıst hesaplanır.' },
   { value: 'NO_PAYMENT', label: 'Tahakkuk ettirme', explanation: 'Bu geçerlilik diliminde bu gelir kalemi tahakkuk etmez.' },
 ];
@@ -66,7 +69,35 @@ const defaultBenefitRule = (method: BenefitPaymentMethod) => ({
   // explicitly choose day classes for conditional and proportional rules.
   eligibleDayTypes: [] as BenefitDayType[],
   denominator: 'CALENDAR_DAYS' as const,
+  allowMonthlyAmountExcess: false,
 });
+
+type BenefitPreview =
+  | { kind: 'ready'; amount: string }
+  | { kind: 'needs-day-types' }
+  | { kind: 'invalid-amount' }
+  | { kind: 'failed' };
+
+function benefitAmountDraft(draft: Draft, key: keyof Draft['socialBenefitAccrualPolicies']): string {
+  switch (key) {
+    case 'birlestirilmisSosyalYardim': return draft.birlestirilmisSosyalYardim;
+    case 'giyimYardimi': return draft.giyimYardimi;
+    // The sample treats one service-year unit as its illustrative monthly amount.
+    case 'hizmetZammi': return draft.hizmetZammiBirimi;
+    case 'ekOdeme': return draft.ekOdeme.kind === 'VALUE' ? draft.ekOdeme.raw : '0';
+    case 'digerGelir': return draft.digerGelirVarsayilan.kind === 'VALUE' ? draft.digerGelirVarsayilan.raw : '0';
+  }
+}
+
+function inclusivePeriodDays(start: string, end: string): number | null {
+  const datePattern = /^(\d{4})-(\d{2})-(\d{2})$/u;
+  const startParts = datePattern.exec(start);
+  const endParts = datePattern.exec(end);
+  if (!startParts || !endParts) return null;
+  const toUtc = (parts: RegExpExecArray) => Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  const days = (toUtc(endParts) - toUtc(startParts)) / 86_400_000 + 1;
+  return Number.isInteger(days) && days > 0 ? days : null;
+}
 
 interface TextDecimalInputProps {
   id: string;
@@ -171,8 +202,48 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
 }) => {
   const [percentageRaw, setPercentageRaw] = useState('');
   const [percentageFeedback, setPercentageFeedback] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
+  const [benefitPreviews, setBenefitPreviews] = useState<Partial<Record<keyof Draft['socialBenefitAccrualPolicies'], BenefitPreview>>>({});
   const fieldErrors = getCompensationPolicyDraftFieldErrors(draft);
+  const benefitRuleErrors = getCompensationPolicyBenefitRuleErrors(draft.socialBenefitAccrualPolicies);
   const required = (field: keyof CompensationPolicyStateDraft): string | undefined => showValidation ? fieldErrors[field] : undefined;
+  const periodDays = inclusivePeriodDays(loadData.scope.periodStartInclusive, loadData.scope.periodEndInclusive);
+
+  useEffect(() => {
+    let current = true;
+    setBenefitPreviews({});
+    void (async () => {
+      try {
+        const runtime = await getWasmRuntime();
+        const nextEntries = await Promise.all(BENEFIT_ITEMS.map(async ({ key }) => {
+          const parsedAmount = parseCompensationPolicyDecimal(benefitAmountDraft(draft, key));
+          if (parsedAmount.ok === false) {
+            return [key, { kind: 'invalid-amount' } as BenefitPreview] as const;
+          }
+          if (periodDays === null) return [key, { kind: 'failed' } as BenefitPreview] as const;
+          const policy = draft.socialBenefitAccrualPolicies[key];
+          const requiresDayTypes = policy?.method === 'FULL_IF_ELIGIBLE_DAY' || policy?.method === 'PROPORTIONAL';
+          if (requiresDayTypes && !policy?.eligibleDayTypes.length) {
+            return [key, { kind: 'needs-day-types' } as BenefitPreview] as const;
+          }
+          try {
+            const amount = runtime.calculate_social_benefit_preview_json(JSON.stringify({
+              monthlyAmount: parsedAmount.value,
+              periodDays,
+              eligibleDays: requiresDayTypes ? Math.min(20, periodDays) : 0,
+              policy: policy ?? null,
+            }));
+            return [key, { kind: 'ready', amount } as BenefitPreview] as const;
+          } catch {
+            return [key, { kind: 'failed' } as BenefitPreview] as const;
+          }
+        }));
+        if (current) setBenefitPreviews(Object.fromEntries(nextEntries));
+      } catch {
+        if (current) setBenefitPreviews(Object.fromEntries(BENEFIT_ITEMS.map(({ key }) => [key, { kind: 'failed' }])));
+      }
+    })();
+    return () => { current = false; };
+  }, [draft, periodDays]);
   const effectiveDateError = showValidation ? validation.operationErrors.find((error) => error.includes('tarihi')) : undefined;
   const reasonError = showValidation ? validation.operationErrors.find((error) => error.includes('gerekçesi')) : undefined;
   const selectedVersionId = draft.operationKind === 'SAME_DATE_CORRECTION'
@@ -370,10 +441,17 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
                           if (selected === 'LEGACY') {
                             setBenefitPolicy(key, () => null);
                           } else {
-                            setBenefitPolicy(key, (current) => ({
-                              ...(current ?? defaultBenefitRule(selected as BenefitPaymentMethod)),
-                              method: selected as BenefitPaymentMethod,
-                            }));
+                            setBenefitPolicy(key, (current) => {
+                              const selectedMethod = selected as BenefitPaymentMethod;
+                              const next = {
+                                ...(current ?? defaultBenefitRule(selectedMethod)),
+                                method: selectedMethod,
+                              };
+                              if (selectedMethod === 'PROPORTIONAL' && current?.method !== 'PROPORTIONAL') {
+                                next.allowMonthlyAmountExcess = current?.allowMonthlyAmountExcess ?? false;
+                              }
+                              return next;
+                            });
                           }
                         }}
                       >
@@ -385,70 +463,133 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
                       {methodInfo?.explanation ?? 'Bu kalem için henüz yeni bir hak ediş kuralı tanımlanmadı; önceki sürümdeki davranış kullanılır.'}
                     </p>
                   </div>
-                  {method && (
-                    <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-700" aria-live="polite">
-                      Örnek tahakkuk: 3.000,00 TL tutar ve 30 günlük dönemde 20 hak günü için{' '}
-                      {method === 'FULL' ? '3.000,00 TL (tam tutar)' :
-                        method === 'FULL_IF_ELIGIBLE_DAY' ? '3.000,00 TL (en az bir hak günü var)' :
-                          method === 'PROPORTIONAL' ? '2.000,00 TL (3.000 × 20 / 30)' :
-                            '0,00 TL (tahakkuk yok)'}.
-                    </p>
-                  )}
-                  {(method === 'FULL_IF_ELIGIBLE_DAY' || method === 'PROPORTIONAL') && (
-                    <details className="mt-2 border-t border-slate-100 pt-2">
-                      <summary className="cursor-pointer text-xs font-semibold text-indigo-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
-                        Ayrıntılı Kurallar · hak kazandıran günler ve oranlama
-                      </summary>
-                      <fieldset className="mt-2 space-y-2">
-                        <legend className="text-xs font-semibold text-slate-700">Hak kazandıran gün türleri</legend>
-                        {policy?.eligibleDayTypes.length === 0 && (
-                          <p className="rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
-                            Bir gün türü otomatik seçilmez. Kurumunuz için geçerli mevzuat ve toplu iş sözleşmesine göre en az bir tür işaretleyin.
-                          </p>
-                        )}
-                        <div className="grid gap-1.5 sm:grid-cols-2">
-                          {BENEFIT_DAY_TYPES.map(({ value, label: dayLabel }) => (
-                            <label key={value} className="flex min-h-8 items-center gap-2 text-xs text-slate-700">
-                              <input
-                                type="checkbox"
-                                className="h-4 w-4 accent-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                                checked={policy?.eligibleDayTypes.includes(value) ?? false}
-                                onChange={(event) => setBenefitPolicy(key, (current) => {
-                                  const rule = current ?? defaultBenefitRule(method);
-                                  return {
-                                    ...rule,
-                                    eligibleDayTypes: event.target.checked
-                                      ? [...rule.eligibleDayTypes, value]
-                                      : rule.eligibleDayTypes.filter((item) => item !== value),
-                                  };
-                                })}
-                              />
-                              {dayLabel}
-                            </label>
-                          ))}
-                        </div>
-                        {method === 'PROPORTIONAL' && (
-                          <div className="max-w-sm">
-                            <label htmlFor={`benefit-denominator-${key}`} className="mb-1 block text-xs font-semibold text-slate-700">Oranlama paydası</label>
-                            <select
-                              id={`benefit-denominator-${key}`}
-                              className={inputClassName.replace('font-mono', '')}
-                              value={policy?.denominator ?? 'CALENDAR_DAYS'}
-                              onChange={(event) => setBenefitPolicy(key, (current) => ({
-                                ...(current ?? defaultBenefitRule(method)),
-                                denominator: event.target.value as 'CALENDAR_DAYS' | 'THIRTY_DAY_MONTH',
-                              }))}
-                            >
-                              <option value="CALENDAR_DAYS">Dönemin takvim günleri</option>
-                              <option value="THIRTY_DAY_MONTH">Sabit 30 gün</option>
-                            </select>
-                          </div>
-                        )}
-                        <p className="text-xs leading-5 text-slate-500">
-                          Her takvim günü tek puantaj koduyla sınıflanır. Rapor günleri, mevcut ücretli rapor hakkı kayıtlarına göre ücretli/ücretsiz ayrılır; Üİ ücretsiz izni, D işe giriş/çıkış nedeniyle hizmet dışı günü belirtir.
+                  {(() => {
+                    const preview = benefitPreviews[key];
+                    const previewUsesEligibility = method === 'FULL_IF_ELIGIBLE_DAY' || method === 'PROPORTIONAL';
+                    const denominatorLabel = policy?.denominator === 'THIRTY_DAY_MONTH'
+                      ? 'sabit 30 gün'
+                      : `dönemin ${periodDays ?? '—'} takvim günü`;
+                    const selectedDayLabels = BENEFIT_DAY_TYPES
+                      .filter(({ value }) => policy?.eligibleDayTypes.includes(value))
+                      .map(({ label: dayLabel }) => dayLabel);
+                    const monthlyCapLabel = method !== 'PROPORTIONAL'
+                      ? null
+                      : policy?.denominator !== 'THIRTY_DAY_MONTH'
+                        ? 'Takvim günü paydası, hak günleri dönem günlerinden fazla olamayacağı için aylık tutarı aşmaz.'
+                        : policy.allowMonthlyAmountExcess === undefined
+                          ? 'Eski politika sürümü: tarihsel 31/30 aşımı önceki davranışla korunur.'
+                          : policy.allowMonthlyAmountExcess
+                            ? 'Aylık tutar aşılabilir; bu tercih yalnız sabit 30 gün paydasında etkilidir.'
+                            : 'Aylık tutar, dönem içindeki politika dilimlerinin aylık payları toplamıyla sınırlandırılır.';
+                    return (
+                      <div className="mt-2 rounded bg-slate-50 px-2 py-2 text-xs text-slate-700" aria-live="polite">
+                        <p><span className="font-semibold">Örnek brüt tahakkuk (vergi ve kesintiler hariç):</span>{' '}
+                          {preview?.kind === 'ready' ? `${formatCompensationPolicyDecimalForUser(preview.amount)} TL` :
+                            preview?.kind === 'needs-day-types' ? 'Gün türü seçilince hesaplanır.' :
+                              preview?.kind === 'invalid-amount' ? 'Tutarı geçerli biçimde girin.' :
+                                preview?.kind === 'failed' ? 'Önizleme hesaplanamadı.' : 'Hesaplanıyor…'}
                         </p>
-                      </fieldset>
-                    </details>
+                        <p className="mt-1">{loadData.scope.periodId} dönemi · {periodDays ?? '—'} takvim günü. Bu bir örnek senaryodur; mevcut personel puantajı kullanılmıyor.
+                          {previewUsesEligibility ? ` Seçilen gün türlerinde ${Math.min(20, periodDays ?? 20)} örnek hak günü varsayılmıştır.` : ''}
+                          {key === 'hizmetZammi' ? ' Hizmet zammı örneği bir hizmet yılı varsayar.' : ''}
+                        </p>
+                        {previewUsesEligibility && <p>Hak günü: {Math.min(20, periodDays ?? 20)} · Seçilen türler: {selectedDayLabels.join(', ')} · Payda: {denominatorLabel}.</p>}
+                        {monthlyCapLabel && <p>{monthlyCapLabel}</p>}
+                      </div>
+                    );
+                  })()}
+                  {(method === 'FULL_IF_ELIGIBLE_DAY' || method === 'PROPORTIONAL') && (
+                    <fieldset
+                      id={`benefit-day-types-${key}`}
+                      tabIndex={-1}
+                      aria-invalid={showValidation && Boolean(benefitRuleErrors[key])}
+                      aria-describedby={showValidation && benefitRuleErrors[key] ? `benefit-day-types-${key}-error` : undefined}
+                      className="mt-3 space-y-2 border-t border-slate-100 pt-3 focus:outline-none"
+                    >
+                      <legend className="text-xs font-semibold text-slate-700">Hak kazandıran gün türleri</legend>
+                      {policy?.eligibleDayTypes.length === 0 && (
+                        <p className="rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                          Bir gün türü otomatik seçilmez. Bu ödeme yöntemi için en az bir türü burada seçin.
+                        </p>
+                      )}
+                      <div className="grid gap-1.5 sm:grid-cols-2">
+                        {BENEFIT_DAY_TYPES.map(({ value, label: dayLabel }) => (
+                          <label key={value} className="flex min-h-8 items-center gap-2 text-xs text-slate-700">
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 accent-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                              checked={policy?.eligibleDayTypes.includes(value) ?? false}
+                              onChange={(event) => setBenefitPolicy(key, (current) => {
+                                const rule = current ?? defaultBenefitRule(method);
+                                return {
+                                  ...rule,
+                                  eligibleDayTypes: event.target.checked
+                                    ? [...rule.eligibleDayTypes, value]
+                                    : rule.eligibleDayTypes.filter((item) => item !== value),
+                                };
+                              })}
+                            />
+                            {dayLabel}
+                          </label>
+                        ))}
+                      </div>
+                      {showValidation && benefitRuleErrors[key] && (
+                        <p id={`benefit-day-types-${key}-error`} role="alert" className={errorClassName}>{benefitRuleErrors[key]}</p>
+                      )}
+                      {method === 'PROPORTIONAL' && (
+                        <div className="max-w-sm">
+                          <label htmlFor={`benefit-denominator-${key}`} className="mb-1 block text-xs font-semibold text-slate-700">Oranlama paydası</label>
+                          <select
+                            id={`benefit-denominator-${key}`}
+                            className={inputClassName.replace('font-mono', '')}
+                            value={policy?.denominator ?? 'CALENDAR_DAYS'}
+                            onChange={(event) => setBenefitPolicy(key, (current) => ({
+                              ...(current ?? defaultBenefitRule(method)),
+                              denominator: event.target.value as 'CALENDAR_DAYS' | 'THIRTY_DAY_MONTH',
+                            }))}
+                          >
+                            <option value="CALENDAR_DAYS">Dönemin takvim günleri</option>
+                            <option value="THIRTY_DAY_MONTH">Sabit 30 gün</option>
+                          </select>
+                        </div>
+                      )}
+                      {method === 'PROPORTIONAL' && policy?.denominator === 'THIRTY_DAY_MONTH' && (
+                        <fieldset className="space-y-1 rounded border border-slate-200 p-2">
+                          <legend className="px-1 text-xs font-semibold text-slate-700">Aylık tutar sınırı</legend>
+                          <label className="flex items-start gap-2 text-xs text-slate-700">
+                            <input
+                              type="radio"
+                              name={`benefit-monthly-cap-${key}`}
+                              checked={policy.allowMonthlyAmountExcess === false}
+                              onChange={() => setBenefitPolicy(key, (current) => ({
+                                ...(current ?? defaultBenefitRule(method)), allowMonthlyAmountExcess: false,
+                              }))}
+                              className="mt-0.5 accent-indigo-600"
+                            />
+                            Aylık tanımlı tutarı aşma (önerilen)
+                          </label>
+                          <label className="flex items-start gap-2 text-xs text-slate-700">
+                            <input
+                              type="radio"
+                              name={`benefit-monthly-cap-${key}`}
+                              checked={policy.allowMonthlyAmountExcess !== false}
+                              onChange={() => setBenefitPolicy(key, (current) => ({
+                                ...(current ?? defaultBenefitRule(method)), allowMonthlyAmountExcess: true,
+                              }))}
+                              className="mt-0.5 accent-indigo-600"
+                            />
+                            Sözleşme gerektiriyorsa aylık tutarın aşılmasına izin ver
+                          </label>
+                          {policy.allowMonthlyAmountExcess === undefined && (
+                            <p className="text-xs leading-5 text-amber-900">Bu eski politika sürümünde ayar bulunmuyor. Tarihsel 31/30 hesabını korumak için aşım davranışı açık gösteriliyor; yeni tercihi seçerek değiştirebilirsiniz.</p>
+                          )}
+                          <p className="text-xs leading-5 text-slate-500">31 günlük dönemde 31 hak günü, aşım açıkken aylık tutarın 31/30’u kadar tahakkuk oluşturabilir. Aşım kapalıysa politika dilimlerinin aylık payları toplamı üst sınır olur.</p>
+                        </fieldset>
+                      )}
+                      <p className="text-xs leading-5 text-slate-500">
+                        Tam ödeme, yalnız bu politika diliminin dönem içindeki payıdır; dilimde en az bir seçili gün varsa bu pay ödenir. Her takvim günü tek puantaj koduyla sınıflanır. Rapor günleri ücretli/ücretsiz rapor kayıtlarına göre ayrılır.
+                      </p>
+                    </fieldset>
                   )}
                 </article>
               );

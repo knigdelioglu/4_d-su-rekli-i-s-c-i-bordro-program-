@@ -3,6 +3,7 @@ import { describeError } from '../../utils/errorMessage';
 type WasmExports = {
   default: () => Promise<unknown>;
   calculate_payroll_json: (requestJson: string) => string;
+  calculate_social_benefit_preview_json: (requestJson: string) => string;
   calculate_legacy_backup_payroll_json: (replayJson: string) => string;
   calculate_compensation_policy_payroll_json: (requestJson: string) => string;
   resolve_compensation_policy_timeline_json: (requestJson: string) => string;

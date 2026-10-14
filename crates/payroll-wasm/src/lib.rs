@@ -48,6 +48,16 @@ struct CompensationPolicyPeriodValidationRequest {
     candidate_versions: Vec<CompensationPolicyVersion>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SocialBenefitPreviewRequest {
+    #[serde(with = "rust_decimal::serde::str")]
+    monthly_amount: rust_decimal::Decimal,
+    period_days: u32,
+    eligible_days: u32,
+    policy: Option<payroll_core::BenefitAccrualPolicy>,
+}
+
 fn deserialize_contract_json<T: DeserializeOwned>(json: &str) -> Result<T, serde_json::Error> {
     serde_json::from_str(json)
 }
@@ -123,6 +133,26 @@ pub fn calculate_payroll_json(request_json: &str) -> Result<String, JsValue> {
     let payroll = calculate_payroll_checked(&request).map_err(error_to_js)?;
     serde_json::to_string(&payroll)
         .map_err(|error| JsValue::from_str(&format!("Bordro sonucu serileştirilemedi: {}", error)))
+}
+
+/// Calculates one settings-page example using the payroll core's social
+/// benefit slice rule. The result is a decimal string in lira.
+#[wasm_bindgen]
+pub fn calculate_social_benefit_preview_json(request_json: &str) -> Result<String, JsValue> {
+    let request: SocialBenefitPreviewRequest =
+        deserialize_contract_json(request_json).map_err(|error| {
+            error_to_js(payroll_core::DomainError::InvalidData(format!(
+                "Sosyal yardım önizleme isteği geçersiz JSON içeriyor: {error}"
+            )))
+        })?;
+    let amount = payroll_core::calculate_social_benefit_preview(
+        request.monthly_amount,
+        request.period_days,
+        request.eligible_days,
+        request.policy.as_ref(),
+    )
+    .map_err(error_to_js)?;
+    Ok(amount.to_string())
 }
 
 /// Import-only exact V1-V5 replay. Missing legacy sources return JSON null so
@@ -1033,6 +1063,38 @@ mod tests {
                 .as_ref()
                 .map(|detail| detail.kesilenGelirVergisi)
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn settings_preview_uses_the_shared_capped_and_legacy_calculation() {
+        let capped = r#"{"monthlyAmount":"3000","periodDays":31,"eligibleDays":31,"policy":{"method":"PROPORTIONAL","eligibleDayTypes":["WORKED"],"denominator":"THIRTY_DAY_MONTH","allowMonthlyAmountExcess":false}}"#;
+        let capped_amount = calculate_social_benefit_preview_json(capped)
+            .expect("capped preview should calculate")
+            .parse::<rust_decimal::Decimal>()
+            .expect("preview is an exact decimal string");
+        assert_eq!(
+            capped_amount,
+            payroll_core::calculate_social_benefit_preview(
+                rust_decimal::Decimal::from(3000),
+                31,
+                31,
+                Some(&payroll_core::BenefitAccrualPolicy {
+                    method: payroll_core::BenefitPaymentMethod::Proportional,
+                    eligibleDayTypes: vec![payroll_core::BenefitDayType::Worked],
+                    denominator: payroll_core::BenefitProrationDenominator::ThirtyDayMonth,
+                    allowMonthlyAmountExcess: Some(false),
+                }),
+            )
+            .unwrap()
+        );
+        assert_eq!(capped_amount, rust_decimal_macros::dec!(3000));
+
+        let historical = r#"{"monthlyAmount":"3000","periodDays":31,"eligibleDays":31,"policy":{"method":"PROPORTIONAL","eligibleDayTypes":["WORKED"],"denominator":"THIRTY_DAY_MONTH"}}"#;
+        let historical_amount = calculate_social_benefit_preview_json(historical)
+            .expect("missing option should preserve historical behavior")
+            .parse::<rust_decimal::Decimal>()
+            .expect("preview is an exact decimal string");
+        assert_eq!(historical_amount, rust_decimal_macros::dec!(3100));
     }
 
     #[wasm_bindgen_test]

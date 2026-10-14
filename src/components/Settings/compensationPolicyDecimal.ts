@@ -7,6 +7,7 @@ import type {
   CompensationPolicyStateWire,
   CompensationPolicyVersionWire,
   CompensationPolicyWriteOperation,
+  SocialBenefitAccrualPolicies,
 } from '../../services/compensationPolicy/contract';
 
 const MAX_DECIMAL_COEFFICIENT = 79_228_162_514_264_337_593_543_950_335n;
@@ -194,6 +195,29 @@ function readNullableDecimal(
   values.set(field, result.value);
 }
 
+export type BenefitAccrualPolicyErrors = Partial<Record<keyof SocialBenefitAccrualPolicies, string>>;
+
+export function getCompensationPolicyBenefitRuleErrors(
+  policies: Partial<SocialBenefitAccrualPolicies> | null | undefined
+): BenefitAccrualPolicyErrors {
+  const errors: BenefitAccrualPolicyErrors = {};
+  for (const [key, policy] of Object.entries(policies ?? {}) as Array<[
+    keyof SocialBenefitAccrualPolicies,
+    SocialBenefitAccrualPolicies[keyof SocialBenefitAccrualPolicies]
+  ]>) {
+    if (!policy) continue;
+    if (
+      (policy.method === 'FULL_IF_ELIGIBLE_DAY' || policy.method === 'PROPORTIONAL') &&
+      policy.eligibleDayTypes.length === 0
+    ) {
+      errors[key] = 'Bu ödeme yöntemi için en az bir hak kazandıran gün türü seçilmelidir.';
+    } else if (new Set(policy.eligibleDayTypes).size !== policy.eligibleDayTypes.length) {
+      errors[key] = 'Aynı hak kazandıran gün türü birden fazla seçilemez.';
+    }
+  }
+  return errors;
+}
+
 function invalidStateErrors(state: CompensationPolicyStateWire): string[] {
   const errors: string[] = [];
   const base = decimalParts(state.gunlukTabanUcret);
@@ -253,15 +277,8 @@ function invalidStateErrors(state: CompensationPolicyStateWire): string[] {
       }
     }
   });
-  for (const [label, policy] of Object.entries(state.socialBenefitAccrualPolicies ?? {})) {
-    if (!policy) continue;
-    if ((policy.method === 'FULL_IF_ELIGIBLE_DAY' || policy.method === 'PROPORTIONAL') && policy.eligibleDayTypes.length === 0) {
-      errors.push(`${label}: bu ödeme yöntemi için en az bir hak kazandıran gün türü seçilmelidir.`);
-    }
-    if (new Set(policy.eligibleDayTypes).size !== policy.eligibleDayTypes.length) {
-      errors.push(`${label}: aynı hak kazandıran gün türü birden fazla seçilemez.`);
-    }
-  }
+  Object.entries(getCompensationPolicyBenefitRuleErrors(state.socialBenefitAccrualPolicies))
+    .forEach(([key, message]) => { if (message) errors.push(`${key}: ${message}`); });
   return [...new Set(errors)];
 }
 

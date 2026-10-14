@@ -228,6 +228,77 @@ fn policy_for_benefit(
     }
 }
 
+fn calculate_benefit_slice_amount(
+    base: Decimal,
+    period_days: Decimal,
+    slice_days: Decimal,
+    eligible_days: i32,
+    policy: Option<&BenefitAccrualPolicy>,
+) -> (Decimal, Option<Decimal>) {
+    let full_slice_amount = base * slice_days / period_days;
+    let Some(policy) = policy else {
+        return (full_slice_amount, None);
+    };
+
+    match policy.method {
+        BenefitPaymentMethod::Full => (full_slice_amount, None),
+        BenefitPaymentMethod::FullIfEligibleDay => {
+            if eligible_days > 0 {
+                (full_slice_amount, None)
+            } else {
+                (Decimal::ZERO, None)
+            }
+        }
+        BenefitPaymentMethod::Proportional => {
+            let denominator = match policy.denominator {
+                BenefitProrationDenominator::CalendarDays => period_days,
+                BenefitProrationDenominator::ThirtyDayMonth => Decimal::from(30),
+            };
+            let amount = base * Decimal::from(eligible_days) / denominator;
+            let monthly_cap =
+                (policy.allowMonthlyAmountExcess == Some(false)).then_some(full_slice_amount);
+            (amount, monthly_cap)
+        }
+        BenefitPaymentMethod::NoPayment => (Decimal::ZERO, None),
+    }
+}
+
+/// Uses the same Rust slice calculation as payroll for the settings preview.
+/// The preview models one policy slice spanning the whole sample period.
+pub(super) fn calculate_social_benefit_preview(
+    monthly_amount: Decimal,
+    period_days: u32,
+    eligible_days: u32,
+    policy: Option<&BenefitAccrualPolicy>,
+) -> Result<Decimal> {
+    if monthly_amount < Decimal::ZERO {
+        return Err(DomainError::ValidationError(
+            "Önizleme tutarı negatif olamaz.".into(),
+        ));
+    }
+    if period_days == 0 || eligible_days > period_days {
+        return Err(DomainError::ValidationError(
+            "Önizleme gün sayıları geçersiz.".into(),
+        ));
+    }
+    if policy.is_some_and(|policy| {
+        matches!(
+            policy.method,
+            BenefitPaymentMethod::FullIfEligibleDay | BenefitPaymentMethod::Proportional
+        ) && policy.eligibleDayTypes.is_empty()
+    }) {
+        return Err(DomainError::ValidationError(
+            "Koşullu ve orantılı önizleme için en az bir hak kazandıran gün türü seçilmelidir."
+                .into(),
+        ));
+    }
+
+    let days = Decimal::from(period_days);
+    let (amount, cap) =
+        calculate_benefit_slice_amount(monthly_amount, days, days, eligible_days as i32, policy);
+    Ok(round2(cap.map_or(amount, |cap| amount.min(cap))))
+}
+
 fn calculate_period_benefit(
     slices: &[DatedPolicySlice<'_>],
     dates: &[(NaiveDate, &str)],
@@ -239,40 +310,35 @@ fn calculate_period_benefit(
 ) -> Result<Decimal> {
     let period_days = Decimal::from(service_days(period_start, period_end)?);
     let mut amount = Decimal::ZERO;
+    let mut capped_proportional_amount = Decimal::ZERO;
+    let mut capped_proportional_limit = Decimal::ZERO;
     for slice in slices {
         let slice_days = Decimal::from(service_days(slice.start, slice.end)?);
         let base = amount_for(slice.state);
-        match policy_for_benefit(slice.state, benefit) {
-            // An absent rule is an explicit compatibility path: preserve the
-            // established calendar-weighted monthly amount for this version.
-            None => amount += base * slice_days / period_days,
-            Some(policy) => match policy.method {
-                BenefitPaymentMethod::Full => amount += base * slice_days / period_days,
-                BenefitPaymentMethod::FullIfEligibleDay => {
-                    if eligible_benefit_days(policy, dates, paid_sick_dates, slice.start, slice.end)
-                        > 0
-                    {
-                        amount += base * slice_days / period_days;
-                    }
-                }
-                BenefitPaymentMethod::Proportional => {
-                    let eligible_days = eligible_benefit_days(
-                        policy,
-                        dates,
-                        paid_sick_dates,
-                        slice.start,
-                        slice.end,
-                    );
-                    let denominator = match policy.denominator {
-                        BenefitProrationDenominator::CalendarDays => period_days,
-                        BenefitProrationDenominator::ThirtyDayMonth => Decimal::from(30),
-                    };
-                    amount += base * Decimal::from(eligible_days) / denominator;
-                }
-                BenefitPaymentMethod::NoPayment => {}
-            },
+        let policy = policy_for_benefit(slice.state, benefit);
+        let eligible_days = policy
+            .filter(|policy| {
+                matches!(
+                    policy.method,
+                    BenefitPaymentMethod::FullIfEligibleDay | BenefitPaymentMethod::Proportional
+                )
+            })
+            .map(|policy| {
+                eligible_benefit_days(policy, dates, paid_sick_dates, slice.start, slice.end)
+            })
+            .unwrap_or_default();
+        let (slice_amount, monthly_cap) =
+            calculate_benefit_slice_amount(base, period_days, slice_days, eligible_days, policy);
+        if let Some(monthly_cap) = monthly_cap {
+            capped_proportional_amount += slice_amount;
+            capped_proportional_limit += monthly_cap;
+        } else {
+            // Missing rules and rules without the new explicit cap preserve
+            // their former calculation result, including historical 31/30.
+            amount += slice_amount;
         }
     }
+    amount += capped_proportional_amount.min(capped_proportional_limit);
     Ok(round2(amount))
 }
 

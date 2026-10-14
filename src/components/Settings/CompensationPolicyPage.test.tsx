@@ -19,19 +19,6 @@ let viteOrigin = '';
 let previousDisableHmr: string | undefined;
 
 beforeAll(async () => {
-  const result = await build({
-    entryPoints: ['src/components/Settings/CompensationPolicyPageTestHarness.tsx'],
-    bundle: true,
-    format: 'iife',
-    platform: 'browser',
-    target: 'chrome120',
-    write: false,
-    jsx: 'automatic',
-    logLevel: 'silent',
-    define: { 'process.env.NODE_ENV': '"production"' },
-  });
-  harnessBundle = result.outputFiles[0]?.text ?? '';
-  if (!harnessBundle) throw new Error('The rendered component test harness did not bundle.');
   previousDisableHmr = process.env.DISABLE_HMR;
   process.env.DISABLE_HMR = 'true';
   vite = await createServer({
@@ -44,6 +31,28 @@ beforeAll(async () => {
   const address = vite.httpServer?.address();
   if (!address || typeof address === 'string') throw new Error('The rendered component test CSS server did not bind a TCP port.');
   viteOrigin = `http://127.0.0.1:${address.port}`;
+  const result = await build({
+    entryPoints: ['src/components/Settings/CompensationPolicyPageTestHarness.tsx'],
+    bundle: true,
+    format: 'iife',
+    platform: 'browser',
+    target: 'chrome120',
+    write: false,
+    jsx: 'automatic',
+    logLevel: 'silent',
+    define: { 'process.env.NODE_ENV': '"production"' },
+    plugins: [{
+      name: 'serve-wasm-package-as-a-browser-module',
+      setup(builder) {
+        builder.onResolve({ filter: /payroll_wasm\.js$/ }, () => ({
+          path: `${viteOrigin}/src/wasm/pkg/payroll_wasm.js`,
+          external: true,
+        }));
+      },
+    }],
+  });
+  harnessBundle = result.outputFiles[0]?.text ?? '';
+  if (!harnessBundle) throw new Error('The rendered component test harness did not bundle.');
   browser = await chromium.launch({ headless: true });
 }, 30_000);
 
@@ -63,6 +72,7 @@ afterAll(async () => {
 async function openPolicyPage(): Promise<Page> {
   pageUnderTest = await browser.newPage();
   pageUnderTest.setDefaultTimeout(5_000);
+  await pageUnderTest.goto(`${viteOrigin}/src/wasm/pkg/payroll_wasm.js`);
   await pageUnderTest.setContent(`<!doctype html><html lang="tr"><body><div id="root"></div></body></html>`);
   await pageUnderTest.addStyleTag({ url: `${viteOrigin}/src/index.css` });
   await pageUnderTest.addScriptTag({ content: harnessBundle });
@@ -134,6 +144,47 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     await page.locator('#policy-base-wage').waitFor({ state: 'visible' });
     expect(await page.locator('#policy-base-wage').inputValue()).toBe('2616,26');
     expect((await events(page)).filter((entry) => entry.type === 'load').length).toBe(2);
+  });
+
+  test('keeps eligibility day choices visible and focuses the missing rule without inventing a default', async () => {
+    const page = await openPolicyPage();
+    await page.evaluate(() => window.__compensationPolicyTest.useEylulPrefill());
+    await page.locator('#policy-reason').fill('Hak ediş doğrulama testi');
+    await page.locator('#benefit-policy-birlestirilmisSosyalYardim').selectOption('PROPORTIONAL');
+
+    const dayChoices = page.locator('#benefit-day-types-birlestirilmisSosyalYardim');
+    await dayChoices.getByRole('checkbox', { name: /çalışılan gün/ }).waitFor({ state: 'visible' });
+    expect(await dayChoices.getByRole('checkbox').count()).toBe(6);
+    expect(await dayChoices.getByRole('checkbox').evaluateAll((boxes) => boxes.some((box) => (box as HTMLInputElement).checked))).toBe(false);
+
+    await page.getByRole('button', { name: /Etkileri önizle/ }).click();
+    await dayChoices.locator('#benefit-day-types-birlestirilmisSosyalYardim-error').waitFor({ state: 'visible' });
+    expect(await dayChoices.getAttribute('aria-invalid')).toBe('true');
+    expect(await dayChoices.getByRole('checkbox').evaluateAll((boxes) => boxes.some((box) => (box as HTMLInputElement).checked))).toBe(false);
+    await page.waitForFunction(() => document.activeElement?.closest('#benefit-day-types-birlestirilmisSosyalYardim') !== null);
+    expect(await page.evaluate(() => document.activeElement?.closest('#benefit-day-types-birlestirilmisSosyalYardim') !== null)).toBe(true);
+
+    await dayChoices.getByRole('checkbox', { name: /çalışılan gün/ }).check();
+    await page.locator('#benefit-denominator-birlestirilmisSosyalYardim').selectOption('THIRTY_DAY_MONTH');
+    const benefitCard = dayChoices.locator('xpath=..');
+    await page.waitForFunction(() => document.querySelector('#benefit-day-types-birlestirilmisSosyalYardim')?.parentElement?.textContent?.includes('3393,13 TL'));
+    expect(await benefitCard.innerText()).toContain('3393,13 TL');
+    expect(await benefitCard.innerText()).toContain('2026-09 dönemi · 30 takvim günü');
+    expect(await benefitCard.innerText()).toContain('Aylık tutar, dönem içindeki politika dilimlerinin aylık payları toplamıyla sınırlandırılır.');
+
+    await page.locator('#policy-social').fill('3000');
+    await page.waitForFunction(() => document.querySelector('#benefit-day-types-birlestirilmisSosyalYardim')?.parentElement?.textContent?.includes('2000 TL'));
+    expect(await benefitCard.innerText()).toContain('2000 TL');
+    expect(await benefitCard.innerText()).toContain('mevcut personel puantajı kullanılmıyor');
+  });
+
+  test('shows legacy proportional policies as historically uncapped until the user changes the choice', async () => {
+    const page = await openPolicyPage();
+    await page.evaluate(() => window.__compensationPolicyTest.useLegacyUncappedBenefitRule());
+
+    expect(await page.getByRole('radio', { name: 'Aylık tanımlı tutarı aşma (önerilen)' }).isChecked()).toBe(false);
+    expect(await page.getByRole('radio', { name: 'Sözleşme gerektiriyorsa aylık tutarın aşılmasına izin ver' }).isChecked()).toBe(true);
+    expect(await page.locator('#benefit-day-types-birlestirilmisSosyalYardim').innerText()).toContain('Tarihsel 31/30 hesabını korumak için aşım davranışı açık gösteriliyor');
   });
 
   test('keeps dates, policy ids, and modes visible when the policy API rejects a rounding conflict', async () => {
@@ -418,6 +469,7 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
       geceCalismaTatiliPrimiYuzde: '30',
       ekOdeme: '0',
       digerGelirVarsayilan: null,
+      socialBenefitAccrualPolicies: null,
     });
 
     await page.getByRole('button', { name: 'Önizlenen değişikliği kaydet' }).click();
@@ -505,6 +557,7 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
       geceCalismaTatiliPrimiYuzde: '30',
       ekOdeme: '0',
       digerGelirVarsayilan: null,
+      socialBenefitAccrualPolicies: null,
     });
 
     await page.evaluate(() => window.__compensationPolicyTest.setScenario('reloadwait'));

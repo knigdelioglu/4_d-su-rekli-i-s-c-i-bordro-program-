@@ -141,6 +141,8 @@ export interface BenefitAccrualPolicy {
   method: BenefitPaymentMethod;
   eligibleDayTypes: BenefitDayType[];
   denominator: BenefitProrationDenominator;
+  /** Missing means a historical policy version with the former uncapped behavior. */
+  allowMonthlyAmountExcess?: boolean;
 }
 
 export interface SocialBenefitAccrualPolicies {

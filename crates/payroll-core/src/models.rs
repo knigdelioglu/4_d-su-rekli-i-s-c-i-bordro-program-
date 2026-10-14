@@ -816,6 +816,11 @@ pub struct BenefitAccrualPolicy {
     #[serde(default)]
     pub eligibleDayTypes: Vec<BenefitDayType>,
     pub denominator: BenefitProrationDenominator,
+    /// `None` is the legacy, uncapped 30-day behavior. New form-created
+    /// proportional rules write `Some(false)` unless the contract explicitly
+    /// permits the monthly amount to be exceeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowMonthlyAmountExcess: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

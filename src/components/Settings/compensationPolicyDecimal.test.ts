@@ -8,6 +8,7 @@ import {
   draftToCompensationPolicyOperation,
   draftToCompensationPolicyState,
   findScopedSameDateActiveLeaf,
+  getCompensationPolicyBenefitRuleErrors,
   parseCompensationPolicyDecimal,
   validateCompensationPolicyDraft,
 } from './compensationPolicyDecimal';
@@ -40,6 +41,26 @@ const completeStateDraft = (): PageDraft => ({
 });
 
 describe('exact compensation policy decimal boundary', () => {
+  test('requires an explicit eligibility set and defaults newly selected thirty-day rules to the monthly cap', () => {
+    const draft = completeStateDraft();
+    draft.socialBenefitAccrualPolicies.birlestirilmisSosyalYardim = {
+      method: 'PROPORTIONAL',
+      eligibleDayTypes: [],
+      denominator: 'THIRTY_DAY_MONTH',
+      allowMonthlyAmountExcess: false,
+    };
+    expect(getCompensationPolicyBenefitRuleErrors(draft.socialBenefitAccrualPolicies))
+      .toEqual({ birlestirilmisSosyalYardim: 'Bu ödeme yöntemi için en az bir hak kazandıran gün türü seçilmelidir.' });
+    expect(validateCompensationPolicyDraft(draft).draft).toBe('INVALID');
+
+    draft.socialBenefitAccrualPolicies.birlestirilmisSosyalYardim.eligibleDayTypes = ['WORKED'];
+    const result = draftToCompensationPolicyState(draft);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.state.socialBenefitAccrualPolicies?.birlestirilmisSosyalYardim?.allowMonthlyAmountExcess).toBe(false);
+    }
+  });
+
   test('canonicalizes Turkish decimal input exactly without a JavaScript number conversion', () => {
     expect(parseCompensationPolicyDecimal('9007199254740993,1234')).toEqual({
       ok: true,
@@ -79,6 +100,7 @@ describe('exact compensation policy decimal boundary', () => {
       geceCalismaTatiliPrimiYuzde: '30',
       ekOdeme: '0',
       digerGelirVarsayilan: null,
+      socialBenefitAccrualPolicies: null,
     });
     const userDraft = compensationPolicyStateToDraft(result.state);
     expect(userDraft.gunlukTabanUcret).toBe('9007199254740993,1234');

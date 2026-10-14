@@ -1,4 +1,4 @@
-use bordro_programi_lib::db::create_in_memory_connection;
+use bordro_programi_lib::db::{create_connection, create_in_memory_connection};
 use bordro_programi_lib::domain::models::*;
 use bordro_programi_lib::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
 use bordro_programi_lib::repositories::attendance_repo::AttendanceRepository;
@@ -16,6 +16,10 @@ use payroll_core::PayrollMutation;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::{Duration as StdDuration, SystemTime, UNIX_EPOCH};
 #[path = "common/compensation_policy.rs"]
 mod compensation_policy_test_support;
 
@@ -170,7 +174,19 @@ fn setup_full_retro_database() -> (
     BordroDonemi,
     CompensationRevision,
 ) {
-    let conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
+    setup_full_retro_database_with(
+        create_in_memory_connection().expect("in-memory SQLite kurulmalı"),
+    )
+}
+
+fn setup_full_retro_database_with(
+    conn: rusqlite::Connection,
+) -> (
+    rusqlite::Connection,
+    BordroDonemi,
+    BordroDonemi,
+    CompensationRevision,
+) {
     let person = personnel();
     let source_period = retro_period("2026-03", 4);
     let payment_period = retro_period("2026-06", 6);
@@ -244,6 +260,28 @@ fn setup_full_retro_database() -> (
     PayrollService::calculate_payroll_for_personnel(&conn, &person.id, "2026-04")
         .expect("2026-04 normal bordro hesaplanmalı");
     (conn, source_period, payment_period, revision)
+}
+
+struct TemporaryRetroDatabase(PathBuf);
+
+impl TemporaryRetroDatabase {
+    fn new() -> Self {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        Self(std::env::temp_dir().join(format!(
+            "4d-retro-sequence-{}-{nonce}.sqlite",
+            std::process::id()
+        )))
+    }
+}
+
+impl Drop for TemporaryRetroDatabase {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        let _ = std::fs::remove_file(self.0.with_extension("sqlite-journal"));
+    }
 }
 
 #[test]
@@ -574,6 +612,108 @@ fn native_retro_payments_allocate_distinct_sequences_for_same_person_and_date() 
         same_date.iter().map(|row| row.sequence).collect::<Vec<_>>(),
         [0, 1]
     );
+}
+
+#[test]
+fn concurrent_native_retro_payments_serialize_same_date_sequence_allocation() {
+    let temp_database = TemporaryRetroDatabase::new();
+    let (conn, _source_period, payment_period, first_revision) = setup_full_retro_database_with(
+        create_connection(Some(temp_database.0.clone()))
+            .expect("file-backed SQLite should initialize"),
+    );
+
+    let mut second_revision = first_revision.clone();
+    second_revision.id = "revision-concurrent-sequence-2".into();
+    second_revision.title = "Concurrent sequence allocation".into();
+    save_revision_with_overrides(
+        &conn,
+        &second_revision,
+        &[CompensationRevisionOverride {
+            id: "override-concurrent-sequence-2".into(),
+            revisionId: second_revision.id.clone(),
+            parameter: RetroParameterKey::EK_ODEME,
+            value: dec!(12000),
+            personnelId: None,
+        }],
+    )
+    .expect("second revision should persist");
+
+    let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset should load");
+    let first_preview =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
+            batchId: "batch-concurrent-sequence-1".into(),
+            revision: first_revision.clone(),
+            overrides: dataset
+                .compensationRevisionOverrides
+                .iter()
+                .filter(|item| item.revisionId == first_revision.id)
+                .cloned()
+                .collect(),
+            personnelId: "retro-atomic-person".into(),
+            paymentDate: "2026-06-20".into(),
+            calculatedAt: "2026-06-20T00:00:00Z".into(),
+            description: None,
+            dataset: dataset.clone(),
+        })
+        .expect("first preview should calculate");
+    let second_preview =
+        payroll_core::RetroEntitlementEngine::calculate(&payroll_core::RetroCalculationRequest {
+            batchId: "batch-concurrent-sequence-2".into(),
+            revision: second_revision.clone(),
+            overrides: dataset
+                .compensationRevisionOverrides
+                .iter()
+                .filter(|item| item.revisionId == second_revision.id)
+                .cloned()
+                .collect(),
+            personnelId: "retro-atomic-person".into(),
+            paymentDate: "2026-06-20".into(),
+            calculatedAt: "2026-06-20T00:00:00Z".into(),
+            description: None,
+            dataset,
+        })
+        .expect("second preview should calculate");
+
+    let barrier = Arc::new(Barrier::new(2));
+    let payment_period_id = payment_period.id.clone();
+    let path = temp_database.0.clone();
+    let start_payment = |batch: RetroAdjustmentBatch, allocations: Vec<RetroAllocation>| {
+        let path = path.clone();
+        let payment_period_id = payment_period_id.clone();
+        let barrier = Arc::clone(&barrier);
+        thread::spawn(move || {
+            let connection = rusqlite::Connection::open(path).expect("second connection opens");
+            connection
+                .busy_timeout(StdDuration::from_secs(5))
+                .expect("SQLite contention should wait briefly");
+            barrier.wait();
+            PayrollService::create_retro_payment(
+                &connection,
+                &batch,
+                &allocations,
+                &payment_period_id,
+                0,
+            )
+        })
+    };
+
+    let first = start_payment(first_preview.batch, first_preview.allocations);
+    let second = start_payment(second_preview.batch, second_preview.allocations);
+    assert!(first.join().expect("first worker should finish").is_ok());
+    assert!(second.join().expect("second worker should finish").is_ok());
+
+    let same_date = PayrollRepository::get_for_personnel_and_payment_date(
+        &conn,
+        "retro-atomic-person",
+        "2026-06-20",
+    )
+    .expect("same-date payments should load");
+    assert_eq!(same_date.len(), 2);
+    assert_eq!(
+        same_date.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert_ne!(same_date[0].accrualId, same_date[1].accrualId);
 }
 
 #[test]

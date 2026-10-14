@@ -2939,6 +2939,15 @@ export const RUST_STRUCT_CONTRACT = {
         "nestedTypes": [
           "BenefitProrationDenominator"
         ]
+      },
+      "allowMonthlyAmountExcess": {
+        "rustName": "allowMonthlyAmountExcess",
+        "rustType": "Option<bool>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": []
       }
     }
   },
