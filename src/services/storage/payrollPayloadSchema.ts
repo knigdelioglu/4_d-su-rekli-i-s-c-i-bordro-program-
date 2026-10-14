@@ -81,7 +81,10 @@ export function validateTransportRatesForPeriod(
 
 export const VALID_ATTENDANCE_CODES = new Set(['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R', 'Üİ', 'D']);
 
-const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R', 'Üİ', 'D'] as const;
+// Rust PuantajOzeti skips zero-valued Üİ and D counters when serializing.
+// Keep the established seven counters strict; omitted new counters mean zero.
+const PUANTAJ_OZETI_REQUIRED_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
+const PUANTAJ_OZETI_OPTIONAL_ZERO_KEYS = ['Üİ', 'D'] as const;
 const ACCRUAL_TYPE_VALUES = RUST_ENUM_VALUES.AccrualType;
 const COMPENSATION_REVISION_REASON_VALUES = RUST_ENUM_VALUES.CompensationRevisionReason;
 const COMPENSATION_REVISION_STATUS_VALUES = RUST_ENUM_VALUES.CompensationRevisionStatus;
@@ -377,9 +380,13 @@ export function validatePuantaj(
   });
 }
 
-function validatePuantajOzeti(value: unknown, path: string): void {
+export function validatePuantajOzeti(value: unknown, path: string): void {
   assertRecord(value, path);
-  PUANTAJ_OZETI_KEYS.forEach((key) => requiredInteger(value, key, path));
+  PUANTAJ_OZETI_REQUIRED_KEYS.forEach((key) => requiredInteger(value, key, path));
+  PUANTAJ_OZETI_OPTIONAL_ZERO_KEYS.forEach((key) => {
+    // Absent is an implicit zero; present values must still be strict integers.
+    if (hasOwn(value, key)) assertInteger(value[key], fieldPath(path, key));
+  });
 }
 
 function validateGelirKalemleri(value: unknown, path: string): void {
