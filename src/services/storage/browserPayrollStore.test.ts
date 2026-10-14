@@ -2643,6 +2643,8 @@ describe('Legacy native Serde compatibility parity', () => {
     delete summary.R;
 
     const parsed = parseLegacyBackup(JSON.stringify(legacy));
+    // Legacy V1 import materializes all zero defaults; current Rust JSON may
+    // omit zero-valued Üİ/D, which the strict current validator now accepts.
     expect(parsed.bordrolar[0].puantajOzeti).toEqual({
       Ç: 1,
       T: 0,
@@ -2651,6 +2653,8 @@ describe('Legacy native Serde compatibility parity', () => {
       GÇ: 0,
       GÇT: 0,
       R: 0,
+      'Üİ': 0,
+      D: 0,
     });
 
     const current = parseTestSnapshot(makeV2Snapshot());
