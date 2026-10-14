@@ -6,8 +6,9 @@ use bordro_programi_lib::db::{
     },
 };
 use bordro_programi_lib::domain::models::{
+    BenefitAccrualPolicy, BenefitDayType, BenefitPaymentMethod, BenefitProrationDenominator,
     CompensationBoundaryScope, CompensationPolicyGroup, CompensationPolicyState,
-    CompensationPolicyVersion, RoadRoundingMode,
+    CompensationPolicyVersion, RoadRoundingMode, SocialBenefitAccrualPolicies,
 };
 use bordro_programi_lib::repositories::compensation_policy_repo::CompensationPolicyRepository;
 use bordro_programi_lib::repositories::transaction::with_transaction;
@@ -35,6 +36,8 @@ fn policy_state(base: rust_decimal::Decimal) -> CompensationPolicyState {
         geceCalismaTatiliPrimiYuzde: dec!(0),
         ekOdeme: None,
         digerGelirVarsayilan: Some(dec!(0)),
+
+        socialBenefitAccrualPolicies: None,
     }
 }
 
@@ -557,4 +560,24 @@ fn strict_database_read_rejects_malformed_financial_json_and_constraints_reject_
         [],
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn social_benefit_rules_round_trip_through_versioned_database_json() {
+    let conn = create_in_memory_connection().unwrap();
+    let mut configured = version("benefit-rules", "2026-01-15", dec!(100), None);
+    configured.state.socialBenefitAccrualPolicies = Some(SocialBenefitAccrualPolicies {
+        birlestirilmisSosyalYardim: Some(BenefitAccrualPolicy {
+            method: BenefitPaymentMethod::Proportional,
+            eligibleDayTypes: vec![BenefitDayType::Worked, BenefitDayType::PaidSickLeave],
+            denominator: BenefitProrationDenominator::ThirtyDayMonth,
+        }),
+        ..Default::default()
+    });
+
+    CompensationPolicyRepository::insert_version(&conn, &configured).unwrap();
+    let restored =
+        CompensationPolicyRepository::get_versions_for_period(&conn, "2026-01-15", "2026-02-14")
+            .unwrap();
+    assert_eq!(restored, vec![configured]);
 }

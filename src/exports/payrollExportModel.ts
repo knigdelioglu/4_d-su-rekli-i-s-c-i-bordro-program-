@@ -94,6 +94,8 @@ const ATTENDANCE_LABELS: Record<string, string> = {
   'GÇ': 'Gece Çalışması',
   'GÇT': 'Gece Çalışması Tatili',
   R: 'Rapor',
+  'Üİ': 'Ücretsiz İzin',
+  D: 'İşe giriş/çıkış nedeniyle hizmet dışı',
 };
 
 const INCOME_LABELS: Array<[keyof BordroKaydi['gelirler'], string]> = [

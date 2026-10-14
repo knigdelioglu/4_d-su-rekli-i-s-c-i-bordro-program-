@@ -6,7 +6,6 @@ use super::*;
 use crate::payroll_snapshot::{
     PAID_SICK_LEAVE_RULE_VERSION, PAYROLL_CALCULATION_VERSION, PAYROLL_SNAPSHOT_SCHEMA_VERSION,
 };
-use rust_decimal_macros::dec;
 
 fn personal_deductions_snapshot(
     person: &Personel,
@@ -131,7 +130,6 @@ fn prior_event_snapshot(
     dataset: &PayrollDatasetSnapshot,
     index: &PayrollDatasetIndex,
     payroll: &BordroKaydi,
-    current_settings: &PayrollPeriodInstitutionSettings,
 ) -> Result<PayrollPriorPaymentEventSnapshot> {
     let period = period_by_id(dataset, index, &payroll.donemId)?;
     let gv = payroll.gvDetay.as_ref().ok_or_else(|| {
@@ -156,12 +154,12 @@ fn prior_event_snapshot(
         .damgaDetay
         .as_ref()
         .map(|detail| detail.uygulananDamgaIstisnasi)
-        .unwrap_or_else(|| {
-            let rate = current_settings.damgaVergisiOraniBinde.unwrap_or_default() / dec!(1000);
-            (round2(payroll.gelirToplam * rate)
-                - payroll.kesintiler.damgaVergisi.unwrap_or_default())
-            .max(Decimal::ZERO)
-        });
+        .ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "UNSUPPORTED_HISTORICAL_REPLAY: {} damga vergisi istisnası ayrıştırılamıyor; kayıtlı damgaDetay eksik.",
+                effective_accrual_id(payroll)
+            ))
+        })?;
 
     Ok(PayrollPriorPaymentEventSnapshot {
         periodId: payroll.donemId.clone(),
@@ -283,7 +281,7 @@ pub(super) fn build_compensation_policy_snapshot(
                             && prior_period.taxMonth <= period.taxMonth
                     })
             })
-            .map(|(_, prior)| prior_event_snapshot(dataset, index, prior, settings))
+            .map(|(_, prior)| prior_event_snapshot(dataset, index, prior))
             .collect::<Result<Vec<_>>>()?;
     // The order from the payment-event index is canonical and intentionally
     // retained; do not sort by work-period ID or accrual type here.

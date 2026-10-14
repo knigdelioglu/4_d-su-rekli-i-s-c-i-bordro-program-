@@ -4,7 +4,7 @@
 
 import { RUST_ENUM_VALUES } from '../services/payrollEngine/generated/payrollContract';
 
-export type PuantajKodu = 'Ç' | 'T' | 'G' | 'İ' | 'GÇ' | 'GÇT' | 'R';
+export type PuantajKodu = 'Ç' | 'T' | 'G' | 'İ' | 'GÇ' | 'GÇT' | 'R' | 'Üİ' | 'D';
 
 export interface PuantajKoduBilgi {
   kod: PuantajKodu;
@@ -64,6 +64,20 @@ export const PUANTAJ_KODLARI: Record<PuantajKodu, PuantajKoduBilgi> = {
     renk: 'text-rose-700 dark:text-rose-300',
     bgRenk: 'bg-rose-50 border-rose-200 text-rose-800',
   },
+  'Üİ': {
+    kod: 'Üİ',
+    tanim: 'Ücretsiz İzin',
+    aciklama: 'Ücret ve SGK günü doğurmayan ücretsiz izin günü',
+    renk: 'text-orange-700 dark:text-orange-300',
+    bgRenk: 'bg-orange-50 border-orange-200 text-orange-800',
+  },
+  D: {
+    kod: 'D',
+    tanim: 'Dönem Dışı',
+    aciklama: 'İşe giriş veya işten çıkış nedeniyle hizmet dışında kalan gün',
+    renk: 'text-slate-700 dark:text-slate-300',
+    bgRenk: 'bg-slate-100 border-slate-300 text-slate-800',
+  },
 };
 
 export interface GvIndirimGirdileri {
@@ -116,6 +130,25 @@ export interface CompensationPolicyState {
   geceCalismaTatiliPrimiYuzde: number;
   ekOdeme: number | null;
   digerGelirVarsayilan: number | null;
+  socialBenefitAccrualPolicies?: SocialBenefitAccrualPolicies | null;
+}
+
+export type BenefitPaymentMethod = 'FULL' | 'FULL_IF_ELIGIBLE_DAY' | 'PROPORTIONAL' | 'NO_PAYMENT';
+export type BenefitDayType = 'WORKED' | 'PAID_REST_HOLIDAY_OR_LEAVE' | 'PAID_SICK_LEAVE' | 'UNPAID_SICK_LEAVE' | 'UNPAID_LEAVE' | 'OUTSIDE_EMPLOYMENT';
+export type BenefitProrationDenominator = 'CALENDAR_DAYS' | 'THIRTY_DAY_MONTH';
+
+export interface BenefitAccrualPolicy {
+  method: BenefitPaymentMethod;
+  eligibleDayTypes: BenefitDayType[];
+  denominator: BenefitProrationDenominator;
+}
+
+export interface SocialBenefitAccrualPolicies {
+  birlestirilmisSosyalYardim: BenefitAccrualPolicy | null;
+  giyimYardimi: BenefitAccrualPolicy | null;
+  hizmetZammi: BenefitAccrualPolicy | null;
+  ekOdeme: BenefitAccrualPolicy | null;
+  digerGelir: BenefitAccrualPolicy | null;
 }
 
 export type CompensationBoundaryScope = 'FULL_EARNING' | 'ROAD_ONLY';
@@ -431,7 +464,7 @@ export interface BackupPayload {
   compensationPolicyVersions?: CompensationPolicyVersion[];
 }
 
-export type PuantajOzeti = Record<PuantajKodu, number>;
+export type PuantajOzeti = Record<Exclude<PuantajKodu, 'Üİ' | 'D'>, number> & Partial<Record<'Üİ' | 'D', number>>;
 
 export interface PersonelPuantaj {
   id: string; // `${personelId}_${donemId}`

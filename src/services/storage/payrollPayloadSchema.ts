@@ -79,9 +79,9 @@ export function validateTransportRatesForPeriod(
   }
 }
 
-export const VALID_ATTENDANCE_CODES = new Set(['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R']);
+export const VALID_ATTENDANCE_CODES = new Set(['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R', 'Üİ', 'D']);
 
-const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
+const PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R', 'Üİ', 'D'] as const;
 const ACCRUAL_TYPE_VALUES = RUST_ENUM_VALUES.AccrualType;
 const COMPENSATION_REVISION_REASON_VALUES = RUST_ENUM_VALUES.CompensationRevisionReason;
 const COMPENSATION_REVISION_STATUS_VALUES = RUST_ENUM_VALUES.CompensationRevisionStatus;
@@ -92,6 +92,9 @@ const RETRO_TAX_TREATMENT_VALUES = RUST_ENUM_VALUES.RetroTaxTreatment;
 const RETRO_SETTLEMENT_STATUS_VALUES = RUST_ENUM_VALUES.RetroSettlementStatus;
 const COMPENSATION_BOUNDARY_SCOPE_VALUES = RUST_ENUM_VALUES.CompensationBoundaryScope;
 const ROAD_ROUNDING_MODE_VALUES = RUST_ENUM_VALUES.RoadRoundingMode;
+const BENEFIT_PAYMENT_METHOD_VALUES = RUST_ENUM_VALUES.BenefitPaymentMethod;
+const BENEFIT_DAY_TYPE_VALUES = RUST_ENUM_VALUES.BenefitDayType;
+const BENEFIT_PRORATION_DENOMINATOR_VALUES = RUST_ENUM_VALUES.BenefitProrationDenominator;
 const RETRO_SGK_TREATMENT_VALUES = RUST_ENUM_VALUES.RetroSgkTreatment;
 const RETRO_POLICY_BY_EARNING_CODE: Record<
   (typeof RETRO_EARNING_CODE_VALUES)[number],
@@ -878,6 +881,35 @@ function validateCompensationPolicyState(value: UnknownRecord, path: string): vo
     required(group, 'aktif', groupPath);
     assertBoolean(group.aktif, fieldPath(groupPath, 'aktif'));
   });
+  if (Object.prototype.hasOwnProperty.call(value, 'socialBenefitAccrualPolicies')) {
+    const policyValue = value.socialBenefitAccrualPolicies;
+    if (policyValue !== null) {
+      assertRecord(policyValue, fieldPath(path, 'socialBenefitAccrualPolicies'));
+      const benefits = ['birlestirilmisSosyalYardim', 'giyimYardimi', 'hizmetZammi', 'ekOdeme', 'digerGelir'] as const;
+      benefits.forEach((benefit) => {
+        const rule = policyValue[benefit];
+        if (rule === undefined || rule === null) return;
+        const rulePath = fieldPath(fieldPath(path, 'socialBenefitAccrualPolicies'), benefit);
+        assertRecord(rule, rulePath);
+        requiredEnum(rule, 'method', BENEFIT_PAYMENT_METHOD_VALUES, rulePath);
+        requiredEnum(rule, 'denominator', BENEFIT_PRORATION_DENOMINATOR_VALUES, rulePath);
+        const dayTypes = required(rule, 'eligibleDayTypes', rulePath);
+        assertArray(dayTypes, fieldPath(rulePath, 'eligibleDayTypes'));
+        dayTypes.forEach((dayType, index) => {
+          assertString(dayType, `${fieldPath(rulePath, 'eligibleDayTypes')}[${index}]`);
+          if (!BENEFIT_DAY_TYPE_VALUES.includes(dayType as (typeof BENEFIT_DAY_TYPE_VALUES)[number])) {
+            fail(`${fieldPath(rulePath, 'eligibleDayTypes')}[${index}]`, `desteklenmeyen hak ediş gün türü: ${dayType}.`);
+          }
+        });
+        if (new Set(dayTypes).size !== dayTypes.length) {
+          fail(fieldPath(rulePath, 'eligibleDayTypes'), 'aynı hak ediş gün türü birden fazla seçilemez.');
+        }
+        if ((rule.method === 'FULL_IF_ELIGIBLE_DAY' || rule.method === 'PROPORTIONAL') && dayTypes.length === 0) {
+          fail(fieldPath(rulePath, 'eligibleDayTypes'), 'seçili ödeme yöntemi için en az bir hak kazandıran gün türü gerekir.');
+        }
+      });
+    }
+  }
 }
 
 function validateCompensationPolicyVersion(value: unknown, path: string): void {

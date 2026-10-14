@@ -129,6 +129,13 @@ const draft: CompensationPolicyStateDraft = {
   geceCalismaTatiliPrimiYuzde: '18.75',
   ekOdeme: { kind: 'VALUE', raw: '0' },
   digerGelirVarsayilan: { kind: 'ABSENT' },
+  socialBenefitAccrualPolicies: {
+    birlestirilmisSosyalYardim: null,
+    giyimYardimi: null,
+    hizmetZammi: null,
+    ekOdeme: null,
+    digerGelir: null,
+  },
 };
 
 const previewData: CompensationPolicyPreviewData = {

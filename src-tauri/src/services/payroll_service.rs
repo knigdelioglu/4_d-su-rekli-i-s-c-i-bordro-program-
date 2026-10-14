@@ -355,9 +355,8 @@ impl PayrollService {
         // not allow a caller to reuse it for a different person, period, or
         // accrual type; a composite person+period uniqueness rule alone would
         // otherwise permit a second payment node with the same batch id.
-        let existing_batch_identity = PayrollRepository::get_all(&tx)?.into_iter().find(|record| {
-            record.id == canonical_batch.id || record.accrualId == canonical_batch.id
-        });
+        let existing_batch_identity =
+            PayrollRepository::get_by_id_or_accrual_id(&tx, &canonical_batch.id)?;
         if let Some(existing) = existing_batch_identity {
             if existing.personelId != canonical_batch.personnelId
                 || existing.accrualType != AccrualType::RETRO_ADJUSTMENT
@@ -395,19 +394,19 @@ impl PayrollService {
             &retro_batch_impact,
         )?;
 
-        let payrolls = PayrollRepository::get_all(&tx)?;
-        let existing = payrolls.iter().find(|record| {
+        let payment_events = PayrollRepository::get_for_personnel_and_payment_date(
+            &tx,
+            &canonical_batch.personnelId,
+            &canonical_batch.paymentDate,
+        )?;
+        let existing = payment_events.iter().find(|record| {
             record.personelId == canonical_batch.personnelId
                 && record.donemId == payment_period_id
                 && record.accrualId == canonical_batch.id
         });
         let effective_sequence = existing.map(|record| record.sequence).unwrap_or_else(|| {
-            payrolls
+            payment_events
                 .iter()
-                .filter(|record| {
-                    record.personelId == canonical_batch.personnelId
-                        && record.paymentDate == canonical_batch.paymentDate
-                })
                 .map(|record| record.sequence)
                 .max()
                 .map_or(0, |sequence| sequence + 1)

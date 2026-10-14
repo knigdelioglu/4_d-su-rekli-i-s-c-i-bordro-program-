@@ -89,6 +89,8 @@ mod tests {
             geceCalismaTatiliPrimiYuzde: "0".parse().unwrap(),
             ekOdeme: Some("0".parse().unwrap()),
             digerGelirVarsayilan: Some("0".parse().unwrap()),
+
+            socialBenefitAccrualPolicies: None,
         }
     }
 

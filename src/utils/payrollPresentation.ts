@@ -511,7 +511,7 @@ export function getPeriodDaysList(baslangicTarihi: string, bitisTarihi: string):
 }
 
 export function calculatePuantajOzeti(gunler: Record<string, PuantajKodu>): PuantajOzeti {
-  const summary: PuantajOzeti = { Ç: 0, T: 0, G: 0, İ: 0, GÇ: 0, GÇT: 0, R: 0 };
+  const summary: PuantajOzeti = { Ç: 0, T: 0, G: 0, İ: 0, GÇ: 0, GÇT: 0, R: 0, 'Üİ': 0, D: 0 };
   Object.values(gunler).forEach((kod) => {
     if (summary[kod] !== undefined) summary[kod]++;
   });

@@ -148,6 +148,8 @@ fn policy_state(
         geceCalismaTatiliPrimiYuzde: dec!(0),
         ekOdeme: None,
         digerGelirVarsayilan: Some(dec!(0)),
+
+        socialBenefitAccrualPolicies: None,
     }
 }
 

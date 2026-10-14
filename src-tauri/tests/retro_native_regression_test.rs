@@ -509,6 +509,74 @@ fn native_retro_payment_replay_refreshes_stale_event_without_duplicate() {
 }
 
 #[test]
+fn native_retro_payments_allocate_distinct_sequences_for_same_person_and_date() {
+    let (conn, _source_period, payment_period, first_revision) = setup_full_retro_database();
+    let mut revisions = vec![first_revision.clone()];
+    let mut second_revision = first_revision;
+    second_revision.id = "revision-native-sequence-2".into();
+    second_revision.title = "Native sequence allocation second revision".into();
+    let second_override = CompensationRevisionOverride {
+        id: "override-native-sequence-2".into(),
+        revisionId: second_revision.id.clone(),
+        parameter: RetroParameterKey::EK_ODEME,
+        value: dec!(12000),
+        personnelId: None,
+    };
+    save_revision_with_overrides(&conn, &second_revision, &[second_override])
+        .expect("second revision should persist");
+    revisions.push(second_revision);
+
+    let mut events = Vec::new();
+    for (index, revision) in revisions.into_iter().enumerate() {
+        let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset should load");
+        let overrides = dataset
+            .compensationRevisionOverrides
+            .iter()
+            .filter(|item| item.revisionId == revision.id)
+            .cloned()
+            .collect();
+        let batch_id = format!("batch-sequence-{index}");
+        let preview = payroll_core::RetroEntitlementEngine::calculate(
+            &payroll_core::RetroCalculationRequest {
+                batchId: batch_id,
+                revision: revision.clone(),
+                overrides,
+                personnelId: "retro-atomic-person".into(),
+                paymentDate: "2026-06-20".into(),
+                calculatedAt: "2026-06-20T00:00:00Z".into(),
+                description: None,
+                dataset,
+            },
+        )
+        .expect("canonical preview should calculate");
+        events.push(
+            PayrollService::create_retro_payment(
+                &conn,
+                &preview.batch,
+                &preview.allocations,
+                &payment_period.id,
+                0,
+            )
+            .expect("retro payment event should persist"),
+        );
+    }
+
+    assert_eq!(events[0].sequence, 0);
+    assert_eq!(events[1].sequence, 1);
+    let same_date = PayrollRepository::get_for_personnel_and_payment_date(
+        &conn,
+        "retro-atomic-person",
+        "2026-06-20",
+    )
+    .expect("targeted same-date query should load the events");
+    assert_eq!(same_date.len(), 2);
+    assert_eq!(
+        same_date.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        [0, 1]
+    );
+}
+
+#[test]
 fn native_stale_batch_and_payment_recover_in_place_and_remain_idempotent() {
     let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
     let dataset = PayrollService::build_dataset_snapshot(&conn).expect("dataset okunmalı");

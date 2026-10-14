@@ -458,6 +458,55 @@ fn attendance_mutation_ignores_unrelated_person_and_preserves_legacy_dependency(
 }
 
 #[test]
+fn old_accrual_invalidation_does_not_chain_through_continuous_payroll_years() {
+    let mut periods = Vec::new();
+    let mut payrolls = Vec::new();
+    for year in 2025..=2028 {
+        for month in 1..=12 {
+            let id = format!("period-{year}-{month:02}");
+            let (next_year, next_month) = if month == 12 {
+                (year + 1, 1)
+            } else {
+                (year, month + 1)
+            };
+            let start = format!("{year}-{month:02}-15");
+            let end = format!("{next_year}-{next_month:02}-14");
+            periods.push(period_custom(&id, &start, &end, year, month));
+            let accrual_id = format!("accrual-{year}-{month:02}");
+            payrolls.push(payroll_for(
+                "person-1",
+                &id,
+                &accrual_id,
+                BordroStatus::CALCULATED,
+                AccrualType::NORMAL,
+                &format!("{year}-{month:02}-20"),
+                0,
+                StatutorySnapshotSource::AttendanceBacked,
+            ));
+        }
+    }
+
+    let data = dataset(periods, payrolls);
+    let impact = evaluate_payroll_invalidation(
+        &data,
+        &PayrollMutation::AccrualCalculation {
+            personnelId: "person-1".into(),
+            periodId: "period-2025-11".into(),
+            accrualId: "accrual-2025-11".into(),
+        },
+    )
+    .expect("source-period invalidation");
+
+    assert!(!affected(&impact, "accrual-2025-11"));
+    assert!(affected(&impact, "accrual-2025-12"));
+    assert!(affected(&impact, "accrual-2026-01"));
+    assert!(!affected(&impact, "accrual-2026-02"));
+    assert!(!affected(&impact, "accrual-2026-03"));
+    assert!(!affected(&impact, "accrual-2027-01"));
+    assert!(!affected(&impact, "accrual-2028-12"));
+}
+
+#[test]
 fn compensation_policy_uses_normal_roots_and_actual_payment_event_closure() {
     let source = period_custom("source", "2026-03-15", "2026-04-14", 2026, 3);
     let next = period_custom("next", "2026-04-15", "2026-05-14", 2026, 4);

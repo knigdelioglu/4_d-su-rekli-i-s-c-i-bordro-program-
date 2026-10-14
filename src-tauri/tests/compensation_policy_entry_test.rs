@@ -77,6 +77,8 @@ fn policy_state() -> CompensationPolicyState {
         geceCalismaTatiliPrimiYuzde: dec!(0),
         ekOdeme: Some(dec!(0)),
         digerGelirVarsayilan: Some(dec!(0)),
+
+        socialBenefitAccrualPolicies: None,
     }
 }
 

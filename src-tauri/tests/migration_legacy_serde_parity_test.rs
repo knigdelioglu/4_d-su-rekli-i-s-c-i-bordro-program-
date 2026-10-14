@@ -2134,6 +2134,8 @@ fn precise_compensation_policy_version() -> CompensationPolicyVersion {
             geceCalismaTatiliPrimiYuzde: dec!(0),
             ekOdeme: Some(dec!(0)),
             digerGelirVarsayilan: Some(dec!(0)),
+
+            socialBenefitAccrualPolicies: None,
         },
         boundaryScope: CompensationBoundaryScope::FullEarning,
         roadRoundingMode: RoadRoundingMode::PerCompensationSlice,

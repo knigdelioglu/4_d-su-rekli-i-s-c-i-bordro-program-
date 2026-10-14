@@ -175,6 +175,7 @@ function operationFieldLabels(fields: CompensationPolicyDirectEffect['changedFie
     geceCalismaTatiliPrimiYuzde: 'Gece çalışma tatili primi',
     ekOdeme: 'Ek ödeme',
     digerGelirVarsayilan: 'Diğer gelir varsayılanı',
+    socialBenefitAccrualPolicies: 'Sosyal yardım hak ediş kuralları',
   };
   return fields
     .filter((field) => field !== 'isPrimiGruplari')

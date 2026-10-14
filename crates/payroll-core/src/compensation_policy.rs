@@ -7,8 +7,8 @@
 
 use crate::errors::DomainError;
 use crate::models::{
-    BordroDonemi, BordroKaydi, CompensationBoundaryScope, CompensationPolicyState,
-    CompensationPolicyVersion, ResolvedCompensationSegment,
+    BenefitPaymentMethod, BordroDonemi, BordroKaydi, CompensationBoundaryScope,
+    CompensationPolicyState, CompensationPolicyVersion, ResolvedCompensationSegment,
 };
 use crate::Result;
 use chrono::{Duration, NaiveDate};
@@ -92,6 +92,40 @@ pub fn validate_compensation_policy_state(state: &CompensationPolicyState) -> Re
     }
     if state.isPrimiGruplari.is_empty() {
         return Err(invalid("İş primi grupları tam state içinde boş olamaz."));
+    }
+
+    if let Some(policies) = state.socialBenefitAccrualPolicies.as_ref() {
+        for (name, policy) in [
+            (
+                "birlestirilmisSosyalYardim",
+                policies.birlestirilmisSosyalYardim.as_ref(),
+            ),
+            ("giyimYardimi", policies.giyimYardimi.as_ref()),
+            ("hizmetZammi", policies.hizmetZammi.as_ref()),
+            ("ekOdeme", policies.ekOdeme.as_ref()),
+            ("digerGelir", policies.digerGelir.as_ref()),
+        ] {
+            let Some(policy) = policy else { continue };
+            let mut seen = HashSet::new();
+            if policy
+                .eligibleDayTypes
+                .iter()
+                .any(|day_type| !seen.insert(*day_type))
+            {
+                return Err(invalid(format!(
+                    "{name} hak ediş kuralında aynı gün türü birden fazla seçilemez."
+                )));
+            }
+            if matches!(
+                policy.method,
+                BenefitPaymentMethod::FullIfEligibleDay | BenefitPaymentMethod::Proportional
+            ) && policy.eligibleDayTypes.is_empty()
+            {
+                return Err(invalid(format!(
+                    "{name} hak ediş kuralı seçilen gün türlerinden en az birini içermelidir."
+                )));
+            }
+        }
     }
 
     let mut identifier_owners: HashMap<&str, usize> = HashMap::new();

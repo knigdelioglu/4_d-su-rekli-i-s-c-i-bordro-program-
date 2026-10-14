@@ -6,6 +6,8 @@ import type {
   CompensationPolicyPageProps,
   CompensationPolicyStateDraft,
   RoadRoundingMode,
+  BenefitDayType,
+  BenefitPaymentMethod,
 } from '../../services/compensationPolicy/contract';
 import {
   applyCompensationPolicyPercentageIncrease,
@@ -33,6 +35,38 @@ export interface CompensationPolicyFormProps {
 
 const inputClassName = 'min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 font-mono focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100';
 const errorClassName = 'mt-1 text-xs font-medium text-rose-700';
+
+const BENEFIT_ITEMS = [
+  { key: 'birlestirilmisSosyalYardim', label: 'Birleştirilmiş sosyal yardım' },
+  { key: 'giyimYardimi', label: 'Giyim yardımı' },
+  { key: 'hizmetZammi', label: 'Hizmet zammı' },
+  { key: 'ekOdeme', label: 'Ek ödeme' },
+  { key: 'digerGelir', label: 'Diğer gelir' },
+] as const satisfies ReadonlyArray<{ key: keyof Draft['socialBenefitAccrualPolicies']; label: string }>;
+
+const BENEFIT_DAY_TYPES: ReadonlyArray<{ value: BenefitDayType; label: string }> = [
+  { value: 'WORKED', label: 'Ç / GÇ · çalışılan gün' },
+  { value: 'PAID_REST_HOLIDAY_OR_LEAVE', label: 'T / G / İ / GÇT · ücretli tatil ve izin' },
+  { value: 'PAID_SICK_LEAVE', label: 'R · ücretli rapor günü' },
+  { value: 'UNPAID_SICK_LEAVE', label: 'R · ücretsiz rapor günü' },
+  { value: 'UNPAID_LEAVE', label: 'Üİ · ücretsiz izin' },
+  { value: 'OUTSIDE_EMPLOYMENT', label: 'D · işe giriş/çıkış nedeniyle hizmet dışı gün' },
+];
+
+const PAYMENT_METHODS: ReadonlyArray<{ value: BenefitPaymentMethod; label: string; explanation: string }> = [
+  { value: 'FULL', label: 'Tam öde', explanation: 'Bu geçerlilik diliminin tutarı puantaj günlerinden bağımsız tam uygulanır.' },
+  { value: 'FULL_IF_ELIGIBLE_DAY', label: 'Hak ediş varsa tam öde', explanation: 'Bu dilimde en az bir seçili hak günü varsa tam tutar uygulanır; sıfır günde ödeme yapılmaz.' },
+  { value: 'PROPORTIONAL', label: 'Orantılı öde', explanation: 'Yalnız seçili hak günleri için, belirlenen paydaya göre kıst hesaplanır.' },
+  { value: 'NO_PAYMENT', label: 'Tahakkuk ettirme', explanation: 'Bu geçerlilik diliminde bu gelir kalemi tahakkuk etmez.' },
+];
+
+const defaultBenefitRule = (method: BenefitPaymentMethod) => ({
+  method,
+  // Do not silently assume a collective agreement's eligibility list. Users
+  // explicitly choose day classes for conditional and proportional rules.
+  eligibleDayTypes: [] as BenefitDayType[],
+  denominator: 'CALENDAR_DAYS' as const,
+});
 
 interface TextDecimalInputProps {
   id: string;
@@ -167,6 +201,18 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
     onDraftChange({ ...draft, ...result.draft });
     setPercentageFeedback({ kind: 'success', message: 'Günlük taban ücret ve yemek güncellendi. Diğer ücret alanları değişmedi; yeni değerleri gözden geçirin.' });
   };
+  const setBenefitPolicy = (
+    key: keyof Draft['socialBenefitAccrualPolicies'],
+    update: (current: Draft['socialBenefitAccrualPolicies'][typeof key]) => Draft['socialBenefitAccrualPolicies'][typeof key]
+  ) => {
+    const current = draft.socialBenefitAccrualPolicies[key];
+    change({
+      socialBenefitAccrualPolicies: {
+        ...draft.socialBenefitAccrualPolicies,
+        [key]: update(current),
+      },
+    });
+  };
 
   return (
     <form className="space-y-4" onSubmit={(event) => event.preventDefault()} aria-label="Ücret politikası formu">
@@ -292,6 +338,121 @@ export const CompensationPolicyForm: React.FC<CompensationPolicyFormProps> = ({
             <TextDecimalInput id="policy-road" label="Yol" value={draft.gunlukVasitaYol} error={required('gunlukVasitaYol')} disabled={disabled} onChange={(gunlukVasitaYol) => change({ gunlukVasitaYol })} />
             <TextDecimalInput id="policy-clothing" label="Giyim yardımı" value={draft.giyimYardimi} error={required('giyimYardimi')} disabled={disabled} onChange={(giyimYardimi) => change({ giyimYardimi })} />
             <TextDecimalInput id="policy-service-unit" label="Hizmet zammı birimi" value={draft.hizmetZammiBirimi} error={required('hizmetZammiBirimi')} disabled={disabled} onChange={(hizmetZammiBirimi) => change({ hizmetZammiBirimi })} />
+          </div>
+        </section>
+
+        <section aria-labelledby="benefit-accrual-heading" className="space-y-3 border-t border-slate-200 pt-4">
+          <div>
+            <h3 id="benefit-accrual-heading" className="text-sm font-bold text-slate-900">Sosyal Yardım Hak Edişleri</h3>
+            <p className="mt-1 text-xs text-slate-600">
+              Her kalemin ödeme yöntemini ayrı seçin. Eski sürümlerde seçim yapılmamışsa mevcut hesaplama davranışı korunur.
+            </p>
+            <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-950">
+              Hak ediş kurallarını kurumunuz için geçerli mevzuat ve toplu iş sözleşmesine göre belirleyin. Değişikliğin geçerlilik tarihi ve dayanağı bu ücret politikası sürümünde saklanır.
+            </p>
+          </div>
+          <div className="space-y-3">
+            {BENEFIT_ITEMS.map(({ key, label }) => {
+              const policy = draft.socialBenefitAccrualPolicies[key];
+              const method = policy?.method ?? null;
+              const methodInfo = PAYMENT_METHODS.find((item) => item.value === method);
+              return (
+                <article key={key} className="rounded-md border border-slate-200 p-3">
+                  <div className="grid gap-2 sm:grid-cols-[minmax(12rem,1fr)_minmax(16rem,1.2fr)] sm:items-end">
+                    <div>
+                      <label htmlFor={`benefit-policy-${key}`} className="mb-1 block text-sm font-semibold text-slate-800">{label}</label>
+                      <select
+                        id={`benefit-policy-${key}`}
+                        className={inputClassName.replace('font-mono', '')}
+                        value={method ?? 'LEGACY'}
+                        onChange={(event) => {
+                          const selected = event.target.value;
+                          if (selected === 'LEGACY') {
+                            setBenefitPolicy(key, () => null);
+                          } else {
+                            setBenefitPolicy(key, (current) => ({
+                              ...(current ?? defaultBenefitRule(selected as BenefitPaymentMethod)),
+                              method: selected as BenefitPaymentMethod,
+                            }));
+                          }
+                        }}
+                      >
+                        <option value="LEGACY">Eski hesaplama davranışını koru</option>
+                        {PAYMENT_METHODS.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                      </select>
+                    </div>
+                    <p className="text-xs leading-5 text-slate-600">
+                      {methodInfo?.explanation ?? 'Bu kalem için henüz yeni bir hak ediş kuralı tanımlanmadı; önceki sürümdeki davranış kullanılır.'}
+                    </p>
+                  </div>
+                  {method && (
+                    <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-700" aria-live="polite">
+                      Örnek tahakkuk: 3.000,00 TL tutar ve 30 günlük dönemde 20 hak günü için{' '}
+                      {method === 'FULL' ? '3.000,00 TL (tam tutar)' :
+                        method === 'FULL_IF_ELIGIBLE_DAY' ? '3.000,00 TL (en az bir hak günü var)' :
+                          method === 'PROPORTIONAL' ? '2.000,00 TL (3.000 × 20 / 30)' :
+                            '0,00 TL (tahakkuk yok)'}.
+                    </p>
+                  )}
+                  {(method === 'FULL_IF_ELIGIBLE_DAY' || method === 'PROPORTIONAL') && (
+                    <details className="mt-2 border-t border-slate-100 pt-2">
+                      <summary className="cursor-pointer text-xs font-semibold text-indigo-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+                        Ayrıntılı Kurallar · hak kazandıran günler ve oranlama
+                      </summary>
+                      <fieldset className="mt-2 space-y-2">
+                        <legend className="text-xs font-semibold text-slate-700">Hak kazandıran gün türleri</legend>
+                        {policy?.eligibleDayTypes.length === 0 && (
+                          <p className="rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+                            Bir gün türü otomatik seçilmez. Kurumunuz için geçerli mevzuat ve toplu iş sözleşmesine göre en az bir tür işaretleyin.
+                          </p>
+                        )}
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {BENEFIT_DAY_TYPES.map(({ value, label: dayLabel }) => (
+                            <label key={value} className="flex min-h-8 items-center gap-2 text-xs text-slate-700">
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 accent-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                                checked={policy?.eligibleDayTypes.includes(value) ?? false}
+                                onChange={(event) => setBenefitPolicy(key, (current) => {
+                                  const rule = current ?? defaultBenefitRule(method);
+                                  return {
+                                    ...rule,
+                                    eligibleDayTypes: event.target.checked
+                                      ? [...rule.eligibleDayTypes, value]
+                                      : rule.eligibleDayTypes.filter((item) => item !== value),
+                                  };
+                                })}
+                              />
+                              {dayLabel}
+                            </label>
+                          ))}
+                        </div>
+                        {method === 'PROPORTIONAL' && (
+                          <div className="max-w-sm">
+                            <label htmlFor={`benefit-denominator-${key}`} className="mb-1 block text-xs font-semibold text-slate-700">Oranlama paydası</label>
+                            <select
+                              id={`benefit-denominator-${key}`}
+                              className={inputClassName.replace('font-mono', '')}
+                              value={policy?.denominator ?? 'CALENDAR_DAYS'}
+                              onChange={(event) => setBenefitPolicy(key, (current) => ({
+                                ...(current ?? defaultBenefitRule(method)),
+                                denominator: event.target.value as 'CALENDAR_DAYS' | 'THIRTY_DAY_MONTH',
+                              }))}
+                            >
+                              <option value="CALENDAR_DAYS">Dönemin takvim günleri</option>
+                              <option value="THIRTY_DAY_MONTH">Sabit 30 gün</option>
+                            </select>
+                          </div>
+                        )}
+                        <p className="text-xs leading-5 text-slate-500">
+                          Her takvim günü tek puantaj koduyla sınıflanır. Rapor günleri, mevcut ücretli rapor hakkı kayıtlarına göre ücretli/ücretsiz ayrılır; Üİ ücretsiz izni, D işe giriş/çıkış nedeniyle hizmet dışı günü belirtir.
+                        </p>
+                      </fieldset>
+                    </details>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </section>
 

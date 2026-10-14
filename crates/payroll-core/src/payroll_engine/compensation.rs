@@ -1,4 +1,5 @@
 use super::*;
+use std::collections::HashSet;
 
 #[derive(Clone)]
 struct DatedPolicySlice<'a> {
@@ -168,6 +169,113 @@ fn service_days(start: NaiveDate, end: NaiveDate) -> Result<i64> {
         .ok_or_else(|| DomainError::InvalidData("Ücret politikası takvim aralığı geçersiz.".into()))
 }
 
+fn benefit_day_type(
+    code: &str,
+    date: NaiveDate,
+    paid_sick_dates: &HashSet<NaiveDate>,
+) -> BenefitDayType {
+    match code {
+        "Ç" | "GÇ" => BenefitDayType::Worked,
+        "T" | "G" | "İ" | "GÇT" => BenefitDayType::PaidRestHolidayOrLeave,
+        "R" if paid_sick_dates.contains(&date) => BenefitDayType::PaidSickLeave,
+        "R" => BenefitDayType::UnpaidSickLeave,
+        "Üİ" => BenefitDayType::UnpaidLeave,
+        "D" => BenefitDayType::OutsideEmployment,
+        // Attendance validation rejects unsupported values before calculation.
+        _ => BenefitDayType::OutsideEmployment,
+    }
+}
+
+fn eligible_benefit_days(
+    policy: &BenefitAccrualPolicy,
+    dates: &[(NaiveDate, &str)],
+    paid_sick_dates: &HashSet<NaiveDate>,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> i32 {
+    dates
+        .iter()
+        .filter(|(date, code)| {
+            *date >= start
+                && *date <= end
+                && policy
+                    .eligibleDayTypes
+                    .contains(&benefit_day_type(code, *date, paid_sick_dates))
+        })
+        .count() as i32
+}
+
+#[derive(Clone, Copy)]
+enum SocialBenefitKind {
+    CombinedAid,
+    Clothing,
+    ServiceBonus,
+    ExtraPayment,
+    OtherIncome,
+}
+
+fn policy_for_benefit(
+    state: &CompensationPolicyState,
+    benefit: SocialBenefitKind,
+) -> Option<&BenefitAccrualPolicy> {
+    let policies = state.socialBenefitAccrualPolicies.as_ref()?;
+    match benefit {
+        SocialBenefitKind::CombinedAid => policies.birlestirilmisSosyalYardim.as_ref(),
+        SocialBenefitKind::Clothing => policies.giyimYardimi.as_ref(),
+        SocialBenefitKind::ServiceBonus => policies.hizmetZammi.as_ref(),
+        SocialBenefitKind::ExtraPayment => policies.ekOdeme.as_ref(),
+        SocialBenefitKind::OtherIncome => policies.digerGelir.as_ref(),
+    }
+}
+
+fn calculate_period_benefit(
+    slices: &[DatedPolicySlice<'_>],
+    dates: &[(NaiveDate, &str)],
+    paid_sick_dates: &HashSet<NaiveDate>,
+    period_start: NaiveDate,
+    period_end: NaiveDate,
+    amount_for: &dyn Fn(&CompensationPolicyState) -> Decimal,
+    benefit: SocialBenefitKind,
+) -> Result<Decimal> {
+    let period_days = Decimal::from(service_days(period_start, period_end)?);
+    let mut amount = Decimal::ZERO;
+    for slice in slices {
+        let slice_days = Decimal::from(service_days(slice.start, slice.end)?);
+        let base = amount_for(slice.state);
+        match policy_for_benefit(slice.state, benefit) {
+            // An absent rule is an explicit compatibility path: preserve the
+            // established calendar-weighted monthly amount for this version.
+            None => amount += base * slice_days / period_days,
+            Some(policy) => match policy.method {
+                BenefitPaymentMethod::Full => amount += base * slice_days / period_days,
+                BenefitPaymentMethod::FullIfEligibleDay => {
+                    if eligible_benefit_days(policy, dates, paid_sick_dates, slice.start, slice.end)
+                        > 0
+                    {
+                        amount += base * slice_days / period_days;
+                    }
+                }
+                BenefitPaymentMethod::Proportional => {
+                    let eligible_days = eligible_benefit_days(
+                        policy,
+                        dates,
+                        paid_sick_dates,
+                        slice.start,
+                        slice.end,
+                    );
+                    let denominator = match policy.denominator {
+                        BenefitProrationDenominator::CalendarDays => period_days,
+                        BenefitProrationDenominator::ThirtyDayMonth => Decimal::from(30),
+                    };
+                    amount += base * Decimal::from(eligible_days) / denominator;
+                }
+                BenefitPaymentMethod::NoPayment => {}
+            },
+        }
+    }
+    Ok(round2(amount))
+}
+
 fn legacy_group_items(state: &CompensationPolicyState) -> Vec<IsPrimiGrupItem> {
     state
         .isPrimiGruplari
@@ -206,6 +314,7 @@ pub(super) fn calculate_policy_income(
     let all_slices = timeline.slices()?;
     let slices = timeline.earning_slices()?;
     let dates = attendance_dates(attendance)?;
+    let paid_sick_date_set = paid_sick_dates.iter().copied().collect::<HashSet<_>>();
     let mut income = GelirKalemleri::default();
 
     let mut base = Some(Decimal::ZERO);
@@ -216,7 +325,7 @@ pub(super) fn calculate_policy_income(
             base,
             Some(round2(Decimal::from(days) * slice.state.gunlukTabanUcret)),
         );
-        let sick_days = paid_sick_dates
+        let sick_days = paid_sick_date_set
             .iter()
             .filter(|date| **date >= slice.start && **date <= slice.end)
             .count() as i32;
@@ -298,23 +407,66 @@ pub(super) fn calculate_policy_income(
 
     let period_start = policy_date(&period.baslangicTarihi)?;
     let period_end = policy_date(&period.bitisTarihi)?;
-    let total_calendar_days = Decimal::from(service_days(period_start, period_end)?);
-    let weighted = |amount_for: &dyn Fn(&CompensationPolicyState) -> Decimal| -> Result<Decimal> {
-        let mut amount = Decimal::ZERO;
-        for slice in &all_slices {
-            amount +=
-                amount_for(slice.state) * Decimal::from(service_days(slice.start, slice.end)?);
-        }
-        Ok(round2(amount / total_calendar_days))
-    };
-    income.birlestirilmisSosyalYardim = Some(weighted(&|state| state.birlestirilmisSosyalYardim)?);
-    income.giyimYardimi = Some(weighted(&|state| state.giyimYardimi)?);
-    income.hizmetZammi = Some(weighted(&|state| {
-        Decimal::from(service_year) * state.hizmetZammiBirimi
-    })?);
+    income.birlestirilmisSosyalYardim = Some(calculate_period_benefit(
+        &all_slices,
+        &dates,
+        &paid_sick_date_set,
+        period_start,
+        period_end,
+        &|state| state.birlestirilmisSosyalYardim,
+        SocialBenefitKind::CombinedAid,
+    )?);
+    income.giyimYardimi = Some(calculate_period_benefit(
+        &all_slices,
+        &dates,
+        &paid_sick_date_set,
+        period_start,
+        period_end,
+        &|state| state.giyimYardimi,
+        SocialBenefitKind::Clothing,
+    )?);
+    income.hizmetZammi = Some(calculate_period_benefit(
+        &all_slices,
+        &dates,
+        &paid_sick_date_set,
+        period_start,
+        period_end,
+        &|state| Decimal::from(service_year) * state.hizmetZammiBirimi,
+        SocialBenefitKind::ServiceBonus,
+    )?);
     let period_end_state = timeline.period_end_state()?;
-    income.ekOdeme = period_end_state.ekOdeme.map(round2);
-    income.digerGelir = period_end_state.digerGelirVarsayilan.map(round2);
+    let has_ek_odeme_policy = all_slices
+        .iter()
+        .any(|slice| policy_for_benefit(slice.state, SocialBenefitKind::ExtraPayment).is_some());
+    income.ekOdeme = if has_ek_odeme_policy {
+        Some(calculate_period_benefit(
+            &all_slices,
+            &dates,
+            &paid_sick_date_set,
+            period_start,
+            period_end,
+            &|state| state.ekOdeme.unwrap_or_default(),
+            SocialBenefitKind::ExtraPayment,
+        )?)
+    } else {
+        period_end_state.ekOdeme.map(round2)
+    };
+    let has_other_income_policy = all_slices
+        .iter()
+        .any(|slice| policy_for_benefit(slice.state, SocialBenefitKind::OtherIncome).is_some());
+    income.digerGelir = if has_other_income_policy {
+        Some(calculate_period_benefit(
+            &all_slices,
+            &dates,
+            &paid_sick_date_set,
+            period_start,
+            period_end,
+            &|state| state.digerGelirVarsayilan.unwrap_or_default(),
+            SocialBenefitKind::OtherIncome,
+        )?)
+    } else {
+        period_end_state.digerGelirVarsayilan.map(round2)
+    };
 
     Ok((income, premium_detail))
 }

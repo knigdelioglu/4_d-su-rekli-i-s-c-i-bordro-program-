@@ -117,6 +117,8 @@ fn attendance_classification_table_preserves_prim_and_meal_semantics() {
         ("GÇT", None, 30, 0),
         ("R", Some(r_date), 30, 27),
         ("R", None, 27, 27),
+        ("Üİ", None, 0, 0),
+        ("D", None, 0, 0),
     ];
 
     for (code, paid_sick_date, expected_sgk_days, expected_meal_days) in cases {
@@ -143,6 +145,33 @@ fn attendance_classification_table_preserves_prim_and_meal_semantics() {
         );
         assert_eq!(snapshot.segments[0].fiiliYemekGunu, expected_meal_days);
     }
+}
+
+#[test]
+fn year_crossing_period_uses_each_statutory_segment_for_sgk_and_pek() {
+    let request = audit_support::dated_request(2026, 12);
+    let period = request.dataset.periods[0].clone();
+    let mut settings = request
+        .dataset
+        .institutionSettings
+        .get(&period.id)
+        .expect("December settings")
+        .clone();
+    settings.statutoryParameterSegments = Some(vec![
+        statutory_segment("2026-12-15", Some(dec!(1101)), None, None, None),
+        statutory_segment("2027-01-01", Some(dec!(1200)), None, None, None),
+    ]);
+    let mut attendance = request.dataset.attendances[0].clone();
+    attendance.gunler.insert("2026-12-31".into(), "Üİ".into());
+
+    let snapshot = resolve_statutory_snapshot_for_period(&attendance, &period, &settings)
+        .expect("year-crossing statutory snapshots");
+    assert_eq!(snapshot.sgkPrimGunSayisi, 30);
+    assert_eq!(snapshot.segments.len(), 2);
+    assert_eq!(snapshot.segments[0].sgkPrimGunSayisi, 16);
+    assert_eq!(snapshot.segments[1].sgkPrimGunSayisi, 14);
+    assert_eq!(snapshot.pekAltSinir, dec!(34416));
+    assert_eq!(snapshot.pekUstSinir, dec!(309744));
 }
 
 #[test]
@@ -1358,7 +1387,7 @@ fn skipped_tax_month_expires_a_two_month_pek_carry_exactly() {
 }
 
 #[test]
-fn legacy_stamp_snapshot_reconstructs_used_exemption_from_gross_and_deduction() {
+fn legacy_stamp_snapshot_without_details_fails_closed_for_same_month_replay() {
     let mut prior_request =
         audit_support::supplementary(audit_support::request(), AccrualType::TEDIYE);
     prior_request.dataset.attendances.clear();
@@ -1372,11 +1401,52 @@ fn legacy_stamp_snapshot_reconstructs_used_exemption_from_gross_and_deduction() 
 
     let mut request = audit_support::request();
     request.dataset.payrolls.push(prior);
-    let current = calculate_payroll(&request).expect("current event after legacy stamp row");
-    let stamp = current.damgaDetay.as_ref().expect("current stamp detail");
-    assert_eq!(stamp.ayniAyOncekiKullanilanDamgaIstisnasi, dec!(101.80));
-    assert_eq!(stamp.uygulananDamgaIstisnasi, dec!(148.90));
-    assert_eq!(stamp.kalanDamgaIstisnasi, Decimal::ZERO);
+    let error = calculate_payroll(&request)
+        .expect_err("an unclassified historical stamp exemption must not be guessed");
+    assert!(error.to_string().contains("UNSUPPORTED_HISTORICAL_REPLAY"));
+    assert!(error
+        .to_string()
+        .contains("kayıtlı finansal verilerden güvenilir"));
+}
+
+#[test]
+fn same_month_stamp_replay_separates_minimum_wage_and_meal_exemptions() {
+    let mut prior_request = audit_support::request();
+    prior_request
+        .dataset
+        .institutionSettings
+        .get_mut(&prior_request.periodId)
+        .unwrap()
+        .yemekTamGvIstisnaDamgaTabi = false;
+    prior_request.accrual = Some(PayrollAccrualInput {
+        accrualId: "stamp-meal-normal".into(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-01-20".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: None,
+    });
+    let prior = calculate_payroll_checked(&prior_request).expect("meal-exempt normal payroll");
+    let prior_stamp = prior.damgaDetay.as_ref().expect("prior stamp detail");
+    assert_eq!(prior.gelirler.yemek, Some(dec!(6200)));
+    // The recorded monthly minimum-wage exclusion stays distinct from the
+    // meal exception already removed before stamp is calculated.
+    assert_eq!(prior_stamp.brutDamgaVergisi, dec!(470.58));
+    assert_eq!(prior_stamp.uygulananDamgaIstisnasi, dec!(250.70));
+    assert_eq!(prior_stamp.kesilenDamgaVergisi, dec!(219.88));
+
+    let mut later_request =
+        audit_support::supplementary(audit_support::request(), AccrualType::TEDIYE);
+    later_request.dataset.institutionSettings = prior_request.dataset.institutionSettings.clone();
+    later_request.dataset.payrolls.push(prior);
+    let later = calculate_payroll_checked(&later_request).expect("same-month later payment");
+    let later_stamp = later.damgaDetay.as_ref().expect("later stamp detail");
+    assert_eq!(
+        later_stamp.ayniAyOncekiKullanilanDamgaIstisnasi,
+        dec!(250.70)
+    );
+    assert_eq!(later_stamp.uygulananDamgaIstisnasi, dec!(0));
+    assert_eq!(later_stamp.kesilenDamgaVergisi, dec!(75.90));
 }
 
 #[test]

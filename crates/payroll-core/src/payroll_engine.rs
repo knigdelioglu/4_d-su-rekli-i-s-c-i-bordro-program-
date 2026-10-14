@@ -87,6 +87,8 @@ fn add_puantaj_kodu(summary: &mut PuantajOzeti, code: &str, period_id: &str) -> 
         "GÇ" => summary.gc += 1,
         "GÇT" => summary.gct += 1,
         "R" => summary.r += 1,
+        "Üİ" => summary.ui += 1,
+        "D" => summary.d += 1,
         _ => {
             return Err(DomainError::InvalidData(format!(
                 "{} döneminde desteklenmeyen puantaj kodu: {}",
@@ -1718,31 +1720,23 @@ fn same_month_gv_exemption_used(prior: &[&BordroKaydi]) -> Result<Decimal> {
     })
 }
 
-fn same_month_stamp_exemption_used(prior: &[&BordroKaydi], stamp_rate: Decimal) -> Result<Decimal> {
+fn same_month_stamp_exemption_used(prior: &[&BordroKaydi]) -> Result<Decimal> {
     prior.iter().try_fold(Decimal::ZERO, |total, payroll| {
-        if let Some(detail) = payroll.damgaDetay.as_ref() {
-            if detail.uygulananDamgaIstisnasi < Decimal::ZERO {
-                return Err(DomainError::InvalidData(format!(
-                    "{} tahakkukunda negatif damga istisnası bulundu; aynı-ay state'i çözülemez.",
-                    effective_accrual_id(payroll)
-                )));
-            }
-            let total = total
-                .checked_add(detail.uygulananDamgaIstisnasi)
-                .ok_or_else(|| {
-                    DomainError::InvalidData(
-                        "Aynı-ay damga istisna toplamında Decimal taşması oluştu.".into(),
-                    )
-                })?;
-            return Ok(round2(total));
+        let detail = payroll.damgaDetay.as_ref().ok_or_else(|| {
+            DomainError::InvalidData(format!(
+                "UNSUPPORTED_HISTORICAL_REPLAY: {} damga istisnası kayıtlı finansal verilerden güvenilir biçimde yeniden üretilemiyor; yeni tahakkuk durduruldu.",
+                effective_accrual_id(payroll)
+            ))
+        })?;
+        if detail.uygulananDamgaIstisnasi < Decimal::ZERO {
+            return Err(DomainError::InvalidData(format!(
+                "{} tahakkukunda negatif damga istisnası bulundu; aynı-ay state'i çözülemez.",
+                effective_accrual_id(payroll)
+            )));
         }
-        // Pre-accrual databases did not persist a stamp snapshot. Reconstruct
-        // the actually used amount from that immutable record's gross and tax,
-        // then carry it into the first new same-month accrual.
-        let gross = round2(payroll.gelirToplam * stamp_rate);
-        let deducted = payroll.kesintiler.damgaVergisi.unwrap_or_default();
-        let used = (gross - deducted).max(Decimal::ZERO);
-        let total = total.checked_add(used).ok_or_else(|| {
+        let total = total
+            .checked_add(detail.uygulananDamgaIstisnasi)
+            .ok_or_else(|| {
             DomainError::InvalidData(
                 "Aynı-ay damga istisna toplamında Decimal taşması oluştu.".into(),
             )
@@ -4016,7 +4010,7 @@ fn calculate_payroll_with_index_policy_override_mode(
         / dec!(1000);
     let monthly_minimum = round2(statutory_snapshot.gvReferansGunlukAsgariUcret * dec!(30));
     let same_month_stamp_used = if let Some(snapshot) = replay_snapshot {
-        let replayed = same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?;
+        let replayed = same_month_stamp_exemption_used(&prior_accruals)?;
         let captured = snapshot
             .usedInputs
             .taxHistory
@@ -4029,7 +4023,7 @@ fn calculate_payroll_with_index_policy_override_mode(
         }
         captured
     } else {
-        same_month_stamp_exemption_used(&prior_accruals, stamp_rate)?
+        same_month_stamp_exemption_used(&prior_accruals)?
     };
     // The institution's selected payroll policy is separate from statutory
     // daily caps and must not change the SGK meal exemption or frozen snapshot.

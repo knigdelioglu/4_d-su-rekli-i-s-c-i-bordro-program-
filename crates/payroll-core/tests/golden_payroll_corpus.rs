@@ -625,9 +625,22 @@ fn golden_payroll_corpus_is_independently_declared_and_exactly_replayed() {
             .as_object_mut()
             .expect("payroll result serializes as an object")
             .remove("calculationMetadata");
+        let mut expected_json = fixture.expected.result.clone();
+        let expected_puantaj = expected_json
+            .get_mut("puantajOzeti")
+            .and_then(Value::as_object_mut)
+            .expect("golden PuantajOzeti should be an object");
+        // Existing golden rows predate explicit unpaid-leave/outside-service
+        // counters. Zero-valued additive fields are omitted from serialization
+        // so old snapshot payloads keep their exact shape.
+        for key in ["Üİ", "D"] {
+            if expected_puantaj.get(key).and_then(Value::as_i64) == Some(0) {
+                expected_puantaj.remove(key);
+            }
+        }
         assert_eq!(
             actual_json,
-            fixture.expected.result,
+            expected_json,
             "{} ({}) FULL_FINANCIAL golden sonucu exact eşleşmiyor",
             path.display(),
             fixture.id

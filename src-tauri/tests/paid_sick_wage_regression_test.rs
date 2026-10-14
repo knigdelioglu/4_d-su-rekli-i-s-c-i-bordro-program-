@@ -108,6 +108,8 @@ fn policy_version_with_rates(
             geceCalismaTatiliPrimiYuzde: dec!(0),
             ekOdeme: Some(dec!(0)),
             digerGelirVarsayilan: Some(dec!(0)),
+
+            socialBenefitAccrualPolicies: None,
         },
         boundaryScope: CompensationBoundaryScope::FullEarning,
         roadRoundingMode: RoadRoundingMode::PerCompensationSlice,

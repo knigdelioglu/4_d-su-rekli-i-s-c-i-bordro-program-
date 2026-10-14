@@ -100,6 +100,8 @@ mod tests {
                         .unwrap_or_default(),
                     ekOdeme: settings.ekOdeme,
                     digerGelirVarsayilan: settings.digerGelirVarsayilan,
+
+                    socialBenefitAccrualPolicies: None,
                 };
                 CompensationPolicyRepository::insert_version(
                     conn,
@@ -164,6 +166,8 @@ mod tests {
             geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
             ekOdeme: settings.ekOdeme,
             digerGelirVarsayilan: settings.digerGelirVarsayilan,
+
+            socialBenefitAccrualPolicies: None,
         };
         CompensationPolicyRepository::insert_version(
             conn,

@@ -184,6 +184,18 @@ pub struct PuantajOzeti {
     pub gct: i32,
     #[serde(rename = "R")]
     pub r: i32,
+    /// Unpaid leave days. Kept separate from paid leave and reports so
+    /// benefit policies can make an explicit entitlement decision.
+    #[serde(rename = "Üİ", skip_serializing_if = "is_zero_i32")]
+    pub ui: i32,
+    /// Days outside the employment interval, entered explicitly in attendance
+    /// until hire/termination dates are modeled on personnel records.
+    #[serde(rename = "D", skip_serializing_if = "is_zero_i32")]
+    pub d: i32,
+}
+
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -764,6 +776,61 @@ pub struct CompensationPolicyState {
     pub ekOdeme: Option<Decimal>,
     #[serde(with = "rust_decimal::serde::str_option")]
     pub digerGelirVarsayilan: Option<Decimal>,
+    /// None preserves the historical monthly-income behavior for older
+    /// policy versions and newly migrated backups.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socialBenefitAccrualPolicies: Option<SocialBenefitAccrualPolicies>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BenefitPaymentMethod {
+    Full,
+    FullIfEligibleDay,
+    Proportional,
+    NoPayment,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BenefitDayType {
+    Worked,
+    PaidRestHolidayOrLeave,
+    PaidSickLeave,
+    UnpaidSickLeave,
+    UnpaidLeave,
+    OutsideEmployment,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BenefitProrationDenominator {
+    CalendarDays,
+    ThirtyDayMonth,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BenefitAccrualPolicy {
+    pub method: BenefitPaymentMethod,
+    #[serde(default)]
+    pub eligibleDayTypes: Vec<BenefitDayType>,
+    pub denominator: BenefitProrationDenominator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SocialBenefitAccrualPolicies {
+    #[serde(default)]
+    pub birlestirilmisSosyalYardim: Option<BenefitAccrualPolicy>,
+    #[serde(default)]
+    pub giyimYardimi: Option<BenefitAccrualPolicy>,
+    #[serde(default)]
+    pub hizmetZammi: Option<BenefitAccrualPolicy>,
+    #[serde(default)]
+    pub ekOdeme: Option<BenefitAccrualPolicy>,
+    #[serde(default)]
+    pub digerGelir: Option<BenefitAccrualPolicy>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

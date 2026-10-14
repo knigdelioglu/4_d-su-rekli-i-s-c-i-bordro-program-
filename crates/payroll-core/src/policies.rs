@@ -304,16 +304,17 @@ fn effective_accrual_id(payroll: &crate::models::BordroKaydi) -> String {
     }
 }
 
-/// GV resets each payment year; PEK can bridge at most two payment months.
-/// Keep the transitive chain (including same-year events after long gaps),
-/// but stop when a new year has neither a tax nor a possible carry dependency.
+/// Income tax dependency ends at the payment-year boundary. A PEK carry can
+/// still reach the next two tax months, so permit that bounded bridge;
+/// do not let a chain of unrelated monthly payrolls renew the old dependency.
 fn affected_after_accrual(
     index: &PayrollDatasetIndex,
     dataset: &PayrollDatasetSnapshot,
     payroll: &crate::models::BordroKaydi,
     personnel_id: &str,
     source_order: &crate::payroll_engine::AccrualOrder,
-    source_date: NaiveDate,
+    source_tax_year: i32,
+    source_tax_month: i32,
 ) -> Result<bool> {
     if payroll.personelId != personnel_id {
         return Ok(false);
@@ -322,29 +323,14 @@ fn affected_after_accrual(
     if candidate_order <= *source_order {
         return Ok(false);
     }
-    let mut events = Vec::new();
-    for event in index.payrolls_for_person(dataset, personnel_id) {
-        let order = payroll_order(dataset, index, event)?;
-        if order > *source_order && order <= candidate_order {
-            events.push((
-                order,
-                payroll_effective_payment_date(index, dataset, event)?,
-            ));
-        }
+    let candidate_period = require_period(index, dataset, &payroll.donemId)?;
+    if candidate_period.taxYear == source_tax_year {
+        return Ok(true);
     }
-    events.sort_by(|left, right| left.0.cmp(&right.0));
-    let ordinal = |date: NaiveDate| i64::from(date.year()) * 12 + i64::from(date.month());
-    let mut previous_date = source_date;
-    for (order, date) in events {
-        if date.year() != previous_date.year() && ordinal(date) - ordinal(previous_date) > 2 {
-            return Ok(false);
-        }
-        if order == candidate_order {
-            return Ok(true);
-        }
-        previous_date = date;
-    }
-    Ok(false)
+    let tax_months_elapsed = (i64::from(candidate_period.taxYear) * 12
+        + i64::from(candidate_period.taxMonth))
+        - (i64::from(source_tax_year) * 12 + i64::from(source_tax_month));
+    Ok((1..=2).contains(&tax_months_elapsed))
 }
 
 fn compensation_policy_period_overlaps(
@@ -410,7 +396,8 @@ fn compensation_policy_causes_for<'a>(
             payroll,
             &root.personelId,
             &payroll_order(dataset, index, root)?,
-            payroll_effective_payment_date(index, dataset, root)?,
+            require_period(index, dataset, &root.donemId)?.taxYear,
+            require_period(index, dataset, &root.donemId)?.taxMonth,
         )? {
             causes.push(root);
         }
@@ -609,7 +596,8 @@ fn affected_by_mutation(
                 payroll,
                 personnelId,
                 &payroll_order(dataset, index, source)?,
-                payroll_effective_payment_date(index, dataset, source)?,
+                require_period(index, dataset, &source.donemId)?.taxYear,
+                require_period(index, dataset, &source.donemId)?.taxMonth,
             )? || (payroll_personnel_id == personnelId
                 && matches!(mutation, PayrollMutation::AccrualDelete { .. })
                 && effective_accrual_id(payroll) == *accrualId))
@@ -626,9 +614,8 @@ fn affected_by_mutation(
             payroll,
             personnelId,
             &input_order(index, dataset, periodId, paymentDate, *sequence, accrualId)?,
-            NaiveDate::parse_from_str(paymentDate, "%Y-%m-%d").map_err(|error| {
-                DomainError::ValidationError(format!("Tahakkuk ödeme tarihi geçersiz: {error}"))
-            })?,
+            require_period(index, dataset, periodId)?.taxYear,
+            require_period(index, dataset, periodId)?.taxMonth,
         ),
         PayrollMutation::RetroBatchSave {
             personnelId,
@@ -1565,11 +1552,11 @@ mod tests {
     }
 
     #[test]
-    fn same_year_and_transitive_cross_year_carry_dependencies_still_block() {
-        for dates in [
-            vec![(2026, 8), (2026, 12)],
-            vec![(2026, 12), (2027, 1)],
-            vec![(2026, 8), (2026, 12), (2027, 1), (2027, 4)],
+    fn same_year_and_bounded_cross_year_carry_dependencies_block() {
+        for (dates, expected_blockers) in [
+            (vec![(2026, 8), (2026, 12)], 1),
+            (vec![(2026, 12), (2027, 1)], 1),
+            (vec![(2026, 8), (2026, 12), (2027, 1), (2027, 4)], 0),
         ] {
             let mut periods = Vec::new();
             let mut payrolls = Vec::new();
@@ -1600,7 +1587,7 @@ mod tests {
                 },
             )
             .unwrap();
-            assert_eq!(impact.blockedByFinalized.len(), 1);
+            assert_eq!(impact.blockedByFinalized.len(), expected_blockers);
         }
     }
 

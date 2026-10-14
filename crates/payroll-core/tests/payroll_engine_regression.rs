@@ -184,6 +184,8 @@ fn legacy_calculation_output_ignores_an_additive_valid_policy_timeline() {
                 geceCalismaTatiliPrimiYuzde: dec!(0),
                 ekOdeme: None,
                 digerGelirVarsayilan: None,
+
+                socialBenefitAccrualPolicies: None,
             },
             boundaryScope: CompensationBoundaryScope::FullEarning,
             roadRoundingMode: RoadRoundingMode::PerCompensationSlice,

@@ -311,6 +311,8 @@ fn schema2_policy_state(
         geceCalismaTatiliPrimiYuzde: Decimal::ZERO,
         ekOdeme: supplemental,
         digerGelirVarsayilan: other_income,
+
+        socialBenefitAccrualPolicies: None,
     }
 }
 

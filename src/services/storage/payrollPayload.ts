@@ -24,7 +24,7 @@ import { describeError } from '../../utils/errorMessage';
 
 type UnknownRecord = Record<string, unknown>;
 
-const LEGACY_PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R'] as const;
+const LEGACY_PUANTAJ_OZETI_KEYS = ['Ç', 'T', 'G', 'İ', 'GÇ', 'GÇT', 'R', 'Üİ', 'D'] as const;
 
 const LEGACY_GELIR_OPTIONAL_DECIMAL_KEYS = [
   'tabanBrutAylik',

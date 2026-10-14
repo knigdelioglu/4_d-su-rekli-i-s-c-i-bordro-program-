@@ -243,6 +243,24 @@ export const RUST_ENUM_VALUES = {
     "STALE",
     "FINALIZED"
   ],
+  "BenefitPaymentMethod": [
+    "FULL",
+    "FULL_IF_ELIGIBLE_DAY",
+    "PROPORTIONAL",
+    "NO_PAYMENT"
+  ],
+  "BenefitDayType": [
+    "WORKED",
+    "PAID_REST_HOLIDAY_OR_LEAVE",
+    "PAID_SICK_LEAVE",
+    "UNPAID_SICK_LEAVE",
+    "UNPAID_LEAVE",
+    "OUTSIDE_EMPLOYMENT"
+  ],
+  "BenefitProrationDenominator": [
+    "CALENDAR_DAYS",
+    "THIRTY_DAY_MONTH"
+  ],
   "CompensationBoundaryScope": [
     "FULL_EARNING",
     "ROAD_ONLY"
@@ -912,6 +930,24 @@ export const RUST_STRUCT_CONTRACT = {
       },
       "R": {
         "rustName": "r",
+        "rustType": "i32",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "Üİ": {
+        "rustName": "ui",
+        "rustType": "i32",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": []
+      },
+      "D": {
+        "rustName": "d",
         "rustType": "i32",
         "required": false,
         "optional": true,
@@ -2853,6 +2889,117 @@ export const RUST_STRUCT_CONTRACT = {
         "nullable": true,
         "decimal": true,
         "nestedTypes": []
+      },
+      "socialBenefitAccrualPolicies": {
+        "rustName": "socialBenefitAccrualPolicies",
+        "rustType": "Option<SocialBenefitAccrualPolicies>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "SocialBenefitAccrualPolicies"
+        ]
+      }
+    }
+  },
+  "BenefitAccrualPolicy": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "method": {
+        "rustName": "method",
+        "rustType": "BenefitPaymentMethod",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitPaymentMethod"
+        ]
+      },
+      "eligibleDayTypes": {
+        "rustName": "eligibleDayTypes",
+        "rustType": "Vec<BenefitDayType>",
+        "required": false,
+        "optional": true,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitDayType"
+        ]
+      },
+      "denominator": {
+        "rustName": "denominator",
+        "rustType": "BenefitProrationDenominator",
+        "required": true,
+        "optional": false,
+        "nullable": false,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitProrationDenominator"
+        ]
+      }
+    }
+  },
+  "SocialBenefitAccrualPolicies": {
+    "renameAll": "camelCase",
+    "default": false,
+    "fields": {
+      "birlestirilmisSosyalYardim": {
+        "rustName": "birlestirilmisSosyalYardim",
+        "rustType": "Option<BenefitAccrualPolicy>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitAccrualPolicy"
+        ]
+      },
+      "giyimYardimi": {
+        "rustName": "giyimYardimi",
+        "rustType": "Option<BenefitAccrualPolicy>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitAccrualPolicy"
+        ]
+      },
+      "hizmetZammi": {
+        "rustName": "hizmetZammi",
+        "rustType": "Option<BenefitAccrualPolicy>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitAccrualPolicy"
+        ]
+      },
+      "ekOdeme": {
+        "rustName": "ekOdeme",
+        "rustType": "Option<BenefitAccrualPolicy>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitAccrualPolicy"
+        ]
+      },
+      "digerGelir": {
+        "rustName": "digerGelir",
+        "rustType": "Option<BenefitAccrualPolicy>",
+        "required": false,
+        "optional": true,
+        "nullable": true,
+        "decimal": false,
+        "nestedTypes": [
+          "BenefitAccrualPolicy"
+        ]
       }
     }
   },

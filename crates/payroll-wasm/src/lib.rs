@@ -460,6 +460,8 @@ mod tests {
             geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
             ekOdeme: settings.ekOdeme,
             digerGelirVarsayilan: settings.digerGelirVarsayilan,
+
+            socialBenefitAccrualPolicies: None,
         }
     }
 

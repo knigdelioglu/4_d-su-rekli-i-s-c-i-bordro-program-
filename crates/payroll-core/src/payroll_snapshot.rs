@@ -14,8 +14,13 @@ use std::collections::HashSet;
 use thiserror::Error;
 
 pub const PAYROLL_SNAPSHOT_SCHEMA_VERSION: u16 = 2;
+/// The original v1 projection remains readable through its explicit
+/// compatibility branch in the calculator.
 pub const PAYROLL_PREVIOUS_CALCULATION_VERSION: &str = "compensation-engine-v1";
-pub const PAYROLL_CALCULATION_VERSION: &str = "compensation-engine-v2";
+/// v2 snapshots used the same attendance fallback, before configurable
+/// benefit-accrual rules were introduced.
+pub const PAYROLL_COMPATIBLE_CALCULATION_VERSION: &str = "compensation-engine-v2";
+pub const PAYROLL_CALCULATION_VERSION: &str = "compensation-engine-v3";
 pub const PAID_SICK_LEAVE_RULE_VERSION: &str =
     "first-two-days-first-five-episodes-by-start-year-v1";
 
@@ -151,6 +156,7 @@ pub fn validate_payroll_calculation_metadata_structure(
     }
     if snapshot.calculationVersion != PAYROLL_CALCULATION_VERSION
         && snapshot.calculationVersion != PAYROLL_PREVIOUS_CALCULATION_VERSION
+        && snapshot.calculationVersion != PAYROLL_COMPATIBLE_CALCULATION_VERSION
     {
         return Err(
             PayrollCalculationSnapshotError::UnsupportedCalculationVersion(

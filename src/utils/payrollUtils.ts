@@ -169,6 +169,8 @@ export function calculatePuantajOzeti(gunler: Record<string, PuantajKodu>): Puan
     GÇ: 0,
     GÇT: 0,
     R: 0,
+    'Üİ': 0,
+    D: 0,
   };
 
   Object.values(gunler).forEach((kod) => {

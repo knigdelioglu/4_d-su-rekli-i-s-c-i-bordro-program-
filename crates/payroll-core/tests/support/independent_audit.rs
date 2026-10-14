@@ -61,6 +61,8 @@ pub fn request() -> PayrollCalculationRequest {
         geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
         ekOdeme: settings.ekOdeme,
         digerGelirVarsayilan: settings.digerGelirVarsayilan,
+
+        socialBenefitAccrualPolicies: None,
     };
     let mut attendance = PersonelPuantaj {
         id: "audit-attendance".into(),

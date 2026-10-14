@@ -66,6 +66,8 @@ fn policy_state(settings: &DonemselKurumDegerleri) -> CompensationPolicyState {
         geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
         ekOdeme: settings.ekOdeme,
         digerGelirVarsayilan: settings.digerGelirVarsayilan,
+
+        socialBenefitAccrualPolicies: None,
     }
 }
 

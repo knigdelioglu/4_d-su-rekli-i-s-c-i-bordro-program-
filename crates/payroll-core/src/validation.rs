@@ -3,7 +3,7 @@ use crate::{models::*, DomainError, Result};
 use chrono::NaiveDate;
 use rust_decimal::Decimal;
 
-pub const VALID_ATTENDANCE_CODES: [&str; 7] = ["Ç", "T", "G", "İ", "GÇ", "GÇT", "R"];
+pub const VALID_ATTENDANCE_CODES: [&str; 9] = ["Ç", "T", "G", "İ", "GÇ", "GÇT", "R", "Üİ", "D"];
 
 pub fn validate_monetary_amount(field: &str, amount: Decimal) -> Result<()> {
     if amount.normalize().scale() > 2 {

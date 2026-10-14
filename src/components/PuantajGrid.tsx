@@ -846,6 +846,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                 <th className="p-3 text-center">GÇ (Gece Ç.)</th>
                 <th className="p-3 text-center">GÇT (Gece T.)</th>
                 <th className="p-3 text-center">R (Rapor)</th>
+                <th className="p-3 text-center">Üİ (Ücretsiz İzin)</th>
+                <th className="p-3 text-center">D (Dönem Dışı)</th>
                 <th className="p-3 text-right">İşlem</th>
               </tr>
             </thead>
@@ -879,6 +881,8 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                     <td className="p-3 text-center font-bold text-indigo-700 font-mono">{sum?.GÇ ?? '—'}</td>
                     <td className="p-3 text-center font-bold text-teal-700 font-mono">{sum?.GÇT ?? '—'}</td>
                     <td className="p-3 text-center font-bold text-rose-700 font-mono">{sum?.R ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-orange-700 font-mono">{sum?.['Üİ'] ?? '—'}</td>
+                    <td className="p-3 text-center font-bold text-slate-700 font-mono">{sum?.D ?? '—'}</td>
                     <td className="p-3 text-right">
                       <button
                         onClick={(e) => {

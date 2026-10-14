@@ -31,6 +31,7 @@ pub fn state_from_settings(settings: &DonemselKurumDegerleri) -> CompensationPol
         geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
         ekOdeme: settings.ekOdeme,
         digerGelirVarsayilan: settings.digerGelirVarsayilan,
+        socialBenefitAccrualPolicies: None,
     }
 }
 

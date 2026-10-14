@@ -9,6 +9,11 @@ import type {
   CompensationRevisionOverride,
   CompensationBoundaryScope,
   CompensationPolicyState,
+  BenefitAccrualPolicy,
+  BenefitDayType,
+  BenefitPaymentMethod,
+  BenefitProrationDenominator,
+  SocialBenefitAccrualPolicies,
   CompensationPolicyVersion,
   RetroAdjustmentBatch,
   RetroAllocation,
@@ -75,7 +80,15 @@ export interface CompensationPolicyStateDraft {
   geceCalismaTatiliPrimiYuzde: string;
   ekOdeme: CompensationPolicyNullableDecimalDraft;
   digerGelirVarsayilan: CompensationPolicyNullableDecimalDraft;
+  socialBenefitAccrualPolicies: SocialBenefitAccrualPolicies;
 }
+
+export type {
+  BenefitAccrualPolicy,
+  BenefitDayType,
+  BenefitPaymentMethod,
+  BenefitProrationDenominator,
+};
 
 export type CompensationPolicyBoundaryIntent =
   | {
@@ -180,6 +193,35 @@ export function compensationPolicyStateEqualsExceptRoad(
           leftGroup.ad !== rightGroup.ad ||
           leftGroup.aktif !== rightGroup.aktif ||
           !sameDecimalValue(leftGroup.oran, rightGroup.oran)
+        ) return false;
+      }
+      continue;
+    }
+    if (key === 'socialBenefitAccrualPolicies') {
+      const leftPolicies = (leftValue ?? null) as SocialBenefitAccrualPolicies | null;
+      const rightPolicies = (rightValue ?? null) as SocialBenefitAccrualPolicies | null;
+      if (leftPolicies === null || rightPolicies === null) {
+        if (leftPolicies !== rightPolicies) return false;
+        continue;
+      }
+      for (const benefit of [
+        'birlestirilmisSosyalYardim',
+        'giyimYardimi',
+        'hizmetZammi',
+        'ekOdeme',
+        'digerGelir',
+      ] as const) {
+        const leftPolicy = leftPolicies[benefit];
+        const rightPolicy = rightPolicies[benefit];
+        if (leftPolicy === null || rightPolicy === null) {
+          if (leftPolicy !== rightPolicy) return false;
+          continue;
+        }
+        if (
+          leftPolicy.method !== rightPolicy.method ||
+          leftPolicy.denominator !== rightPolicy.denominator ||
+          leftPolicy.eligibleDayTypes.length !== rightPolicy.eligibleDayTypes.length ||
+          leftPolicy.eligibleDayTypes.some((dayType) => !rightPolicy.eligibleDayTypes.includes(dayType))
         ) return false;
       }
       continue;

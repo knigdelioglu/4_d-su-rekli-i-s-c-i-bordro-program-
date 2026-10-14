@@ -183,6 +183,8 @@ mod ipc_tests {
             geceCalismaTatiliPrimiYuzde: settings.geceCalismaTatiliPrimiYuzde.unwrap_or_default(),
             ekOdeme: settings.ekOdeme,
             digerGelirVarsayilan: settings.digerGelirVarsayilan,
+
+            socialBenefitAccrualPolicies: None,
         };
         CompensationPolicyRepository::insert_version(
             &state.lock().expect("test DB lock should be available"),

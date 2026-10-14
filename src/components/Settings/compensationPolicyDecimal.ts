@@ -253,6 +253,15 @@ function invalidStateErrors(state: CompensationPolicyStateWire): string[] {
       }
     }
   });
+  for (const [label, policy] of Object.entries(state.socialBenefitAccrualPolicies ?? {})) {
+    if (!policy) continue;
+    if ((policy.method === 'FULL_IF_ELIGIBLE_DAY' || policy.method === 'PROPORTIONAL') && policy.eligibleDayTypes.length === 0) {
+      errors.push(`${label}: bu ödeme yöntemi için en az bir hak kazandıran gün türü seçilmelidir.`);
+    }
+    if (new Set(policy.eligibleDayTypes).size !== policy.eligibleDayTypes.length) {
+      errors.push(`${label}: aynı hak kazandıran gün türü birden fazla seçilemez.`);
+    }
+  }
   return [...new Set(errors)];
 }
 
@@ -275,6 +284,9 @@ function buildFullState(draft: CompensationPolicyStateDraft): CompensationPolicy
     }
     return { ...group, oran: result.ok === true ? result.value : '' };
   });
+  const socialBenefitAccrualPolicies = Object.values(draft.socialBenefitAccrualPolicies).some(Boolean)
+    ? draft.socialBenefitAccrualPolicies
+    : null;
 
   if (Object.keys(fieldErrors).length > 0) {
     return {
@@ -300,6 +312,7 @@ function buildFullState(draft: CompensationPolicyStateDraft): CompensationPolicy
     geceCalismaTatiliPrimiYuzde: requiredValues.get('geceCalismaTatiliPrimiYuzde')!,
     ekOdeme: nullableValues.get('ekOdeme')!,
     digerGelirVarsayilan: nullableValues.get('digerGelirVarsayilan')!,
+    socialBenefitAccrualPolicies,
   } satisfies CompensationPolicyStateWire;
   const errors = invalidStateErrors(state);
   if (errors.length > 0) {
@@ -432,6 +445,14 @@ export function compensationPolicyStateToDraft(source: Partial<CompensationPolic
   };
   const groups = source.isPrimiGruplari;
   if (groups !== undefined && !Array.isArray(groups)) throw new Error('İş primi grupları prefill listesi geçersiz.');
+  const savedAccrualPolicies = source.socialBenefitAccrualPolicies;
+  const socialBenefitAccrualPolicies = {
+    birlestirilmisSosyalYardim: savedAccrualPolicies?.birlestirilmisSosyalYardim ?? null,
+    giyimYardimi: savedAccrualPolicies?.giyimYardimi ?? null,
+    hizmetZammi: savedAccrualPolicies?.hizmetZammi ?? null,
+    ekOdeme: savedAccrualPolicies?.ekOdeme ?? null,
+    digerGelir: savedAccrualPolicies?.digerGelir ?? null,
+  };
   return {
     gunlukTabanUcret: read('gunlukTabanUcret'),
     gunlukYemek: read('gunlukYemek'),
@@ -450,6 +471,7 @@ export function compensationPolicyStateToDraft(source: Partial<CompensationPolic
     geceCalismaTatiliPrimiYuzde: read('geceCalismaTatiliPrimiYuzde'),
     ekOdeme: nullableDraftFromPartial(source, 'ekOdeme'),
     digerGelirVarsayilan: nullableDraftFromPartial(source, 'digerGelirVarsayilan'),
+    socialBenefitAccrualPolicies,
   };
 }
 
@@ -468,6 +490,13 @@ export function createEmptyCompensationPolicyStateDraft(): CompensationPolicySta
     geceCalismaTatiliPrimiYuzde: '',
     ekOdeme: { kind: 'ABSENT' },
     digerGelirVarsayilan: { kind: 'ABSENT' },
+    socialBenefitAccrualPolicies: {
+      birlestirilmisSosyalYardim: null,
+      giyimYardimi: null,
+      hizmetZammi: null,
+      ekOdeme: null,
+      digerGelir: null,
+    },
   };
 }
 
@@ -478,6 +507,12 @@ export function copyCompensationPolicyStateDraft(draft: CompensationPolicyStateD
     isPrimiYuzde: { ...draft.isPrimiYuzde },
     ekOdeme: { ...draft.ekOdeme },
     digerGelirVarsayilan: { ...draft.digerGelirVarsayilan },
+    socialBenefitAccrualPolicies: Object.fromEntries(
+      Object.entries(draft.socialBenefitAccrualPolicies).map(([key, policy]) => [
+        key,
+        policy ? { ...policy, eligibleDayTypes: [...policy.eligibleDayTypes] } : null,
+      ])
+    ) as CompensationPolicyStateDraft['socialBenefitAccrualPolicies'],
     isPrimiGruplari: draft.isPrimiGruplari.map((group) => ({ ...group })),
   };
 }

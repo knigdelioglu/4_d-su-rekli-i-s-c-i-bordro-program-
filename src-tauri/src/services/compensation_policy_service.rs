@@ -1853,10 +1853,13 @@ fn changed_fields(
         return Vec::new();
     };
     let previous_object = previous.as_ref().and_then(serde_json::Value::as_object);
-    next_object
-        .iter()
-        .filter(|(key, value)| previous_object.and_then(|object| object.get(*key)) != Some(*value))
-        .map(|(key, _)| key.clone())
+    let keys = next_object
+        .keys()
+        .chain(previous_object.into_iter().flat_map(|object| object.keys()))
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    keys.into_iter()
+        .filter(|key| next_object.get(key) != previous_object.and_then(|object| object.get(key)))
         .collect()
 }
 

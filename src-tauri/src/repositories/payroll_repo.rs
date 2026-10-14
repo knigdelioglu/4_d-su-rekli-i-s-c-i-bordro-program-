@@ -10,7 +10,7 @@ use crate::repositories::period_repo::PeriodRepository;
 use chrono::{Datelike, NaiveDate, Utc};
 use payroll_core::round_currency_amount;
 use payroll_core::PayrollMutation;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value, Connection, OptionalExtension};
 use rust_decimal::Decimal;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -1153,7 +1153,7 @@ impl PayrollRepository {
     }
 
     pub fn get_all(conn: &Connection) -> Result<Vec<BordroKaydi>> {
-        Self::get_filtered(conn, None)
+        Self::get_filtered(conn, None, None, None)
     }
 
     /// Loads only one person's payment-event history while preserving the
@@ -1161,13 +1161,56 @@ impl PayrollRepository {
     /// The optional predicate is SQL-side so scoped calculation snapshots do
     /// not materialize unrelated personnel or their income/deduction items.
     pub fn get_for_personnel(conn: &Connection, personnel_id: &str) -> Result<Vec<BordroKaydi>> {
-        Self::get_filtered(conn, Some(personnel_id))
+        Self::get_filtered(conn, Some(personnel_id), None, None)
     }
 
-    fn get_filtered(conn: &Connection, personnel_id: Option<&str>) -> Result<Vec<BordroKaydi>> {
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, personnel_id, period_id, accrual_id, accrual_type, payment_date,
+    pub fn get_for_personnel_and_payment_date(
+        conn: &Connection,
+        personnel_id: &str,
+        payment_date: &str,
+    ) -> Result<Vec<BordroKaydi>> {
+        Self::get_filtered(conn, Some(personnel_id), None, Some(payment_date))
+    }
+
+    /// Looks up the globally unique record/accrual identity without loading
+    /// unrelated personnel or their income and deduction rows.
+    pub fn get_by_id_or_accrual_id(
+        conn: &Connection,
+        identity: &str,
+    ) -> Result<Option<BordroKaydi>> {
+        Ok(Self::get_filtered(conn, None, Some(identity), None)?
+            .into_iter()
+            .next())
+    }
+
+    fn get_filtered(
+        conn: &Connection,
+        personnel_id: Option<&str>,
+        identity: Option<&str>,
+        payment_date: Option<&str>,
+    ) -> Result<Vec<BordroKaydi>> {
+        let mut filters = Vec::new();
+        let mut filter_values = Vec::<Value>::new();
+        if let Some(personnel_id) = personnel_id {
+            filters.push("personnel_id = ?".to_string());
+            filter_values.push(Value::Text(personnel_id.to_string()));
+        }
+        if let Some(identity) = identity {
+            filters.push("(id = ? OR accrual_id = ?)".to_string());
+            filter_values.push(Value::Text(identity.to_string()));
+            filter_values.push(Value::Text(identity.to_string()));
+        }
+        if let Some(payment_date) = payment_date {
+            filters.push("payment_date = ?".to_string());
+            filter_values.push(Value::Text(payment_date.to_string()));
+        }
+        let filter_sql = if filters.is_empty() {
+            "1 = 1".to_string()
+        } else {
+            filters.join(" AND ")
+        };
+        let select_records = format!(
+            "SELECT id, personnel_id, period_id, accrual_id, accrual_type, payment_date,
                         sequence, accrual_description, gross_total, gv_base, previous_cumulative_gv,
                         total_deductions, net_payment, status, puantaj_summary_json,
                         pek_detail_json, devreden_pek_gelen_json, sonraki_devreden_pek_json,
@@ -1175,12 +1218,15 @@ impl PayrollRepository {
                         is_primi_snapshot_json, gv_snapshot_json, statutory_snapshot_json,
                         damga_snapshot_json, notlar, calculation_metadata_json
                  FROM payroll_records
-                 WHERE (?1 IS NULL OR personnel_id = ?1)",
-            )
+                 WHERE {filter_sql}
+                 ORDER BY payment_date ASC, sequence ASC, accrual_id ASC, id ASC"
+        );
+        let mut stmt = conn
+            .prepare(&select_records)
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![personnel_id], |row| {
+            .query_map(params_from_iter(filter_values.iter()), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -1220,33 +1266,35 @@ impl PayrollRepository {
         }
 
         // Kalemler iki toplu sorgu ile okunur; her bordro için ayrı SELECT yapılmaz.
-        let mut income_stmt = conn
-            .prepare(
-                "SELECT payroll_id, item_type, amount
+        let select_income = format!(
+            "SELECT payroll_id, item_type, amount
                       FROM payroll_income_items
                       WHERE payroll_id IN (
                           SELECT id FROM payroll_records
-                          WHERE (?1 IS NULL OR personnel_id = ?1)
+                          WHERE {filter_sql}
                       )
-                      ORDER BY payroll_id, item_type",
-            )
+                      ORDER BY payroll_id, item_type"
+        );
+        let mut income_stmt = conn
+            .prepare(&select_income)
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
-        let mut deduction_stmt = conn
-            .prepare(
-                "SELECT payroll_id, item_type, amount
+        let select_deductions = format!(
+            "SELECT payroll_id, item_type, amount
                       FROM payroll_deduction_items
                       WHERE payroll_id IN (
                           SELECT id FROM payroll_records
-                          WHERE (?1 IS NULL OR personnel_id = ?1)
+                          WHERE {filter_sql}
                       )
-                      ORDER BY payroll_id, item_type",
-            )
+                      ORDER BY payroll_id, item_type"
+        );
+        let mut deduction_stmt = conn
+            .prepare(&select_deductions)
             .map_err(|e| DomainError::DatabaseError(e.to_string()))?;
 
         let mut income_by_payroll: std::collections::HashMap<String, GelirKalemleri> =
             std::collections::HashMap::new();
         let income_rows = income_stmt
-            .query_map(params![personnel_id], |row| {
+            .query_map(params_from_iter(filter_values.iter()), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -1264,7 +1312,7 @@ impl PayrollRepository {
         let mut deductions_by_payroll: std::collections::HashMap<String, KesintiKalemleri> =
             std::collections::HashMap::new();
         let deduction_rows = deduction_stmt
-            .query_map(params![personnel_id], |row| {
+            .query_map(params_from_iter(filter_values.iter()), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
