@@ -242,7 +242,7 @@ fn prior_payroll_with_devreden(
             uygulanabilirSigortaGvIndirimi: dec!(0),
         }),
         persistedGvBase: Some(dec!(0)),
-        damgaDetay: None,
+        damgaDetay: Some(DamgaVergisiHesapDetayi::default()),
         statutorySnapshot: Some(statutory_snapshot),
         odenenRaporluGun: Some(0),
         raporluGun: Some(0),

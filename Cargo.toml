@@ -6,9 +6,9 @@ members = [
     "crates/payroll-wasm",
 ]
 
-# Keep local test code at Cargo's default opt-level=0 so assertions,
-# overflow checks, and debug information remain enabled. Lightly optimize
-# third-party dependencies to retain useful test throughput without the
-# compile-time cost of opt-level=3.
-[profile.test.package."*"]
-opt-level = 1
+[profile.test.package.payroll-core]
+opt-level = 2
+
+# Keep dev and test assertions enabled by default. Only the CPU-heavy payroll
+# engine is optimized in tests for the property/oracle cases; release remains
+# Cargo's standard optimized profile.

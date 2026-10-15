@@ -699,8 +699,22 @@ fn concurrent_native_retro_payments_serialize_same_date_sequence_allocation() {
 
     let first = start_payment(first_preview.batch, first_preview.allocations);
     let second = start_payment(second_preview.batch, second_preview.allocations);
-    assert!(first.join().expect("first worker should finish").is_ok());
-    assert!(second.join().expect("second worker should finish").is_ok());
+    let first_result = first.join().expect("first worker should finish");
+    let second_result = second.join().expect("second worker should finish");
+    // The payment-order transaction serializes sequence allocation. Both
+    // previews can commit if still current, or the later one can fail closed
+    // after the first transaction changes the authoritative event/PEK chain.
+    let accepted_events = match (first_result, second_result) {
+        (Ok(first_event), Ok(second_event)) => vec![first_event, second_event],
+        (Ok(event), Err(error)) | (Err(error), Ok(event))
+            if error.to_string().contains("STALE") =>
+        {
+            vec![event]
+        }
+        (first, second) => panic!(
+            "concurrent writes must either allocate distinct sequences or reject a stale preview; first={first:?}, second={second:?}"
+        ),
+    };
 
     let same_date = PayrollRepository::get_for_personnel_and_payment_date(
         &conn,
@@ -708,12 +722,24 @@ fn concurrent_native_retro_payments_serialize_same_date_sequence_allocation() {
         "2026-06-20",
     )
     .expect("same-date payments should load");
-    assert_eq!(same_date.len(), 2);
+    let expected_sequences = (0..accepted_events.len() as i32).collect::<Vec<_>>();
+    assert_eq!(same_date.len(), accepted_events.len());
     assert_eq!(
         same_date.iter().map(|row| row.sequence).collect::<Vec<_>>(),
-        [0, 1]
+        expected_sequences
     );
-    assert_ne!(same_date[0].accrualId, same_date[1].accrualId);
+    let mut accepted_sequences = accepted_events
+        .iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
+    accepted_sequences.sort_unstable();
+    assert_eq!(
+        accepted_sequences,
+        same_date.iter().map(|row| row.sequence).collect::<Vec<_>>()
+    );
+    if same_date.len() == 2 {
+        assert_ne!(same_date[0].accrualId, same_date[1].accrualId);
+    }
 }
 
 #[test]

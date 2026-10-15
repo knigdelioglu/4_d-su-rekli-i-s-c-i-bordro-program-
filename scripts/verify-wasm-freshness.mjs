@@ -35,7 +35,7 @@ function wasmRelevantWorkspaceConfig() {
         header === 'patch' ||
         header.startsWith('patch.');
     }
-    if (includeTable) selected.push(line);
+    if (includeTable && !line.trimStart().startsWith('#')) selected.push(line);
   }
 
   return selected.join('\n');

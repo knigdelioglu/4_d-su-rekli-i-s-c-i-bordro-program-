@@ -1,0 +1,2 @@
+Tauri watches this optional directory. Keep it present so Cargo does not
+recompile the application on every invocation when no capability files exist.
