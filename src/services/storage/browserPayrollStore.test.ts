@@ -1112,9 +1112,21 @@ describe('BrowserPayrollStore', () => {
     payload.donemler = fixture.donemler as PayrollStorageDto['donemler'];
     payload.compensationPolicyVersions = fixture.compensationPolicyVersions as PayrollStorageDto['compensationPolicyVersions'];
     const metadata = payload.bordrolar[0].calculationMetadata as unknown as TestRecord;
-    (metadata.snapshot as TestRecord).calculationVersion = 'compensation-engine-v2';
-
-    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
+    const snapshot = metadata.snapshot as TestRecord;
+    // Keep historical v1/v2 readable, and accept current Rust core's v3.
+    for (const version of [
+      'compensation-engine-v1',
+      'compensation-engine-v2',
+      'compensation-engine-v3',
+    ]) {
+      snapshot.calculationVersion = version;
+      expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload))).not.toThrow();
+    }
+    // Unknown future versions must still fail closed rather than bypassing
+    // financial snapshot compatibility checks.
+    snapshot.calculationVersion = 'compensation-engine-v999';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(payload)))
+      .toThrow('desteklenmeyen hesaplama sürümü');
   });
 
   test('persists a separate nafaka amount through the current browser backup contract', () => {

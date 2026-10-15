@@ -840,7 +840,8 @@ function validatePayrollCalculationSnapshot(value: UnknownRecord, path: string):
   requiredString(value, 'calculationVersion', path);
   if (
     value.calculationVersion !== 'compensation-engine-v1' &&
-    value.calculationVersion !== 'compensation-engine-v2'
+    value.calculationVersion !== 'compensation-engine-v2' &&
+    value.calculationVersion !== 'compensation-engine-v3'
   ) {
     fail(fieldPath(path, 'calculationVersion'), 'desteklenmeyen hesaplama sürümü.');
   }
