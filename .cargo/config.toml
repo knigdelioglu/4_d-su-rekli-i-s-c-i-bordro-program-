@@ -1,0 +1,4 @@
+[build]
+# The Air has 10 CPU cores but 16 GiB RAM. Four concurrent rustc jobs
+# retain parallelism while leaving memory headroom for Tauri and test builds.
+jobs = 4

@@ -13,12 +13,33 @@ const sourceDirectories = [
   'src-tauri/src/domain',
 ];
 const manifestSources = [
-  'Cargo.toml',
   'Cargo.lock',
   'crates/payroll-core/Cargo.toml',
   'crates/payroll-wasm/Cargo.toml',
-  'src-tauri/Cargo.toml',
 ];
+
+function wasmRelevantWorkspaceConfig() {
+  const lines = readFileSync(resolve(root, 'Cargo.toml'), 'utf8').split(/\r?\n/);
+  const selected = [];
+  let includeTable = false;
+
+  for (const line of lines) {
+    const header = line.match(/^\[([^\]]+)\]\s*$/)?.[1];
+    if (header) {
+      includeTable =
+        header === 'workspace' ||
+        header.startsWith('workspace.') ||
+        header === 'profile.release' ||
+        header.startsWith('profile.release.') ||
+        header === 'replace' ||
+        header === 'patch' ||
+        header.startsWith('patch.');
+    }
+    if (includeTable) selected.push(line);
+  }
+
+  return selected.join('\n');
+}
 
 function walk(directory) {
   if (!existsSync(directory)) return [];
@@ -31,13 +52,18 @@ function walk(directory) {
 const files = [
   ...sourceDirectories.flatMap((directory) => walk(resolve(root, directory))),
   ...manifestSources.map((path) => resolve(root, path)).filter(existsSync),
-].sort();
+].map((path) => ({ path, contents: readFileSync(path, 'utf8') }));
+files.push({
+  path: resolve(root, 'Cargo.toml#wasm-relevant-workspace-config'),
+  contents: wasmRelevantWorkspaceConfig(),
+});
+files.sort((left, right) => left.path.localeCompare(right.path));
 
 const hash = createHash('sha256');
-for (const path of files) {
+for (const { path, contents } of files) {
   hash.update(relative(root, path).split(sep).join('/'));
   hash.update('\0');
-  hash.update(readFileSync(path, 'utf8').replace(/\r\n?/g, '\n'));
+  hash.update(contents.replace(/\r\n?/g, '\n'));
   hash.update('\0');
 }
 const currentHash = hash.digest('hex');

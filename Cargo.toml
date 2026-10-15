@@ -6,10 +6,9 @@ members = [
     "crates/payroll-wasm",
 ]
 
-# Keep dependency-heavy native and WASM test builds fast for every workspace
-# member now that the repository has a shared root manifest.
-[profile.dev.package."*"]
-opt-level = 3
-
+# Keep local test code at Cargo's default opt-level=0 so assertions,
+# overflow checks, and debug information remain enabled. Lightly optimize
+# third-party dependencies to retain useful test throughput without the
+# compile-time cost of opt-level=3.
 [profile.test.package."*"]
-opt-level = 3
+opt-level = 1

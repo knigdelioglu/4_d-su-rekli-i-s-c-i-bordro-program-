@@ -74,11 +74,11 @@ fi
 # 2b. Rust bordro çekirdeği değiştiyse tarayıcı (WASM) paketini yeniden üret.
 # 'bun run build' WASM tazelik kontrolü yapar; eski paket derlemeyi durdurur.
 if command -v wasm-pack >/dev/null 2>&1; then
-    echo "🦀 WASM bordro motoru yeniden derleniyor..."
+    echo "🦀 WASM bordro paketi doğrulanıyor..."
     if command -v bun >/dev/null 2>&1; then
-        bun run wasm:build || { echo "❌ HATA: WASM derlemesi başarısız."; read -p "Kapatmak için Enter'a basın..."; exit 1; }
+        bun run wasm:ensure || { echo "❌ HATA: WASM doğrulama/derlemesi başarısız."; read -p "Kapatmak için Enter'a basın..."; exit 1; }
     else
-        node scripts/build-wasm.mjs || { echo "❌ HATA: WASM derlemesi başarısız."; read -p "Kapatmak için Enter'a basın..."; exit 1; }
+        node scripts/ensure-wasm.mjs || { echo "❌ HATA: WASM doğrulama/derlemesi başarısız."; read -p "Kapatmak için Enter'a basın..."; exit 1; }
     fi
     echo
 else
