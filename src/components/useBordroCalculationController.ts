@@ -254,6 +254,50 @@ export function findFirstStalePriorEvent(
   ) ?? null;
 }
 
+/** Replay in payment order, keeping retro recovery in its dedicated ledger
+ * workflow. Never attempt a later payment using an unresolved retro event. */
+export async function replaySamePeriodPayrollFollowers(options: {
+  personnelId: string;
+  period: BordroDonemi;
+  getDataset: () => PayrollDatasetSnapshot;
+  recalculate: (event: BordroKaydi, dataset: PayrollDatasetSnapshot) => Promise<void>;
+}): Promise<ChainReplayResult> {
+  let replayed = 0;
+  const attempted = new Set<string>();
+  for (let step = 0; step < MAX_CHAIN_REPLAY_STEPS; step++) {
+    const dataset = options.getDataset();
+    const next = (dataset.payrolls as unknown as BordroKaydi[])
+      .filter((payroll) =>
+        payroll.personelId === options.personnelId &&
+        payroll.donemId === options.period.id &&
+        payroll.accrualType !== 'NORMAL' &&
+        (payroll.status === 'STALE' || payroll.status === 'DRAFT') &&
+        !isSupersededZeroPayableRetroEvent(payroll, (dataset.retroBatches ?? []) as unknown as RetroAdjustmentBatch[]) &&
+        !attempted.has(payroll.accrualId || payroll.id)
+      )
+      .sort((left, right) => comparePaymentEvents(left, right, options.period))[0];
+    if (!next) return { ok: true, replayed };
+    const eventId = next.accrualId || next.id;
+    if (next.accrualType === 'RETRO_ADJUSTMENT') {
+      return {
+        ok: false, replayed,
+        error: `Geriye Dönük Fark (${eventId}) güncelliğini yitirmiş. Önce Geriye Dönük Farklar ekranından yeniden hesaplayın; sonraki tahakkuklar bu kayda bağlı.`,
+      };
+    }
+    attempted.add(eventId);
+    try {
+      await options.recalculate(next, dataset);
+      replayed++;
+    } catch (err) {
+      return {
+        ok: false, replayed,
+        error: `${ACCRUAL_TYPE_LABELS[next.accrualType] ?? next.accrualType} (${eventId}) yeniden hesaplanamadı: ${formatPayrollError(err)}`,
+      };
+    }
+  }
+  return { ok: false, replayed, error: 'Tahakkuk zinciri çok uzun; yeniden hesaplama güvenli sınırda durduruldu.' };
+}
+
 const TAX_OPENING_LATER_PATTERN = /opening başlangıç vergi ayı (\d+) aktif vergi ayı (\d+) sonrasında olamaz/i;
 
 export function isTaxOpeningAfterActiveMonthError(message: string): boolean {
@@ -714,25 +758,11 @@ export function useBordroCalculationController({
    * do not silently drop out of official lists.
    */
   const replayStaleSamePeriodFollowers = async (person: Personel): Promise<ChainReplayResult> => {
-    let replayed = 0;
-    const attempted = new Set<string>();
-    for (let step = 0; step < MAX_CHAIN_REPLAY_STEPS; step++) {
-      const dataset = buildDataset();
-      const next = (dataset.payrolls as unknown as BordroKaydi[])
-        .filter(
-          (payroll) =>
-            payroll.personelId === person.id &&
-            payroll.donemId === aktifDonem.id &&
-            payroll.accrualType !== 'NORMAL' &&
-            payroll.accrualType !== 'RETRO_ADJUSTMENT' &&
-            (payroll.status === 'STALE' || payroll.status === 'DRAFT') &&
-            !attempted.has(payroll.accrualId || payroll.id)
-        )
-        .sort((left, right) => comparePaymentEvents(left, right, aktifDonem))[0];
-      if (!next) return { ok: true, replayed };
-      const eventId = next.accrualId || next.id;
-      attempted.add(eventId);
-      try {
+    return replaySamePeriodPayrollFollowers({
+      personnelId: person.id,
+      period: aktifDonem,
+      getDataset: buildDataset,
+      recalculate: async (next, dataset) => {
         const calculated = await payrollEngine.calculatePayroll({
           personnelId: person.id,
           periodId: aktifDonem.id,
@@ -748,16 +778,8 @@ export function useBordroCalculationController({
         );
         await onSaveBordro(calculated, dataset);
         await waitForDatasetCommit(dataset);
-        replayed++;
-      } catch (err) {
-        return {
-          ok: false,
-          replayed,
-          error: `${ACCRUAL_TYPE_LABELS[next.accrualType] ?? next.accrualType} (${eventId}) yeniden hesaplanamadı: ${formatPayrollError(err)}`,
-        };
-      }
-    }
-    return { ok: true, replayed };
+      },
+    });
   };
 
   const handleCalculateAll = async () => {

@@ -2329,6 +2329,15 @@ describe('SQLite persistence invariant parity', () => {
     retroPayroll.netOdeme = '94.00';
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(retroPayload))).not.toThrow();
 
+    // A premium refund can also make the reconciled deduction TOTAL signed.
+    (retroPayroll.kesintiler as TestRecord).isciSgkPrimi = '-40.00';
+    retroPayroll.kesintiToplam = '-20.00';
+    retroPayroll.netOdeme = '120.00';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(retroPayload))).not.toThrow();
+    const forgedNet = structuredClone(retroPayload);
+    (forgedNet.bordrolar as TestRecord[])[1].netOdeme = '121.00';
+    expect(() => parseCurrentBrowserSnapshot(JSON.stringify(forgedNet))).toThrow('finansal toplamları');
+
     // Negative bes in retro must fail
     (retroPayroll.kesintiler as TestRecord).bes = '-10.00';
     expect(() => parseCurrentBrowserSnapshot(JSON.stringify(retroPayload))).toThrow(

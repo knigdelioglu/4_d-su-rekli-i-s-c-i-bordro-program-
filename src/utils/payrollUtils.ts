@@ -27,6 +27,7 @@ import {
   DEFAULT_KURUM_DEGERLERI as PRESENTATION_DEFAULT_KURUM_DEGERLERI,
   DEFAULT_TEDIYE_LISTESI as PRESENTATION_DEFAULT_TEDIYE_LISTESI,
   DEFAULT_TIS_IKRAMIYE_LISTESI as PRESENTATION_DEFAULT_TIS_IKRAMIYE_LISTESI,
+  getPeriodDaysList as presentationPeriodDaysList,
 } from './payrollPresentation';
 import { getDefaultAnnualPayrollParameters } from '../services/storage/payrollDefaults';
 
@@ -126,35 +127,7 @@ export interface GunDetay {
  * Returns array of day details between baslangicTarihi and bitisTarihi
  */
 export function getPeriodDaysList(baslangicTarihi: string, bitisTarihi: string): GunDetay[] {
-  const days: GunDetay[] = [];
-  const start = new Date(baslangicTarihi + 'T00:00:00');
-  const end = new Date(bitisTarihi + 'T00:00:00');
-
-  const curr = new Date(start);
-  while (curr <= end) {
-    const pad = (n: number) => n.toString().padStart(2, '0');
-    const year = curr.getFullYear();
-    const month = pad(curr.getMonth() + 1);
-    const dayNum = pad(curr.getDate());
-    const dateStr = `${year}-${month}-${dayNum}`;
-
-    const dayOfWeek = curr.getDay(); // 0 is Sunday
-    const isSunday = dayOfWeek === 0;
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-
-    days.push({
-      dateStr,
-      dayNumber: curr.getDate(),
-      dayOfWeek,
-      dayNameShort: GUN_ISIMLERI_KISA[dayOfWeek],
-      isWeekend,
-      isSunday,
-    });
-
-    curr.setDate(curr.getDate() + 1);
-  }
-
-  return days;
+  return presentationPeriodDaysList(baslangicTarihi, bitisTarihi);
 }
 
 /**

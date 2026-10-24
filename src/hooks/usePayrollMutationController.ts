@@ -879,6 +879,7 @@ export function usePayrollMutationController({
         ...current,
         annualPayrollParameters,
         bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact),
+        retroBatches: applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     });
   };
@@ -1024,7 +1025,7 @@ export function usePayrollMutationController({
         kurumDegerleriMap,
         bordrolar: next,
         retroBatches: updatedBordro.accrualType === 'RETRO_ADJUSTMENT' && updatedBordro.status === 'FINALIZED'
-          ? (current.retroBatches ?? []).map((batch) =>
+          ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact).map((batch) =>
               batch.id === updatedBordro.accrualId
                 ? {
                     ...batch,
@@ -1034,7 +1035,7 @@ export function usePayrollMutationController({
                   }
                 : batch
             )
-          : current.retroBatches,
+          : applyBrowserRetroBatchImpact(current.retroBatches ?? [], impact),
       };
     });
   };

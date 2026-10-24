@@ -351,6 +351,52 @@ fn native_retro_repo_accepts_meal_policy_from_the_source_period_settings() {
 }
 
 #[test]
+fn native_meal_exemption_snapshot_roundtrips_and_rejects_invalid_replacement() {
+    let conn = create_in_memory_connection().unwrap();
+    let source = period();
+    PersonnelRepository::save(&conn, &personnel()).unwrap();
+    PeriodRepository::save(&conn, &source).unwrap();
+    SettingsRepository::save_institution_settings(
+        &conn,
+        &DonemselKurumDegerleri {
+            donemId: source.id,
+            yemekTamGvIstisnaDamgaTabi: false,
+            ..DonemselKurumDegerleri::default()
+        },
+    )
+    .unwrap();
+    save_revision_with_overrides(&conn, &revision(), &[]).unwrap();
+    let mut meal = allocation();
+    meal.earningCode = RetroEarningCode::MEAL;
+    meal.originalRecognizedAmount = dec!(100);
+    meal.targetAmount = dec!(110);
+    meal.metadata = Some(
+        serde_json::json!({"mealTaxExemption": {
+            "schemaVersion": 1, "originalAmount": "80", "previousAmount": "0", "targetAmount": "85"
+        }})
+        .to_string(),
+    );
+    save_batch(&conn, &batch(), &[meal.clone()]).unwrap();
+    let saved = bordro_programi_lib::repositories::retro_repo::get_allocations(&conn).unwrap();
+    assert_eq!(saved[0].metadata, meal.metadata);
+    assert_eq!(
+        payroll_core::retro_allocation_tax_exemptions(&batch(), &saved[0]).unwrap(),
+        (dec!(5), dec!(5))
+    );
+    meal.metadata = Some(
+        serde_json::json!({"mealTaxExemption": {
+            "schemaVersion": 1, "originalAmount": "80", "previousAmount": "0", "targetAmount": "111"
+        }})
+        .to_string(),
+    );
+    assert!(save_batch(&conn, &batch(), &[meal]).is_err());
+    assert_eq!(
+        bordro_programi_lib::repositories::retro_repo::get_allocations(&conn).unwrap(),
+        saved
+    );
+}
+
+#[test]
 fn native_retro_batch_save_cannot_rebind_an_existing_batch_id() {
     let conn = create_in_memory_connection().expect("in-memory SQLite kurulmalı");
     let person = personnel();

@@ -1347,7 +1347,7 @@ function assertPayrollFinancialTotals(
   const snapshotNet = paymentCents(payroll.netOdeme, `${path}.netOdeme`);
   const calculatedNet = gross - deductions;
 
-  if (gross < 0n || deductions < 0n || snapshotNet < 0n) {
+  if (gross < 0n || (deductions < 0n && payroll.accrualType !== 'RETRO_ADJUSTMENT') || snapshotNet < 0n) {
     fail(path, 'Bordro snapshot finansal toplamları negatif olamaz.');
   }
   if (gross !== snapshotGross || deductions !== snapshotDeductions || calculatedNet !== snapshotNet) {

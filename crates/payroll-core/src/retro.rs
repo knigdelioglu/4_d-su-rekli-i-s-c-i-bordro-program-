@@ -186,8 +186,98 @@ struct RevisionApplication {
 #[derive(Debug, Clone)]
 struct TargetIncomeForPeriod {
     income: GelirKalemleri,
+    original_meal_exemption: MealExemptionTotals,
     meal_exemption: MealExemptionTotals,
     meal_income_tax_exempt: bool,
+}
+
+/// Versioned financial data inside the existing allocation metadata envelope.
+/// Its absence preserves the tax result of older saved retro ledgers. New
+/// daily-limit meal allocations freeze the source-period exemption entitlement
+/// here, so payment never consults mutable settings or revision definitions.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MealTaxExemptionSnapshot {
+    schema_version: u32,
+    original_amount: Decimal,
+    previous_amount: Decimal,
+    target_amount: Decimal,
+}
+
+fn meal_tax_exemption_snapshot(
+    allocation: &RetroAllocation,
+) -> Result<Option<MealTaxExemptionSnapshot>> {
+    let Some(metadata) = allocation
+        .metadata
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    else {
+        return Ok(None);
+    };
+    let Some(value) = metadata.get("mealTaxExemption") else {
+        return Ok(None);
+    };
+    let snapshot: MealTaxExemptionSnapshot =
+        serde_json::from_value(value.clone()).map_err(|error| {
+            DomainError::InvalidData(format!("Retro yemek vergi snapshot'ı geçersiz: {error}"))
+        })?;
+    if snapshot.schema_version != 1
+        || allocation.earningCode != RetroEarningCode::MEAL
+        || allocation.incomeTaxTreatment != RetroTaxTreatment::TAXABLE
+        || allocation.stampTaxTreatment != RetroTaxTreatment::TAXABLE
+        || snapshot.original_amount < Decimal::ZERO
+        || snapshot.original_amount > allocation.originalRecognizedAmount
+        || snapshot.target_amount < Decimal::ZERO
+        || snapshot.target_amount > allocation.targetAmount
+    {
+        return Err(DomainError::InvalidData(
+            "Retro yemek vergi snapshot'ı earning policy veya tutar sınırlarıyla eşleşmiyor."
+                .into(),
+        ));
+    }
+    for amount in [
+        snapshot.original_amount,
+        snapshot.previous_amount,
+        snapshot.target_amount,
+    ] {
+        crate::validate_monetary_amount("retro meal tax exemption", amount)?;
+    }
+    Ok(Some(snapshot))
+}
+
+/// Returns the cash-payment exemptions without changing the full-GV / taxable
+/// stamp preference or the signed entitlement/offset ledger. A partial cash
+/// settlement receives the same proportion of the meal exemption as of gross.
+pub fn retro_allocation_tax_exemptions(
+    batch: &RetroAdjustmentBatch,
+    allocation: &RetroAllocation,
+) -> Result<(Decimal, Decimal)> {
+    let payable = retro_payable_allocation_amount(batch, allocation);
+    if let Some(snapshot) = meal_tax_exemption_snapshot(allocation)? {
+        let delta = allocation.deltaAmount.max(Decimal::ZERO);
+        let exemption_delta =
+            (snapshot.target_amount - snapshot.original_amount - snapshot.previous_amount)
+                .max(Decimal::ZERO)
+                .min(delta);
+        let exempt = if delta == Decimal::ZERO {
+            Decimal::ZERO
+        } else {
+            round2(exemption_delta * payable / delta).min(payable)
+        };
+        return Ok((exempt, exempt));
+    }
+    Ok((
+        if allocation.incomeTaxTreatment == RetroTaxTreatment::EXEMPT {
+            payable
+        } else {
+            Decimal::ZERO
+        },
+        if allocation.stampTaxTreatment == RetroTaxTreatment::EXEMPT {
+            payable
+        } else {
+            Decimal::ZERO
+        },
+    ))
 }
 
 /// Boundary rule for retro source-period selection (BUG-RETRO-001).
@@ -794,13 +884,14 @@ fn target_income_for_period(
                 ))
             })?;
         let original_segments = &snapshot.compensation.segments;
-        let (replayed_original, _, _) = replay_saved_normal_compensation_income(
-            source,
-            period,
-            original_segments,
-            &dataset.payrolls,
-            &dataset.periods,
-        )?;
+        let (replayed_original, original_meal_exemption, _) =
+            replay_saved_normal_compensation_income(
+                source,
+                period,
+                original_segments,
+                &dataset.payrolls,
+                &dataset.periods,
+            )?;
         if !same_income_values(&replayed_original, &source.gelirler) {
             return Err(DomainError::InvalidData(format!(
                 "{} persisted NORMAL income does not match replay from its schema-2 snapshot.",
@@ -818,6 +909,7 @@ fn target_income_for_period(
             )?;
         return Ok(TargetIncomeForPeriod {
             income,
+            original_meal_exemption,
             meal_exemption,
             meal_income_tax_exempt,
         });
@@ -1080,6 +1172,7 @@ fn validate_batch_ledger(
                 allocation.id
             )));
         }
+        meal_tax_exemption_snapshot(allocation)?;
         if round2(
             allocation.targetAmount
                 - allocation.originalRecognizedAmount
@@ -2692,6 +2785,28 @@ impl RetroEntitlementEngine {
             &request.batchId,
         )?;
 
+        let mut previous_meal_exemptions = HashMap::<String, Decimal>::new();
+        for batch in index.retro_batches_for_person(&request.dataset, &request.personnelId) {
+            if batch.id == request.batchId
+                || !matches!(
+                    batch.status,
+                    CompensationRevisionStatus::CALCULATED | CompensationRevisionStatus::FINALIZED
+                )
+                || parse_date(&batch.paymentDate, "önceki retro ödeme")? > payment_date
+            {
+                continue;
+            }
+            for allocation in index.retro_allocations_for_batch(&request.dataset, &batch.id) {
+                if let Some(snapshot) = meal_tax_exemption_snapshot(allocation)? {
+                    *previous_meal_exemptions
+                        .entry(allocation.sourcePeriodId.clone())
+                        .or_default() += snapshot.target_amount
+                        - snapshot.original_amount
+                        - snapshot.previous_amount;
+                }
+            }
+        }
+
         let mut allocations = Vec::new();
         let mut previews = Vec::new();
         let mut target_income_by_period = HashMap::new();
@@ -2796,6 +2911,23 @@ impl RetroEntitlementEngine {
                     code,
                     target_income.meal_income_tax_exempt,
                 );
+                let mut metadata = serde_json::json!({
+                    "revisionId": request.revision.id,
+                    "effectiveFrom": request.revision.effectiveFrom,
+                    "sourcePeriodId": period.id,
+                });
+                if code == RetroEarningCode::MEAL && !target_income.meal_income_tax_exempt {
+                    metadata["mealTaxExemption"] = serde_json::to_value(MealTaxExemptionSnapshot {
+                        schema_version: 1,
+                        original_amount: target_income.original_meal_exemption.gv,
+                        previous_amount: previous_meal_exemptions
+                            .get(&period.id)
+                            .copied()
+                            .unwrap_or_default(),
+                        target_amount: target_income.meal_exemption.gv,
+                    })
+                    .map_err(|error| DomainError::InvalidData(error.to_string()))?;
+                }
                 allocations.push(RetroAllocation {
                     id: format!("{}_{}_{code:?}", request.batchId, period.id),
                     batchId: request.batchId.clone(),
@@ -2825,14 +2957,7 @@ impl RetroEntitlementEngine {
                     payableSettlementAmount: Decimal::ZERO,
                     offsetSettlementAmount: Decimal::ZERO,
                     recoverableAmount: Decimal::ZERO,
-                    metadata: Some(
-                        serde_json::json!({
-                            "revisionId": request.revision.id,
-                            "effectiveFrom": request.revision.effectiveFrom,
-                            "sourcePeriodId": period.id,
-                        })
-                        .to_string(),
-                    ),
+                    metadata: Some(metadata.to_string()),
                 });
             }
         }

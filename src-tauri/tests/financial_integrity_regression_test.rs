@@ -366,6 +366,29 @@ fn strict_restore_accepts_valid_payment_events_and_retro_source_deltas() {
 }
 
 #[test]
+fn retro_premium_refund_roundtrips_signed_deduction_total_but_keeps_line_and_total_guards() {
+    let conn = reconciliation_connection();
+    let mut retro = reconciled_payroll(AccrualType::RETRO_ADJUSTMENT, 24);
+    retro.kesintiler.isciSgkPrimi = Some(dec!(-14));
+    retro.kesintiler.isciIssizlikPrimi = Some(dec!(-1));
+    retro.kesintiToplam = dec!(-15);
+    retro.netOdeme = dec!(115);
+    PayrollRepository::save_in_transaction(&conn, &retro).unwrap();
+    let saved = PayrollRepository::get_all(&conn).unwrap();
+    assert_eq!(saved[0].kesintiToplam, dec!(-15));
+    assert_eq!(saved[0].netOdeme, dec!(115));
+    let mut invalid = retro.clone();
+    invalid.netOdeme = dec!(116);
+    assert!(PayrollRepository::save_in_transaction(&conn, &invalid).is_err());
+    invalid = retro.clone();
+    invalid.kesintiler.icra = Some(dec!(-1));
+    assert!(PayrollRepository::save_in_transaction(&conn, &invalid).is_err());
+    invalid = retro;
+    invalid.accrualType = AccrualType::SUPPLEMENTAL;
+    assert!(PayrollRepository::save_in_transaction(&conn, &invalid).is_err());
+}
+
+#[test]
 fn current_non_authoritative_sparse_snapshot_keeps_draft_without_gv_pair() {
     let conn = reconciliation_connection();
     let mut draft = payroll(AccrualType::NORMAL, 24, dec!(90));

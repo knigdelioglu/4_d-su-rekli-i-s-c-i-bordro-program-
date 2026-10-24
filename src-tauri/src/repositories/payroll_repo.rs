@@ -173,7 +173,10 @@ impl PayrollRepository {
         let calculated_deductions = calculate_kesinti_toplam(&bordro.kesintiler);
         let calculated_net = round_currency_amount(calculated_gross - calculated_deductions);
 
-        if bordro.gelirToplam < Decimal::ZERO || bordro.kesintiToplam < Decimal::ZERO {
+        if bordro.gelirToplam < Decimal::ZERO
+            || (bordro.kesintiToplam < Decimal::ZERO
+                && bordro.accrualType != AccrualType::RETRO_ADJUSTMENT)
+        {
             return Err(DomainError::InvalidData(
                 "Bordro snapshot finansal toplamları negatif olamaz.".into(),
             ));

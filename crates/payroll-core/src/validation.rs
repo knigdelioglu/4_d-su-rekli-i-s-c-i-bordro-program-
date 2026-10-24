@@ -23,6 +23,15 @@ pub fn validate_ordinary_payroll_line_items(
     validate_payroll_line_items_internal(gelirler, kesintiler, false)
 }
 
+/// Retro cash income stays non-negative; only worker premium adjustments
+/// may be signed, exactly as in the persisted retro snapshot validator.
+pub(crate) fn validate_retro_payroll_line_items(
+    gelirler: &GelirKalemleri,
+    kesintiler: &KesintiKalemleri,
+) -> Result<()> {
+    validate_payroll_line_items_internal(gelirler, kesintiler, true)
+}
+
 fn validate_payroll_line_items_internal(
     gelirler: &GelirKalemleri,
     kesintiler: &KesintiKalemleri,

@@ -888,6 +888,7 @@ fn save_batch_in_transaction_impl(
                         .into(),
                 ));
                 }
+                payroll_core::retro_allocation_tax_exemptions(batch, allocation)?;
                 if allocation.originalRecognizedAmount < rust_decimal::Decimal::ZERO
                     || allocation.targetAmount < rust_decimal::Decimal::ZERO
                     || allocation.originalPek < rust_decimal::Decimal::ZERO

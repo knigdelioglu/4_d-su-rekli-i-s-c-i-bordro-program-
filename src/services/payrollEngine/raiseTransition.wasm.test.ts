@@ -2,11 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import { readFile } from 'node:fs/promises';
 import init, {
   calculate_payroll_json,
+  calculate_retro_preview_json,
   evaluate_mutation_policy_json,
   validate_payroll_json,
 } from '../../wasm/pkg/payroll_wasm.js';
 import { parseWasmPayrollBoundaryResult } from './decimalBoundary';
-import type { PayrollBoundaryPayroll, PayrollCalculationRequest } from './types';
+import type { PayrollBoundaryPayroll, PayrollCalculationRequest, RetroCalculationRequest, RetroCalculationResult } from './types';
 
 type PolicyState = PayrollCalculationRequest['dataset']['compensationPolicyVersions'][number]['state'];
 type PolicyVersion = PayrollCalculationRequest['dataset']['compensationPolicyVersions'][number];
@@ -107,6 +108,60 @@ function calculate(value: PayrollCalculationRequest): PayrollBoundaryPayroll {
 }
 
 describe('production WASM compensation policy transition', () => {
+  test('transports a partial retro meal exemption and signed premium refund through the real WASM boundary', async () => {
+    for (const refund of [false, true]) {
+      const value = await request();
+      const source = value.dataset.periods[0];
+      for (const version of value.dataset.compensationPolicyVersions) {
+        version.state = policyState('2000', refund ? '180' : '260', '0', '0');
+        version.state.gunlukVasitaYol = '0';
+      }
+      const settings = value.dataset.institutionSettings[value.periodId];
+      settings.yemekTamGvIstisnaDamgaTabi = false;
+      settings.gunlukYemekIstisnasiGV = '300';
+      settings.gunlukYemekIstisnasiSGK = '300';
+      value.dataset.personnel[0].kesintiler = null;
+      value.dataset.personnel[0].hizmetYili = 0;
+      value.dataset.payrolls.push(calculate(value));
+      const payment = { ...source, id: 'retro-payment', ay: 2,
+        baslangicTarihi: '2026-02-15', bitisTarihi: '2026-03-14', taxMonth: 2 };
+      value.dataset.periods.push(payment);
+      value.dataset.institutionSettings[payment.id] = { ...settings, donemId: payment.id };
+      const days: PayrollCalculationRequest['dataset']['attendances'][number]['gunler'] = {};
+      for (let date = new Date('2026-02-15T00:00:00Z'); date <= new Date('2026-03-14T00:00:00Z'); date.setUTCDate(date.getUTCDate() + 1)) {
+        days[date.toISOString().slice(0, 10)] = 'Ç';
+      }
+      value.dataset.attendances.push({ id: 'retro-payment-attendance', personelId: value.personnelId,
+        donemId: payment.id, gunler: days });
+      value.periodId = payment.id;
+      value.accrual = { accrualId: 'payment-normal', accrualType: 'NORMAL', paymentDate: '2026-02-28',
+        sequence: 0, grossAmount: null, description: null };
+      value.dataset.payrolls.push(calculate(value));
+      const retroRequest: RetroCalculationRequest = {
+        batchId: 'meal-retro', personnelId: value.personnelId, paymentDate: '2026-02-28',
+        calculatedAt: value.calculatedAt, description: null, dataset: value.dataset,
+        revision: { id: 'meal-revision', reason: 'COLLECTIVE_AGREEMENT', title: 'Meal correction',
+          effectiveFrom: source.baslangicTarihi, effectiveTo: source.bitisTarihi,
+          status: 'DRAFT', scope: 'ALL_PERSONNEL', personnelIds: [] },
+        overrides: [{ id: 'meal-override', revisionId: 'meal-revision', parameter: 'GUNLUK_YEMEK',
+          value: refund ? '280' : '350', personnelId: null }],
+      };
+      if (refund) retroRequest.overrides.push({ id: 'wage-override', revisionId: 'meal-revision',
+        parameter: 'GUNLUK_TABAN_UCRET', value: '1950', personnelId: null });
+      const retro = JSON.parse(calculate_retro_preview_json(JSON.stringify(retroRequest))) as RetroCalculationResult;
+      value.dataset.retroBatches.push(retro.batch);
+      value.dataset.retroAllocations.push(...retro.allocations);
+      value.accrual = { accrualId: retro.batch.id, accrualType: 'RETRO_ADJUSTMENT',
+        paymentDate: retro.batch.paymentDate, sequence: 1, grossAmount: null, description: null };
+      const payroll = calculate(value);
+      expect(Number(payroll.gelirToplam)).toBe(refund ? 1550 : 2790);
+      expect(Number(payroll.gvDetay!.cariGvMatrahi)).toBe(refund ? 232.5 : 1317.5);
+      expect(Number(payroll.kesintiler.isciSgkPrimi)).toBe(refund ? -217 : 217);
+      expect(Number(payroll.damgaDetay!.brutDamgaVergisi)).toBe(refund ? 0 : 11.76);
+      if (refund) expect(Number(payroll.kesintiToplam)).toBeLessThan(0);
+    }
+  });
+
   test('defaults meal policy on and switches GV/DV without changing the split meal or SGK', async () => {
     const value = await request();
     value.dataset.compensationPolicyVersions[0].state = policyState('2443.28', '300.75', '1000', '100');

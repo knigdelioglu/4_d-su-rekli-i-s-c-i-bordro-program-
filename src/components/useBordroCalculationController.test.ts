@@ -5,6 +5,7 @@ import {
   isPayrollTaxOpeningConfigurationError,
   classifyBatchAttendance,
   findFirstStalePriorEvent,
+  replaySamePeriodPayrollFollowers,
   isStaleChainError,
   summarizeBatchPayrollOutcomes,
   tryAcquireSupplementaryPaymentScope,
@@ -13,11 +14,64 @@ import {
 import { paymentEventSequenceScopeKey } from '../services/payrollEngine/paymentEventOrder';
 import { getPeriodDaysList } from '../utils/payrollPresentation';
 import type { BordroDonemi, BordroKaydi, PersonelPuantaj, PuantajKodu, RetroAdjustmentBatch } from '../types/payroll';
+import type { PayrollDatasetSnapshot } from '../services/payrollEngine/types';
 
 const leapPeriod = {
   baslangicTarihi: '2024-02-15',
   bitisTarihi: '2024-03-14',
 };
+
+describe('same-period follower replay', () => {
+  const period = { id: 'period', taxYear: 2026, taxMonth: 3 } as BordroDonemi;
+  const event = (id: string, type: BordroKaydi['accrualType'], sequence: number) => ({
+    id, accrualId: id, accrualType: type, personelId: 'person', donemId: 'period',
+    paymentDate: '2026-03-28', sequence, status: 'STALE',
+  }) as BordroKaydi;
+
+  async function replay(events: BordroKaydi[], batches: RetroAdjustmentBatch[] = []) {
+    const dataset = { payrolls: events, retroBatches: batches } as unknown as PayrollDatasetSnapshot;
+    const calculated: string[] = [];
+    const result = await replaySamePeriodPayrollFollowers({
+      personnelId: 'person', period, getDataset: () => dataset,
+      recalculate: async (payroll) => {
+        calculated.push(payroll.accrualId);
+        payroll.status = 'CALCULATED';
+      },
+    });
+    return { result, calculated };
+  }
+
+  test('stops at stale retro before attempting a dependent tediye', async () => {
+    const { result, calculated } = await replay([
+      event('tediye', 'TEDIYE', 2), event('retro', 'RETRO_ADJUSTMENT', 1),
+    ]);
+    expect(calculated).toEqual([]);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Geriye Dönük Farklar ekranından yeniden hesaplayın');
+    expect(result.error).toContain('retro');
+  });
+
+  test('replays earlier supplementary events but never jumps over the retro blocker', async () => {
+    const { result, calculated } = await replay([
+      event('after', 'TEDIYE', 3), event('retro', 'RETRO_ADJUSTMENT', 2), event('before', 'SUPPLEMENTAL', 1),
+    ]);
+    expect(calculated).toEqual(['before']);
+    expect(result).toMatchObject({ ok: false, replayed: 1 });
+  });
+
+  test('continues after a zero-payable retired retro or an authoritative recovered retro', async () => {
+    for (const retired of [true, false]) {
+      const retro = event('retro', 'RETRO_ADJUSTMENT', 1);
+      if (!retired) retro.status = 'CALCULATED';
+      const { result, calculated } = await replay([retro, event('tediye', 'TEDIYE', 2)], retired ? [{
+        id: 'retro', personnelId: 'person', paymentDate: '2026-03-28', status: 'CALCULATED',
+        settlementStatus: 'UNSETTLED', totalGrossDelta: 0, payableSettlementAmount: 0,
+      } as RetroAdjustmentBatch] : []);
+      expect(result).toEqual({ ok: true, replayed: 1 });
+      expect(calculated).toEqual(['tediye']);
+    }
+  });
+});
 
 function fullPeriodAttendance(): PersonelPuantaj {
   const gunler: Record<string, PuantajKodu> = Object.fromEntries(

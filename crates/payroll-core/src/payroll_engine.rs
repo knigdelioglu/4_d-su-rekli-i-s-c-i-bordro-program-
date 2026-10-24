@@ -13,7 +13,7 @@ use crate::raise_transition::{
     find_zam_tarihi, resolve_raise_transition, weighted_period_income_amount,
 };
 use crate::retro::{
-    retro_payable_allocation_amount, retro_payable_settlement_amount,
+    retro_allocation_tax_exemptions, retro_payable_settlement_amount,
     retro_payment_income_with_index,
 };
 use crate::round_currency_amount;
@@ -3400,26 +3400,15 @@ fn calculate_payroll_with_index_policy_override_mode(
     let (retro_income_tax_exempt, retro_stamp_tax_exempt) = retro_payment
         .as_ref()
         .map(|(batch, allocations, _, _)| {
-            allocations.iter().fold(
+            allocations.iter().try_fold(
                 (Decimal::ZERO, Decimal::ZERO),
                 |(income_tax_exempt, stamp_tax_exempt), allocation| {
-                    (
-                        income_tax_exempt
-                            + if allocation.incomeTaxTreatment == RetroTaxTreatment::EXEMPT {
-                                retro_payable_allocation_amount(batch, allocation)
-                            } else {
-                                Decimal::ZERO
-                            },
-                        stamp_tax_exempt
-                            + if allocation.stampTaxTreatment == RetroTaxTreatment::EXEMPT {
-                                retro_payable_allocation_amount(batch, allocation)
-                            } else {
-                                Decimal::ZERO
-                            },
-                    )
+                    let (gv, stamp) = retro_allocation_tax_exemptions(batch, allocation)?;
+                    Ok::<_, DomainError>((income_tax_exempt + gv, stamp_tax_exempt + stamp))
                 },
             )
         })
+        .transpose()?
         .unwrap_or((Decimal::ZERO, Decimal::ZERO));
     let attendance = if is_normal_accrual {
         Some(normal_attendance(
@@ -4166,7 +4155,11 @@ fn calculate_payroll_with_index_policy_override_mode(
     let gv_base = canonical_tax.gv_base;
     let gv_detail = canonical_tax.gv;
     let stamp_detail = canonical_tax.stamp;
-    crate::validate_ordinary_payroll_line_items(&income, &deductions)?;
+    if is_retro_accrual {
+        crate::validation::validate_retro_payroll_line_items(&income, &deductions)?;
+    } else {
+        crate::validate_ordinary_payroll_line_items(&income, &deductions)?;
+    }
 
     let deduction_total = calculate_kesinti_toplam(&deductions);
     let net_payment = round2(income_total - deduction_total);

@@ -483,28 +483,29 @@ export interface GunDetay {
 
 export function getPeriodDaysList(baslangicTarihi: string, bitisTarihi: string): GunDetay[] {
   const days: GunDetay[] = [];
-  const start = new Date(`${baslangicTarihi}T00:00:00`);
-  const end = new Date(`${bitisTarihi}T00:00:00`);
+  // Attendance keys are calendar dates, independent of the device time zone.
+  const start = new Date(`${baslangicTarihi}T00:00:00Z`);
+  const end = new Date(`${bitisTarihi}T00:00:00Z`);
   const curr = new Date(start);
 
   while (curr <= end) {
     const pad = (n: number) => n.toString().padStart(2, '0');
-    const year = curr.getFullYear();
-    const month = pad(curr.getMonth() + 1);
-    const dayNum = pad(curr.getDate());
+    const year = curr.getUTCFullYear();
+    const month = pad(curr.getUTCMonth() + 1);
+    const dayNum = pad(curr.getUTCDate());
     const dateStr = `${year}-${month}-${dayNum}`;
-    const dayOfWeek = curr.getDay();
+    const dayOfWeek = curr.getUTCDay();
     const isSunday = dayOfWeek === 0;
 
     days.push({
       dateStr,
-      dayNumber: curr.getDate(),
+      dayNumber: curr.getUTCDate(),
       dayOfWeek,
       dayNameShort: GUN_ISIMLERI_KISA[dayOfWeek],
       isWeekend: isSunday || dayOfWeek === 6,
       isSunday,
     });
-    curr.setDate(curr.getDate() + 1);
+    curr.setUTCDate(curr.getUTCDate() + 1);
   }
 
   return days;
