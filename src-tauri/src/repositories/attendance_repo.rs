@@ -3,7 +3,7 @@ use crate::domain::{DomainError, Result};
 use crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository;
 use crate::repositories::period_repo::PeriodRepository;
 use crate::repositories::transaction::with_transaction;
-use chrono::{Duration, NaiveDate, Utc};
+use chrono::{Datelike, Duration, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 
@@ -204,6 +204,90 @@ impl AttendanceRepository {
 
     pub fn save(conn: &Connection, p: &PersonelPuantaj) -> Result<()> {
         with_transaction(conn, |tx| Self::save_in_transaction(tx, p))
+    }
+
+    /// Replay only selected dates against current data inside the same transaction as policy authorization.
+    pub fn apply_bulk_intent(
+        conn: &Connection,
+        period_id: &str,
+        personnel_ids: &[String],
+        dates: &[String],
+        code: &str,
+    ) -> Result<()> {
+        if personnel_ids.is_empty() || dates.is_empty() || !Self::VALID_CODES.contains(&code) {
+            return Err(DomainError::ValidationError(
+                "Personel, tarih ve geçerli puantaj kodu seçin.".into(),
+            ));
+        }
+        with_transaction(conn, |tx| {
+            let period = Self::period_for_attendance(tx, period_id)?;
+            let start = NaiveDate::parse_from_str(&period.baslangicTarihi, "%Y-%m-%d")
+                .map_err(|e| DomainError::ValidationError(e.to_string()))?;
+            let end = NaiveDate::parse_from_str(&period.bitisTarihi, "%Y-%m-%d")
+                .map_err(|e| DomainError::ValidationError(e.to_string()))?;
+            if dates
+                .iter()
+                .any(|date| date < &period.baslangicTarihi || date > &period.bitisTarihi)
+            {
+                return Err(DomainError::ValidationError(
+                    "Seçili tarih hizmet döneminin dışında.".into(),
+                ));
+            }
+            let mut seen = HashSet::new();
+            for personnel_id in personnel_ids {
+                if !seen.insert(personnel_id) {
+                    return Err(DomainError::ValidationError(
+                        "Personel seçimi mükerrer kayıt içeriyor.".into(),
+                    ));
+                }
+                let existing = Self::get_by_personnel_and_period(tx, personnel_id, period_id)?;
+                let mut attendance = existing.clone().unwrap_or_else(|| PersonelPuantaj {
+                    id: format!("{personnel_id}_{period_id}"),
+                    personelId: personnel_id.clone(),
+                    donemId: period_id.into(),
+                    gunler: (0..=(end - start).num_days())
+                        .map(|offset| {
+                            let date = start + Duration::days(offset);
+                            (
+                                date.format("%Y-%m-%d").to_string(),
+                                if date.weekday().number_from_monday() >= 6 {
+                                    "T"
+                                } else {
+                                    "Ç"
+                                }
+                                .into(),
+                            )
+                        })
+                        .collect(),
+                });
+                let reports =
+                    crate::repositories::sick_leave_repo::SickLeaveRepository::get_by_personnel(
+                        tx,
+                        personnel_id,
+                    )?;
+                for date in dates {
+                    let current = attendance.gunler.get(date).ok_or_else(|| {
+                        DomainError::ValidationError("Seçili gün puantajda bulunamadı.".into())
+                    })?;
+                    let covered = reports
+                        .iter()
+                        .any(|report| report.startDate <= *date && report.endDate >= *date);
+                    if covered && current != "R" {
+                        return Err(DomainError::ValidationError("Hastalık raporu günü R koduyla eşleşmiyor. Önce raporu ve puantajı düzeltin.".into()));
+                    }
+                    if current != "R" && !covered {
+                        attendance.gunler.insert(date.clone(), code.into());
+                    }
+                }
+                if existing
+                    .as_ref()
+                    .is_none_or(|previous| previous.gunler != attendance.gunler)
+                {
+                    Self::save_in_transaction(tx, &attendance)?;
+                }
+            }
+            Ok(())
+        })
     }
 
     pub fn save_many(conn: &Connection, attendances: &[PersonelPuantaj]) -> Result<()> {

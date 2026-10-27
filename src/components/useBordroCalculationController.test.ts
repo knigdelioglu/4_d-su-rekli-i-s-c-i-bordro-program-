@@ -192,7 +192,7 @@ describe('payroll error messages', () => {
       message: '2027-01 dönemindeki tahakkuk authoritative değil; retro hesap durduruldu.',
     };
 
-    expect(formatPayrollError(error)).toBe(error.message);
+    expect(formatPayrollError(error)).toBe('Bordro hesaplama bilgileri güncel değil. Verileri yeniden yükleyip ilgili bordroyu yeniden hesaplayın.');
     expect(formatPayrollError(error)).not.toBe(String(error));
   });
 
@@ -325,4 +325,9 @@ describe('stale payment-event chain replay selection', () => {
     expect(isStaleChainError(message)).toBe(true);
     expect(message.includes('otomatik yeniden hesaplanır')).toBe(true);
   });
+});
+
+test('translates rounding and historical-replay errors into actionable Turkish', () => {
+  expect(formatPayrollError(new Error('road rounding mode conflict PERIOD_TOTAL'))).toContain('Bağlı düzeltmeleri önizle');
+  expect(formatPayrollError('UNSUPPORTED_HISTORICAL_REPLAY')).toContain('Geriye Dönük Farklar');
 });

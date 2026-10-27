@@ -294,3 +294,43 @@ fn payroll_service_bozuk_raw_puantajdan_ucret_uretmez() -> Result<(), Box<dyn st
     assert_eq!(count, 0, "bozuk puantaj bordro üretmemeli");
     Ok(())
 }
+
+#[test]
+fn bulk_intent_preserves_latest_unselected_dates_and_report_codes() {
+    let conn = create_in_memory_connection().unwrap();
+    PeriodRepository::save(&conn, &period()).unwrap();
+    PersonnelRepository::save(&conn, &person()).unwrap();
+    let mut days = valid_days(31);
+    days.insert("2026-07-17".into(), "İ".into());
+    days.insert("2026-07-18".into(), "R".into());
+    AttendanceRepository::save(&conn, &attendance(&period().id, days)).unwrap();
+    AttendanceRepository::apply_bulk_intent(
+        &conn,
+        &period().id,
+        &["p1".into()],
+        &["2026-07-16".into(), "2026-07-18".into()],
+        "T",
+    )
+    .unwrap();
+    let saved = AttendanceRepository::get_by_personnel_and_period(&conn, "p1", &period().id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.gunler["2026-07-16"], "T");
+    assert_eq!(saved.gunler["2026-07-17"], "İ");
+    assert_eq!(saved.gunler["2026-07-18"], "R");
+    assert!(AttendanceRepository::apply_bulk_intent(
+        &conn,
+        &period().id,
+        &["p1".into(), "missing-person".into()],
+        &["2026-07-16".into()],
+        "G"
+    )
+    .is_err());
+    assert_eq!(
+        AttendanceRepository::get_by_personnel_and_period(&conn, "p1", &period().id)
+            .unwrap()
+            .unwrap()
+            .gunler,
+        saved.gunler
+    );
+}

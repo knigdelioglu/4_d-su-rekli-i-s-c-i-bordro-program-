@@ -574,7 +574,14 @@ const Harness: React.FC = () => {
           message: 'Yol yuvarlama biçimi 2026-09-15–2026-10-14 bordro hizmet dönemi içinde değişemez: 2026-10-01 tarihli rounding-invalid (PER_COMPENSATION_SLICE) sürümü rounding-baseline (PERIOD_TOTAL) ile çelişiyor.',
         } });
       } else {
-        setPreviewState({ status: 'ready', value: previewFor(operation, data, scenario) });
+        const value = previewFor(operation, data, scenario);
+        if (scenario === 'native-serde') {
+          value.previewToken.operation = JSON.parse(JSON.stringify(operation));
+          delete value.previewToken.operation.state.socialBenefitAccrualPolicies;
+          const wage = value.previewToken.operation.state.gunlukTabanUcret;
+          value.previewToken.operation.state.gunlukTabanUcret = wage.includes('.') ? `${wage}00` : `${wage}.00`;
+        }
+        setPreviewState({ status: 'ready', value });
       }
     }, 30);
   };

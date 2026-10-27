@@ -1377,3 +1377,274 @@ fn native_load_exposes_current_settings_as_exact_string_prefill_only() {
     assert_eq!(sourcePeriodId, "2026-01");
     assert_eq!(state.gunlukTabanUcret, Some("1234.56789".into()));
 }
+
+fn seed_linked_rounding_conflicts(conn: &rusqlite::Connection) {
+    for (year, month) in [(2027, 10), (2027, 11), (2027, 12), (2028, 1)] {
+        PeriodRepository::save(conn, &synthetic_period(year, month)).unwrap();
+    }
+    for (id, date, mode, wage) in [
+        (
+            "repair-baseline",
+            "2027-10-15",
+            RoadRoundingMode::PeriodTotal,
+            dec!(100),
+        ),
+        (
+            "repair-nov",
+            "2027-11-01",
+            RoadRoundingMode::PerCompensationSlice,
+            dec!(110),
+        ),
+        (
+            "repair-jan",
+            "2028-01-01",
+            RoadRoundingMode::PerCompensationSlice,
+            dec!(120),
+        ),
+        (
+            "repair-feb",
+            "2028-02-01",
+            RoadRoundingMode::PeriodTotal,
+            dec!(130),
+        ),
+    ] {
+        CompensationPolicyRepository::insert_version(
+            conn,
+            &CompensationPolicyVersion {
+                id: id.into(),
+                effectiveFrom: date.into(),
+                state: policy_state(wage, dec!(5.125)),
+                boundaryScope: CompensationBoundaryScope::FullEarning,
+                roadRoundingMode: mode,
+                createdAt: "2026-01-01T00:00:00Z".into(),
+                source: "TEST".into(),
+                reason: "Legacy policy".into(),
+                supersedesVersionId: None,
+            },
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn linked_rounding_repair_is_atomic_preserves_originals_and_rechecks_preview_tokens() {
+    let conn = create_in_memory_connection().unwrap();
+    seed_linked_rounding_conflicts(&conn);
+    let originals = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    let scope = scope_for_period(&synthetic_period(2027, 10));
+    let preview_result = CompensationPolicyService::preview_rounding_repair(&conn, &scope);
+    let CompensationPolicyOperationResult::Success { value: preview, .. } = preview_result else {
+        panic!("repair preview failed: {preview_result:?}");
+    };
+    assert_eq!(preview.previews.len(), 2);
+    let tokens = preview
+        .previews
+        .iter()
+        .map(|item| item.previewToken.clone())
+        .collect::<Vec<_>>();
+    assert!(matches!(
+        CompensationPolicyService::save_rounding_repair(&conn, &scope, &tokens[..1]),
+        CompensationPolicyOperationResult::Failure { .. }
+    ));
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&conn).unwrap(),
+        originals
+    );
+    let result = CompensationPolicyService::save_rounding_repair(&conn, &scope, &tokens);
+    let CompensationPolicyOperationResult::Success {
+        value: receipts, ..
+    } = result
+    else {
+        panic!("repair save failed: {result:?}");
+    };
+    assert_eq!(receipts.len(), 2);
+    let after = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    for original in &originals {
+        assert_eq!(
+            after.iter().find(|item| item.id == original.id),
+            Some(original)
+        );
+    }
+    for receipt in receipts {
+        let original = originals
+            .iter()
+            .find(|item| Some(&item.id) == receipt.version.supersedesVersionId.as_ref())
+            .unwrap();
+        assert_eq!(receipt.version.state, original.state);
+        assert_eq!(receipt.version.effectiveFrom, original.effectiveFrom);
+    }
+    for period in PeriodRepository::get_all(&conn).unwrap() {
+        assert!(payroll_core::resolve_compensation_segments(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            &after
+        )
+        .is_ok());
+    }
+    let count = after.len();
+    assert!(matches!(
+        CompensationPolicyService::save_rounding_repair(&conn, &scope, &tokens),
+        CompensationPolicyOperationResult::Failure { .. }
+    ));
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&conn)
+            .unwrap()
+            .len(),
+        count
+    );
+}
+
+#[test]
+fn rounding_repair_keeps_finalized_retro_protection_and_writes_nothing_when_blocked() {
+    let conn = create_in_memory_connection().unwrap();
+    seed_retro_graph(&conn, "FINALIZED");
+    CompensationPolicyRepository::insert_version(
+        &conn,
+        &CompensationPolicyVersion {
+            id: "blocked-rounding".into(),
+            effectiveFrom: "2026-02-01".into(),
+            state: policy_state(dec!(110), dec!(5.125)),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+            roadRoundingMode: RoadRoundingMode::PerCompensationSlice,
+            createdAt: "2026-01-01T00:00:00Z".into(),
+            source: "TEST".into(),
+            reason: "Legacy policy".into(),
+            supersedesVersionId: None,
+        },
+    )
+    .unwrap();
+    let originals = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    assert!(matches!(
+        CompensationPolicyService::preview_rounding_repair(&conn, &scope()),
+        CompensationPolicyOperationResult::Failure {
+            error: CompensationPolicyApiError::RetroBlocker { .. }
+                | CompensationPolicyApiError::FinalizedBlocker { .. },
+            ..
+        }
+    ));
+    assert!(matches!(
+        CompensationPolicyService::save_rounding_repair(&conn, &scope(), &[]),
+        CompensationPolicyOperationResult::Failure { .. }
+    ));
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&conn).unwrap(),
+        originals
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM payroll_records WHERE id = 'retro-person_2026-01'",
+            [],
+            |row| row.get::<_, String>(0)
+        )
+        .unwrap(),
+        "FINALIZED"
+    );
+}
+
+#[test]
+#[ignore = "Requires an explicitly supplied disposable SQLite copy"]
+fn disposable_live_rounding_repair_probe() {
+    let path =
+        std::env::var("BORDRO_ROUNDING_PROBE_COPY").expect("supply a disposable database copy");
+    assert!(path.starts_with("/private/tmp/"));
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let originals = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    let raw_finalized = |conn: &rusqlite::Connection| {
+        let mut statement = conn
+            .prepare("SELECT * FROM payroll_records WHERE status = 'FINALIZED' ORDER BY id")
+            .unwrap();
+        let count = statement.column_count();
+        let rows = statement
+            .query_map([], |row| {
+                (0..count)
+                    .map(|index| row.get::<_, rusqlite::types::Value>(index))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap();
+        rows.collect::<rusqlite::Result<Vec<_>>>().unwrap()
+    };
+    let raw_before = raw_finalized(&conn);
+    let before_finalized =
+        bordro_programi_lib::repositories::payroll_repo::PayrollRepository::get_all(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|payroll| payroll.status == payroll_core::BordroStatus::FINALIZED)
+            .collect::<Vec<_>>();
+    let periods = PeriodRepository::get_all(&conn).unwrap();
+    let october = periods
+        .iter()
+        .find(|period| period.yil == 2027 && period.ay == 10)
+        .unwrap();
+    let scope = scope_for_period(october);
+    let preview = CompensationPolicyService::preview_rounding_repair(&conn, &scope);
+    let CompensationPolicyOperationResult::Success { value, .. } = preview else {
+        panic!("preview blocked: {preview:?}");
+    };
+    assert_eq!(value.previews.len(), 2);
+    let tokens = value
+        .previews
+        .into_iter()
+        .map(|item| item.previewToken)
+        .collect::<Vec<_>>();
+    let saved = CompensationPolicyService::save_rounding_repair(&conn, &scope, &tokens);
+    assert!(
+        matches!(saved, CompensationPolicyOperationResult::Success { .. }),
+        "{saved:?}"
+    );
+    let after = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    for original in &originals {
+        assert_eq!(
+            after.iter().find(|item| item.id == original.id),
+            Some(original)
+        );
+    }
+    let after_finalized =
+        bordro_programi_lib::repositories::payroll_repo::PayrollRepository::get_all(&conn)
+            .unwrap()
+            .into_iter()
+            .filter(|payroll| payroll.status == payroll_core::BordroStatus::FINALIZED)
+            .collect::<Vec<_>>();
+    assert_eq!(raw_before, raw_finalized(&conn));
+    assert_eq!(
+        serde_json::to_value(&before_finalized).unwrap(),
+        serde_json::to_value(&after_finalized).unwrap()
+    );
+    for period in periods.iter().filter(|period| {
+        (period.yil == 2027 && period.ay == 10) || (period.yil == 2028 && period.ay == 1)
+    }) {
+        assert!(payroll_core::resolve_compensation_segments(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            &after
+        )
+        .is_ok());
+    }
+    println!("Disposable copy: two policy corrections saved; October 2027 and January 2028 resolved; {} finalized records unchanged", before_finalized.len());
+}
+
+#[test]
+fn linked_rounding_repair_rolls_back_both_versions_if_the_second_insert_fails() {
+    let conn = create_in_memory_connection().unwrap();
+    seed_linked_rounding_conflicts(&conn);
+    let originals = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+    let scope = scope_for_period(&synthetic_period(2027, 10));
+    let CompensationPolicyOperationResult::Success { value, .. } =
+        CompensationPolicyService::preview_rounding_repair(&conn, &scope)
+    else {
+        panic!("preview failed");
+    };
+    let tokens = value
+        .previews
+        .into_iter()
+        .map(|preview| preview.previewToken)
+        .collect::<Vec<_>>();
+    conn.execute_batch("CREATE TRIGGER fail_second_rounding_repair BEFORE INSERT ON compensation_policy_versions WHEN NEW.supersedes_version_id = 'repair-jan' BEGIN SELECT RAISE(ABORT, 'forced second insert failure'); END;").unwrap();
+    assert!(matches!(
+        CompensationPolicyService::save_rounding_repair(&conn, &scope, &tokens),
+        CompensationPolicyOperationResult::Failure { .. }
+    ));
+    assert_eq!(
+        CompensationPolicyRepository::get_all_versions(&conn).unwrap(),
+        originals
+    );
+}

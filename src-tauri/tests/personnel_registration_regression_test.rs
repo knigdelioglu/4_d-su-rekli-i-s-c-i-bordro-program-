@@ -173,3 +173,18 @@ fn unrelated_sql_errors_are_not_reported_as_duplicate_tc_no() {
     let error = PersonnelRepository::save(&conn, &person("trigger-error")).unwrap_err();
     assert!(matches!(error, DomainError::DatabaseError(_)));
 }
+
+#[test]
+fn registration_accepts_eleven_digit_tc_without_checksum_validation() {
+    let conn = create_in_memory_connection().unwrap();
+    let mut worker = person("checksum-not-required");
+    worker.tcNo = "12345678901".into();
+    PersonnelRepository::save(&conn, &worker).unwrap();
+    assert_eq!(
+        PersonnelRepository::get_by_id(&conn, &worker.id)
+            .unwrap()
+            .unwrap()
+            .tcNo,
+        "12345678901"
+    );
+}

@@ -172,4 +172,19 @@ describe('tauriBridge IPC arg anahtarları Tauri camelCase parametreleriyle eşl
     expect(mock.cmd()).toBe('get_sick_leave_records');
     expect(mock.args()).toEqual({ personnelId: 'p-1' });
   });
+  test('bulk attendance intent uses exact camelCase IPC fields', async () => {
+    const mock = installMock();
+    const intent = { periodId: '2027-10', personnelIds: ['p-1'], dates: ['2027-10-16'], code: 'T' as const };
+    await tauriBridge.applyAttendanceBulkIntent(intent);
+    expect(mock.cmd()).toBe('apply_attendance_bulk_intent');
+    expect(mock.args()).toEqual(intent);
+  });
+  test('rounding repair sends previewTokens rather than display effects', async () => {
+    const mock = installMock({ ok: true, value: [] });
+    const scope = { institutionScope: 'CURRENT_INSTITUTION' as const, periodId: 'period', periodStartInclusive: '2027-10-15', periodEndInclusive: '2027-11-14', projectionDate: '2027-10-15' };
+    await tauriBridge.saveRoadRoundingRepair(scope, { previews: [] });
+    expect(mock.cmd()).toBe('save_road_rounding_repair');
+    expect(mock.args()).toEqual({ scope, previewTokens: [] });
+  });
+
 });

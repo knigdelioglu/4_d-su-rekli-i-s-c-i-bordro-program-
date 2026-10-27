@@ -461,6 +461,12 @@ impl<T> CompensationPolicyOperationResult<T> {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoadRoundingRepairPreview {
+    pub previews: Vec<CompensationPolicyPreviewData>,
+}
+
 pub struct CompensationPolicyService;
 
 impl CompensationPolicyService {
@@ -661,6 +667,174 @@ impl CompensationPolicyService {
         }
     }
 
+    // Build an explicit same-date correction set. Monetary state, dates and old versions remain immutable.
+    fn rounding_repair_plan(
+        conn: &Connection,
+    ) -> std::result::Result<
+        (
+            Vec<(
+                CompensationPolicyReadScope,
+                CompensationPolicyWriteOperation,
+            )>,
+            Vec<CompensationPolicyVersion>,
+        ),
+        CompensationPolicyApiError,
+    > {
+        let versions =
+            CompensationPolicyRepository::get_all_versions(conn).map_err(map_domain_error)?;
+        let mut periods = PeriodRepository::get_all(conn).map_err(map_domain_error)?;
+        periods.sort_by(|a, b| a.baslangicTarihi.cmp(&b.baslangicTarihi));
+        let mut working = versions.clone();
+        // Propagate the established method through each service period, including newly exposed conflicts.
+        for period in &periods {
+            loop {
+                let issues = match find_road_rounding_issues(
+                    &period.baslangicTarihi,
+                    &period.bitisTarihi,
+                    &working,
+                ) {
+                    Ok(issues) => issues,
+                    Err(DomainError::NotFound(_)) => break,
+                    Err(error) => return Err(map_domain_error(error)),
+                };
+                let Some(issue) = issues.first() else {
+                    break;
+                };
+                let version = working
+                    .iter_mut()
+                    .find(|version| version.id == issue.actual_version_id)
+                    .ok_or_else(|| CompensationPolicyApiError::InvalidPolicy {
+                        message: "Uyuşmayan sürüm bulunamadı.".into(),
+                    })?;
+                version.roadRoundingMode = issue.expected_mode;
+            }
+        }
+        let mut operations = Vec::new();
+        let mut candidate = versions.clone();
+        for source in &versions {
+            let repaired = working
+                .iter()
+                .find(|version| version.id == source.id)
+                .unwrap();
+            if source.roadRoundingMode == repaired.roadRoundingMode {
+                continue;
+            }
+            let period = periods
+                .iter()
+                .find(|period| {
+                    period.baslangicTarihi <= source.effectiveFrom
+                        && period.bitisTarihi >= source.effectiveFrom
+                })
+                .ok_or_else(|| CompensationPolicyApiError::InvalidPolicy {
+                    message: "Düzeltme için hizmet dönemi bulunamadı.".into(),
+                })?;
+            let operation = CompensationPolicyWriteOperation::SameDateCorrection {
+                effectiveFrom: source.effectiveFrom.clone(),
+                state: source.state.clone(),
+                roadRoundingMode: repaired.roadRoundingMode,
+                boundaryScope: source.boundaryScope,
+                changeIntent: if source.boundaryScope == CompensationBoundaryScope::RoadOnly {
+                    "ROAD_AMOUNT_ONLY"
+                } else {
+                    "FULL_STATE_CHANGE"
+                }
+                .into(),
+                reason: "Bağlı hizmet dönemlerindeki yol yuvarlama uyumsuzluğunun düzeltilmesi"
+                    .into(),
+                supersedesVersionId: source.id.clone(),
+            };
+            let mut version = Self::preview_version(&operation);
+            version.id = format!("rounding-repair-{}", source.id);
+            candidate.push(version);
+            operations.push((
+                CompensationPolicyReadScope {
+                    institutionScope: "CURRENT_INSTITUTION".into(),
+                    periodId: period.id.clone(),
+                    periodStartInclusive: period.baslangicTarihi.clone(),
+                    periodEndInclusive: period.bitisTarihi.clone(),
+                    projectionDate: source.effectiveFrom.clone(),
+                },
+                operation,
+            ));
+        }
+        let candidate =
+            validate_compensation_policy_timeline(&candidate).map_err(map_domain_error)?;
+        validate_no_new_road_rounding_conflicts(&periods, &versions, &candidate)
+            .map_err(map_domain_error)?;
+        Ok((operations, candidate))
+    }
+
+    fn rounding_repair_preview_inner(
+        conn: &Connection,
+        scope: &CompensationPolicyReadScope,
+    ) -> std::result::Result<RoadRoundingRepairPreview, CompensationPolicyApiError> {
+        Self::validate_scope(conn, scope)?;
+        let (operations, candidate) = Self::rounding_repair_plan(conn)?;
+        let previews = operations
+            .iter()
+            .map(|(scope, operation)| {
+                Self::preview_inner_with_rounding(conn, scope, operation, Some(&candidate))
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(RoadRoundingRepairPreview { previews })
+    }
+
+    pub fn preview_rounding_repair(
+        conn: &Connection,
+        scope: &CompensationPolicyReadScope,
+    ) -> CompensationPolicyOperationResult<RoadRoundingRepairPreview> {
+        match Self::rounding_repair_preview_inner(conn, scope) {
+            Ok(value) => CompensationPolicyOperationResult::success(value),
+            Err(error) => CompensationPolicyOperationResult::failure(error),
+        }
+    }
+
+    pub fn save_rounding_repair(
+        conn: &Connection,
+        scope: &CompensationPolicyReadScope,
+        preview_tokens: &[CompensationPolicyPreviewToken],
+    ) -> CompensationPolicyOperationResult<Vec<CompensationPolicySaveReceipt>> {
+        let result = crate::repositories::transaction::with_transaction(conn, |tx| {
+            let fresh =
+                Self::rounding_repair_preview_inner(tx, scope).map_err(api_error_to_domain)?;
+            if fresh.previews.len() != preview_tokens.len()
+                || fresh
+                    .previews
+                    .iter()
+                    .zip(preview_tokens)
+                    .any(|(a, b)| a.previewToken != *b)
+            {
+                return Err(api_error_to_domain(CompensationPolicyApiError::Conflict {
+                    message: "Yol yuvarlama onarım önizlemesi değişti. Yeniden önizleyin.".into(),
+                    actualTargetState: None,
+                }));
+            }
+            let (operations, candidate) =
+                Self::rounding_repair_plan(tx).map_err(api_error_to_domain)?;
+            let mut receipts = Vec::new();
+            for (scope, operation) in operations {
+                let current =
+                    Self::preview_inner_with_rounding(tx, &scope, &operation, Some(&candidate))
+                        .map_err(api_error_to_domain)?;
+                receipts.push(Self::save_inner_with_rounding(
+                    tx,
+                    &CompensationPolicySaveRequest {
+                        scope,
+                        operation,
+                        previewToken: current.previewToken,
+                        initialBaselineConfirmation: None,
+                    },
+                    Some(&candidate),
+                )?);
+            }
+            Ok(receipts)
+        });
+        match result {
+            Ok(value) => CompensationPolicyOperationResult::success(value),
+            Err(error) => CompensationPolicyOperationResult::failure(map_save_error(error)),
+        }
+    }
+
     fn load_inner(
         conn: &Connection,
         request: &CompensationPolicyLoadRequest,
@@ -848,6 +1022,15 @@ impl CompensationPolicyService {
         scope: &CompensationPolicyReadScope,
         operation: &CompensationPolicyWriteOperation,
     ) -> std::result::Result<CompensationPolicyPreviewData, CompensationPolicyApiError> {
+        Self::preview_inner_with_rounding(conn, scope, operation, None)
+    }
+
+    fn preview_inner_with_rounding(
+        conn: &Connection,
+        scope: &CompensationPolicyReadScope,
+        operation: &CompensationPolicyWriteOperation,
+        final_rounding: Option<&[CompensationPolicyVersion]>,
+    ) -> std::result::Result<CompensationPolicyPreviewData, CompensationPolicyApiError> {
         let period = Self::validate_scope(conn, scope)?;
         if let Some(quarantined) = Self::find_quarantined(conn)? {
             return Err(CompensationPolicyApiError::QuarantinedPolicy {
@@ -858,7 +1041,14 @@ impl CompensationPolicyService {
         let versions =
             CompensationPolicyRepository::get_all_versions(conn).map_err(map_domain_error)?;
         let all_periods = PeriodRepository::get_all(conn).map_err(map_domain_error)?;
-        Self::validate_operation(scope, &period, operation, &versions, &all_periods)?;
+        Self::validate_operation(
+            scope,
+            &period,
+            operation,
+            &versions,
+            &all_periods,
+            final_rounding,
+        )?;
         let targetState = Self::target_state(&versions, operation.effective_from());
         let directCompensationEffects = Self::direct_effects(&all_periods, &versions, operation)?;
         let direct_period_ids = directCompensationEffects
@@ -950,6 +1140,14 @@ impl CompensationPolicyService {
         tx: &Connection,
         request: &CompensationPolicySaveRequest,
     ) -> Result<CompensationPolicySaveReceipt> {
+        Self::save_inner_with_rounding(tx, request, None)
+    }
+
+    fn save_inner_with_rounding(
+        tx: &Connection,
+        request: &CompensationPolicySaveRequest,
+        final_rounding: Option<&[CompensationPolicyVersion]>,
+    ) -> Result<CompensationPolicySaveReceipt> {
         let is_initial = matches!(
             request.operation,
             CompensationPolicyWriteOperation::InitialBaseline { .. }
@@ -974,8 +1172,13 @@ impl CompensationPolicyService {
             ));
         }
 
-        let preview = Self::preview_inner(tx, &request.scope, &request.operation)
-            .map_err(api_error_to_domain)?;
+        let preview = Self::preview_inner_with_rounding(
+            tx,
+            &request.scope,
+            &request.operation,
+            final_rounding,
+        )
+        .map_err(api_error_to_domain)?;
         if preview.previewToken != request.previewToken {
             return Err(api_error_to_domain(CompensationPolicyApiError::Conflict {
                 message: "Ücret politikası önizlemesi değişti; güncel verilerle yeniden önizleyin."
@@ -992,6 +1195,7 @@ impl CompensationPolicyService {
             &request.operation,
             &versions,
             &all_periods,
+            final_rounding,
         )
         .map_err(api_error_to_domain)?;
         let effect = preview.directCompensationEffects.first().ok_or_else(|| {
@@ -1195,6 +1399,7 @@ impl CompensationPolicyService {
         operation: &CompensationPolicyWriteOperation,
         versions: &[CompensationPolicyVersion],
         all_periods: &[BordroDonemi],
+        final_rounding: Option<&[CompensationPolicyVersion]>,
     ) -> std::result::Result<(), CompensationPolicyApiError> {
         if !operation.change_intent_matches() {
             return Err(CompensationPolicyApiError::InvalidRequest {
@@ -1309,15 +1514,22 @@ impl CompensationPolicyService {
                 });
             }
         };
-        validate_no_new_road_rounding_conflicts(all_periods, versions, &candidate).map_err(
-            |error| CompensationPolicyApiError::InvalidPolicy {
-                message: error.to_string(),
-            },
-        )?;
-        resolve_compensation_segments(&period.baslangicTarihi, &period.bitisTarihi, &candidate)
-            .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
-                message: error.to_string(),
-            })?;
+        validate_no_new_road_rounding_conflicts(
+            all_periods,
+            versions,
+            final_rounding.unwrap_or(&candidate),
+        )
+        .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
+            message: error.to_string(),
+        })?;
+        resolve_compensation_segments(
+            &period.baslangicTarihi,
+            &period.bitisTarihi,
+            final_rounding.unwrap_or(&candidate),
+        )
+        .map_err(|error| CompensationPolicyApiError::InvalidPolicy {
+            message: error.to_string(),
+        })?;
         let _ = scope;
         Ok(())
     }

@@ -33,6 +33,9 @@ import { formatPayrollError } from './useBordroCalculationController';
 import { describeError } from '../utils/errorMessage';
 import { createPuantajBulkPlan, type PuantajBulkCommitIntent } from '../utils/puantajBulkPlan';
 
+import { previewAttendanceBulkDependencies, type AttendanceBulkDependency } from '../utils/attendanceBulkDependencies';
+import { getPayrollEngine, type PayrollDatasetSnapshot } from '../services/payrollEngine';
+
 type BulkApplyRequest =
   | { scope: 'all' | 'range'; dates: string[]; code: PuantajKodu }
   | { scope: 'personnel'; dates: string[]; code: PuantajKodu };
@@ -42,6 +45,7 @@ interface PuantajGridProps {
   personeller: Personel[];
   puantajlar: PersonelPuantaj[];
   sickLeaveRecords: SickLeaveRecord[];
+  authoritativeDataset?: PayrollDatasetSnapshot;
   onSavePuantaj: (puantaj: PersonelPuantaj) => Promise<void> | void;
   onSavePuantajBatch: (
     puantajlar: PersonelPuantaj[],
@@ -55,6 +59,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   personeller,
   puantajlar,
   sickLeaveRecords,
+  authoritativeDataset,
   onSavePuantaj,
   onSavePuantajBatch,
   onSelectPersonelForBordro,
@@ -77,6 +82,11 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   const [exportError, setExportError] = useState<string | null>(null);
   const [puantajError, setPuantajError] = useState<string | null>(null);
   const [bulkApplyRequest, setBulkApplyRequest] = useState<BulkApplyRequest | null>(null);
+  const [bulkPersonnelIds, setBulkPersonnelIds] = useState<Set<string>>(new Set());
+  const [bulkDependencies, setBulkDependencies] = useState<AttendanceBulkDependency[] | null>(null);
+  const [dependencyPending, setDependencyPending] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{ ids: string[]; success: boolean } | null>(null);
+  const bulkWriteRef = useRef(false);
   const [isApplyingBulkCode, setIsApplyingBulkCode] = useState(false);
   const [quickEntryDates, setQuickEntryDates] = useState<string[]>([]);
   const [isQuickCalendarOpen, setIsQuickCalendarOpen] = useState(false);
@@ -125,11 +135,28 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
   };
   const isAttendanceCreated = Boolean(savedPuantaj);
 
+  useEffect(() => {
+    if (!bulkApplyRequest) return;
+    const ids = bulkApplyRequest.scope === 'personnel' ? personeller.map((person) => person.id) : [selectedPersonelId];
+    let cancelled = false;
+    setBulkPersonnelIds(new Set(ids));
+    setBulkDependencies(null);
+    setDependencyPending(Boolean(authoritativeDataset));
+    if (!authoritativeDataset) return;
+    void previewAttendanceBulkDependencies(getPayrollEngine(), authoritativeDataset, aktifDonem.id, ids).then((rows) => {
+      if (cancelled) return;
+      setBulkDependencies(rows);
+      setBulkPersonnelIds(new Set(rows.filter((row) => !row.blocked).map((row) => row.personnelId)));
+      setDependencyPending(false);
+    });
+    return () => { cancelled = true; };
+  }, [bulkApplyRequest, authoritativeDataset, aktifDonem.id, selectedPersonelId, personeller]);
+
   const bulkPlan = useMemo(() => {
     if (!bulkApplyRequest) return null;
-    const selectedPersonnel = bulkApplyRequest.scope === 'personnel'
+    const selectedPersonnel = (bulkApplyRequest.scope === 'personnel'
       ? personeller
-      : activePersonel ? [activePersonel] : [];
+      : activePersonel ? [activePersonel] : []).filter((person) => bulkPersonnelIds.has(person.id));
     return createPuantajBulkPlan({
       personnel: selectedPersonnel,
       attendances: puantajlar,
@@ -146,6 +173,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     aktifDonem.bitisTarihi,
     aktifDonem.id,
     bulkApplyRequest,
+    bulkPersonnelIds,
     personeller,
     puantajlar,
     sickLeaveRecords,
@@ -261,7 +289,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
     if (
       !bulkApplyRequest ||
       (bulkApplyRequest.scope !== 'personnel' && !savedPuantaj) ||
-      isApplyingBulkCode
+      isApplyingBulkCode || bulkWriteRef.current || dependencyPending
     ) return;
     if (!bulkPlan) return;
     if (bulkPlan.reportMismatches.length > 0) {
@@ -275,22 +303,25 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
       return;
     }
 
+    bulkWriteRef.current = true;
     setIsApplyingBulkCode(true);
     try {
-      const targetPersonnel = bulkApplyRequest.scope === 'personnel'
+      const targetPersonnel = (bulkApplyRequest.scope === 'personnel'
         ? personeller
-        : activePersonel ? [activePersonel] : [];
+        : activePersonel ? [activePersonel] : []).filter((person) => bulkPersonnelIds.has(person.id));
       const saved = await persistPuantajBatch(bulkPlan.updates, {
         periodId: aktifDonem.id,
         personnelIds: targetPersonnel.map((person) => person.id),
         dates: bulkApplyRequest.dates,
         code: bulkApplyRequest.code,
       });
+      setBulkResult({ ids: bulkPlan.updates.map((attendance) => attendance.personelId), success: saved });
       if (!saved) return;
       if (bulkApplyRequest.scope === 'personnel') setQuickEntryDates([]);
       setBulkApplyRequest(null);
       setPuantajError(null);
     } finally {
+      bulkWriteRef.current = false;
       setIsApplyingBulkCode(false);
     }
   };
@@ -653,14 +684,14 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
           {/* Quick Tools */}
           <div className="flex flex-col items-stretch gap-2 text-xs">
             <div className="flex items-center gap-2 flex-wrap">
-            <button
+            {isAttendanceCreated && <button
               type="button"
               onClick={handleResetDefault}
               className="px-3 py-1.5 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-xl font-medium transition-colors flex items-center gap-1.5 cursor-pointer shadow-2xs"
             >
               <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-              <span>{isAttendanceCreated ? 'Varsayılan Düzeni Uygula' : 'Varsayılan Puantajı Oluştur'}</span>
-            </button>
+              <span>Varsayılan Düzeni Uygula</span>
+            </button>}
 
             <div className="flex items-center bg-white border border-slate-200 rounded-xl p-1 gap-1 shadow-2xs">
               <span className="px-2 text-xs text-slate-500">
@@ -902,6 +933,10 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
         </div>
       </div>
 
+      {bulkResult && <section role="status" className="rounded border p-3 text-sm" aria-label="Toplu puantaj sonucu">
+        Başarı: {bulkResult.success ? bulkResult.ids.length : 0} · Hata: {bulkResult.success ? 0 : bulkResult.ids.length}
+        <ul>{bulkResult.ids.map((id) => { const person = personeller.find((entry) => entry.id === id); return <li key={id}>{person?.ad} {person?.soyad}: {bulkResult.success ? 'Kaydedildi' : 'Kaydedilemedi; atomik işlem geri alındı'}</li>; })}</ul>
+      </section>}
       {bulkApplyRequest && (
         <div
           role="alertdialog"
@@ -971,6 +1006,19 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                 )}
               </div>
             </div>
+            <fieldset className="max-h-48 overflow-auto border-b p-3 text-xs" disabled={isApplyingBulkCode || dependencyPending}>
+              <legend className="font-bold">Personel seçimi ve bordro / retro bağımlılıkları</legend>
+              {dependencyPending && <p role="status">Bağımlılıklar inceleniyor…</p>}
+              {(bulkApplyRequest.scope === 'personnel' ? personeller : activePersonel ? [activePersonel] : []).map((person) => {
+                const dependency = bulkDependencies?.find((row) => row.personnelId === person.id);
+                return <label key={person.id} className="my-2 flex gap-2">
+                  <input type="checkbox" data-testid={`bulk-attendance-person-${person.id}`} checked={bulkPersonnelIds.has(person.id)} disabled={Boolean(dependency?.blocked)}
+                    onChange={() => setBulkPersonnelIds((current) => { const next = new Set(current); next.has(person.id) ? next.delete(person.id) : next.add(person.id); return next; })} />
+                  <span>{person.ad} {person.soyad} — {dependency?.message ?? 'Önizlemeye dahil'}</span>
+                </label>;
+              })}
+              <p>Seçili: {bulkPersonnelIds.size} · Engelli: {bulkDependencies?.filter((row) => row.blocked).length ?? 0}</p>
+            </fieldset>
             <div className="max-h-64 overflow-auto border-b border-slate-200">
               {bulkPlan?.rows.length ? (
                 <table className="w-full text-left text-xs" aria-label="Toplu puantaj değişiklik önizlemesi">
@@ -1017,7 +1065,7 @@ export const PuantajGrid: React.FC<PuantajGridProps> = ({
                 type="button"
                 data-testid="bulk-apply-confirm"
                 onClick={() => void handleConfirmBulkApply()}
-                disabled={isApplyingBulkCode || !bulkPlan || bulkPlan.reportMismatches.length > 0 || bulkPlan.updates.length === 0}
+                disabled={isApplyingBulkCode || dependencyPending || !bulkPlan || bulkPlan.reportMismatches.length > 0 || bulkPlan.updates.length === 0}
                 className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700 disabled:cursor-wait disabled:opacity-60"
               >
                 {isApplyingBulkCode ? 'Kaydediliyor…' : 'Önizlenen değişiklikleri kaydet'}

@@ -1,4 +1,6 @@
 import type {
+  RoadRoundingRepairPreview,
+  CompensationPolicyReadScope,
   CompensationPolicyApi,
   CompensationPolicyApiError,
   CompensationPolicyDependencyEffect,
@@ -316,7 +318,8 @@ function validateOperation(
   payload: BrowserPayload,
   period: BrowserPayload['donemler'][number],
   operation: CompensationPolicyPreviewRequest['operation'],
-  runtime: Awaited<ReturnType<typeof getWasmRuntime>>
+  runtime: Awaited<ReturnType<typeof getWasmRuntime>>,
+  finalRounding?: CompensationPolicyVersionWire[]
 ): CompensationPolicyVersionWire[] {
   const versions = orderedVersions(payload.compensationPolicyVersions);
   if (!isCanonicalDate(operation.effectiveFrom) ||
@@ -377,7 +380,7 @@ function validateOperation(
     runtime.validate_no_new_compensation_policy_rounding_conflicts_json(JSON.stringify({
       periods: payload.donemler,
       existingVersions: versions,
-      candidateVersions: candidateTimeline,
+      candidateVersions: finalRounding ?? candidateTimeline,
     }));
   } catch (error) {
     raise('INVALID_POLICY', readableErrorMessage(error));
@@ -386,7 +389,7 @@ function validateOperation(
     runtime.resolve_compensation_policy_timeline_json(JSON.stringify({
       startInclusive: period.baslangicTarihi,
       endInclusive: period.bitisTarihi,
-      versions: candidateTimeline,
+      versions: finalRounding ?? candidateTimeline,
     }));
   } catch (error) {
     const descendantRoadOnly = operation.kind === 'SAME_DATE_CORRECTION'
@@ -610,10 +613,11 @@ function calculatePreview(
   payload: BrowserPayload,
   scope: CompensationPolicyPreviewRequest['scope'],
   operation: CompensationPolicyPreviewRequest['operation'],
-  runtime: Awaited<ReturnType<typeof getWasmRuntime>>
+  runtime: Awaited<ReturnType<typeof getWasmRuntime>>,
+  finalRounding?: CompensationPolicyVersionWire[]
 ): CompensationPolicyPreviewData {
   const period = validateScope(payload, scope);
-  const versions = validateOperation(payload, period, operation, runtime);
+  const versions = validateOperation(payload, period, operation, runtime, finalRounding);
   const directCompensationEffects = directEffects(payload, operation, versions);
   const directPeriodIds = new Set(directCompensationEffects.flatMap((effect) => effect.affectedPeriods.map((item) => item.periodId)));
   const dataset = readSnapshot(payload);
@@ -779,6 +783,76 @@ async function loadBrowserPolicy(
   }
 }
 
+function applyPolicySave(current: BrowserPayload, request: CompensationPolicySaveRequest,
+  runtime: Awaited<ReturnType<typeof getWasmRuntime>>, finalRounding?: CompensationPolicyVersionWire[]) {
+  const preview = calculatePreview(current, request.scope, request.operation, runtime, finalRounding);
+  if (!same(preview.previewToken, request.previewToken)) {
+    raise('CONFLICT', 'Ücret politikası önizleme tokenı güncel snapshot ile eşleşmiyor.', {
+      actualTargetState: preview.previewToken.targetState,
+    });
+  }
+  const now = new Date().toISOString();
+  const version: CompensationPolicyVersionWire = {
+    id: globalThis.crypto.randomUUID(),
+    effectiveFrom: request.operation.effectiveFrom,
+    state: request.operation.state,
+    boundaryScope: request.operation.boundaryScope,
+    roadRoundingMode: request.operation.roadRoundingMode,
+    createdAt: now,
+    source: 'SETTINGS_COMPENSATION_POLICY',
+    reason: request.operation.reason.trim(),
+    supersedesVersionId: request.operation.kind === 'SAME_DATE_CORRECTION'
+      ? request.operation.supersedesVersionId
+      : null,
+  };
+  const calculated = calculatePreview(current, request.scope, request.operation, runtime, finalRounding);
+  const staleKeys = new Set(
+    calculated.dependencyClosureEffects
+      .filter((effect) => effect.action === 'CALCULATED_TO_STALE')
+      .map((effect) => `${effect.affectedPayroll.personnelId}\u0000${effect.affectedPayroll.periodId}\u0000${effect.affectedPayroll.accrualId}`)
+  );
+  const staleRetroEffects = calculated.retroEffects.filter((effect) => effect.action === 'STALE_ELIGIBLE');
+  const staleBatchIds = new Set(staleRetroEffects.map((effect) => effect.batchId));
+  const stalePaymentEventIds = new Set(staleRetroEffects.flatMap((effect) => effect.linkedPaymentEventIds));
+  const staleNow = new Date().toISOString();
+  const nextPolicyVersions = [...current.compensationPolicyVersions, version];
+  const latestActivePolicy = activeVersions(nextPolicyVersions).at(-1);
+  const receipt: CompensationPolicySaveReceipt = {
+    version,
+    invalidatedPayrolls: current.bordrolar.flatMap((payroll) => {
+      const key = keyString(payrollKey(payroll));
+      if (!staleKeys.has(key) || payroll.status !== 'CALCULATED') return [];
+      return [{ payroll: payrollReference(payroll), fromStatus: 'CALCULATED', toStatus: 'STALE' }];
+    }),
+    invalidatedRetroBatches: current.retroBatches.flatMap((batch) => {
+      if (!staleBatchIds.has(batch.id) || batch.status !== 'CALCULATED') return [];
+      return [{ batchId: batch.id, fromStatus: 'CALCULATED', toStatus: 'STALE' }];
+    }),
+    invalidatedRetroPaymentEvents: current.bordrolar.flatMap((payroll) => {
+      if (!stalePaymentEventIds.has(payroll.id) || payroll.status !== 'CALCULATED') return [];
+      return [{ payroll: payrollReference(payroll), fromStatus: 'CALCULATED', toStatus: 'STALE' }];
+    }),
+    authoritativeReloadRequired: true,
+  };
+  const payload: BrowserPayload = {
+    ...current,
+    isPrimiGruplari: latestActivePolicy?.state.isPrimiGruplari ?? current.isPrimiGruplari,
+    compensationPolicyVersions: nextPolicyVersions,
+    retroBatches: current.retroBatches.map((batch) =>
+      staleBatchIds.has(batch.id) && batch.status === 'CALCULATED'
+        ? { ...batch, status: 'STALE' }
+        : batch
+    ),
+    bordrolar: current.bordrolar.map((payroll) =>
+      (staleKeys.has(keyString(payrollKey(payroll))) || stalePaymentEventIds.has(payroll.id))
+        && payroll.status === 'CALCULATED'
+        ? { ...payroll, status: 'STALE', sonGuncellemeTarihi: staleNow }
+        : payroll
+    ),
+  };
+  return { payload, receipt };
+}
+
 const browserCompensationPolicyApi: CompensationPolicyApi = {
   load: loadBrowserPolicy,
 
@@ -807,71 +881,9 @@ const browserCompensationPolicyApi: CompensationPolicyApi = {
       const runtime = await getWasmRuntime();
       let receipt: CompensationPolicySaveReceipt | undefined;
       await browserPayrollStore.mutateSnapshot((current) => {
-        const preview = calculatePreview(current, request.scope, request.operation, runtime);
-        if (!same(preview.previewToken, request.previewToken)) {
-          raise('CONFLICT', 'Ücret politikası önizleme tokenı güncel snapshot ile eşleşmiyor.', {
-            actualTargetState: preview.previewToken.targetState,
-          });
-        }
-        const now = new Date().toISOString();
-        const version: CompensationPolicyVersionWire = {
-          id: globalThis.crypto.randomUUID(),
-          effectiveFrom: request.operation.effectiveFrom,
-          state: request.operation.state,
-          boundaryScope: request.operation.boundaryScope,
-          roadRoundingMode: request.operation.roadRoundingMode,
-          createdAt: now,
-          source: 'SETTINGS_COMPENSATION_POLICY',
-          reason: request.operation.reason.trim(),
-          supersedesVersionId: request.operation.kind === 'SAME_DATE_CORRECTION'
-            ? request.operation.supersedesVersionId
-            : null,
-        };
-        const calculated = calculatePreview(current, request.scope, request.operation, runtime);
-        const staleKeys = new Set(
-          calculated.dependencyClosureEffects
-            .filter((effect) => effect.action === 'CALCULATED_TO_STALE')
-            .map((effect) => `${effect.affectedPayroll.personnelId}\u0000${effect.affectedPayroll.periodId}\u0000${effect.affectedPayroll.accrualId}`)
-        );
-        const staleRetroEffects = calculated.retroEffects.filter((effect) => effect.action === 'STALE_ELIGIBLE');
-        const staleBatchIds = new Set(staleRetroEffects.map((effect) => effect.batchId));
-        const stalePaymentEventIds = new Set(staleRetroEffects.flatMap((effect) => effect.linkedPaymentEventIds));
-        const staleNow = new Date().toISOString();
-        const nextPolicyVersions = [...current.compensationPolicyVersions, version];
-        const latestActivePolicy = activeVersions(nextPolicyVersions).at(-1);
-        receipt = {
-          version,
-          invalidatedPayrolls: current.bordrolar.flatMap((payroll) => {
-            const key = keyString(payrollKey(payroll));
-            if (!staleKeys.has(key) || payroll.status !== 'CALCULATED') return [];
-            return [{ payroll: payrollReference(payroll), fromStatus: 'CALCULATED', toStatus: 'STALE' }];
-          }),
-          invalidatedRetroBatches: current.retroBatches.flatMap((batch) => {
-            if (!staleBatchIds.has(batch.id) || batch.status !== 'CALCULATED') return [];
-            return [{ batchId: batch.id, fromStatus: 'CALCULATED', toStatus: 'STALE' }];
-          }),
-          invalidatedRetroPaymentEvents: current.bordrolar.flatMap((payroll) => {
-            if (!stalePaymentEventIds.has(payroll.id) || payroll.status !== 'CALCULATED') return [];
-            return [{ payroll: payrollReference(payroll), fromStatus: 'CALCULATED', toStatus: 'STALE' }];
-          }),
-          authoritativeReloadRequired: true,
-        };
-        return {
-          ...current,
-          isPrimiGruplari: latestActivePolicy?.state.isPrimiGruplari ?? current.isPrimiGruplari,
-          compensationPolicyVersions: nextPolicyVersions,
-          retroBatches: current.retroBatches.map((batch) =>
-            staleBatchIds.has(batch.id) && batch.status === 'CALCULATED'
-              ? { ...batch, status: 'STALE' }
-              : batch
-          ),
-          bordrolar: current.bordrolar.map((payroll) =>
-            (staleKeys.has(keyString(payrollKey(payroll))) || stalePaymentEventIds.has(payroll.id))
-              && payroll.status === 'CALCULATED'
-              ? { ...payroll, status: 'STALE', sonGuncellemeTarihi: staleNow }
-              : payroll
-          ),
-        };
+        const applied = applyPolicySave(current, request, runtime);
+        receipt = applied.receipt;
+        return applied.payload;
       });
       if (!receipt) raise('PERSISTENCE', 'Kaydetme sonucu oluşturulamadı.');
       return success({ ...receipt, authoritativeReloadRequired: true as const });
@@ -952,4 +964,73 @@ const browserCompensationPolicyApi: CompensationPolicyApi = {
 /** Native and browser APIs share the frozen DTO and fail-closed result union. */
 export function getCompensationPolicyApi(): CompensationPolicyApi {
   return tauriBridge.isTauriAvailable() ? tauriCompensationPolicyApi : browserCompensationPolicyApi;
+}
+
+function roundingRepairPlan(payload: BrowserPayload): { scope: CompensationPolicyReadScope; operation: CompensationPolicyPreviewRequest['operation'] }[] {
+  const versions = orderedVersions(payload.compensationPolicyVersions);
+  const active = activeVersions(versions).map((version) => ({ ...version }));
+  const periods = [...payload.donemler].sort((a, b) => a.baslangicTarihi.localeCompare(b.baslangicTarihi));
+  for (const period of periods) {
+    const baseline = active.filter((version) => version.effectiveFrom <= period.baslangicTarihi).at(-1);
+    if (!baseline) continue;
+    let mode = baseline.roadRoundingMode;
+    for (const version of active.filter((version) => version.effectiveFrom > period.baslangicTarihi && version.effectiveFrom <= period.bitisTarihi)) {
+      if (version.roadRoundingMode !== mode) version.roadRoundingMode = mode;
+      mode = version.roadRoundingMode;
+    }
+  }
+  return active.flatMap((repaired) => {
+    const source = versions.find((version) => version.id === repaired.id)!;
+    if (source.roadRoundingMode === repaired.roadRoundingMode) return [];
+    const period = periods.find((period) => period.baslangicTarihi <= source.effectiveFrom && period.bitisTarihi >= source.effectiveFrom);
+    if (!period) raise('INVALID_POLICY', 'Düzeltmenin hizmet dönemi bulunamadı.');
+    const operation: CompensationPolicyPreviewRequest['operation'] = {
+      kind: 'SAME_DATE_CORRECTION', effectiveFrom: source.effectiveFrom, state: source.state,
+      boundaryScope: source.boundaryScope, changeIntent: source.boundaryScope === 'ROAD_ONLY' ? 'ROAD_AMOUNT_ONLY' : 'FULL_STATE_CHANGE',
+      roadRoundingMode: repaired.roadRoundingMode, supersedesVersionId: source.id,
+      reason: 'Bağlı hizmet dönemlerindeki yol yuvarlama uyumsuzluğunun düzeltilmesi',
+    } as CompensationPolicyPreviewRequest['operation'];
+    return [{ scope: { institutionScope: 'CURRENT_INSTITUTION', periodId: period.id,
+      periodStartInclusive: period.baslangicTarihi, periodEndInclusive: period.bitisTarihi, projectionDate: source.effectiveFrom }, operation }];
+  });
+}
+function repairCandidate(payload: BrowserPayload, operations: ReturnType<typeof roundingRepairPlan>): CompensationPolicyVersionWire[] {
+  return orderedVersions([...payload.compensationPolicyVersions, ...operations.map(({ operation }) => ({
+    ...operation, id: `rounding-repair-${operation.kind === 'SAME_DATE_CORRECTION' ? operation.supersedesVersionId : ''}`,
+    createdAt: '2000-01-01T00:00:00Z', source: 'ROUNDING_REPAIR_PREVIEW',
+    supersedesVersionId: operation.kind === 'SAME_DATE_CORRECTION' ? operation.supersedesVersionId : null,
+  }))]);
+}
+function repairPreview(payload: BrowserPayload, scope: CompensationPolicyReadScope, runtime: Awaited<ReturnType<typeof getWasmRuntime>>): RoadRoundingRepairPreview {
+  validateScope(payload, scope);
+  const operations = roundingRepairPlan(payload);
+  const final = repairCandidate(payload, operations);
+  return { previews: operations.map(({ scope, operation }) => calculatePreview(payload, scope, operation, runtime, final)) };
+}
+export async function previewRoadRoundingRepair(scope: CompensationPolicyReadScope): Promise<CompensationPolicyOperationResult<RoadRoundingRepairPreview>> {
+  if (tauriBridge.isTauriAvailable()) return tauriBridge.previewRoadRoundingRepair(scope);
+  try { return success(repairPreview(await loadBrowserPayload(), scope, await getWasmRuntime())); }
+  catch (error) { return errorResult(error); }
+}
+export async function saveRoadRoundingRepair(scope: CompensationPolicyReadScope, preview: RoadRoundingRepairPreview): Promise<CompensationPolicyOperationResult<CompensationPolicySaveReceipt[]>> {
+  if (tauriBridge.isTauriAvailable()) return tauriBridge.saveRoadRoundingRepair(scope, preview);
+  try {
+    const runtime = await getWasmRuntime();
+    const receipts: CompensationPolicySaveReceipt[] = [];
+    await browserPayrollStore.mutateSnapshot((current) => {
+      const fresh = repairPreview(current, scope, runtime);
+      if (!same(fresh.previews.map((item) => item.previewToken), preview.previews.map((item) => item.previewToken))) raise('CONFLICT', 'Yol yuvarlama onarım önizlemesi değişti. Yeniden önizleyin.');
+      const operations = roundingRepairPlan(current);
+      const final = repairCandidate(current, operations);
+      let next = current;
+      for (const { scope, operation } of operations) {
+        const freshPreview = calculatePreview(next, scope, operation, runtime, final);
+        const applied = applyPolicySave(next, { scope, operation, previewToken: freshPreview.previewToken } as CompensationPolicySaveRequest, runtime, final);
+        receipts.push(applied.receipt);
+        next = applied.payload;
+      }
+      return next;
+    });
+    return success(receipts);
+  } catch (error) { return errorResult(error); }
 }

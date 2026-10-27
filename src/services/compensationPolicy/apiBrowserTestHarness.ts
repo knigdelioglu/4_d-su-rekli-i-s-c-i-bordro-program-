@@ -5,7 +5,7 @@ import { BordroHesaplama } from '../../components/BordroHesaplama';
 import { BACKUP_FORMAT_VERSION } from '../../types/payroll';
 import { getInitialDataset } from '../../utils/sampleData';
 import { createBordroDonemi } from '../../utils/payrollPresentation';
-import { getCompensationPolicyApi } from './api';
+import { getCompensationPolicyApi, previewRoadRoundingRepair, saveRoadRoundingRepair } from './api';
 import type {
   CompensationPolicyPageProps,
   CompensationPolicySaveRequest,
@@ -240,6 +240,42 @@ function addDays(iso: string, days: number): string {
   const date = new Date(`${iso}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+async function exerciseLinkedRoundingRepair() {
+  await resetBrowserPayrollDatabase();
+  const data = getInitialDataset();
+  const periods = [createBordroDonemi(2027, 10), createBordroDonemi(2027, 11), createBordroDonemi(2027, 12), createBordroDonemi(2028, 1)];
+  const versions: CompensationPolicyVersionWire[] = [
+    ['base', '2027-10-15', 'PERIOD_TOTAL'], ['nov', '2027-11-01', 'PER_COMPENSATION_SLICE'],
+    ['jan', '2028-01-01', 'PER_COMPENSATION_SLICE'], ['feb', '2028-02-01', 'PERIOD_TOTAL'],
+  ].map(([id, effectiveFrom, mode], index) => ({ id, effectiveFrom, roadRoundingMode: mode as CompensationPolicyVersionWire['roadRoundingMode'],
+    state: { ...browserAcceptanceState(), gunlukTabanUcret: `${2100 + index * 10}.005` }, boundaryScope: 'FULL_EARNING',
+    createdAt: '2026-01-01T00:00:00Z', source: 'TEST', reason: 'Legacy policy', supersedesVersionId: null }));
+  const payload = toPayrollBoundaryDto({ backupVersion: BACKUP_FORMAT_VERSION, exportedAt: '2026-01-01T00:00:00Z', ...data,
+    personeller: [], puantajlar: [], bordrolar: [], sickLeaveRecords: [], taxOpenings: [], donemler: [...data.donemler, ...periods], compensationPolicyVersions: versions,
+    compensationRevisions: [], compensationRevisionOverrides: [], retroBatches: [], retroAllocations: [], aktifDonemId: periods[0].id,
+  }) as unknown as PayrollStorageDto;
+  await browserPayrollStore.savePayload(serializePayrollStorage(payload));
+  const scope: Scope = { institutionScope: 'CURRENT_INSTITUTION', periodId: periods[0].id, periodStartInclusive: periods[0].baslangicTarihi,
+    periodEndInclusive: periods[0].bitisTarihi, projectionDate: periods[0].baslangicTarihi };
+  const preview = await previewRoadRoundingRepair(scope);
+  if (preview.ok === false) throw new Error(JSON.stringify(preview.error));
+  const rejected = await saveRoadRoundingRepair(scope, { previews: preview.value.previews.slice(0, 1) });
+  const before = await browserPayrollStore.loadPayload();
+  const saved = await saveRoadRoundingRepair(scope, preview.value);
+  const after = await browserPayrollStore.loadPayload();
+  const retry = await saveRoadRoundingRepair(scope, preview.value);
+  const resolutions = [];
+  for (const period of periods) {
+    const loaded = await getCompensationPolicyApi().load({ scope: { ...scope, periodId: period.id,
+      periodStartInclusive: period.baslangicTarihi, periodEndInclusive: period.bitisTarihi, projectionDate: period.baslangicTarihi } });
+    resolutions.push(loaded.ok === true ? loaded.value.timeline.resolution : loaded.error.code);
+  }
+  return { count: preview.value.previews.length, rejected: !rejected.ok, saved: saved.ok, retryRejected: !retry.ok,
+    originalsPreserved: (JSON.parse(before!) as PayrollStorageDto).compensationPolicyVersions.every((source) => JSON.stringify((JSON.parse(after!) as PayrollStorageDto).compensationPolicyVersions.find((v) => v.id === source.id)) === JSON.stringify(source)),
+    beforeCount: (JSON.parse(before!) as PayrollStorageDto).compensationPolicyVersions.length,
+    afterCount: (JSON.parse(after!) as PayrollStorageDto).compensationPolicyVersions.length, resolutions };
 }
 
 async function exerciseRoadRoundingRecovery() {
@@ -1815,6 +1851,7 @@ declare global {
     };
     __compensationPolicyBrowserApiTest: {
       loadArchivedSeptemberPrefill(): ReturnType<typeof loadArchivedSeptemberPrefill>;
+      exerciseLinkedRoundingRepair(): ReturnType<typeof exerciseLinkedRoundingRepair>;
       exerciseRoadRoundingRecovery(): ReturnType<typeof exerciseRoadRoundingRecovery>;
       exerciseFuturePeriodRoundingConflict(): ReturnType<typeof exerciseFuturePeriodRoundingConflict>;
       exerciseSyntheticPolicySchedule(): ReturnType<typeof exerciseSyntheticPolicySchedule>;
@@ -1855,6 +1892,7 @@ window.__compensationAcceptanceBrowserApp = {
 
 window.__compensationPolicyBrowserApiTest = {
   loadArchivedSeptemberPrefill,
+  exerciseLinkedRoundingRepair,
   exerciseRoadRoundingRecovery,
   exerciseFuturePeriodRoundingConflict,
   exerciseSyntheticPolicySchedule,

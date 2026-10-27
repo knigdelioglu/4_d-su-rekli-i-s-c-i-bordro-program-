@@ -53,7 +53,7 @@ beforeAll(async () => {
   });
   harnessBundle = result.outputFiles[0]?.text ?? '';
   if (!harnessBundle) throw new Error('The rendered component test harness did not bundle.');
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
 }, 30_000);
 
 afterEach(async () => {
@@ -760,4 +760,17 @@ describe('rendered CompensationPolicyPage interactions with frozen props', () =>
     await reloadPage.getByText('Ücret değişikliği kaydedildi.').waitFor({ state: 'visible' });
     expect((await events(reloadPage)).filter((entry) => entry.type === 'reload-authoritative').length).toBe(1);
   });
+});
+
+test('native serde preview remains saveable with unchanged draft and blocks a genuine later edit', async () => {
+  const page = await openPolicyPage();
+  await page.evaluate(() => window.__compensationPolicyTest.setScenario('native-serde'));
+  await prepareValidInitialBaseline(page);
+  await requestPreview(page);
+  expect(await page.getByText('Taslak önizlemeden sonra değişti.', { exact: false }).count()).toBe(0);
+  const confirm = page.getByRole('button', { name: /Başlangıç.*onay/ });
+  await confirm.click();
+  expect(await page.getByRole('button', { name: 'Başlangıç ücretini kaydet', exact: true }).isEnabled()).toBe(true);
+  await page.locator('#policy-base-wage').fill('3000');
+  expect(await page.getByRole('button', { name: 'Başlangıç ücretini kaydet', exact: true }).count()).toBe(0);
 });

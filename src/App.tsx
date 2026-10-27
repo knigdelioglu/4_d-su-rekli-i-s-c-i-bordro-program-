@@ -2,7 +2,8 @@
  * 4/D Sürekli İşçi Bordro Programı — Main App Component
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BulkPayrollProgress } from './components/BulkPayrollProgress';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
 import { AppViewportFrame } from './components/AppViewportFrame';
@@ -586,6 +587,9 @@ export default function App() {
     }
     return toPayrollBoundaryDto(EMPTY_UI_DATASET) as unknown as PayrollDatasetSnapshot;
   }, [authoritativePayload]);
+  const payrollDatasetRef = useRef(payrollDataset);
+  useLayoutEffect(() => { payrollDatasetRef.current = payrollDataset; }, [payrollDataset]);
+  const getAuthoritativePayrollDataset = useCallback(() => payrollDatasetRef.current, []);
   const {
     notices: payrollNotices,
     counts: payrollNoticeCounts,
@@ -935,12 +939,16 @@ export default function App() {
                   />
                 )}
 
+                {activeTab !== 'bordro' && <BulkPayrollProgress periods={donemler} personnel={personeller}
+                  onOpen={(periodId) => { void handleSelectDonem(periodId); setActiveTab('bordro'); }} />}
+
                 {aktifDonem && activeTab === 'puantaj' && (
                   <PuantajGrid
                     aktifDonem={aktifDonem}
                     personeller={personeller}
                     puantajlar={puantajlar}
                     sickLeaveRecords={sickLeaveRecords}
+                    authoritativeDataset={payrollDataset}
                     onSavePuantaj={handleSavePuantaj}
                     onSavePuantajBatch={handleSavePuantajBatch}
                     onSelectPersonelForBordro={handleSelectPersonelForBordro}
@@ -961,6 +969,7 @@ export default function App() {
                     annualPayrollParameters={annualPayrollParameters}
                     activePayrollView={activePayrollView}
                     authoritativeDataset={payrollDataset}
+                    getAuthoritativeDataset={getAuthoritativePayrollDataset}
                     onSaveBordro={handleSaveBordro}
                     onDeleteBordro={handleDeleteBordro}
                     onSavePersonelAndTaxOpening={handleSavePersonelAndTaxOpening}

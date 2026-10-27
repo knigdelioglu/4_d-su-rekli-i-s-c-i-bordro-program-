@@ -15,7 +15,7 @@ function installBrowserOutboundGuard(page: Page): void {
       url.pathname === '/' ||
       url.pathname === '/index.html' ||
       url.pathname.startsWith('/assets/') ||
-      /^\/favicon(?:\.ico)?$/.test(url.pathname);
+      /^\/favicon(?:\.(?:ico|svg))?$/.test(url.pathname);
     const isAllowed =
       isSameOrigin &&
       ['GET', 'HEAD'].includes(request.method()) &&
@@ -780,7 +780,7 @@ test('missing supplementary rows reveal the actual work period, gross and stale 
   }
   await selectPeriod(page, otherId);
   for (const [view, gross] of [['tediye', '24.500'], ['tis', '18.000'], ['ek-odeme', '12.000']]) {
-    await page.getByTestId(`nav-bordro-${view}`).click();
+    await page.getByTestId(`nav-bordro-${view === 'supplemental' ? 'ek-odeme' : view}`).click();
     const discovery = page.getByTestId('other-period-accruals-p-1');
     await discovery.locator('summary').click();
     await expect(discovery).toContainText(sourceLabel);
@@ -2060,4 +2060,90 @@ test('simplified new period form creates the first period without wage or bonus 
       Number(settings?.gunlukAsgariUcret) === 1101 &&
       Number(settings?.pekTavanKatsayisi) === 9;
   }).toBe(true);
+});
+
+test('bulk payroll survives leaving the screen and retains person outcomes after reload', async ({ page }) => {
+  await seedCalculatedSnapshot(page);
+  await page.getByRole('button', { name: /Tüm Hesaplanabilir Bordroları Hesapla/ }).click();
+  await page.getByTestId('nav-ozet').click();
+  const progress = page.getByTestId('bulk-payroll-progress');
+  await expect(progress).toBeVisible();
+  await expect(progress).toContainText('Tamamlandı');
+  await expect(progress).toContainText('Hata: 0');
+  const outcomes = await progress.innerText();
+  await page.reload();
+  await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Tamamlandı');
+  await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Hata: 0');
+  expect(outcomes).toContain('5/5');
+});
+
+test('bulk supplementary accruals preview selected people and persist each type once', async ({ page }) => {
+  await seedCalculatedSnapshot(page);
+  for (const view of ['tediye', 'tis', 'supplemental']) {
+    await page.getByTestId(`nav-bordro-${view === 'supplemental' ? 'ek-odeme' : view}`).click();
+    await page.getByRole('button', { name: 'Toplu tahakkuk ekle' }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByLabel('Kişi başı brüt tutar (TL)').fill('1000.25');
+    await dialog.getByRole('button', { name: 'Seçimi temizle' }).click();
+    await dialog.getByRole('checkbox', { name: 'Ahmet Yılmaz seç' }).check();
+    await dialog.getByRole('button', { name: 'Önizle', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: 'Seçili 1 kişiyi kaydet' })).toBeEnabled();
+    if (view === 'tediye') await page.screenshot({ path: test.info().outputPath('bulk-accrual-preview.png'), fullPage: true });
+    await dialog.getByRole('button', { name: 'Seçili 1 kişiyi kaydet' }).dblclick();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Başarı: 1');
+    await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Hata: 0');
+    if (view === 'tediye') {
+      // Simulate process exit after repository commit but before the success checkpoint.
+      await page.evaluate(() => {
+        const key = '4d-bordro-bulk-job-v1';
+        const job = JSON.parse(localStorage.getItem(key)!);
+        job.status = 'running'; job.items[0].status = 'running';
+        localStorage.setItem(key, JSON.stringify(job));
+      });
+      await page.reload();
+      await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Sürdürülmeyi bekliyor');
+      await page.getByRole('button', { name: 'Yarım kalan işlemi sürdür' }).click();
+      await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Tamamlandı');
+      await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Başarı: 1');
+    }
+  }
+  const saved = JSON.parse((await readStoredPayload(page))!) as { bordrolar: Array<{ personelId: string; accrualType: string; accrualId: string }> };
+  for (const type of ['TEDIYE', 'TIS_IKRAMIYE', 'SUPPLEMENTAL']) {
+    expect(saved.bordrolar.filter((item) => item.personelId === 'p-1' && item.accrualType === type && item.accrualId.startsWith('bulk_'))).toHaveLength(1);
+  }
+});
+
+test('bulk attendance previews finalized dependencies and saves only selected eligible personnel', async ({ page }) => {
+  await seedCalculatedSnapshot(page);
+  const periodId = (await page.getByTestId('payroll-screen').getAttribute('data-period-id'))!;
+  const payrollRow = page.locator('tbody tr').filter({ hasText: 'Ahmet Yılmaz' }).first();
+  await payrollRow.getByRole('button', { name: /Diğer işlemler/i }).click();
+  await page.getByRole('menuitem', { name: /Kesinleştir/i }).click();
+  await page.getByRole('button', { name: 'Kesinleştir ve Kilitle' }).click();
+  await expect(payrollRow).toContainText('Kesinleştirildi');
+  const before = (await readStoredSnapshot(page))!;
+  const finalized = before.bordrolar.find((payroll) => payroll.personelId === 'p-1' && payroll.donemId === periodId);
+  await page.getByTestId('nav-puantaj').click();
+  await page.getByTestId('attendance-code-T').click();
+  await page.getByTestId('open-quick-attendance-calendar').click();
+  const day = page.locator('[data-testid^="quick-attendance-day-"]').first();
+  const date = (await day.getAttribute('data-testid'))!.replace('quick-attendance-day-', '');
+  await day.click();
+  await page.getByTestId('apply-quick-attendance-to-all').click();
+  const dialog = page.getByTestId('bulk-apply-confirmation');
+  await expect(dialog).toContainText('Kesinleşmiş bordro');
+  await expect(dialog.getByTestId('bulk-attendance-person-p-1')).toBeDisabled();
+  await expect(dialog.getByTestId('bulk-attendance-person-p-1')).not.toBeChecked();
+  for (const checkbox of await dialog.locator('input[type="checkbox"]:not(:disabled)').all()) await checkbox.uncheck();
+  await dialog.getByTestId('bulk-attendance-person-p-2').check();
+  await page.screenshot({ path: test.info().outputPath('bulk-attendance-preview.png'), fullPage: true });
+  await dialog.getByTestId('bulk-apply-confirm').click();
+  await expect(dialog).toHaveCount(0);
+  const after = (await readStoredSnapshot(page))!;
+  expect(after.bordrolar.find((payroll) => payroll.personelId === 'p-1' && payroll.donemId === periodId)).toEqual(finalized);
+  for (const attendance of before.puantajlar.filter((entry) => entry.personelId !== 'p-2')) {
+    expect(after.puantajlar.find((entry) => entry.personelId === attendance.personelId && entry.donemId === attendance.donemId)).toEqual(attendance);
+  }
+  expect(after.puantajlar.find((entry) => entry.personelId === 'p-2' && entry.donemId === periodId)?.gunler[date]).toBe('T');
 });

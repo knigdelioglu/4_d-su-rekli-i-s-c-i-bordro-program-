@@ -27,3 +27,17 @@ pub fn save_attendances(db: State<'_, DbState>, attendances: Vec<PersonelPuantaj
     })?;
     AttendanceRepository::save_many(&conn, &attendances)
 }
+
+#[tauri::command]
+pub fn apply_attendance_bulk_intent(
+    db: State<'_, DbState>,
+    period_id: String,
+    personnel_ids: Vec<String>,
+    dates: Vec<String>,
+    code: String,
+) -> Result<()> {
+    let conn = db.lock().map_err(|error| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {error}"))
+    })?;
+    AttendanceRepository::apply_bulk_intent(&conn, &period_id, &personnel_ids, &dates, &code)
+}

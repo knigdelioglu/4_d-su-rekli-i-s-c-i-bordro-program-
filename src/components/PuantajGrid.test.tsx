@@ -35,7 +35,7 @@ beforeAll(async () => {
   const address = vite.httpServer?.address();
   if (!address || typeof address === 'string') throw new Error('The PuantajGrid test server did not bind a TCP port.');
   viteOrigin = `http://127.0.0.1:${address.port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
 }, 30_000);
 
 afterEach(async () => {

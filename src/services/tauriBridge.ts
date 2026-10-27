@@ -170,6 +170,10 @@ export const tauriBridge = {
     return mutateTauri<void>('save_attendance', { attendance });
   },
 
+  async applyAttendanceBulkIntent(intent: import('../utils/puantajBulkPlan').PuantajBulkCommitIntent): Promise<void> {
+    return mutateTauri<void>('apply_attendance_bulk_intent', { periodId: intent.periodId, personnelIds: intent.personnelIds, dates: intent.dates, code: intent.code });
+  },
+
   async saveAttendances(attendances: PersonelPuantaj[]): Promise<void> {
     return mutateTauri<void>('save_attendances', { attendances });
   },
@@ -229,6 +233,14 @@ export const tauriBridge = {
     return payroll;
   },
 
+  async previewRoadRoundingRepair(scope: import('./compensationPolicy/contract').CompensationPolicyReadScope) {
+    return invokeTauriExact<import('./compensationPolicy/contract').CompensationPolicyOperationResult<import('./compensationPolicy/contract').RoadRoundingRepairPreview>>('preview_road_rounding_repair', { scope });
+  },
+  async saveRoadRoundingRepair(scope: import('./compensationPolicy/contract').CompensationPolicyReadScope, preview: import('./compensationPolicy/contract').RoadRoundingRepairPreview) {
+    const result = await invokeTauriExact<import('./compensationPolicy/contract').CompensationPolicyOperationResult<import('./compensationPolicy/contract').CompensationPolicySaveReceipt[]>>('save_road_rounding_repair', { scope, previewTokens: encodeDecimalValues(preview.previews.map((item) => item.previewToken)) });
+    if (result.ok) emitPayrollDataChanged();
+    return result;
+  },
   async loadCompensationPolicy(
     request: CompensationPolicyLoadRequest
   ): Promise<CompensationPolicyOperationResult<CompensationPolicyLoadData>> {

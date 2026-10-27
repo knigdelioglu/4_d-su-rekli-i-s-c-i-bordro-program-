@@ -11,8 +11,11 @@ import type {
   CompensationPolicySaveRequest,
   CompensationPolicyStateWire,
   CompensationPolicyWriteOperation,
+  RoadRoundingRepairPreview,
   RoadRoundingMode,
 } from '../../services/compensationPolicy/contract';
+import { compensationPolicyOperationFingerprint } from '../../services/compensationPolicy/contract';
+import { previewRoadRoundingRepair, saveRoadRoundingRepair } from '../../services/compensationPolicy/api';
 import { CompensationPolicyForm } from './CompensationPolicyForm';
 import {
   compensationPolicyStateToDraft,
@@ -41,7 +44,7 @@ function stableValue(value: unknown): string {
 }
 
 function sameOperation(left: CompensationPolicyWriteOperation, right: CompensationPolicyWriteOperation): boolean {
-  return stableValue(left) === stableValue(right);
+  return compensationPolicyOperationFingerprint(left) === compensationPolicyOperationFingerprint(right);
 }
 
 function titleCaseApiError(error: CompensationPolicyApiError): { title: string; message: string; detail?: string } {
@@ -420,6 +423,11 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const [roundingSelection, setRoundingSelection] = useState<Props['draft']['roadRoundingMode'] | null>(initialRoundingSelection);
   const [baselineConfirmation, setBaselineConfirmation] = useState<string | null>(null);
   const [showValidation, setShowValidation] = useState(false);
+  const [repairPreview, setRepairPreview] = useState<RoadRoundingRepairPreview | null>(null);
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairMessage, setRepairMessage] = useState<string | null>(null);
+  const repairGuard = useRef(false);
+  useEffect(() => { setRepairPreview(null); setRepairMessage(null); }, [props.scope.periodId]);
   const [callbackError, setCallbackError] = useState<string | null>(null);
   const [loadPending, setLoadPending] = useState(false);
   const [previewPending, setPreviewPending] = useState(false);
@@ -435,7 +443,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const validation = mergedValidation(localValidation, props.draftValidation);
   const operationResult = useMemo(() => draftToCompensationPolicyOperation(props.draft), [props.draft]);
   const currentOperation = operationResult.ok ? operationResult.operation : null;
-  const currentFingerprint = currentOperation ? stableValue(currentOperation) : null;
+  const currentFingerprint = currentOperation ? compensationPolicyOperationFingerprint(currentOperation) : null;
   const baselineConfirmationMatches = currentFingerprint !== null && baselineConfirmation === currentFingerprint;
   const sameDateLeaf = authoritativeLoad && props.draft.operationKind === 'SAME_DATE_CORRECTION'
     ? findScopedSameDateActiveLeaf(authoritativeLoad.timeline.versions, props.draft.effectiveFrom)
@@ -447,7 +455,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
   const scopeSelectionFresh = visibleScopeSelection !== null && visibleScopeSelection === props.draft.boundaryScope;
   const roundingSelectionFresh = visibleRoundingSelection !== null && visibleRoundingSelection === props.draft.roadRoundingMode;
   const initialBaselineAllowed = Boolean(authoritativeLoad?.initialBaselineRequired && props.draft.operationKind === 'INITIAL_BASELINE');
-  const isSaving = props.saveState.status === 'saving' || props.saveState.status === 'reloading-authoritative' || savePending;
+  const isSaving = repairBusy || props.saveState.status === 'saving' || props.saveState.status === 'reloading-authoritative' || savePending;
   const operationUnchangedSinceSuccess = props.saveState.status === 'succeeded'
     && (savedOperationFingerprint === null || savedOperationFingerprint === currentFingerprint);
 
@@ -630,7 +638,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
     setCallbackError(null);
     previewInFlightRef.current = true;
     setPreviewPending(true);
-    setLastPreviewRequest({ operation: stableValue(currentOperation), scope: stableValue(props.scope) });
+    setLastPreviewRequest({ operation: compensationPolicyOperationFingerprint(currentOperation), scope: stableValue(props.scope) });
     try {
       const result = props.onPreview(currentOperation);
       if (result && typeof result.then === 'function') {
@@ -658,10 +666,10 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
       ? {
           scope: props.scope,
           previewToken: activePreview.previewToken,
-          operation: currentOperation,
+          operation: activePreview.previewToken.operation as typeof currentOperation,
           initialBaselineConfirmation: { confirmed: true, effectiveFrom: currentOperation.effectiveFrom },
         }
-      : { scope: props.scope, previewToken: activePreview.previewToken, operation: currentOperation };
+      : { scope: props.scope, previewToken: activePreview.previewToken, operation: activePreview.previewToken.operation };
     setSavePending(true);
     saveInFlightRef.current = true;
     setCallbackError(null);
@@ -822,6 +830,7 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
       {props.saveState.status === 'conflict' && showApiError(props.saveState.error, 'reload')}
       {props.saveState.status === 'blocked' && showApiError(props.saveState.error)}
       {props.saveState.status === 'error' && showApiError(props.saveState.error, props.saveState.error.code === 'CONFLICT' ? 'reload' : 'preview')}
+      {repairMessage && <p role="status" className="rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">{repairMessage}</p>}
 
       {authoritativeLoad && <ScopedHistory data={authoritativeLoad} />}
 
@@ -833,9 +842,38 @@ export const CompensationPolicyPage: React.FC<Props> = (props) => {
             {(authoritativeLoad.timeline.roadRoundingIssues ?? []).map((issue) => (
               <li key={`${issue.periodStartInclusive}:${issue.actualVersionId}`}>
                 {shortDate(issue.periodStartInclusive)}–{shortDate(issue.periodEndInclusive)} hizmet dönemi: {issue.actualVersionId} sürümü ({shortDate(issue.effectiveFrom)} · {roundingLabel(issue.actualMode)}) · önceki {issue.expectedVersionId} sürümü ({roundingLabel(issue.expectedMode)})
+
               </li>
             ))}
           </ul>
+          <p className="mt-2 text-xs">Bağlı sürümler birlikte düzeltilir. Tarihler, ücret tutarları ve eski sürümler korunur; tüm bordro ve retro engelleri yeniden kontrol edilir.</p>
+          <button type="button" className={`${secondaryButtonClass} mt-2`} disabled={isSaving || previewBusy} onClick={async () => {
+            if (repairGuard.current) return;
+            repairGuard.current = true; setRepairBusy(true); setRepairMessage(null); setRepairPreview(null);
+            try {
+              const result = await previewRoadRoundingRepair(props.scope);
+              if (result.ok === false) setRepairMessage(titleCaseApiError(result.error).message);
+              else setRepairPreview(result.value);
+            } catch { setRepairMessage('Yol yuvarlama onarımı önizlenemedi. Tekrar deneyin.'); }
+            finally { repairGuard.current = false; setRepairBusy(false); }
+          }}>Bağlı düzeltmeleri önizle</button>
+          {repairPreview && <div className="mt-3 rounded border bg-white p-3">
+            <p>{repairPreview.previews.length} aynı tarih düzeltmesi tek işlemde kaydedilecek:</p>
+            <ul>{repairPreview.previews.map((preview) => <li key={preview.previewToken.operation.effectiveFrom}>
+              {shortDate(preview.previewToken.operation.effectiveFrom)} → {roundingLabel(preview.previewToken.operation.roadRoundingMode)}
+              {' · '}{preview.dependencyClosureEffects.length} bordro, {preview.retroEffects.length} retro bağımlılığı
+            </li>)}</ul>
+            <button type="button" className={`${primaryButtonClass} mt-2`} disabled={isSaving || !repairPreview.previews.length} onClick={async () => {
+              if (repairGuard.current) return;
+              repairGuard.current = true; setRepairBusy(true);
+              try {
+                const result = await saveRoadRoundingRepair(props.scope, repairPreview);
+                if (result.ok === false) { setRepairMessage(titleCaseApiError(result.error).message); setRepairPreview(null); }
+                else { setRepairPreview(null); setRepairMessage('Yol yuvarlama düzeltmeleri kaydedildi. Ücret geçmişinden yeni sürümleri kontrol edebilirsiniz.'); await props.onReloadAuthoritative(); }
+              } catch { setRepairPreview(null); setRepairMessage('Onarımın kayıt sonucu doğrulanamadı. Tekrar kayıt yapmadan önce ücret geçmişini yeniden yükleyin.'); }
+              finally { repairGuard.current = false; setRepairBusy(false); }
+            }}>Önizlenen düzeltmeleri birlikte kaydet</button>
+          </div>}
           <p className="mt-2 text-xs">Düzeltme için işlem türünü “Aynı tarihte düzeltme” seçin, uyuşmayan sürümün tarihini kullanın ve önceki sürümdeki biçimi seçin. Kesinleşmiş bordrolar için mevcut retro engelleri ayrıca uygulanır.</p>
         </div>
       )}

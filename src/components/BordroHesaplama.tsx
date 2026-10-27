@@ -2,7 +2,9 @@
  * Bordro Hesaplama Ekranı — Temiz, Otomatik ve Hızlı Bordro Yönetimi
  */
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { BulkAccrualDialog } from './BulkAccrualDialog';
+import { BulkPayrollProgress } from './BulkPayrollProgress';
 import {
   Calculator,
   Search,
@@ -83,6 +85,7 @@ interface BordroHesaplamaProps {
   isPrimiGruplari: IsPrimiGrupItem[];
   activePayrollView: PayrollViewType;
   authoritativeDataset: PayrollDatasetSnapshot;
+  getAuthoritativeDataset?: () => PayrollDatasetSnapshot;
   onDeleteBordro: (bordro: BordroKaydi) => Promise<void>;
   onSaveBordro: (
     bordro: PayrollBoundaryPayroll,
@@ -111,12 +114,15 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   isPrimiGruplari,
   activePayrollView,
   authoritativeDataset,
+  getAuthoritativeDataset,
   onSaveBordro,
   onDeleteBordro,
   onSavePersonelAndTaxOpening,
   onGoToPuantaj,
   onOpenCompensationPolicy,
 }) => {
+  const [bulkAccrualOpen, setBulkAccrualOpen] = useState(false);
+  useEffect(() => { setBulkAccrualOpen(false); }, [aktifDonem.id, activePayrollView]);
   const activeKurumDegerleri = kurumDegerleriMap[aktifDonem.id];
 
   const activeAccrualType: AccrualType =
@@ -140,6 +146,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     deletingAccrualId,
     setDeletingAccrualId,
     isBatchProcessing,
+    handleResumeBulk,
+    handleStartSupplementaryBulk,
     successMessage,
     setSuccessMessage,
     errorMessage,
@@ -179,6 +187,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     activeAccrualType,
     activeViewTitle,
     authoritativeDataset,
+    getAuthoritativeDataset,
     bordrolar,
     personeller,
     puantajlar,
@@ -277,6 +286,8 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {isSupplementaryView && <button type="button" disabled={isBatchProcessing || !personeller.length}
+            onClick={() => setBulkAccrualOpen(true)} className="rounded bg-indigo-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Toplu tahakkuk ekle</button>}
           {!isSupplementaryView && (
             <>
               <button
@@ -305,6 +316,10 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
         </div>
       </div>
 
+      <BulkPayrollProgress periods={donemler} personnel={personeller} activePeriodId={aktifDonem.id} onResume={() => void handleResumeBulk()} />
+      {bulkAccrualOpen && isSupplementaryView && <BulkAccrualDialog period={aktifDonem} personnel={personeller}
+        type={activeAccrualType as 'TEDIYE' | 'TIS_IKRAMIYE' | 'SUPPLEMENTAL'} engine={payrollEngine} getDataset={buildDataset}
+        onSave={handleStartSupplementaryBulk} onClose={() => setBulkAccrualOpen(false)} />}
       {!isSupplementaryView && <div className="flex flex-col gap-2 rounded-xl border border-indigo-100 bg-indigo-50/60 px-3.5 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="text-xs font-bold uppercase tracking-wide text-indigo-900">
@@ -1033,19 +1048,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
                                     />
                                   )}
                                 </>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    if (onGoToPuantaj) onGoToPuantaj(person.id);
-                                  }}
-                                  className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-600 hover:text-white text-rose-700 border border-rose-200 rounded-lg transition-colors text-[11px] font-bold flex items-center gap-1"
-                                >
-                                  <CalendarCheck className="w-3.5 h-3.5" />
-                                  <span>Puantaj Gir</span>
-                                </button>
-                              )}
+                              ) : null}
                             </div>
                           </td>
                         </tr>

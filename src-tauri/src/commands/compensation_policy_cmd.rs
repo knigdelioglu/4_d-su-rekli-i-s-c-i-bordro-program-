@@ -42,3 +42,37 @@ pub fn save_compensation_policy(
     let conn = lock_database(&db)?;
     Ok(CompensationPolicyService::save(&conn, &request))
 }
+
+#[tauri::command]
+pub fn preview_road_rounding_repair(
+    db: State<'_, DbState>,
+    scope: crate::services::compensation_policy_service::CompensationPolicyReadScope,
+) -> Result<
+    CompensationPolicyOperationResult<
+        crate::services::compensation_policy_service::RoadRoundingRepairPreview,
+    >,
+> {
+    let conn = lock_database(&db)?;
+    Ok(CompensationPolicyService::preview_rounding_repair(
+        &conn, &scope,
+    ))
+}
+
+#[tauri::command]
+pub fn save_road_rounding_repair(
+    license: State<'_, crate::license::LicenseRuntime>,
+    db: State<'_, DbState>,
+    scope: crate::services::compensation_policy_service::CompensationPolicyReadScope,
+    preview_tokens: Vec<
+        crate::services::compensation_policy_service::CompensationPolicyPreviewToken,
+    >,
+) -> Result<CompensationPolicyOperationResult<Vec<CompensationPolicySaveReceipt>>> {
+    crate::license::require_allowed(license.data_dir(), "yol yuvarlama onarımı")
+        .map_err(DomainError::ValidationError)?;
+    let conn = lock_database(&db)?;
+    Ok(CompensationPolicyService::save_rounding_repair(
+        &conn,
+        &scope,
+        &preview_tokens,
+    ))
+}

@@ -237,6 +237,32 @@ export function compensationPolicyStateEqualsExceptRoad(
   return true;
 }
 
+/** Compare UI drafts with Rust's serialized Decimal/Option representation without Number conversion. */
+export function compensationPolicyOperationFingerprint(operation: CompensationPolicyWriteOperation): string {
+  const state = { ...operation.state } as Record<string, unknown>;
+  for (const field of [...policyDecimalFields, 'gunlukVasitaYol']) {
+    if (typeof state[field] === 'string') state[field] = decimalValueKey(state[field]) ?? state[field];
+  }
+  state.isPrimiGruplari = operation.state.isPrimiGruplari.map((group) => ({
+    ...group, oran: decimalValueKey(group.oran) ?? group.oran,
+  }));
+  state.socialBenefitAccrualPolicies = operation.state.socialBenefitAccrualPolicies == null ? null
+    : Object.fromEntries(['birlestirilmisSosyalYardim', 'giyimYardimi', 'hizmetZammi', 'ekOdeme', 'digerGelir'].map((key) => {
+      const rule = operation.state.socialBenefitAccrualPolicies![key];
+      return [key, rule == null ? null : { ...rule,
+        eligibleDayTypes: rule.eligibleDayTypes ?? [],
+        allowMonthlyAmountExcess: rule.allowMonthlyAmountExcess ?? null,
+      }];
+    }));
+  const stable = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`;
+    if (value && typeof value === 'object') return `{${Object.entries(value).filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${stable(v)}`).join(',')}}`;
+    return JSON.stringify(value);
+  };
+  return stable({ ...operation, state });
+}
+
 export interface CompensationPolicyLoadRequest {
   scope: CompensationPolicyReadScope;
   /** Partial exact state from current period settings; never an authority. */
@@ -520,6 +546,10 @@ export type CompensationPolicySaveRequest =
         | SameDateCompensationPolicyCorrectionOperation;
       initialBaselineConfirmation?: never;
     });
+
+export interface RoadRoundingRepairPreview {
+  previews: CompensationPolicyPreviewData[];
+}
 
 export interface CompensationPolicyApi {
   load(

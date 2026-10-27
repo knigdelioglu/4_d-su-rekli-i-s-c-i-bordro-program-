@@ -371,3 +371,16 @@ describe('compensation policy frozen contract', () => {
     expect(typeof pageProps.onReloadAuthoritative).toBe('function');
   });
 });
+
+test('preview operation equality survives native serde omission and decimal scale without ignoring real edits', async () => {
+  const { compensationPolicyOperationFingerprint: key } = await import('./contract');
+  const draft = { ...newEffectiveDateOperation, state: { ...exactState, socialBenefitAccrualPolicies: null } };
+  const native = JSON.parse(JSON.stringify(draft));
+  delete native.state.socialBenefitAccrualPolicies;
+  native.state.gunlukTabanUcret = '1000.0000000000000000010';
+  native.state.isPrimiGruplari[0].oran = '65.12500';
+  expect(key(draft)).toBe(key(native));
+  expect(key({ ...native, state: { ...native.state, gunlukTabanUcret: '1000.000000000000000002' } })).not.toBe(key(draft));
+  expect(key({ ...native, state: { ...native.state, isPrimiYuzde: '0' } })).not.toBe(key(draft));
+  expect(key({ ...native, roadRoundingMode: 'PER_COMPENSATION_SLICE' })).not.toBe(key(draft));
+});

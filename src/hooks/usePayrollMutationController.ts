@@ -712,7 +712,8 @@ export function usePayrollMutationController({
     }
 
     if (isNative) {
-      await tauriBridge.saveAttendances(updatedAttendances);
+      if (bulkIntent) await tauriBridge.applyAttendanceBulkIntent(bulkIntent);
+      else await tauriBridge.saveAttendances(updatedAttendances);
       await loadData();
       return;
     }

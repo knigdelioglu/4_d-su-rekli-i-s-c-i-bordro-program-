@@ -39,7 +39,7 @@ beforeAll(async () => {
   const address = vite.httpServer?.address();
   if (!address || typeof address === 'string') throw new Error('Vite API test server did not bind a TCP port.');
   origin = `http://127.0.0.1:${address.port}`;
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless: true, executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH });
   context = await browser.newContext();
 }, 60_000);
 
@@ -458,4 +458,11 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
     expect(restored.calculatedStatus).toBe('CALCULATED');
     expect(restored.calculatedVersionIds).toEqual([restored.baselineVersionId]);
   }, 120_000);
+});
+
+test('repairs linked November and January modes atomically with stale-preview protection', async () => {
+  const page = await openPolicyApiTab();
+  const result = await page.evaluate(() => window.__compensationPolicyBrowserApiTest.exerciseLinkedRoundingRepair());
+  expect(result).toEqual({ count: 2, rejected: true, saved: true, retryRejected: true, originalsPreserved: true,
+    beforeCount: 4, afterCount: 6, resolutions: ['RESOLVED', 'RESOLVED', 'RESOLVED', 'RESOLVED'] });
 });
