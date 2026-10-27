@@ -1,4 +1,8 @@
 import { useLayoutEffect, useRef } from 'react';
+import { recoverRetroBatchInSnapshot } from '../services/payrollEngine/retroRecovery';
+import { replayThroughRetroBatch, storedAccrualInput, storedManualIncome } from '../services/payrollEngine/replayChain';
+import { bulkPayrollJobs } from '../services/bulkPayrollJob';
+import { assertPayrollCalculationSnapshotCurrentForEngine } from '../services/payrollEngine/calculationSnapshot';
 import {
   AnnualPayrollParameters,
   BordroDonemi,
@@ -1256,55 +1260,11 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
-    if (!authoritativePayload) throw new Error('Yetkili veri snapshot’ı hazır değil.');
-    const retireImpact = linkedPayments.length
-      ? await evaluateBrowserMutations(linkedPayments.map((payroll) => ({
-          kind: 'ACCRUAL_DELETE' as const,
-          personnelId: payroll.personelId,
-          periodId: payroll.donemId,
-          accrualId: batch.id,
-        })))
-      : null;
-    const isRetiredPayment = (payroll: { accrualId?: string | null }) =>
-      linkedPayments.length > 0 && payroll.accrualId === batch.id;
-    const exactBatch = toPayrollBoundaryDto(batch) as unknown as NonNullable<PayrollStorageDto['retroBatches']>[number];
-    const exactAllocations = toPayrollBoundaryDto(canonicalResult.allocations) as unknown as NonNullable<PayrollStorageDto['retroAllocations']>;
-    const datasetWithBatch: PayrollDatasetSnapshot = {
-      ...payrollDataset,
-      payrolls: payrollDataset.payrolls.filter((payroll) => !isRetiredPayment(payroll)),
-      retroBatches: [...payrollDataset.retroBatches.filter((item) => item.id !== batch.id), exactBatch],
-      retroAllocations: [
-        ...payrollDataset.retroAllocations.filter((item) => item.batchId !== batch.id),
-        ...exactAllocations,
-      ],
-    };
-    const impact = await evaluateBrowserMutations(
-      {
-        kind: 'RETRO_BATCH_SAVE',
-        personnelId: batch.personnelId,
-        batchId: batch.id,
-        paymentDate: batch.paymentDate,
-      },
-      datasetWithBatch
-    );
-    updateAuthoritativePayload((current) => {
-      const retiredBordrolar = retireImpact
-        ? applyBrowserPayrollImpact(current.bordrolar, retireImpact).filter((item) => !isRetiredPayment(item))
-        : current.bordrolar;
-      const retiredBatches = retireImpact
-        ? applyBrowserRetroBatchImpact(current.retroBatches ?? [], retireImpact)
-        : current.retroBatches ?? [];
-      return {
-        ...current,
-        compensationRevisions: current.compensationRevisions ?? [],
-        compensationRevisionOverrides: current.compensationRevisionOverrides ?? [],
-        retroBatches: [...retiredBatches.filter((item) => item.id !== batch.id), exactBatch],
-        retroAllocations: [
-          ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
-          ...exactAllocations,
-        ],
-        bordrolar: applyBrowserPayrollImpact(retiredBordrolar, impact),
-      };
+    if (!commitAuthoritativePayload) throw new Error('Güvenli kayıt işlemi hazır değil. Verileri yeniden yükleyin.');
+    await commitAuthoritativePayload(async (current) => {
+      const prepared = await recoverRetroBatchInSnapshot(payrollEngine, payrollDatasetFromPayload(current), batch.id,
+        toPayrollBoundaryDto(canonicalResult) as unknown as RetroCalculationResult);
+      return { ...current, bordrolar: prepared.payrolls, retroBatches: prepared.retroBatches, retroAllocations: prepared.retroAllocations };
     });
   };
 
@@ -1327,15 +1287,6 @@ export function usePayrollMutationController({
     );
     const sequence = existingPayment?.sequence ??
       nextPaymentSequence(payrollDataset, batch.personnelId, paymentPeriod, batch.paymentDate);
-    const accrual: PayrollAccrualInput = {
-      accrualId: batch.id,
-      accrualType: 'RETRO_ADJUSTMENT',
-      paymentDate: batch.paymentDate,
-      sequence,
-      grossAmount: batch.payableSettlementAmount,
-      description: batch.description || 'Geriye dönük hakediş farkı',
-    };
-
     if (isNative) {
       await tauriBridge.createRetroPayment(
         batch,
@@ -1346,75 +1297,47 @@ export function usePayrollMutationController({
       await loadData();
       return;
     }
-    if (!authoritativePayload) throw new Error('Yetkili veri snapshot’ı hazır değil.');
-    const exactBatch = toPayrollBoundaryDto(batch) as unknown as NonNullable<PayrollStorageDto['retroBatches']>[number];
-    const exactAllocations = toPayrollBoundaryDto(canonicalResult.allocations) as unknown as NonNullable<PayrollStorageDto['retroAllocations']>;
-    const datasetWithBatch: PayrollDatasetSnapshot = {
-      ...payrollDataset,
-      retroBatches: [...payrollDataset.retroBatches.filter((item) => item.id !== batch.id), exactBatch],
-      retroAllocations: [
-        ...payrollDataset.retroAllocations.filter((item) => item.batchId !== batch.id),
-        ...exactAllocations,
-      ],
-    };
-    const mutation: PayrollMutation = existingPayment
-      ? {
-          kind: 'ACCRUAL_CALCULATION',
-          personnelId: batch.personnelId,
-          periodId: paymentPeriod.id,
-          accrualId: batch.id,
-        }
-      : {
-          kind: 'ACCRUAL_INSERT',
-          personnelId: batch.personnelId,
-          periodId: paymentPeriod.id,
-          accrualId: batch.id,
-          paymentDate: batch.paymentDate,
-          sequence,
-        };
-    const impact = await evaluateBrowserMutations(
-      [
-        {
-          kind: 'RETRO_BATCH_SAVE',
-          personnelId: batch.personnelId,
-          batchId: batch.id,
-          paymentDate: batch.paymentDate,
-        },
-        mutation,
-      ],
-      datasetWithBatch
-    );
-    const paymentRequest = {
-      personnelId: batch.personnelId,
-      periodId: paymentPeriod.id,
-      calculatedAt: new Date().toISOString(),
-      manualIncome: null,
-      accrual: toPayrollBoundaryDto(accrual) as unknown as Parameters<typeof payrollEngine.calculatePayroll>[0]['accrual'],
-      dataset: datasetWithBatch,
-    };
-    await payrollEngine.validatePayroll(paymentRequest);
-    const calculated = await payrollEngine.calculatePayroll(paymentRequest);
-    updateAuthoritativePayload((current) => {
-      const invalidated = applyBrowserPayrollImpact(current.bordrolar, impact);
-      const existingPayrollIndex = invalidated.findIndex(
-        (item) => item.accrualId === batch.id || item.id === batch.id
-      );
-      const nextPayrolls = [...invalidated];
-      if (existingPayrollIndex < 0) nextPayrolls.push(calculated);
-      else nextPayrolls[existingPayrollIndex] = calculated;
-      return {
-        ...current,
-        compensationRevisions: current.compensationRevisions ?? [],
-        compensationRevisionOverrides: current.compensationRevisionOverrides ?? [],
-        retroBatches: [...(current.retroBatches ?? []).filter((item) => item.id !== batch.id), exactBatch],
-        retroAllocations: [
-          ...(current.retroAllocations ?? []).filter((item) => item.batchId !== batch.id),
-          ...exactAllocations,
-        ],
-        bordrolar: nextPayrolls,
-      };
+    if (!commitAuthoritativePayload) throw new Error('Güvenli kayıt işlemi hazır değil. Verileri yeniden yükleyin.');
+    await commitAuthoritativePayload(async (current) => {
+      const prepared = await recoverRetroBatchInSnapshot(payrollEngine, payrollDatasetFromPayload(current), batch.id,
+        toPayrollBoundaryDto(canonicalResult) as unknown as RetroCalculationResult);
+      return { ...current, bordrolar: prepared.payrolls, retroBatches: prepared.retroBatches, retroAllocations: prepared.retroAllocations };
     });
   };
+
+  const waitForRecoveryCommit = async (before: PayrollDatasetSnapshot) => {
+    const deadline = Date.now() + 5000;
+    while (latestPayrollDataset.current === before) {
+      if (Date.now() >= deadline) throw new Error('Kaydedilen hesaplama verileri yenilenemedi. Verileri yeniden yükleyip işlemi sürdürün.');
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    }
+  };
+  const handleRecoverRetroBatch = async (batchId: string) => {
+    const before = latestPayrollDataset.current;
+    if (isNative) { await tauriBridge.recoverRetroBatch(batchId); await loadData(); }
+    else if (commitAuthoritativePayload) {
+      await commitAuthoritativePayload(async (current) => {
+        const result = await recoverRetroBatchInSnapshot(payrollEngine, payrollDatasetFromPayload(current), batchId);
+        return { ...current, bordrolar: result.payrolls, retroBatches: result.retroBatches, retroAllocations: result.retroAllocations };
+      });
+    } else {
+      throw new Error('Güvenli kayıt işlemi hazır değil. Verileri yeniden yükleyin.');
+    }
+    await waitForRecoveryCommit(before);
+  };
+  const handleRecoverRetroChain = (batchId: string) => bulkPayrollJobs.runManual(async () => {
+    const result = await replayThroughRetroBatch({ batchId, getDataset: () => latestPayrollDataset.current,
+      recoverRetro: handleRecoverRetroBatch,
+      recalculate: async (event, period, dataset) => {
+        const calculated = await payrollEngine.calculatePayroll({ personnelId: event.personelId, periodId: period.id,
+          calculatedAt: new Date().toISOString(), manualIncome: storedManualIncome(event), accrual: storedAccrualInput(event, period), dataset });
+        assertPayrollCalculationSnapshotCurrentForEngine(payrollEngine.kind, dataset, latestPayrollDataset.current);
+        await handleSaveBordro(calculated, dataset);
+        await waitForRecoveryCommit(dataset);
+      },
+    });
+    if (!result.ok) throw new Error(result.error);
+  });
 
   return {
     evaluateBrowserMutations,
@@ -1436,5 +1359,7 @@ export function usePayrollMutationController({
     handleCalculateRetroPreview,
     handleSaveRetroBatch,
     handleCreateRetroPayment,
+    handleRecoverRetroBatch,
+    handleRecoverRetroChain,
   };
 }

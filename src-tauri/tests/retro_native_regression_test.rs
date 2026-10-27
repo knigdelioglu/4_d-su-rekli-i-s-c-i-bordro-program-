@@ -1142,7 +1142,10 @@ fn native_bug_retro_001_missing_normal_source_period_is_rejected_not_zero() {
     let error = native_preview(&conn, "batch-missing-normal", &revision, "2026-06-20")
         .expect_err("NORMAL bordrosu olmayan dönem 0 TL tanınmış sayılmamalı");
     assert!(error.to_string().contains("2026-04"), "{error}");
-    assert!(error.to_string().contains("NORMAL bordro yok"), "{error}");
+    assert!(
+        error.to_string().contains("NORMAL bordrosu bulunamadı"),
+        "{error}"
+    );
 
     // A bounded revision that ends before 2026-04 does not need that period.
     let mut bounded = revision.clone();
@@ -1948,4 +1951,352 @@ fn native_p1_legacy_zero_ledger_with_stale_event_is_repaired_by_recovery() {
     p1_assert_zero_ledger_without_event(&conn, batch_id);
     PayrollService::calculate_payroll_for_personnel(&conn, P1_PERSON, &next_period.id)
         .expect("onarım sonrası NORMAL hesaplanmalı");
+}
+
+#[test]
+fn native_recovery_command_rebuilds_ledger_payment_then_allows_following_supplementary() {
+    let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
+    let normal_input = PayrollAccrualInput {
+        accrualId: "recovery-normal".into(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-06-20".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: None,
+    };
+    PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&normal_input),
+        None,
+    )
+    .unwrap();
+    let normal_before_retro = PayrollRepository::get_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|record| record.accrualId == normal_input.accrualId)
+        .unwrap();
+    let initial = native_preview(&conn, "batch-chain-recovery", &revision, "2026-06-20").unwrap();
+    let original = PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        1,
+    )
+    .unwrap();
+    let canonical = PayrollService::build_dataset_snapshot(&conn).unwrap();
+    let current_normal = canonical
+        .payrolls
+        .iter()
+        .find(|record| record.accrualId == normal_input.accrualId)
+        .unwrap();
+    assert_eq!(
+        current_normal
+            .calculationMetadata
+            .as_ref()
+            .unwrap()
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .usedInputs
+            .incomingPekCarry
+            .source,
+        payroll_core::PayrollPekCarrySource::RETRO_OVERRIDE
+    );
+    let payment_input = PayrollAccrualInput {
+        accrualId: original.accrualId.clone(),
+        accrualType: AccrualType::RETRO_ADJUSTMENT,
+        paymentDate: original.paymentDate.clone(),
+        sequence: original.sequence,
+        grossAmount: Some(initial.batch.payableSettlementAmount),
+        description: original.accrualDescription.clone(),
+    };
+    for forged_provenance in [false, true] {
+        let mut tampered = canonical.clone();
+        let record = tampered
+            .payrolls
+            .iter_mut()
+            .find(|record| record.accrualId == normal_input.accrualId)
+            .unwrap();
+        if forged_provenance {
+            record
+                .calculationMetadata
+                .as_mut()
+                .unwrap()
+                .snapshot
+                .as_mut()
+                .unwrap()
+                .usedInputs
+                .incomingPekCarry
+                .sourceId = Some("unrelated-retro".into());
+        } else {
+            *record = normal_before_retro.clone();
+        }
+        let error =
+            payroll_core::calculate_payroll_checked(&payroll_core::PayrollCalculationRequest {
+                personnelId: original.personelId.clone(),
+                periodId: original.donemId.clone(),
+                calculatedAt: "2026-06-20T00:00:00Z".into(),
+                accrual: Some(payment_input.clone()),
+                manualIncome: None,
+                dataset: tampered,
+            })
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("carry") || error.to_string().contains("PEK"),
+            "{error}"
+        );
+    }
+    let supplementary = PayrollAccrualInput {
+        accrualId: "recovery-tediye".into(),
+        accrualType: AccrualType::TEDIYE,
+        paymentDate: "2026-06-20".into(),
+        sequence: original.sequence + 1,
+        grossAmount: Some(dec!(1000.25)),
+        description: Some("Stored tediye input".into()),
+    };
+    PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&supplementary),
+        None,
+    )
+    .unwrap();
+    PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&normal_input),
+        None,
+    )
+    .unwrap();
+    let stale = PayrollService::build_dataset_snapshot(&conn).unwrap();
+    assert_eq!(
+        stale
+            .payrolls
+            .iter()
+            .find(|event| event.accrualId == original.accrualId)
+            .unwrap()
+            .status,
+        BordroStatus::STALE
+    );
+    let recovered = PayrollService::recover_retro_batch(&conn, &original.accrualId)
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.id, original.id);
+    assert_eq!(recovered.sequence, original.sequence);
+    assert_eq!(recovered.status, BordroStatus::CALCULATED);
+    assert_eq!(recovered.gelirToplam, original.gelirToplam);
+    let after_retro = PayrollService::build_dataset_snapshot(&conn).unwrap();
+    assert_eq!(
+        after_retro
+            .retroBatches
+            .iter()
+            .find(|batch| batch.id == original.accrualId)
+            .unwrap()
+            .status,
+        CompensationRevisionStatus::CALCULATED
+    );
+    assert_eq!(
+        after_retro
+            .payrolls
+            .iter()
+            .find(|event| event.accrualId == supplementary.accrualId)
+            .unwrap()
+            .status,
+        BordroStatus::STALE
+    );
+    let follower = PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&supplementary),
+        None,
+    )
+    .unwrap();
+    assert_eq!(follower.status, BordroStatus::CALCULATED);
+    assert_eq!(follower.gelirler.tediye, Some(dec!(1000.25)));
+    for (offset, accrual_type) in [
+        (2, AccrualType::TIS_IKRAMIYE),
+        (3, AccrualType::SUPPLEMENTAL),
+    ] {
+        let input = PayrollAccrualInput {
+            accrualId: format!("recovery-follower-{offset}"),
+            accrualType: accrual_type,
+            paymentDate: original.paymentDate.clone(),
+            sequence: original.sequence + offset,
+            grossAmount: Some(dec!(750.15)),
+            description: None,
+        };
+        let calculated = PayrollService::calculate_payroll_for_accrual_checked(
+            &conn,
+            P1_PERSON,
+            &payment_period.id,
+            Some(&input),
+            None,
+        )
+        .unwrap();
+        assert_eq!(calculated.status, BordroStatus::CALCULATED);
+        assert_eq!(calculated.gelirToplam, dec!(750.15));
+    }
+    PayrollService::recover_retro_batch(&conn, &original.accrualId).unwrap();
+    assert_eq!(
+        PayrollRepository::get_all(&conn)
+            .unwrap()
+            .iter()
+            .filter(|event| event.accrualId == original.accrualId)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn native_recovery_command_preserves_finalized_history_and_explains_missing_sources() {
+    let (conn, _source_period, payment_period, revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, "batch-command-blocker", &revision, "2026-06-20").unwrap();
+    let event = PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE payroll_records SET status='FINALIZED' WHERE accrual_id=?1",
+        [&event.accrualId],
+    )
+    .unwrap();
+    let before =
+        serde_json::to_value(PayrollService::build_dataset_snapshot(&conn).unwrap()).unwrap();
+    let error = PayrollService::recover_retro_batch(&conn, &event.accrualId).unwrap_err();
+    assert!(error.to_string().contains("kesinleşmiş"), "{error}");
+    assert_eq!(
+        serde_json::to_value(PayrollService::build_dataset_snapshot(&conn).unwrap()).unwrap(),
+        before
+    );
+
+    let (conn, _, payment_period, revision) = setup_full_retro_database();
+    let initial = native_preview(&conn, "batch-command-missing", &revision, "2026-06-20").unwrap();
+    PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        0,
+    )
+    .unwrap();
+    conn.execute("DELETE FROM payroll_records WHERE period_id='2026-04'", [])
+        .unwrap();
+    let before =
+        serde_json::to_value(PayrollService::build_dataset_snapshot(&conn).unwrap()).unwrap();
+    let error = PayrollService::recover_retro_batch(&conn, &initial.batch.id).unwrap_err();
+    assert!(error.to_string().contains("2026-04"), "{error}");
+    assert!(error.to_string().contains("doğrulanmış yedek"), "{error}");
+    assert_eq!(
+        serde_json::to_value(PayrollService::build_dataset_snapshot(&conn).unwrap()).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn native_recovery_rolls_back_refreshed_same_day_normal_when_payment_write_fails() {
+    let (conn, _, payment_period, revision) = setup_full_retro_database();
+    let normal = PayrollAccrualInput {
+        accrualId: "rollback-normal".into(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-06-20".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: None,
+    };
+    PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&normal),
+        None,
+    )
+    .unwrap();
+    let initial = native_preview(&conn, "batch-carry-rollback", &revision, "2026-06-20").unwrap();
+    PayrollService::create_retro_payment(
+        &conn,
+        &initial.batch,
+        &initial.allocations,
+        &payment_period.id,
+        1,
+    )
+    .unwrap();
+    PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        "retro-atomic-person",
+        &payment_period.id,
+        Some(&normal),
+        None,
+    )
+    .unwrap();
+    let before =
+        serde_json::to_value(PayrollService::build_dataset_snapshot(&conn).unwrap()).unwrap();
+    conn.execute_batch("CREATE TRIGGER fail_recovered_payment BEFORE INSERT ON payroll_records WHEN NEW.accrual_id='batch-carry-rollback' BEGIN SELECT RAISE(ABORT, 'forced payment failure'); END;").unwrap();
+    assert!(PayrollService::recover_retro_batch(&conn, &initial.batch.id).is_err());
+    assert_eq!(
+        serde_json::to_value(PayrollService::build_dataset_snapshot(&conn).unwrap()).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn native_zero_recovery_removes_old_carry_from_same_day_normal_atomically() {
+    let (conn, _, payment_period, revision) = setup_full_retro_database();
+    let input = PayrollAccrualInput {
+        accrualId: "zero-carry-normal".into(),
+        accrualType: AccrualType::NORMAL,
+        paymentDate: "2026-06-20".into(),
+        sequence: 0,
+        grossAmount: None,
+        description: None,
+    };
+    let original_normal = PayrollService::calculate_payroll_for_accrual_checked(
+        &conn,
+        P1_PERSON,
+        &payment_period.id,
+        Some(&input),
+        None,
+    )
+    .unwrap();
+    let preview = native_preview(&conn, "zero-carry-recovery", &revision, "2026-06-20").unwrap();
+    PayrollService::create_retro_payment(
+        &conn,
+        &preview.batch,
+        &preview.allocations,
+        &payment_period.id,
+        1,
+    )
+    .unwrap();
+    let with_overlay = PayrollRepository::get_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.accrualId == input.accrualId)
+        .unwrap();
+    assert_ne!(
+        with_overlay.devredenPekGelen,
+        original_normal.devredenPekGelen
+    );
+    // Editing the revision changes the target back to the original entitlement.
+    p1_neutralize_revision(&conn, &revision);
+    let recovered = PayrollService::recover_retro_batch(&conn, &preview.batch.id).unwrap();
+    assert!(recovered.is_none());
+    p1_assert_zero_ledger_without_event(&conn, &preview.batch.id);
+    let after = PayrollRepository::get_all(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|event| event.accrualId == input.accrualId)
+        .unwrap();
+    assert_eq!(after.status, BordroStatus::CALCULATED);
+    assert_eq!(after.devredenPekGelen, original_normal.devredenPekGelen);
+    assert_eq!(after.sonrakiDevredenPek, original_normal.sonrakiDevredenPek);
+    assert_eq!(after.netOdeme, original_normal.netOdeme);
 }

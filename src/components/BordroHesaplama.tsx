@@ -99,6 +99,7 @@ interface BordroHesaplamaProps {
   initialPersonelId?: string;
   onGoToPuantaj?: (personelId?: string) => void;
   onOpenCompensationPolicy?: () => void;
+  onRecoverRetroBatch?: (batchId: string) => Promise<void>;
 }
 
 export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
@@ -120,6 +121,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
   onSavePersonelAndTaxOpening,
   onGoToPuantaj,
   onOpenCompensationPolicy,
+  onRecoverRetroBatch,
 }) => {
   const [bulkAccrualOpen, setBulkAccrualOpen] = useState(false);
   useEffect(() => { setBulkAccrualOpen(false); }, [aktifDonem.id, activePayrollView]);
@@ -194,6 +196,7 @@ export const BordroHesaplama: React.FC<BordroHesaplamaProps> = ({
     isSupplementaryView,
     onSaveBordro,
     onOpenCompensationPolicy,
+    onRecoverRetroBatch,
   });
 
   const rowFilters: Array<{ id: PayrollRowFilter; label: string }> = [

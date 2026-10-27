@@ -129,3 +129,12 @@ describe('retro payment event recovery', () => {
     expect(retroPaymentEventNeedsReplay(liveZeroLedger, { ...liveStaleEvent, status: 'FINALIZED' } as BordroKaydi, [], [sourcePayroll]).eligible).toBe(false);
   });
 });
+
+test('chain recovery can offer source replay while preserving named prerequisites and closed-record blockers', () => {
+  const staleSource = { ...sourcePayroll, status: 'STALE' } as BordroKaydi;
+  const current = { ...batch, status: 'STALE' } as RetroAdjustmentBatch;
+  const offered = retroPaymentEventNeedsReplay(current, payroll, allocations, [staleSource], { allowSourceReplay: true });
+  expect(offered.eligible).toBe(true); expect(offered.blockedSourcePeriods).toEqual(['period-1']);
+  const closed = retroPaymentEventNeedsReplay({ ...current, settlementStatus: 'PAID' } as RetroAdjustmentBatch, payroll, allocations, [staleSource], { allowSourceReplay: true });
+  expect(closed.eligible).toBe(false); expect(closed.reason).toContain('düzeltme revizyonu');
+});

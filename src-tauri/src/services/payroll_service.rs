@@ -1,6 +1,7 @@
 use crate::domain::models::{
-    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, DevredenPekKaydi, DonemselKurumDegerleri,
-    ManualPayrollIncomeInput, PayrollAccrualInput, RetroAdjustmentBatch, RetroAllocation,
+    AccrualType, BordroDonemi, BordroKaydi, BordroStatus, CompensationRevisionStatus,
+    DevredenPekKaydi, DonemselKurumDegerleri, ManualPayrollIncomeInput, PayrollAccrualInput,
+    RetroAdjustmentBatch, RetroAllocation, RetroSettlementStatus,
 };
 use crate::domain::{DomainError, Result};
 use crate::repositories::annual_payroll_parameters_repo::AnnualPayrollParametersRepository;
@@ -330,6 +331,93 @@ impl PayrollService {
         })
     }
 
+    /// Deterministic recovery from persisted inputs; existing transactional writers
+    /// revalidate the preview before changing the ledger or its payment event.
+    pub fn recover_retro_batch(conn: &Connection, batch_id: &str) -> Result<Option<BordroKaydi>> {
+        let dataset = Self::build_dataset_snapshot(conn)?;
+        let batch = dataset
+            .retroBatches
+            .iter()
+            .find(|batch| batch.id == batch_id)
+            .ok_or_else(|| {
+                DomainError::NotFound(format!("Geriye dönük fark kaydı bulunamadı: {batch_id}"))
+            })?
+            .clone();
+        if batch.status == CompensationRevisionStatus::FINALIZED
+            || matches!(
+                batch.settlementStatus,
+                RetroSettlementStatus::PAID | RetroSettlementStatus::SETTLED_BY_OFFSET
+            )
+        {
+            return Err(DomainError::PayrollFinalized("Kesinleşmiş, ödenmiş veya mahsupla kapatılmış geriye dönük fark yeniden yazılamaz; doğrulanmış geçmiş için yeni bir düzeltme revizyonu gerekir.".into()));
+        }
+        let linked = dataset
+            .payrolls
+            .iter()
+            .find(|event| event.accrualId == batch.id || event.id == batch.id)
+            .cloned();
+        if let Some(event) = &linked {
+            if event.status == BordroStatus::FINALIZED {
+                return Err(DomainError::PayrollFinalized("Bağlı geriye dönük fark ödemesi kesinleşmiş; aynı kayıt yeniden yazılamaz. Yeni bir düzeltme revizyonu gerekir.".into()));
+            }
+            if event.personelId != batch.personnelId
+                || event.paymentDate != batch.paymentDate
+                || event.accrualType != AccrualType::RETRO_ADJUSTMENT
+            {
+                return Err(DomainError::InvalidData("Geriye dönük fark ile bağlı ödeme olayı eşleşmiyor. Personel, tarih ve kayıt kimliğini inceleyin.".into()));
+            }
+        }
+        let revision = dataset.compensationRevisions.iter().find(|revision| revision.id == batch.revisionId).cloned()
+            .ok_or_else(|| DomainError::NotFound(format!("Geriye dönük fark revizyonu bulunamadı: {}. Özgün revizyonu yedekten kontrol edin.", batch.revisionId)))?;
+        let overrides = dataset
+            .compensationRevisionOverrides
+            .iter()
+            .filter(|item| item.revisionId == revision.id)
+            .cloned()
+            .collect();
+        let replay = RetroEntitlementEngine::calculate(&RetroCalculationRequest {
+            batchId: batch.id.clone(),
+            revision,
+            overrides,
+            personnelId: batch.personnelId.clone(),
+            paymentDate: batch.paymentDate.clone(),
+            calculatedAt: batch
+                .calculatedAt
+                .clone()
+                .or(batch.createdAt.clone())
+                .unwrap_or_else(|| Utc::now().to_rfc3339()),
+            description: batch.description.clone(),
+            dataset: dataset.clone(),
+        })?;
+        if replay.batch.payableSettlementAmount <= rust_decimal::Decimal::ZERO {
+            Self::save_retro_adjustment_batch(conn, &replay.batch, &replay.allocations)?;
+            return Ok(None);
+        }
+        let periods = dataset
+            .periods
+            .iter()
+            .filter(|period| {
+                if let Some(event) = &linked {
+                    period.id == event.donemId
+                } else {
+                    format!("{:04}-{:02}", period.taxYear, period.taxMonth)
+                        == batch.paymentDate[..7]
+                }
+            })
+            .collect::<Vec<_>>();
+        if periods.len() != 1 {
+            return Err(DomainError::ValidationError(format!("{} ödeme tarihi için tek bir bordro dönemi belirlenemedi; ödeme dönemi kaydını kontrol edin.", batch.paymentDate)));
+        }
+        Self::create_retro_payment(
+            conn,
+            &replay.batch,
+            &replay.allocations,
+            &periods[0].id,
+            linked.as_ref().map_or(0, |event| event.sequence),
+        )
+        .map(Some)
+    }
+
     /// Atomically persists a calculated retro batch and its canonical payment
     /// event. The batch must be visible to the shared core while calculating,
     /// but neither it nor the event may survive if the calculation or
@@ -353,6 +441,7 @@ impl PayrollService {
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         let (canonical_batch, canonical_allocations) =
             Self::validate_retro_batch_input(&tx, batch, allocations)?;
+        let previous_carry_impact = Self::previous_retro_carry_impact(&tx, &canonical_batch)?;
         // The batch id is also the stable accrual id of its payment event. Do
         // not allow a caller to reuse it for a different person, period, or
         // accrual type; a composite person+period uniqueness rule alone would
@@ -395,6 +484,9 @@ impl PayrollService {
             &tx,
             &retro_batch_impact,
         )?;
+        if let Some(impact) = &previous_carry_impact {
+            crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(&tx, impact)?;
+        }
 
         let payment_events = PayrollRepository::get_for_personnel_and_payment_date(
             &tx,
@@ -429,6 +521,10 @@ impl PayrollService {
                 .clone()
                 .or_else(|| Some("Geriye dönük hakediş farkı".into())),
         };
+        // A source-month PEK correction can invalidate earlier events on this
+        // same payment date. Rebuild those predecessors against the staged
+        // CALCULATED ledger before computing the retro payment that consumes them.
+        Self::replay_retro_carry_predecessors(&tx, &canonical_batch, payment_period_id, &accrual)?;
         let request = Self::build_calculation_request(
             &tx,
             &canonical_batch.personnelId,
@@ -468,6 +564,106 @@ impl PayrollService {
         Ok(calculated)
     }
 
+    fn previous_retro_carry_impact(
+        conn: &Connection,
+        batch: &RetroAdjustmentBatch,
+    ) -> Result<Option<payroll_core::MutationImpact>> {
+        if !crate::repositories::retro_repo::get_batches_for_personnel(conn, &batch.personnelId)?
+            .iter()
+            .any(|stored| stored.id == batch.id)
+        {
+            return Ok(None);
+        }
+        // Reverting an old carry correction to zero still invalidates events
+        // which consumed that old correction. Evaluate before replacing it.
+        crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::assert_mutation_allowed(conn,
+            &payroll_core::PayrollMutation::RetroBatchSave { personnelId: batch.personnelId.clone(), batchId: batch.id.clone(), paymentDate: batch.paymentDate.clone() }).map(Some)
+    }
+
+    fn replay_retro_carry_predecessors(
+        tx: &Connection,
+        batch: &RetroAdjustmentBatch,
+        period_id: &str,
+        target: &PayrollAccrualInput,
+    ) -> Result<()> {
+        let period = PeriodRepository::get_by_id(tx, period_id)?
+            .ok_or_else(|| DomainError::NotFound("Retro ödeme dönemi bulunamadı.".into()))?;
+        let target_order = payroll_core::payroll_engine::payment_event_order(
+            &period,
+            &target.paymentDate,
+            target.sequence,
+            &target.accrualId,
+        )?;
+        let dataset = Self::build_dataset_snapshot(tx)?;
+        let mut predecessors = dataset
+            .payrolls
+            .iter()
+            .filter(|event| event.personelId == batch.personnelId && event.accrualId != batch.id)
+            .map(|event| {
+                Ok((
+                    payroll_core::payroll_engine::accrual_order_for_payroll(&dataset, event)?,
+                    event.clone(),
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        predecessors.retain(|(order, event)| {
+            *order < target_order
+                && event.paymentDate >= batch.paymentDate
+                && matches!(event.status, BordroStatus::STALE | BordroStatus::DRAFT)
+        });
+        predecessors.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, event) in predecessors {
+            let gross = match event.accrualType {
+                AccrualType::NORMAL => None,
+                AccrualType::TEDIYE => event.gelirler.tediye,
+                AccrualType::TIS_IKRAMIYE => event.gelirler.tisIkramiyesi,
+                AccrualType::SUPPLEMENTAL => event.gelirler.ekOdeme,
+                AccrualType::RETRO_ADJUSTMENT => {
+                    crate::repositories::retro_repo::get_batches_for_personnel(
+                        tx,
+                        &event.personelId,
+                    )?
+                    .iter()
+                    .find(|item| item.id == event.accrualId)
+                    .map(payroll_core::retro_payable_settlement_amount)
+                }
+            };
+            let input = PayrollAccrualInput {
+                accrualId: event.accrualId.clone(),
+                accrualType: event.accrualType,
+                paymentDate: event.paymentDate.clone(),
+                sequence: event.sequence,
+                grossAmount: gross,
+                description: event.accrualDescription.clone(),
+            };
+            let manual =
+                (event.accrualType == AccrualType::NORMAL).then_some(ManualPayrollIncomeInput {
+                    tediye: event.gelirler.tediye,
+                    tisIkramiyesi: event.gelirler.tisIkramiyesi,
+                });
+            let request = Self::build_calculation_request(
+                tx,
+                &event.personelId,
+                &event.donemId,
+                Some(&input),
+                manual.as_ref(),
+            )?;
+            let calculated = payroll_core::calculate_payroll_checked(&request)?;
+            SettingsRepository::persist_statutory_snapshot_if_missing(tx, &event.donemId)?;
+            PayrollRepository::save_with_policy_in_transaction(tx, &calculated)?;
+            let current_batch =
+                crate::repositories::retro_repo::get_batches_for_personnel(tx, &batch.personnelId)?
+                    .into_iter()
+                    .find(|item| item.id == batch.id);
+            if current_batch
+                .is_none_or(|item| item.status != CompensationRevisionStatus::CALCULATED)
+            {
+                return Err(DomainError::ValidationError(format!("{} kaynak döneminin yeniden hesabı {} geriye dönük farkını yeniden geçersiz kıldı; kaynak kapsamı ile ödeme sırası arasında bağımlılık döngüsü var. Revizyon kapsamını ve ödeme tarihini doğrulanmış dayanakla inceleyin; işlem geri alındı.", event.donemId, batch.id)));
+            }
+        }
+        Ok(())
+    }
+
     /// Persists a canonical calculated batch without creating a payment event.
     /// This is the explicit settlement path for negative adjustments: the
     /// overpayment remains in the recognized ledger and can be reviewed or
@@ -487,6 +683,7 @@ impl PayrollService {
             .map_err(|error| DomainError::DatabaseError(error.to_string()))?;
         let (canonical_batch, canonical_allocations) =
             Self::validate_retro_batch_input(&tx, batch, allocations)?;
+        let previous_carry_impact = Self::previous_retro_carry_impact(&tx, &canonical_batch)?;
         // BUG-RETRO-002: a stale ledger whose canonical replay resolves to no
         // difference at all (total and payable both zero) is retired as a
         // settlement-only CALCULATED ledger; otherwise its recovery would be a
@@ -609,6 +806,30 @@ impl PayrollService {
         crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(
             &tx, &impact,
         )?;
+        if let Some(impact) = &previous_carry_impact {
+            crate::repositories::payroll_invalidation_repo::PayrollInvalidationRepository::apply_impact(&tx, impact)?;
+        }
+        // Settlement-only recovery may also change source PEK carry. Rebuild
+        // affected same-day payment predecessors without creating a cash event.
+        let same_day = PayrollRepository::get_for_personnel_and_payment_date(
+            &tx,
+            &canonical_batch.personnelId,
+            &canonical_batch.paymentDate,
+        )?;
+        if let Some(last) = same_day.iter().max_by_key(|event| event.sequence) {
+            let sequence = last.sequence.checked_add(1).ok_or_else(|| {
+                DomainError::ValidationError("Ödeme sıra numarası güvenli sınırı aştı.".into())
+            })?;
+            let target = PayrollAccrualInput {
+                accrualId: format!("{}_settlement_carry", canonical_batch.id),
+                accrualType: AccrualType::RETRO_ADJUSTMENT,
+                paymentDate: canonical_batch.paymentDate.clone(),
+                sequence,
+                grossAmount: None,
+                description: None,
+            };
+            Self::replay_retro_carry_predecessors(&tx, &canonical_batch, &last.donemId, &target)?;
+        }
         tx.commit()
             .map_err(|error| DomainError::DatabaseError(error.to_string()))
     }

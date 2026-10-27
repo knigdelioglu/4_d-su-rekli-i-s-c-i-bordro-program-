@@ -329,5 +329,5 @@ describe('stale payment-event chain replay selection', () => {
 
 test('translates rounding and historical-replay errors into actionable Turkish', () => {
   expect(formatPayrollError(new Error('road rounding mode conflict PERIOD_TOTAL'))).toContain('Bağlı düzeltmeleri önizle');
-  expect(formatPayrollError('UNSUPPORTED_HISTORICAL_REPLAY')).toContain('Geriye Dönük Farklar');
+  expect(formatPayrollError('UNSUPPORTED_HISTORICAL_REPLAY: 2027-01 kaynak bordro eksik')).toContain('2027-01 kaynak bordro eksik');
 });

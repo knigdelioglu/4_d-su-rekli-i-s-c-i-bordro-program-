@@ -396,6 +396,10 @@ export const tauriBridge = {
     });
   },
 
+  async recoverRetroBatch(batchId: string): Promise<void> {
+    await mutateTauri<unknown>('recover_retro_batch', { batchId });
+  },
+
   async calculateRetroPreview(request: RetroCalculationRequest): Promise<RetroCalculationResult> {
     return invokeTauri<RetroCalculationResult>('calculate_retro_preview', {
       batchId: request.batchId,

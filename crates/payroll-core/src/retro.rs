@@ -646,7 +646,7 @@ fn authoritative_normal_payroll<'a>(
     match authoritative.as_slice() {
         [payroll] => Ok(*payroll),
         [] => Err(DomainError::InvalidData(format!(
-            "UNSUPPORTED_HISTORICAL_REPLAY: {period_id} has no CALCULATED/FINALIZED NORMAL source record; bu dönem için hesaplanmış (CALCULATED/FINALIZED) NORMAL bordro yok, STALE/DRAFT rows are not authority."
+            "UNSUPPORTED_HISTORICAL_REPLAY: {period_id} kaynak döneminin hesaplanmış veya kesinleşmiş NORMAL bordrosu bulunamadı. Taslak ya da güncelliğini yitirmiş kayıt kaynak kabul edilemez. Varsa mevcut kaynak bordroyu önce yeniden hesaplayın; kayıt eksikse özgün tarihsel bordroyu doğrulanmış yedekten geri getirin veya revizyonun yürürlük aralığını kontrol edin. Kesinleşmiş kayıtları değiştirerek ya da dönem kapsamını kendiliğinden daraltarak bu engel aşılamaz."
         ))),
         _ => Err(DomainError::InvalidData(format!(
             "UNSUPPORTED_HISTORICAL_REPLAY: {period_id} has multiple authoritative NORMAL source records."

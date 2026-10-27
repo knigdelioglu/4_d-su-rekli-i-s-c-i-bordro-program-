@@ -923,7 +923,7 @@ fn retro_rejects_missing_stale_and_duplicate_normal_source_baselines() {
     assert_source_baseline_rejects(
         missing_normal,
         "retro-source-normal-missing",
-        "hesaplanmış (CALCULATED/FINALIZED) NORMAL bordro yok",
+        "hesaplanmış veya kesinleşmiş NORMAL bordrosu bulunamadı",
     );
 
     let mut stale_normal = source.clone();
@@ -936,7 +936,7 @@ fn retro_rejects_missing_stale_and_duplicate_normal_source_baselines() {
     assert_source_baseline_rejects(
         stale_normal,
         "retro-source-normal-stale",
-        "has no CALCULATED/FINALIZED NORMAL source record",
+        "kaynak döneminin hesaplanmış veya kesinleşmiş NORMAL bordrosu bulunamadı",
     );
 
     let mut duplicate_normal = source;
@@ -2561,7 +2561,10 @@ fn missing_original_accrual_fails_closed_instead_of_recognizing_zero() {
         "2026-06-20",
     ))
     .expect_err("missing NORMAL baseline must not be recognized as zero");
-    assert!(error.to_string().contains("NORMAL bordro yok"), "{error}");
+    assert!(
+        error.to_string().contains("NORMAL bordrosu bulunamadı"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -3720,7 +3723,7 @@ fn bug_retro_001_test_b_missing_normal_inside_window_fails_closed() {
     .expect_err("a period without NORMAL must not be recognized as zero");
     let message = error.to_string();
     assert!(message.contains("2026-06"), "{message}");
-    assert!(message.contains("NORMAL bordro yok"), "{message}");
+    assert!(message.contains("NORMAL bordrosu bulunamadı"), "{message}");
 
     // Bounded revision whose window contains a period whose NORMAL is
     // missing must fail the same way instead of returning a full month.
@@ -3764,7 +3767,7 @@ fn bug_retro_001_stale_normal_inside_window_names_the_period() {
     .expect_err("stale NORMAL baseline is not authoritative");
     let message = error.to_string();
     assert!(message.contains("2026-03"), "{message}");
-    assert!(message.contains("STALE"), "{message}");
+    assert!(message.contains("güncelliğini yitirmiş"), "{message}");
 }
 
 #[test]

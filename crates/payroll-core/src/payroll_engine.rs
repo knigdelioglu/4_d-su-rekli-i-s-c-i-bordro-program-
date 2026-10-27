@@ -1167,13 +1167,115 @@ fn empty_incoming_pek() -> IncomingDevredenPekState {
     }
 }
 
-fn retro_event_contains_carry_override(
+/// Accept replayed predecessors only when their saved carry provenance reaches
+/// the current authoritative retro overlay. CALCULATED alone is not evidence.
+fn payment_event_contains_carry_override(
     overrides: &[RetroSourceCarryOverride],
-    accrual_id: &str,
-) -> bool {
-    overrides
-        .iter()
-        .any(|item| item.batch_id == accrual_id && carry_override_changed(item))
+    payroll: &BordroKaydi,
+    dataset: &PayrollDatasetSnapshot,
+    index: &PayrollDatasetIndex,
+) -> Result<bool> {
+    let mut current = payroll;
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(effective_accrual_id(current)) {
+            return Ok(false);
+        }
+        ensure_authoritative_payment_event(current)?;
+        if overrides.iter().any(|item| {
+            item.batch_id == effective_accrual_id(current) && carry_override_changed(item)
+        }) {
+            return Ok(true);
+        }
+        let period = period_by_id(dataset, index, &current.donemId)?;
+        let order = accrual_order_for_payroll_with_index(dataset, index, current)?;
+        if current.accrualType == AccrualType::NORMAL {
+            if crate::validate_payroll_calculation_metadata_with_context(
+                current,
+                period,
+                &dataset.payrolls,
+                &dataset.periods,
+            )
+            .map_err(|error| {
+                DomainError::InvalidData(format!(
+                    "{} yeniden hesaplanmış PEK kaynağı doğrulanamadı: {error}",
+                    current.accrualId
+                ))
+            })? != crate::PayrollCalculationSnapshotDisposition::CurrentSnapshotValidated
+            {
+                return Ok(false);
+            }
+            let carry = &current
+                .calculationMetadata
+                .as_ref()
+                .and_then(|metadata| metadata.snapshot.as_ref())
+                .expect("validated schema-2 snapshot")
+                .usedInputs
+                .incomingPekCarry;
+            if carry.source == PayrollPekCarrySource::RETRO_OVERRIDE {
+                return Ok(overrides
+                    .iter()
+                    .filter(|item| carry_override_changed(item))
+                    .any(|item| {
+                        carry.sourceId.as_deref() == Some(item.batch_id.as_str())
+                            && carry.sourcePeriodId.as_deref()
+                                == Some(item.source_period_id.as_str())
+                            && carry.taxMonthsElapsed
+                                == (order.tax_ordinal - item.source_tax_ordinal) as i32
+                            && carry.records.len() == item.target_carry.len()
+                            && carry.records.iter().zip(&item.target_carry).all(|(a, b)| {
+                                a.tutar == b.tutar
+                                    && a.kalanAySayisi == b.kalanAySayisi
+                                    && a.kaynakDonemId == b.kaynakDonemId
+                            })
+                            && current.devredenPekGelen.as_deref()
+                                == Some(item.target_carry.as_slice())
+                    }));
+            }
+            if carry.source != PayrollPekCarrySource::PAYMENT_EVENT {
+                return Ok(false);
+            }
+            let source_id = carry.sourceId.as_deref().unwrap_or_default();
+            let Some(source) = index
+                .payrolls_for_person(dataset, &current.personelId)
+                .find(|event| effective_accrual_id(event) == source_id)
+            else {
+                return Ok(false);
+            };
+            let source_order = accrual_order_for_payroll_with_index(dataset, index, source)?;
+            let prior = ordered_prior_payment_events(dataset, index, &current.personelId, &order)?;
+            if prior.last().is_none_or(|(_, event)| {
+                effective_accrual_id(event) != effective_accrual_id(source)
+            }) {
+                return Ok(false);
+            }
+            if source_order >= order
+                || carry.sourcePeriodId.as_deref() != Some(source.donemId.as_str())
+                || current.devredenPekGelen != source.sonrakiDevredenPek
+            {
+                return Ok(false);
+            }
+            current = source;
+        } else {
+            // Supplementary rows do not own NORMAL schema-2 metadata. Use the
+            // same validated authoritative payment/carry edge as ordinary PEK
+            // chaining, then continue to the NORMAL/retro provenance anchor.
+            crate::validate_current_payroll_snapshot_authority(current)?;
+            if current.pekDetay.is_none() {
+                return Ok(false);
+            }
+            let prior = ordered_prior_payment_events(dataset, index, &current.personelId, &order)?;
+            let Some((_, source)) = prior.last() else {
+                return Ok(false);
+            };
+            if current.devredenPekGelen.is_none()
+                || current.devredenPekGelen != source.sonrakiDevredenPek
+            {
+                return Ok(false);
+            }
+            current = source;
+        }
+    }
 }
 
 pub(crate) fn accrual_order_for_input(
@@ -1810,13 +1912,16 @@ fn incoming_devreden_pek(
                 index,
             );
         }
-        if changed_overrides.iter().any(|override_state| {
-            override_state.source_tax_ordinal <= current_order.tax_ordinal
-                && !retro_event_contains_carry_override(
-                    &retro_carry_overrides,
-                    &effective_accrual_id(previous_accrual),
-                )
-        }) {
+        if changed_overrides
+            .iter()
+            .any(|override_state| override_state.source_tax_ordinal <= current_order.tax_ordinal)
+            && !payment_event_contains_carry_override(
+                &retro_carry_overrides,
+                previous_accrual,
+                dataset,
+                index,
+            )?
+        {
             return Err(DomainError::ValidationError(
                 "Retro source carry downstream aynı vergi ayındaki mevcut payment-event zinciriyle çakışıyor; tarihçe sessizce yeniden yazılamaz, downstream replay gerekir."
                     .into(),
@@ -1889,10 +1994,12 @@ fn incoming_devreden_pek(
                 index,
             );
         }
-        if !retro_event_contains_carry_override(
+        if !payment_event_contains_carry_override(
             &retro_carry_overrides,
-            &effective_accrual_id(previous_payroll),
-        ) {
+            previous_payroll,
+            dataset,
+            index,
+        )? {
             return Err(DomainError::ValidationError(
                 "Retro source carry downstream payment-event zincirini etkiliyor; historical event sessizce değiştirilmeden önce downstream replay yapılmalıdır."
                     .into(),
@@ -2672,13 +2779,16 @@ fn validate_devreden_pek_gap(
         {
             return Ok(());
         }
-        if changed_overrides.iter().any(|override_state| {
-            override_state.source_tax_ordinal <= current_order.tax_ordinal
-                && !retro_event_contains_carry_override(
-                    &retro_carry_overrides,
-                    &effective_accrual_id(previous_accrual),
-                )
-        }) {
+        if changed_overrides
+            .iter()
+            .any(|override_state| override_state.source_tax_ordinal <= current_order.tax_ordinal)
+            && !payment_event_contains_carry_override(
+                &retro_carry_overrides,
+                previous_accrual,
+                dataset,
+                index,
+            )?
+        {
             return Err(DomainError::ValidationError(
                 "Retro source carry downstream aynı vergi ayındaki mevcut payment-event zinciriyle çakışıyor; downstream replay gerekir."
                     .into(),
@@ -2720,10 +2830,12 @@ fn validate_devreden_pek_gap(
         if override_state.source_tax_ordinal > previous_order.tax_ordinal {
             return Ok(());
         }
-        if !retro_event_contains_carry_override(
+        if !payment_event_contains_carry_override(
             &retro_carry_overrides,
-            &effective_accrual_id(previous_payroll),
-        ) {
+            previous_payroll,
+            dataset,
+            index,
+        )? {
             return Err(DomainError::ValidationError(
                 "Retro source carry downstream payment-event zincirini etkiliyor; downstream replay gerekir."
                     .into(),

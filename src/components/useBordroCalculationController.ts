@@ -16,7 +16,8 @@ import {
   RetroAdjustmentBatch,
 } from '../types/payroll';
 import { bulkPayrollJobs, type BulkPayrollJob, type BulkPayrollItem } from '../services/bulkPayrollJob';
-import { isSupersededZeroPayableRetroEvent } from './retroEventRecovery';
+import { assertRetroRecovered, findFirstStalePriorEvent, replaySamePeriodPayrollFollowers, storedManualIncome, storedAccrualInput, type ChainReplayResult } from '../services/payrollEngine/replayChain';
+export { findFirstStalePriorEvent, replaySamePeriodPayrollFollowers } from '../services/payrollEngine/replayChain';
 import { formatTL, getDefaultAccrualPaymentDate, getPeriodDaysList } from '../utils/payrollPresentation';
 import {
   getPayrollEngine,
@@ -38,7 +39,7 @@ function formatActionableParameterError(message: string): string {
     return 'Yol yuvarlama biçimleri bu hizmet döneminde çakışıyor. Ücret Politikası ekranında “Bağlı düzeltmeleri önizle” adımıyla onarımı inceleyin.';
   }
   if (/UNSUPPORTED_HISTORICAL_REPLAY/i.test(message)) {
-    return 'Bu değişiklik kesinleşmiş geçmişi yeniden hesaplamayı gerektiriyor. Geriye Dönük Farklar ekranından ilerleyin.';
+    return message.replace(/(?:Geçersiz veri:\s*)?UNSUPPORTED_HISTORICAL_REPLAY:\s*/i, '') + ' Kaynak bordronun özgün hesaplama kaydını veya yedeğini kontrol edin; geçmiş değerleri tahmin ederek doldurmayın.';
   }
   if (/CURRENT_ENGINE_SNAPSHOT_REQUIRED|authoritative (?:snapshot|değil)/i.test(message)) {
     return 'Bordro hesaplama bilgileri güncel değil. Verileri yeniden yükleyip ilgili bordroyu yeniden hesaplayın.';
@@ -218,6 +219,7 @@ interface UseBordroCalculationControllerOptions {
   puantajlar: PersonelPuantaj[];
   isSupplementaryView: boolean;
   onOpenCompensationPolicy?: () => void;
+  onRecoverRetroBatch?: (batchId: string) => Promise<void>;
   onSaveBordro: (
     bordro: PayrollBoundaryPayroll,
     calculationSnapshot?: PayrollDatasetSnapshot,
@@ -227,87 +229,6 @@ interface UseBordroCalculationControllerOptions {
 
 const DATASET_COMMIT_TIMEOUT_MS = 5000;
 const MAX_CHAIN_REPLAY_STEPS = 240;
-
-export interface ChainReplayResult {
-  ok: boolean;
-  replayed: number;
-  error?: string;
-}
-
-type PaymentEventKey = { paymentDate: string; sequence: number; accrualId: string; id: string };
-
-/**
- * Returns the person's first (canonical payment-event order) DRAFT/STALE event
- * that precedes the target event. Pure; exported for regression tests.
- */
-export function findFirstStalePriorEvent(
-  payrolls: BordroKaydi[],
-  periodsById: Map<string, BordroDonemi>,
-  personId: string,
-  target: PaymentEventKey,
-  targetPeriod: BordroDonemi,
-  retroBatches: ReadonlyArray<RetroAdjustmentBatch> = []
-): { payroll: BordroKaydi; period: BordroDonemi } | null {
-  const targetId = target.accrualId || target.id;
-  const prior = payrolls
-    .filter((payroll) => payroll.personelId === personId && (payroll.accrualId || payroll.id) !== targetId)
-    .map((payroll) => ({ payroll, period: periodsById.get(payroll.donemId) }))
-    .filter((item): item is { payroll: BordroKaydi; period: BordroDonemi } =>
-      item.period !== undefined &&
-      comparePaymentEvents(item.payroll, target, item.period, targetPeriod) < 0
-    )
-    .sort((left, right) => comparePaymentEvents(left.payroll, right.payroll, left.period, right.period));
-  return prior.find((item) =>
-    (item.payroll.status === 'STALE' || item.payroll.status === 'DRAFT') &&
-    // A stale retro event retired by a zero-payable recalculated ledger is an
-    // audit record; the core engine skips it, so it must not block the chain.
-    !isSupersededZeroPayableRetroEvent(item.payroll, retroBatches)
-  ) ?? null;
-}
-
-/** Replay in payment order, keeping retro recovery in its dedicated ledger
- * workflow. Never attempt a later payment using an unresolved retro event. */
-export async function replaySamePeriodPayrollFollowers(options: {
-  personnelId: string;
-  period: BordroDonemi;
-  getDataset: () => PayrollDatasetSnapshot;
-  recalculate: (event: BordroKaydi, dataset: PayrollDatasetSnapshot) => Promise<void>;
-}): Promise<ChainReplayResult> {
-  let replayed = 0;
-  const attempted = new Set<string>();
-  for (let step = 0; step < MAX_CHAIN_REPLAY_STEPS; step++) {
-    const dataset = options.getDataset();
-    const next = (dataset.payrolls as unknown as BordroKaydi[])
-      .filter((payroll) =>
-        payroll.personelId === options.personnelId &&
-        payroll.donemId === options.period.id &&
-        payroll.accrualType !== 'NORMAL' &&
-        (payroll.status === 'STALE' || payroll.status === 'DRAFT') &&
-        !isSupersededZeroPayableRetroEvent(payroll, (dataset.retroBatches ?? []) as unknown as RetroAdjustmentBatch[]) &&
-        !attempted.has(payroll.accrualId || payroll.id)
-      )
-      .sort((left, right) => comparePaymentEvents(left, right, options.period))[0];
-    if (!next) return { ok: true, replayed };
-    const eventId = next.accrualId || next.id;
-    if (next.accrualType === 'RETRO_ADJUSTMENT') {
-      return {
-        ok: false, replayed,
-        error: `Geriye Dönük Fark (${eventId}) güncelliğini yitirmiş. Önce Geriye Dönük Farklar ekranından yeniden hesaplayın; sonraki tahakkuklar bu kayda bağlı.`,
-      };
-    }
-    attempted.add(eventId);
-    try {
-      await options.recalculate(next, dataset);
-      replayed++;
-    } catch (err) {
-      return {
-        ok: false, replayed,
-        error: `${ACCRUAL_TYPE_LABELS[next.accrualType] ?? next.accrualType} (${eventId}) yeniden hesaplanamadı: ${formatPayrollError(err)}`,
-      };
-    }
-  }
-  return { ok: false, replayed, error: 'Tahakkuk zinciri çok uzun; yeniden hesaplama güvenli sınırda durduruldu.' };
-}
 
 const TAX_OPENING_LATER_PATTERN = /opening başlangıç vergi ayı (\d+) aktif vergi ayı (\d+) sonrasında olamaz/i;
 
@@ -375,31 +296,6 @@ export function getBatchNotApplicableReason(
   return null;
 }
 
-function storedManualIncome(event: BordroKaydi): PayrollCalculationRequest['manualIncome'] {
-  if (event.accrualType !== 'NORMAL') return null;
-  const tediye = event.gelirler?.tediye ?? null;
-  const tisIkramiyesi = event.gelirler?.tisIkramiyesi ?? null;
-  if (tediye === null && tisIkramiyesi === null) return null;
-  return { tediye, tisIkramiyesi } as unknown as PayrollCalculationRequest['manualIncome'];
-}
-
-function storedAccrualInput(event: BordroKaydi, period: BordroDonemi): PayrollBoundaryAccrualInput {
-  const gross =
-    event.accrualType === 'TEDIYE'
-      ? event.gelirler?.tediye
-      : event.accrualType === 'TIS_IKRAMIYE'
-        ? event.gelirler?.tisIkramiyesi
-        : event.gelirler?.ekOdeme;
-  return {
-    accrualId: event.accrualId || event.id,
-    accrualType: event.accrualType,
-    paymentDate: event.paymentDate || getDefaultAccrualPaymentDate(period),
-    sequence: event.sequence,
-    grossAmount: event.accrualType === 'NORMAL' ? null : String(gross ?? 0),
-    description: event.accrualDescription ?? null,
-  } as PayrollBoundaryAccrualInput;
-}
-
 export function tryAcquireSupplementaryPaymentScope(
   pendingScopes: Set<string>,
   scope: string
@@ -426,6 +322,7 @@ export function useBordroCalculationController({
   isSupplementaryView,
   onSaveBordro,
   onOpenCompensationPolicy,
+  onRecoverRetroBatch,
 }: UseBordroCalculationControllerOptions) {
   const payrollEngine = getPayrollEngine();
   const authoritativeDatasetRef = useRef(authoritativeDataset);
@@ -695,13 +592,6 @@ export function useBordroCalculationController({
       }
       lastAttempt = eventId;
 
-      if (event.accrualType === 'RETRO_ADJUSTMENT') {
-        return {
-          ok: false,
-          replayed,
-          error: `Önceki ${eventLabel} güncelliğini yitirmiş bir geriye dönük fark ödemesi. Önce Geriye Dönük Farklar ekranından yeniden hesaplayın.`,
-        };
-      }
       if (event.accrualType === 'NORMAL') {
         const attendance = dataset.attendances.find(
           (item) => item.personelId === person.id && item.donemId === event.donemId
@@ -716,6 +606,13 @@ export function useBordroCalculationController({
       }
 
       try {
+        if (event.accrualType === 'RETRO_ADJUSTMENT') {
+          if (!onRecoverRetroBatch) throw new Error('Geriye Dönük Farklar ekranından bu kaydı yeniden hesaplayın.');
+          await onRecoverRetroBatch(eventId);
+          assertRetroRecovered(eventId, buildDataset());
+          replayed++;
+          continue;
+        }
         const calculated = await payrollEngine.calculatePayroll({
           personnelId: person.id,
           periodId: event.donemId,
@@ -758,6 +655,8 @@ export function useBordroCalculationController({
       personnelId: person.id,
       period: aktifDonem,
       getDataset: buildDataset,
+      recoverRetro: onRecoverRetroBatch,
+      formatError: formatPayrollError,
       recalculate: async (next, dataset) => {
         const calculated = await payrollEngine.calculatePayroll({
           personnelId: person.id,
@@ -795,7 +694,7 @@ export function useBordroCalculationController({
       const result = await calculateAndSaveForPerson(person, job.paymentDate);
       if (!result) throw new Error(batchCalculationErrorsRef.current.at(-1) ?? missingBaselineDuringBatchRef.current ?? 'Bordro hesaplanamadı.');
       const followers = await replayStaleSamePeriodFollowers(person);
-      if (!followers.ok) throw new Error(`Normal bordro kaydedildi; bağlı ek tahakkuk tamamlanamadı: ${followers.error}`);
+      if (!followers.ok) throw new Error(`Normal bordro kaydedildi; bağlı tahakkuk zinciri tamamlanamadı: ${followers.error}`);
       const saved = buildDataset().payrolls.find((entry) => entry.personelId === person.id && entry.donemId === job.periodId && entry.accrualType === 'NORMAL');
       if (saved?.status !== 'CALCULATED' && saved?.status !== 'FINALIZED') throw new Error('Bordronun güncel kayıt durumu doğrulanamadı. İşlemi sürdürün.');
       return { status: 'success' };
@@ -965,9 +864,7 @@ export function useBordroCalculationController({
     }
   };
 
-  const handleCalculateSupplementary = async (person: Personel, event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
+  const handleCalculateSupplementary = async (person: Personel) => {
     const grossAmount = supplementaryAccrualDraft.grossAmount.trim();
     const paymentDate = supplementaryAccrualDraft.paymentDate.trim();
     if (!isExactDecimalString(grossAmount) || grossAmount.startsWith('-')) {
@@ -1202,7 +1099,12 @@ export function useBordroCalculationController({
         : withCalculationLock(() => handleOpenPaySlip(person, requestedBordro)),
     openSupplementaryAccrualForm,
     handleRecalculateAccrual: (person: Personel, accrual: BordroKaydi, event: MouseEvent) => withCalculationLock(() => handleRecalculateAccrual(person, accrual, event)),
-    handleCalculateSupplementary: (person: Personel, event: FormEvent<HTMLFormElement>) => withCalculationLock(() => handleCalculateSupplementary(person, event)),
+    handleCalculateSupplementary: (person: Personel, event: FormEvent<HTMLFormElement>) => {
+      // Prevent native navigation synchronously, before awaiting the shared job lock.
+      event.preventDefault();
+      event.stopPropagation();
+      return withCalculationLock(() => handleCalculateSupplementary(person));
+    },
     handleCalculateSingle: (person: Personel, event: MouseEvent, requestedAccrual?: BordroKaydi) => withCalculationLock(() => handleCalculateSingle(person, event, requestedAccrual)),
     handleFinalizeSuccess,
     matchesSupplementaryAccrualStatus,

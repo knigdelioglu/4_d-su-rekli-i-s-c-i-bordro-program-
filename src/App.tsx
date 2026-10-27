@@ -635,6 +635,8 @@ export default function App() {
     handleCalculateRetroPreview,
     handleSaveRetroBatch,
     handleCreateRetroPayment,
+    handleRecoverRetroBatch,
+    handleRecoverRetroChain,
   } = mutationController;
 
   const backupController = useBackupController({
@@ -936,6 +938,7 @@ export default function App() {
                     onCalculatePreview={handleCalculateRetroPreview}
                     onSaveBatch={handleSaveRetroBatch}
                     onCreatePayment={handleCreateRetroPayment}
+                    onRecoverChain={handleRecoverRetroChain}
                   />
                 )}
 
@@ -971,6 +974,7 @@ export default function App() {
                     authoritativeDataset={payrollDataset}
                     getAuthoritativeDataset={getAuthoritativePayrollDataset}
                     onSaveBordro={handleSaveBordro}
+                    onRecoverRetroBatch={handleRecoverRetroBatch}
                     onDeleteBordro={handleDeleteBordro}
                     onSavePersonelAndTaxOpening={handleSavePersonelAndTaxOpening}
                     initialPersonelId={targetPersonelIdForBordro}

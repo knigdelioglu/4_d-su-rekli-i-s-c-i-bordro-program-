@@ -2147,3 +2147,122 @@ test('bulk attendance previews finalized dependencies and saves only selected el
   }
   expect(after.puantajlar.find((entry) => entry.personelId === 'p-2' && entry.donemId === periodId)?.gunler[date]).toBe('T');
 });
+
+// Uses an isolated browser database; no desktop or user fixture is modified.
+type RetroChainSnapshot = Omit<StoredSnapshot, 'bordrolar' | 'retroBatches'> & {
+  bordrolar: Array<StoredPayroll & { accrualId: string; accrualType: string; sequence: number; paymentDate: string; gelirler: Record<string, string>; devredenPekGelen: unknown[] }>;
+  retroBatches: Array<{ id: string; revisionId: string; status: string; totalGrossDelta: string; payableSettlementAmount: string }>;
+  compensationRevisions: Array<{ id: string; effectiveFrom: string }>;
+  compensationRevisionOverrides: Array<{ revisionId: string; value: string }>;
+};
+async function readRetroChainSnapshot(page: Page): Promise<RetroChainSnapshot> {
+  return JSON.parse((await readStoredPayload(page))!) as RetroChainSnapshot;
+}
+async function seedRetroCarryChain(page: Page): Promise<{ batchId: string; paymentPeriodId: string; baselineNormal: RetroChainSnapshot['bordrolar'][number] }> {
+  await seedCalculatedSnapshot(page);
+  const sourceId = (await page.getByTestId('payroll-screen').getAttribute('data-period-id'))!;
+  const snapshot = await readRetroChainSnapshot(page);
+  const source = snapshot.donemler!.find((item) => item.id === sourceId)!;
+  const paymentPeriod = snapshot.donemler!.find((item) => item.yil === source.yil && item.ay === source.ay + 1)!;
+  expect(paymentPeriod).toBeDefined();
+  await selectPeriod(page, paymentPeriod.id);
+  await calculateP1(page, paymentPeriod.id);
+  const baselineNormal = (await readRetroChainSnapshot(page)).bordrolar.find((item) => item.personelId === 'p-1' && item.donemId === paymentPeriod.id)!;
+  await page.getByTestId('nav-retro').click();
+  await page.getByLabel('Başlık', { exact: true }).fill('PEK devri zincir kurtarma testi');
+  await page.getByLabel('Yürürlük tarihi', { exact: true }).fill(source.baslangicTarihi);
+  await page.getByLabel('Bitiş tarihi (opsiyonel)', { exact: true }).fill(source.bitisTarihi);
+  await page.getByRole('combobox', { name: 'Önizleme personeli', exact: true }).selectOption('p-1');
+  await page.getByLabel('Fark ödeme tarihi', { exact: true }).fill(`${paymentPeriod.id}-31`);
+  await page.getByLabel('Override değeri', { exact: true }).fill('10000');
+  await page.getByRole('button', { name: 'Farkı hesapla', exact: true }).click();
+  const create = page.getByRole('button', { name: 'Geriye Dönük Fark Tahakkuku Oluştur', exact: true });
+  await expect(create).toBeEnabled();
+  await create.click();
+  await expect.poll(async () => (await readRetroChainSnapshot(page)).retroBatches.length).toBe(1);
+  const saved = await readRetroChainSnapshot(page);
+  expect(saved.bordrolar.filter((item) => item.personelId === 'p-1').every((item) => item.status === 'CALCULATED')).toBe(true);
+  return { batchId: saved.retroBatches[0].id, paymentPeriodId: paymentPeriod.id, baselineNormal };
+}
+
+test('retro chain recovery refreshes normal, ledger and every supplementary payment in order', async ({ page }) => {
+  const { batchId, paymentPeriodId } = await seedRetroCarryChain(page);
+  await openPayrollScreen(page);
+  await page.getByTestId('nav-bordro-tediye').click();
+  await page.getByTestId('timeline-toggle-p-1').click();
+  for (const [type, gross, label] of [
+    ['TEDIYE', '24500', 'Tediye'], ['TIS_IKRAMIYE', '18000', 'TİS İkramiyesi'], ['SUPPLEMENTAL', '12000', 'Ek Ödeme'],
+  ]) {
+    await page.getByTestId('add-accrual-p-1').click();
+    await page.getByRole('combobox', { name: 'Tür', exact: true }).selectOption(type);
+    await page.getByRole('textbox', { name: 'Brüt tutar', exact: true }).fill(gross);
+    await page.getByRole('button', { name: 'Hesapla ve Kaydet' }).click();
+    await expect.poll(async () => (await readRetroChainSnapshot(page)).bordrolar.filter((item) => item.personelId === 'p-1' && item.donemId === paymentPeriodId).map((item) => item.accrualType)).toContain(type);
+  }
+  const signature = (snapshot: RetroChainSnapshot) => snapshot.bordrolar.filter((item) => item.personelId === 'p-1').map((item) => [item.accrualId, item.sequence, item.gelirToplam, item.kesintiToplam, item.netOdeme]).sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+  const before = await readRetroChainSnapshot(page);
+  await page.getByTestId('nav-bordro-normal').click();
+  await page.getByRole('button', { name: /Tüm Hesaplanabilir Bordroları Hesapla/ }).click();
+  await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Tamamlandı');
+  await expect(page.getByTestId('bulk-payroll-progress')).toContainText('Hata: 0');
+  await expect.poll(async () => (await readRetroChainSnapshot(page)).bordrolar
+    .filter((item) => item.personelId === 'p-1').every((item) => item.status === 'CALCULATED')).toBe(true);
+  const after = await readRetroChainSnapshot(page);
+  expect(after.retroBatches.find((item) => item.id === batchId)?.status).toBe('CALCULATED');
+  expect(signature(after)).toEqual(signature(before));
+  expect(after.bordrolar.filter((item) => item.accrualId === batchId)).toHaveLength(1);
+  // The dedicated retro screen uses the same chain owner, including stale source rows.
+  const source = after.bordrolar.find((item) => item.personelId === 'p-1' && item.donemId !== paymentPeriodId)!;
+  source.status = 'STALE';
+  after.retroBatches[0].status = 'STALE';
+  after.bordrolar.filter((item) => item.personelId === 'p-1' && item.donemId === paymentPeriodId).forEach((item) => { item.status = 'STALE'; });
+  await writeStoredPayload(page, JSON.stringify(after));
+  await page.reload();
+  await page.getByTestId('nav-retro').click();
+  await page.getByTestId(`replay-retro-payment-${batchId}`).click();
+  await expect(page.getByText('Kaynak bordrolar, geriye dönük fark ve bağlı ödeme tahakkukları kayıtlı girdileriyle sırasıyla güncellendi.')).toBeVisible();
+  const recovered = await readRetroChainSnapshot(page);
+  expect(recovered.bordrolar.filter((item) => item.personelId === 'p-1').every((item) => item.status === 'CALCULATED')).toBe(true);
+  expect(signature(recovered)).toEqual(signature(before));
+});
+
+test('retro chain recovery shows missing historical source without committing a partial ledger', async ({ page }) => {
+  const { batchId } = await seedRetroCarryChain(page);
+  const stored = await readRetroChainSnapshot(page);
+  // A changed revision now includes a source period with no authoritative payroll.
+  stored.compensationRevisions[0].effectiveFrom = '2026-06-01';
+  stored.retroBatches[0].status = 'STALE';
+  stored.bordrolar.find((item) => item.accrualId === batchId)!.status = 'STALE';
+  await writeStoredPayload(page, JSON.stringify(stored));
+  await page.reload();
+  await page.getByTestId('nav-retro').click();
+  const before = await readStoredPayload(page);
+  await page.getByTestId(`replay-retro-payment-${batchId}`).click();
+  const error = page.getByTestId(`retro-recovery-error-${batchId}`);
+  await expect(error).toContainText('2026-05');
+  await expect(error).toContainText('doğrulanmış yedek');
+  expect(await readStoredPayload(page)).toBe(before);
+});
+
+test('retro chain recovery to zero retires payment and restores the previous normal carry', async ({ page }) => {
+  const { batchId, baselineNormal } = await seedRetroCarryChain(page);
+  const stored = await readRetroChainSnapshot(page);
+  const normalWithCarry = stored.bordrolar.find((item) => item.accrualId === baselineNormal.accrualId)!;
+  expect(normalWithCarry.devredenPekGelen).not.toEqual(baselineNormal.devredenPekGelen);
+  const batch = stored.retroBatches.find((item) => item.id === batchId)!;
+  stored.compensationRevisionOverrides = stored.compensationRevisionOverrides.filter((item) => item.revisionId !== batch.revisionId);
+  batch.status = 'STALE';
+  stored.bordrolar.find((item) => item.accrualId === batchId)!.status = 'STALE';
+  await writeStoredPayload(page, JSON.stringify(stored));
+  await page.reload();
+  await page.getByTestId('nav-retro').click();
+  await page.getByTestId(`replay-retro-payment-${batchId}`).click();
+  await expect(page.getByText('Kaynak bordrolar, geriye dönük fark ve bağlı ödeme tahakkukları kayıtlı girdileriyle sırasıyla güncellendi.')).toBeVisible();
+  const after = await readRetroChainSnapshot(page);
+  expect(after.bordrolar.some((item) => item.accrualId === batchId)).toBe(false);
+  expect(after.retroBatches.find((item) => item.id === batchId)).toMatchObject({ status: 'CALCULATED', totalGrossDelta: '0', payableSettlementAmount: '0' });
+  const normal = after.bordrolar.find((item) => item.accrualId === baselineNormal.accrualId)!;
+  expect(normal.status).toBe('CALCULATED');
+  expect(normal.devredenPekGelen).toEqual(baselineNormal.devredenPekGelen);
+  expect(normal.netOdeme).toBe(baselineNormal.netOdeme);
+});

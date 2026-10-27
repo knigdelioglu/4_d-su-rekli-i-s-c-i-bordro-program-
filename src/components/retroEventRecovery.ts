@@ -23,7 +23,8 @@ export function retroPaymentEventNeedsReplay(
   batch: RetroAdjustmentBatch,
   payroll: BordroKaydi | undefined,
   allocations: RetroAllocation[],
-  payrolls: BordroKaydi[]
+  payrolls: BordroKaydi[],
+  options: { allowSourceReplay?: boolean } = {}
 ): RetroRecoveryAssessment {
   const blockedSourcePeriods = [...new Set(allocations
     .filter((allocation) => allocation.batchId === batch.id)
@@ -36,7 +37,9 @@ export function retroPaymentEventNeedsReplay(
     ));
 
   if (batch.status === 'FINALIZED' || CLOSED_SETTLEMENTS.includes(batch.settlementStatus ?? '')) {
-    return { eligible: false, blockedSourcePeriods: [] };
+    return { eligible: false, blockedSourcePeriods: [], reason: batch.status === 'FINALIZED'
+      ? 'Geriye dönük fark kesinleşmiş. Aynı kayıt değiştirilemez; doğrulanmış geçmiş için yeni bir düzeltme revizyonu gerekir.'
+      : 'Geriye dönük fark ödenmiş veya mahsupla kapatılmış. Aynı kayıt yeniden hesaplanamaz; yeni bir düzeltme revizyonu gerekir.' };
   }
 
   const linkedEventMatches = payroll === undefined || (
@@ -59,7 +62,7 @@ export function retroPaymentEventNeedsReplay(
       reason: 'Ödeme olayı kesinleşmiş; düzeltme için yeni bir retro revision/batch oluşturun.',
     };
   }
-  if (blockedSourcePeriods.length) {
+  if (blockedSourcePeriods.length && !options.allowSourceReplay) {
     return {
       eligible: false,
       blockedSourcePeriods,

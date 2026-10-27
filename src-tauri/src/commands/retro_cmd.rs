@@ -114,3 +114,20 @@ pub fn create_retro_payment(
     })?;
     PayrollService::create_retro_payment(&conn, &batch, &allocations, &payment_period_id, sequence)
 }
+
+#[tauri::command]
+pub fn recover_retro_batch(
+    license: State<'_, crate::license::LicenseRuntime>,
+    db: State<'_, DbState>,
+    batch_id: String,
+) -> Result<Option<BordroKaydi>> {
+    crate::license::require_allowed(
+        license.data_dir(),
+        "geriye dönük fark zincirini yeniden hesaplama",
+    )
+    .map_err(DomainError::ValidationError)?;
+    let conn = db.lock().map_err(|error| {
+        DomainError::DatabaseError(format!("SQLite bağlantı kilidi alınamadı: {error}"))
+    })?;
+    PayrollService::recover_retro_batch(&conn, &batch_id)
+}

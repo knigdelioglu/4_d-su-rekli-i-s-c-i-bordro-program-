@@ -80,6 +80,7 @@ fn configure_builder<R: tauri::Runtime>(
             commands::calculate_retro_preview,
             commands::save_retro_adjustment_batch,
             commands::create_retro_payment,
+            commands::recover_retro_batch,
             commands::get_license_status,
             commands::activate_license,
             commands::refresh_license_status,
