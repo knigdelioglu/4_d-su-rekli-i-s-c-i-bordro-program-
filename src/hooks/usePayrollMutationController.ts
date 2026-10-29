@@ -85,7 +85,7 @@ export interface PayrollMutationControllerOptions {
   commitAuthoritativePayload?: (
     update: (current: PayrollStorageDto) => PayrollStorageDto | Promise<PayrollStorageDto>
   ) => Promise<void>;
-  loadData: () => Promise<void>;
+  loadData: () => Promise<void | boolean>;
 }
 
 function sameRevisionDefinition(
@@ -519,16 +519,22 @@ export function usePayrollMutationController({
   const handleDeletePersonel = async (personelId: string) => {
     if (isNative) {
       await tauriBridge.deletePersonnel(personelId);
-      await loadData();
+      const loaded = await loadData();
+      if (loaded === false) {
+        throw new Error('Personel silindi, ancak liste yenilenemedi. Verileri yeniden yükleyin.');
+      }
       return;
     }
-    const impact = await evaluateBrowserMutations({ kind: 'PERSON', personnelId: personelId });
-    if (impact.affectedRetroBatches.length > 0) {
-      throw new Error(
-        'Retro batch tarihçesi bulunan personel silinemez; audit ledger korunmalıdır.'
-      );
-    }
-    updateAuthoritativePayload((current) => ({
+    const checkImpact = async (dataset?: PayrollDatasetSnapshot) => {
+      const impact = await evaluateBrowserMutations({ kind: 'PERSON', personnelId: personelId }, dataset);
+      if (impact.affectedRetroBatches.length > 0) {
+        throw new Error(
+          'Retro batch tarihçesi bulunan personel silinemez; audit ledger korunmalıdır.'
+        );
+      }
+      return impact;
+    };
+    const deleteFromPayload = (current: PayrollStorageDto, impact: MutationImpact) => ({
       ...current,
       personeller: current.personeller.filter((person) => person.id !== personelId),
       bordrolar: applyBrowserPayrollImpact(current.bordrolar, impact).filter(
@@ -538,7 +544,15 @@ export function usePayrollMutationController({
       puantajlar: current.puantajlar.filter((attendance) => attendance.personelId !== personelId),
       taxOpenings: current.taxOpenings.filter((opening) => opening.personnelId !== personelId),
       sickLeaveRecords: current.sickLeaveRecords.filter((record) => record.personnelId !== personelId),
-    }));
+    });
+    if (commitAuthoritativePayload) {
+      await commitAuthoritativePayload(async (current) =>
+        deleteFromPayload(current, await checkImpact(payrollDatasetFromPayload(current)))
+      );
+      return;
+    }
+    const impact = await checkImpact();
+    updateAuthoritativePayload((current) => deleteFromPayload(current, impact));
   };
 
   const handleDeleteDonem = async (periodId: string) => {

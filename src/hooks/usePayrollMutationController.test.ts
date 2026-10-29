@@ -5,6 +5,73 @@ import { mergeBrowserTaxOpening, usePayrollMutationController } from './usePayro
 import type { PayrollMutationControllerOptions } from './usePayrollMutationController';
 import type { PayrollStorageDto } from '../services/payrollEngine/decimalBoundary';
 import type { PayrollBoundaryPayroll, PayrollEngine, PayrollDatasetSnapshot } from '../services/payrollEngine/types';
+import { queueAuthoritativePayloadCommit } from '../services/storage/authoritativePayloadCommit';
+import { tauriBridge } from '../services/tauriBridge';
+
+test('native personnel deletion waits for every database deletion and list refresh', async () => {
+  const originalDelete = tauriBridge.deletePersonnel;
+  const events: string[] = [];
+  let controller!: ReturnType<typeof usePayrollMutationController>;
+  let refreshResult = true;
+  tauriBridge.deletePersonnel = async (id) => { events.push(`delete:${id}`); };
+  function Harness() {
+    controller = usePayrollMutationController({
+      isNative: true, payrollDataset: {} as PayrollDatasetSnapshot,
+      loadData: async () => { events.push('refresh'); return refreshResult; },
+    } as unknown as PayrollMutationControllerOptions);
+    return null;
+  }
+  try {
+    renderToString(createElement(Harness));
+    for (let i = 0; i < 6; i++) await controller.handleDeletePersonel(`person-${i}`);
+    expect(events).toEqual(Array.from({ length: 6 }, (_, i) => [`delete:person-${i}`, 'refresh']).flat());
+    refreshResult = false;
+    await expect(controller.handleDeletePersonel('person-6')).rejects.toThrow('Personel silindi, ancak liste yenilenemedi');
+  } finally {
+    tauriBridge.deletePersonnel = originalDelete;
+  }
+});
+
+test('consecutive personnel deletions are saved in order and use the latest dataset', async () => {
+  const ids = Array.from({ length: 6 }, (_, index) => `person-${index}`);
+  let payload = {
+    exportedAt: '', personeller: ids.map((id) => ({ id })), donemler: [],
+    kurumDegerleriMap: {}, puantajlar: [], bordrolar: [], taxOpenings: [],
+    sickLeaveRecords: [], annualPayrollParameters: [], compensationRevisions: [],
+    compensationRevisionOverrides: [], retroBatches: [], retroAllocations: [],
+  } as unknown as PayrollStorageDto;
+  let saved = payload;
+  let generation = 0;
+  const observedCounts: number[] = [];
+  const queue = { current: Promise.resolve() };
+  let controller!: ReturnType<typeof usePayrollMutationController>;
+  function Harness() {
+    controller = usePayrollMutationController({
+      isNative: false, authoritativePayload: payload,
+      payrollDataset: {} as PayrollDatasetSnapshot,
+      donemler: [], puantajlar: [], bordrolar: [], sickLeaveRecords: [],
+      compensationRevisions: [], compensationRevisionOverrides: [], retroBatches: [],
+      payrollEngine: { evaluateMutationPolicy: async (_mutation, dataset) => {
+        observedCounts.push(dataset.personnel.length);
+        return { affectedPayrolls: [], blockedByFinalized: [], affectedRetroBatches: [], blockedByFinalizedRetroBatches: [] };
+      } } as PayrollEngine,
+      updateAuthoritativePayload: () => { throw new Error('Expected durable commit'); },
+      commitAuthoritativePayload: (update) => queueAuthoritativePayloadCommit(queue, {
+        getCurrent: () => payload, getGeneration: () => generation,
+        markDirty: () => { generation++; },
+        persist: async (next) => { saved = next; },
+        publish: (next) => { payload = next; }, missingPayloadMessage: 'missing',
+      }, update),
+      loadData: async () => {},
+    } as PayrollMutationControllerOptions);
+    return null;
+  }
+  renderToString(createElement(Harness));
+  await Promise.all(ids.map((id) => controller.handleDeletePersonel(id)));
+  expect(observedCounts).toEqual([6, 5, 4, 3, 2, 1]);
+  expect(payload.personeller).toEqual([]);
+  expect(saved.personeller).toEqual([]);
+});
 
 describe('browser tax opening mutation', () => {
   test('persists value and effective period as one canonical pair', () => {

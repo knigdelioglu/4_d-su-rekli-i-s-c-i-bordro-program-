@@ -208,6 +208,38 @@ mod ipc_tests {
     }
 
     #[test]
+    fn consecutive_personnel_deletions_through_tauri_ipc() {
+        let state: DbState = Arc::new(Mutex::new(db::create_in_memory_connection().unwrap()));
+        let app = configure_builder(mock_builder(), state)
+            .build(mock_context(noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let tc_numbers = ["10000000146", "10000000214", "10000000382", "10000000450", "10000000528", "10000000696"];
+        for (index, tc_no) in tc_numbers.iter().enumerate() {
+            let id = format!("delete-{index}");
+            let person = Personel {
+                id: id.clone(), tcNo: (*tc_no).into(), ad: "Test".into(),
+                soyad: "Personel".into(), grup: "1. Grup".into(), unvan: None,
+                sgkSicilNo: String::new(), iban: "TR330006100519786457841326".into(),
+                hizmetYili: 1, aciklama: None, devirKumulatifGvMatrahi: None,
+                devirKumulatifGvMatrahiYili: None, devirKumulatifGvMatrahiBaslangicAyi: None,
+                devirKumulatifAsgariGvMatrahi: None, devirKumulatifAsgariGvMatrahiYili: None,
+                kesintiler: Some(PersonelKesintileri::default()),
+            };
+            assert_eq!(invoke(&webview, "save_personnel", json!({ "personel": person })), Ok(Value::Null));
+        }
+        for index in 0..6 {
+            let id = format!("delete-{index}");
+            assert_eq!(invoke(&webview, "delete_personnel", json!({ "id": id })), Ok(Value::Null));
+            let personnel = invoke(&webview, "get_personnel_list", json!({})).unwrap();
+            assert_eq!(personnel.as_array().unwrap().len(), 5 - index);
+            assert!(!personnel.as_array().unwrap().iter().any(|p| p["id"] == id));
+        }
+    }
+
+    #[test]
     fn registered_tauri_ipc_commands_round_trip_storage_through_sqlite() {
         let connection = db::create_in_memory_connection()
             .expect("in-memory SQLite should initialize with migrations");

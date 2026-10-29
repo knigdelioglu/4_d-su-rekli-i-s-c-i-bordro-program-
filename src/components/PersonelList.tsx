@@ -2,7 +2,7 @@
  * Section 2: Personel Bilgileri Listesi
  */
 
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   UserPlus,
   Search,
@@ -44,6 +44,9 @@ export const PersonelList: React.FC<PersonelListProps> = ({
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [personelToEdit, setPersonelToEdit] = useState<Personel | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteInProgress = useRef(false);
 
   const filteredPersoneller = personeller.filter((p) => matchesPersonSearch(p, search));
 
@@ -58,12 +61,24 @@ export const PersonelList: React.FC<PersonelListProps> = ({
   };
 
   const handleDelete = async (id: string) => {
+    if (deleteInProgress.current) return;
+    deleteInProgress.current = true;
+    setIsDeleting(true);
+    setDeleteError(null);
     try {
       await onDeletePersonel(id);
       setConfirmDeleteId(null);
     } catch (err) {
-      alert(`Personel silinemedi: ${describeError(err)}`);
+      setDeleteError(describeError(err));
+    } finally {
+      deleteInProgress.current = false;
+      setIsDeleting(false);
     }
+  };
+
+  const confirmDelete = (id: string) => {
+    setDeleteError(null);
+    setConfirmDeleteId(id);
   };
 
   return (
@@ -168,7 +183,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
                       <Edit2 className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => setConfirmDeleteId(p.id)}
+                      onClick={() => confirmDelete(p.id)}
                       title="Sil"
                       className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                     >
@@ -296,7 +311,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
                           <Edit2 className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => setConfirmDeleteId(p.id)}
+                          onClick={() => confirmDelete(p.id)}
                           title="Sil"
                           className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
                         >
@@ -324,7 +339,7 @@ export const PersonelList: React.FC<PersonelListProps> = ({
       {confirmDeleteId && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto"
-          onClick={() => setConfirmDeleteId(null)}
+          onClick={() => { if (!isDeleting) setConfirmDeleteId(null); }}
         >
           <div
             className="bg-white rounded-2xl p-6 max-w-sm w-full border border-slate-200 shadow-xl text-center space-y-4 animate-in fade-in zoom-in-95 my-auto"
@@ -339,18 +354,21 @@ export const PersonelList: React.FC<PersonelListProps> = ({
                 Bu personeli silmek istediğinize emin misiniz? İlgili döneme ait puantaj verileri de etkilenecektir.
               </p>
             </div>
+            {deleteError && <p role="alert" className="text-xs text-rose-700">{deleteError}</p>}
             <div className="flex gap-2 justify-center pt-2">
               <button
                 onClick={() => setConfirmDeleteId(null)}
+                disabled={isDeleting}
                 className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
               >
                 Vazgeç
               </button>
               <button
                 onClick={() => handleDelete(confirmDeleteId)}
+                disabled={isDeleting}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-colors cursor-pointer"
               >
-                Evet, Sil
+                {isDeleting ? 'Siliniyor…' : 'Evet, Sil'}
               </button>
             </div>
           </div>
