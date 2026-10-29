@@ -777,6 +777,9 @@ async function loadBrowserPolicy(
         ? { kind: 'ACTIVE', asOfDate: request.scope.projectionDate, version: projection }
         : { kind: 'MISSING', asOfDate: request.scope.projectionDate },
       initialBaselineRequired: ordered.length === 0,
+      workPremiumGroups: payload.isPrimiGruplari?.every((group) => typeof group.aktif === 'boolean')
+        ? payload.isPrimiGruplari.map((group) => ({ ...group, aktif: group.aktif! }))
+        : null,
       nonAuthoritativePrefill: legacySettingsToPolicyPrefillOnly(payload, period.id),
     });
   } catch (error) {

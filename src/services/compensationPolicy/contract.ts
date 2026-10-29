@@ -300,6 +300,8 @@ export interface CompensationPolicyLoadData {
     | { kind: 'MISSING'; asOfDate: string };
   /** Empty timelines need a user-confirmed baseline; the loader never creates one. */
   initialBaselineRequired: boolean;
+  /** Current settings are advisory until the initial policy is confirmed. */
+  workPremiumGroups?: CompensationPolicyStateWire['isPrimiGruplari'] | null;
   nonAuthoritativePrefill:
     | {
         kind: 'AVAILABLE';

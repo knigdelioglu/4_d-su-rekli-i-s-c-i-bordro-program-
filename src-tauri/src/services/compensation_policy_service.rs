@@ -209,6 +209,7 @@ pub struct CompensationPolicyLoadData {
     pub timeline: CompensationPolicyTimelineData,
     pub activePolicyProjection: ActivePolicyProjection,
     pub initialBaselineRequired: bool,
+    pub workPremiumGroups: Option<Vec<CompensationPolicyGroup>>,
     pub nonAuthoritativePrefill: CompensationPolicyPrefill,
 }
 
@@ -897,8 +898,51 @@ impl CompensationPolicyService {
                 },
             ),
             initialBaselineRequired,
+            workPremiumGroups: Self::current_work_premium_groups(conn)?,
             nonAuthoritativePrefill: Self::non_authoritative_prefill(conn, &period)?,
         })
+    }
+
+    fn current_work_premium_groups(
+        conn: &Connection,
+    ) -> std::result::Result<Option<Vec<CompensationPolicyGroup>>, CompensationPolicyApiError> {
+        let Some(raw) = SettingsRepository::get_app_setting(conn, "is_primi_gruplari")
+            .map_err(map_domain_error)?
+        else {
+            return Ok(None);
+        };
+        let Ok(values) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return Ok(None);
+        };
+        let Some(groups) = values.as_array() else {
+            return Ok(None);
+        };
+        if groups.is_empty()
+            || groups.iter().any(|group| {
+                !group.get("id").is_some_and(serde_json::Value::is_string)
+                    || !group.get("ad").is_some_and(serde_json::Value::is_string)
+                    || !group.get("oran").is_some_and(serde_json::Value::is_string)
+                    || !group
+                        .get("aktif")
+                        .is_some_and(serde_json::Value::is_boolean)
+            })
+        {
+            return Ok(None);
+        }
+        let Ok(groups) = serde_json::from_value::<Vec<IsPrimiGrupItem>>(values) else {
+            return Ok(None);
+        };
+        Ok(Some(
+            groups
+                .into_iter()
+                .map(|group| CompensationPolicyGroup {
+                    id: group.id,
+                    ad: group.ad,
+                    oran: group.oran,
+                    aktif: group.aktif,
+                })
+                .collect(),
+        ))
     }
 
     fn non_authoritative_prefill(

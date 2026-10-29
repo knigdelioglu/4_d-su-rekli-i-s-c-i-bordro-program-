@@ -1667,3 +1667,41 @@ fn linked_rounding_repair_rolls_back_both_versions_if_the_second_insert_fails() 
         originals
     );
 }
+
+#[test]
+fn native_initial_policy_uses_saved_groups_even_without_period_settings() {
+    let conn = create_in_memory_connection().unwrap();
+    PeriodRepository::save(&conn, &period()).unwrap();
+    set_app_setting_with_connection(&conn, "is_primi_gruplari", r#"[{"id":"one","ad":"Bir","oran":"9","aktif":true},{"id":"two","ad":"İki","oran":"8","aktif":true},{"id":"three","ad":"Üç","oran":"7","aktif":true}]"#).unwrap();
+    let loaded = CompensationPolicyService::load(
+        &conn,
+        &CompensationPolicyLoadRequest {
+            scope: scope(),
+            nonAuthoritativePrefill: None,
+        },
+    );
+    let CompensationPolicyOperationResult::Success { value, .. } = loaded else {
+        panic!("load failed");
+    };
+    assert!(matches!(
+        value.nonAuthoritativePrefill,
+        CompensationPolicyPrefill::Unavailable { .. }
+    ));
+    let groups = value.workPremiumGroups.unwrap();
+    assert_eq!(groups.len(), 3);
+    let mut state = policy_state(dec!(100), dec!(5));
+    state.isPrimiGruplari = groups;
+    let saved = preview_and_save_policy(
+        &conn,
+        &period(),
+        CompensationPolicyWriteOperation::InitialBaseline {
+            effectiveFrom: period().baslangicTarihi,
+            state,
+            roadRoundingMode: RoadRoundingMode::PeriodTotal,
+            reason: "Başlangıç".into(),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+        },
+    );
+    assert_eq!(saved.state.isPrimiGruplari.len(), 3);
+    assert_eq!(saved.state.isPrimiGruplari[0].oran, dec!(9));
+}

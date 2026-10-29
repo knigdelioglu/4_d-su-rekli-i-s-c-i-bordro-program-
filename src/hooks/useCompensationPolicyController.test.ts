@@ -5,6 +5,7 @@ import type {
   CompensationPolicyVersionWire,
 } from '../services/compensationPolicy/contract';
 import { draftForCompensationPolicyLoad } from './useCompensationPolicyController';
+import { draftToCompensationPolicyOperation } from '../components/Settings/compensationPolicyDecimal';
 
 const scope: CompensationPolicyLoadData['scope'] = {
   institutionScope: 'CURRENT_INSTITUTION',
@@ -141,4 +142,25 @@ describe('draftForCompensationPolicyLoad', () => {
     expect(draft.gunlukVasitaYol).toBe('136,44');
     expect(draft.gunlukTabanUcret).toBe('2616,26');
   });
+});
+
+test('initial draft retains current groups when period settings are unavailable or incomplete', () => {
+  const loaded = loadWithPrefill({});
+  loaded.workPremiumGroups = state.isPrimiGruplari;
+  loaded.nonAuthoritativePrefill = { kind: 'UNAVAILABLE', reason: 'NO_LEGACY_SETTINGS' };
+  let draft = draftForCompensationPolicyLoad(scope, loaded);
+  expect(draft.isPrimiGruplari).toEqual(state.isPrimiGruplari);
+  expect(draft.gunlukTabanUcret).toBe('');
+  loaded.nonAuthoritativePrefill = { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
+  draft = draftForCompensationPolicyLoad(scope, loaded);
+  expect(draft.isPrimiGruplari).toEqual(state.isPrimiGruplari);
+  expect(draft.gunlukYemek).toBe('');
+  Object.assign(draft, {
+    gunlukTabanUcret: '100', gunlukYemek: '10', birlestirilmisSosyalYardim: '10',
+    gunlukVasitaYol: '10', giyimYardimi: '10', hizmetZammiBirimi: '10',
+    geceCalismaPrimiYuzde: '0', geceCalismaTatiliPrimiYuzde: '0', reason: 'Başlangıç',
+  });
+  const operation = draftToCompensationPolicyOperation(draft);
+  expect(operation.ok).toBe(true);
+  if (operation.ok) expect(operation.operation.state.isPrimiGruplari).toEqual(state.isPrimiGruplari);
 });

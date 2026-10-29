@@ -87,6 +87,13 @@ export function draftForCompensationPolicyLoad(
   loaded: CompensationPolicyLoadData
 ): Draft {
   const draft = draftForScope(scope, loaded.initialBaselineRequired);
+  if (loaded.initialBaselineRequired && loaded.workPremiumGroups) {
+    try {
+      draft.isPrimiGruplari = compensationPolicyStateToDraft({ isPrimiGruplari: loaded.workPremiumGroups }).isPrimiGruplari;
+    } catch {
+      // Invalid groups remain empty and must be corrected in settings.
+    }
+  }
   const state = loaded.activePolicyProjection.kind === 'ACTIVE'
     ? loaded.activePolicyProjection.version.state
     : loaded.initialBaselineRequired && loaded.nonAuthoritativePrefill.kind === 'AVAILABLE'
@@ -105,6 +112,8 @@ export function draftForCompensationPolicyLoad(
     return {
       ...draft,
       ...compensationPolicyStateToDraft(state),
+      ...(loaded.initialBaselineRequired && loaded.workPremiumGroups && draft.isPrimiGruplari.length > 0
+        ? { isPrimiGruplari: draft.isPrimiGruplari } : {}),
       ...(activeVersion ? {
         boundaryScope: activeVersion.boundaryScope,
         roadRoundingMode: activeVersion.roadRoundingMode,
