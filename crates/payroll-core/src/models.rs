@@ -5,6 +5,34 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// Serde buffers internally tagged enum content as `Unit` for JSON null.
+// rust_decimal's str_option visitor does not handle that representation.
+mod nullable_policy_decimal {
+    use rust_decimal::Decimal;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::str::FromStr;
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Decimal>, D::Error> {
+        let raw = Option::<String>::deserialize(deserializer)?;
+        match raw.as_deref() {
+            None | Some("") => Ok(None),
+            Some(value) => Decimal::from_str(value)
+                .or_else(|_| Decimal::from_scientific(value))
+                .map(Some)
+                .map_err(serde::de::Error::custom),
+        }
+    }
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<Decimal>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        rust_decimal::serde::str_option::serialize(value, serializer)
+    }
+}
+
 /// SQLite/JSON-safe upper boundary used to represent the open-ended final
 /// income-tax bracket. The calculation layer treats the final bracket as
 /// unbounded, so this is only a persistence-safe sentinel.
@@ -764,7 +792,7 @@ pub struct CompensationPolicyState {
     pub hizmetZammiBirimi: Decimal,
     /// Required nullable legacy/global rate. The new engine does not fall
     /// back to it when a personnel group is missing.
-    #[serde(with = "rust_decimal::serde::str_option")]
+    #[serde(with = "nullable_policy_decimal")]
     pub isPrimiYuzde: Option<Decimal>,
     pub isPrimiGruplari: Vec<CompensationPolicyGroup>,
     #[serde(with = "rust_decimal::serde::str")]
@@ -772,9 +800,9 @@ pub struct CompensationPolicyState {
     #[serde(with = "rust_decimal::serde::str")]
     pub geceCalismaTatiliPrimiYuzde: Decimal,
     /// Required nullable values: null means absent; "0" means explicit zero.
-    #[serde(with = "rust_decimal::serde::str_option")]
+    #[serde(with = "nullable_policy_decimal")]
     pub ekOdeme: Option<Decimal>,
-    #[serde(with = "rust_decimal::serde::str_option")]
+    #[serde(with = "nullable_policy_decimal")]
     pub digerGelirVarsayilan: Option<Decimal>,
     /// None preserves the historical monthly-income behavior for older
     /// policy versions and newly migrated backups.

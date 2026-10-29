@@ -219,6 +219,26 @@ async function previewBaseline(periodId: string) {
   return { scope, operation, preview: preview.value };
 }
 
+async function exerciseOptionalDecimalCombinations(mask: number) {
+    const prepared = await prepareBaseline();
+    const state = { ...prepared.operation.state,
+      isPrimiYuzde: mask & 1 ? '0' : null,
+      ekOdeme: mask & 2 ? '0' : null,
+      digerGelirVarsayilan: mask & 4 ? '0' : null,
+    };
+    const operation = { ...prepared.operation, state };
+    const api = getCompensationPolicyApi();
+    const preview = await api.preview({ scope: prepared.scope, operation });
+    if (preview.ok === false) throw new Error(`Optional preview ${mask}: ${preview.error.message}`);
+    const saved = await api.save({ scope: prepared.scope, operation, previewToken: preview.value.previewToken,
+      initialBaselineConfirmation: { confirmed: true, effectiveFrom: operation.effectiveFrom } });
+    if (saved.ok === false) throw new Error(`Optional save ${mask}: ${saved.error.message}`);
+    const loaded = await api.load({ scope: prepared.scope });
+    if (!loaded.ok || loaded.value.activePolicyProjection.kind !== 'ACTIVE') throw new Error(`Optional reload ${mask} failed`);
+    const actual = loaded.value.activePolicyProjection.version.state;
+    return { isPrimiYuzde: actual.isPrimiYuzde, ekOdeme: actual.ekOdeme, digerGelirVarsayilan: actual.digerGelirVarsayilan };
+}
+
 async function saveBaseline(prepared: Awaited<ReturnType<typeof previewBaseline>>) {
   const request: CompensationPolicySaveRequest = {
     scope: prepared.scope,
@@ -1852,6 +1872,7 @@ declare global {
     };
     __compensationPolicyBrowserApiTest: {
       loadArchivedSeptemberPrefill(): ReturnType<typeof loadArchivedSeptemberPrefill>;
+      exerciseOptionalDecimalCombinations(mask: number): ReturnType<typeof exerciseOptionalDecimalCombinations>;
       exerciseLinkedRoundingRepair(): ReturnType<typeof exerciseLinkedRoundingRepair>;
       exerciseRoadRoundingRecovery(): ReturnType<typeof exerciseRoadRoundingRecovery>;
       exerciseFuturePeriodRoundingConflict(): ReturnType<typeof exerciseFuturePeriodRoundingConflict>;
@@ -1893,6 +1914,7 @@ window.__compensationAcceptanceBrowserApp = {
 
 window.__compensationPolicyBrowserApiTest = {
   loadArchivedSeptemberPrefill,
+  exerciseOptionalDecimalCombinations,
   exerciseLinkedRoundingRepair,
   exerciseRoadRoundingRecovery,
   exerciseFuturePeriodRoundingConflict,

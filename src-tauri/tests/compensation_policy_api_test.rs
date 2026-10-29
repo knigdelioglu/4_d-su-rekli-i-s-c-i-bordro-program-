@@ -1705,3 +1705,71 @@ fn native_initial_policy_uses_saved_groups_even_without_period_settings() {
     assert_eq!(saved.state.isPrimiGruplari.len(), 3);
     assert_eq!(saved.state.isPrimiGruplari[0].oran, dec!(9));
 }
+
+#[test]
+fn native_json_preview_and_save_preserve_all_optional_decimal_combinations() {
+    for mask in 0..8 {
+        let conn = create_in_memory_connection().unwrap();
+        PeriodRepository::save(&conn, &period()).unwrap();
+        let mut state = policy_state(dec!(100), dec!(5));
+        state.isPrimiYuzde = (mask & 1 != 0).then_some(dec!(0));
+        state.ekOdeme = (mask & 2 != 0).then_some(dec!(0));
+        state.digerGelirVarsayilan = (mask & 4 != 0).then_some(dec!(0));
+        let operation = CompensationPolicyWriteOperation::InitialBaseline {
+            effectiveFrom: period().baslangicTarihi,
+            state: state.clone(),
+            roadRoundingMode: RoadRoundingMode::PeriodTotal,
+            reason: "Test".into(),
+            boundaryScope: CompensationBoundaryScope::FullEarning,
+        };
+        // Tauri IPC deserializes JSON values, including an internally tagged operation.
+        let request: CompensationPolicyPreviewRequest = serde_json::from_value(serde_json::json!({
+            "scope": scope(), "operation": operation
+        }))
+        .expect("preview IPC request must accept null");
+        let CompensationPolicyOperationResult::Success { value: preview, .. } =
+            CompensationPolicyService::preview(&conn, &request)
+        else {
+            panic!("preview failed for mask {mask}");
+        };
+        let save: CompensationPolicySaveRequest = serde_json::from_value(serde_json::json!({
+            "scope": scope(), "operation": request.operation, "previewToken": preview.previewToken,
+            "initialBaselineConfirmation": { "confirmed": true, "effectiveFrom": period().baslangicTarihi }
+        })).expect("save IPC request must accept null");
+        let CompensationPolicyOperationResult::Success { value: saved, .. } =
+            CompensationPolicyService::save(&conn, &save)
+        else {
+            panic!("save failed for mask {mask}");
+        };
+        assert_eq!(saved.version.state.isPrimiYuzde, state.isPrimiYuzde);
+        assert_eq!(saved.version.state.ekOdeme, state.ekOdeme);
+        assert_eq!(
+            saved.version.state.digerGelirVarsayilan,
+            state.digerGelirVarsayilan
+        );
+        let loaded = CompensationPolicyRepository::get_all_versions(&conn).unwrap();
+        assert_eq!(loaded[0].state, state);
+    }
+}
+
+#[test]
+fn native_policy_json_rejects_numeric_and_missing_optional_decimal_fields() {
+    let request = serde_json::json!({ "scope": scope(), "operation": baseline() });
+    for field in ["isPrimiYuzde", "ekOdeme", "digerGelirVarsayilan"] {
+        let mut numeric = request.clone();
+        numeric["operation"]["state"][field] = serde_json::json!(0);
+        assert!(
+            serde_json::from_value::<CompensationPolicyPreviewRequest>(numeric).is_err(),
+            "numeric {field}"
+        );
+        let mut missing = request.clone();
+        missing["operation"]["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove(field);
+        assert!(
+            serde_json::from_value::<CompensationPolicyPreviewRequest>(missing).is_err(),
+            "missing {field}"
+        );
+    }
+}

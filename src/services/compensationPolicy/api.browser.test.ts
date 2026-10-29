@@ -138,6 +138,20 @@ describe('browser CompensationPolicyApi IndexedDB integration', () => {
     expect(loaded.beforeRevision).toBe(loaded.afterRevision);
   });
 
+  test('previews, saves and reloads every null and explicit zero combination', async () => {
+    for (let mask = 0; mask < 8; mask++) {
+      const page = await openPolicyApiTab();
+      const result = await page.evaluate((value) => window.__compensationPolicyBrowserApiTest.exerciseOptionalDecimalCombinations(value), mask);
+      expect(result).toEqual({
+        isPrimiYuzde: mask & 1 ? '0' : null,
+        ekOdeme: mask & 2 ? '0' : null,
+        digerGelirVarsayilan: mask & 4 ? '0' : null,
+      });
+      await page.close();
+      pages.splice(pages.indexOf(page), 1);
+    }
+  });
+
   test('blocks a January rounding-mode change, exposes an invalid legacy timeline, and repairs it through same-date correction', async () => {
     const page = await openPolicyApiTab();
     const result = await page.evaluate(() =>
