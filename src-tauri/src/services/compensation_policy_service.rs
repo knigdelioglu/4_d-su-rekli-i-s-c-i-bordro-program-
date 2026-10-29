@@ -915,6 +915,16 @@ impl CompensationPolicyService {
                 reason: "NO_LEGACY_SETTINGS".into(),
             });
         };
+        let mut settings = settings;
+        if let Some(groups_json) = SettingsRepository::get_app_setting(conn, "is_primi_gruplari")
+            .map_err(map_domain_error)?
+        {
+            let groups: serde_json::Value =
+                serde_json::from_str(&groups_json).unwrap_or(serde_json::Value::Null);
+            if let Some(object) = settings.as_object_mut() {
+                object.insert("isPrimiGruplari".into(), groups);
+            }
+        }
         Ok(Self::legacy_settings_to_policy_prefill_only(
             &settings, &period.id,
         ))

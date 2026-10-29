@@ -196,14 +196,15 @@ export function legacySettingsToPolicyPrefillOnly(
   for (const field of [...requiredDecimalFields, ...nullableDecimalFields]) {
     (state as Record<string, unknown>)[field] = settings[field];
   }
-  if (!Array.isArray(settings.isPrimiGruplari) || settings.isPrimiGruplari.length === 0 || settings.isPrimiGruplari.some((group) => {
+  const groups = payload.isPrimiGruplari ?? settings.isPrimiGruplari;
+  if (!Array.isArray(groups) || groups.length === 0 || groups.some((group) => {
     if (!group || typeof group !== 'object') return true;
     const value = group as Record<string, unknown>;
     return typeof value.id !== 'string' || typeof value.ad !== 'string' || typeof value.oran !== 'string' || typeof value.aktif !== 'boolean';
   })) {
     return { kind: 'UNAVAILABLE', reason: 'INCOMPLETE_SETTINGS' };
   }
-  state.isPrimiGruplari = settings.isPrimiGruplari.map((group) => {
+  state.isPrimiGruplari = groups.map((group) => {
     const value = group as Record<string, unknown>;
     return {
       id: value.id as string,

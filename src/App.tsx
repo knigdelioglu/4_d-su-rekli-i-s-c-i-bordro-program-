@@ -989,6 +989,7 @@ export default function App() {
                 {aktifDonem && activeTab === 'banka' && <BankaListesi aktifDonem={aktifDonem} personeller={personeller} bordrolar={bordrolar} />}
                 {aktifDonem && activeTab === 'sgkKontrol' && (
                   <SgkPrimKontrolu
+                    puantajlar={puantajlar}
                     aktifDonem={aktifDonem}
                     personeller={personeller}
                     bordrolar={bordrolar}

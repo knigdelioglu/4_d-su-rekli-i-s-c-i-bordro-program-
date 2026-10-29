@@ -1,3 +1,4 @@
+import { bulkPayrollJobs } from '../services/bulkPayrollJob';
 import { describe, expect, test } from 'bun:test';
 import { useBackupController } from './useBackupController';
 import { tauriBridge } from '../services/tauriBridge';
@@ -60,6 +61,8 @@ describe('useBackupController - sample data reset', () => {
   });
 
   test('executeResetSampleData in browser persists sample data, commits state, and calls onSuccess', async () => {
+    await bulkPayrollJobs.run({ version: 1, id: 'old', periodId: 'old', accrualType: 'NORMAL', status: 'paused', items: [] }, async () => ({ status: 'success' }));
+    expect(bulkPayrollJobs.getSnapshot().job?.status).toBe('completed');
     let savedPayload: string | null = null;
     let authoritativePayloadSet: unknown = null;
     let successMessage: string | null = null;
@@ -101,6 +104,7 @@ describe('useBackupController - sample data reset', () => {
 
     try {
       await controller.executeResetSampleData();
+    expect(bulkPayrollJobs.getSnapshot().job).toBeNull();
 
       expect(savedPayload !== null).toBe(true);
       expect((savedPayload ?? '').includes('"backupVersion":')).toBe(true);

@@ -67,7 +67,7 @@ export function createPuantajBulkPlan(args: {
       const coveredByReport = sickLeaveRecords.some((record) =>
         record.personnelId === person.id && record.startDate <= date && record.endDate >= date
       );
-      if (previousCode === code && !(coveredByReport && previousCode !== 'R')) continue;
+      if (existing && previousCode === code && !(coveredByReport && previousCode !== 'R')) continue;
       const status: PuantajBulkRowStatus = coveredByReport && previousCode !== 'R'
         ? 'REPORT_MISMATCH'
         : previousCode === 'R' || coveredByReport

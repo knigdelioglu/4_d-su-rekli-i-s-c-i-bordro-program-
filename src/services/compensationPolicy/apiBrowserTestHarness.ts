@@ -86,7 +86,8 @@ async function loadArchivedSeptemberPrefill() {
     compensationRevisionOverrides: [],
     retroBatches: [],
     retroAllocations: [],
-    legacyInstitutionSettings: { [period.id]: archivedSettings },
+    isPrimiGruplari: archivedSettings.isPrimiGruplari,
+    legacyInstitutionSettings: { [period.id]: { ...archivedSettings, isPrimiGruplari: undefined } },
   }) as unknown as PayrollStorageDto;
   await browserPayrollStore.savePayload(serializePayrollStorage(payload));
 

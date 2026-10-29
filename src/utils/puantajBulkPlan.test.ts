@@ -117,3 +117,11 @@ describe('createPuantajBulkPlan', () => {
     });
   });
 });
+
+test('creates a missing attendance even when the chosen code matches the displayed default', () => {
+  const args = { ...period, personnel: [person('a')], attendances: [], sickLeaveRecords: [], dates: ['2027-01-15'], code: 'Ç' as const };
+  const plan = createPuantajBulkPlan(args);
+  expect(plan.rows[0].status).toBe('APPLY');
+  expect(plan.updates[0].gunler['2027-01-15']).toBe('Ç');
+  expect(createPuantajBulkPlan({ ...args, attendances: plan.updates }).updates).toHaveLength(0);
+});

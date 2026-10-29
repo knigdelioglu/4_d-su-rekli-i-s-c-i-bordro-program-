@@ -78,6 +78,12 @@ export class BulkPayrollJobStore {
       this.listeners.forEach((listener) => listener());
     }
   }
+  clearForDatasetReplacement() {
+    this.storage()?.setItem(KEY, '');
+    this.loaded = true;
+    this.snapshot = { ...empty, busy: this.snapshot.busy };
+    this.listeners.forEach((listener) => listener());
+  }
   close() {
     if (this.getSnapshot().busy || !this.snapshot.job) return;
     this.publish({ ...this.snapshot.job, status: 'completed' }, false);

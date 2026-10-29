@@ -48,3 +48,11 @@ describe('bulk payroll lifecycle', () => {
     expect(store.getSnapshot().error).toContain('İlerleme kaydedilemedi');
   });
 });
+
+test('dataset replacement clears the completed job in memory and persistent storage', async () => {
+  const disk = storage(), store = new BulkPayrollJobStore(() => disk);
+  await store.run(job(), async () => ({ status: 'success' }));
+  await store.runManual(async () => { store.clearForDatasetReplacement(); });
+  expect(store.getSnapshot().job).toBeNull();
+  expect(new BulkPayrollJobStore(() => disk).getSnapshot().job).toBeNull();
+});

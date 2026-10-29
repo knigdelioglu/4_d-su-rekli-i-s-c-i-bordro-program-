@@ -25,6 +25,7 @@ interface SgkPrimKontroluProps {
   aktifDonem: BordroDonemi;
   personeller: Personel[];
   bordrolar: BordroKaydi[];
+  puantajlar: import('../../types/payroll').PersonelPuantaj[];
   retroBatches: RetroAdjustmentBatch[];
   retroAllocations: RetroAllocation[];
   kurumDegerleri?: PayrollPeriodInstitutionSettings;
@@ -47,6 +48,7 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
   aktifDonem,
   personeller,
   bordrolar,
+  puantajlar,
   retroBatches,
   retroAllocations,
   kurumDegerleri,
@@ -58,8 +60,8 @@ export const SgkPrimKontrolu: React.FC<SgkPrimKontroluProps> = ({
   }, [aktifDonem.id]);
 
   const rows = useMemo(
-    () => getSgkPrimKontroluRows(aktifDonem, personeller, bordrolar, retroBatches, retroAllocations),
-    [aktifDonem, personeller, bordrolar, retroBatches, retroAllocations]
+    () => getSgkPrimKontroluRows(aktifDonem, personeller, bordrolar, retroBatches, retroAllocations, puantajlar),
+    [aktifDonem, personeller, bordrolar, retroBatches, retroAllocations, puantajlar]
   );
   const totals = useMemo(() => getSgkPrimKontroluTotals(rows), [rows]);
   const rateLabels = useMemo(

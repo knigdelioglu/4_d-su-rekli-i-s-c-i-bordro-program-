@@ -1,3 +1,4 @@
+import { bulkPayrollJobs } from '../services/bulkPayrollJob';
 import type { ChangeEvent } from 'react';
 import { BACKUP_FORMAT_VERSION } from '../types/payroll';
 import { getInitialDataset } from '../utils/sampleData';
@@ -128,7 +129,7 @@ export function useBackupController({
     setLoadError(null);
   };
 
-  const executeResetSampleData = async () => {
+  const executeResetSampleData = async () => bulkPayrollJobs.runManual(async () => {
     const initialData = getInitialDataset();
     const payload = makeBackupPayload({
       ...initialData,
@@ -145,12 +146,14 @@ export function useBackupController({
     try {
       if (tauriBridge.isTauriAvailable()) {
         await tauriBridge.replaceBackupPayload(serializePayrollStorage(payload));
+        bulkPayrollJobs.clearForDatasetReplacement();
         await reloadPersistedBackup(loadData);
         onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
         return;
       }
 
       await browserPersistence.replacePayload(serializePayrollStorage(payload));
+      bulkPayrollJobs.clearForDatasetReplacement();
       commitBrowserPayload(payload);
       onSuccess?.('Örnek veriler başarıyla yüklendi ve kalıcı olarak kaydedildi.');
     } catch (err) {
@@ -159,7 +162,7 @@ export function useBackupController({
       setLoadError(message);
       throw err;
     }
-  };
+  });
 
   // Confirmation belongs to the app UI so the same accessible dialog works in
   // both the browser and Tauri webview. Keep this handler for existing callers.

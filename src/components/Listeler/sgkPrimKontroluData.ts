@@ -3,6 +3,7 @@ import type {
   BordroKaydi,
   DönemselKurumDegerleri,
   Personel,
+  PersonelPuantaj,
   RetroAdjustmentBatch,
   RetroAllocation,
 } from '../../types/payroll';
@@ -394,7 +395,8 @@ export function getSgkPrimKontroluRows(
   personnel: Personel[],
   payrolls: BordroKaydi[],
   retroBatches: RetroAdjustmentBatch[] = [],
-  retroAllocations: RetroAllocation[] = []
+  retroAllocations: RetroAllocation[] = [],
+  attendances: PersonelPuantaj[] = []
 ): SgkPrimKontroluRow[] {
   const payrollsByPerson = new Map<string, BordroKaydi[]>();
 
@@ -422,7 +424,9 @@ export function getSgkPrimKontroluRows(
       retroAllocations
     );
     const hasAuthoritativeSourcePayroll =
-      authoritativePayrolls.length > 0 && !hasMissingSnapshot;
+      authoritativePayrolls.some((payroll) => payroll.accrualType === 'NORMAL') &&
+      attendances.some((attendance) => attendance.personelId === personel.id && attendance.donemId === period.id) &&
+      !hasMissingSnapshot;
     const canonicalSgkDays = getCanonicalSgkDayCount(authoritativePayrolls);
     const cariDonemPekKurus = getCurrentPeriodPekKurus(authoritativePayrolls);
     const status: SgkPrimKontroluRowStatus = hasStalePayroll

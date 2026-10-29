@@ -1353,6 +1353,22 @@ fn native_load_exposes_current_settings_as_exact_string_prefill_only() {
     };
     SettingsRepository::save_institution_settings(&conn, &settings).unwrap();
 
+    let mut raw = SettingsRepository::get_raw_institution_settings(&conn, "2026-01")
+        .unwrap()
+        .unwrap();
+    raw.as_object_mut().unwrap().remove("isPrimiGruplari");
+    conn.execute(
+        "UPDATE institution_settings SET settings_json = ?1 WHERE period_id = '2026-01'",
+        [raw.to_string()],
+    )
+    .unwrap();
+    SettingsRepository::set_app_setting(
+        &conn,
+        "is_primi_gruplari",
+        r#"[{"id":"current","ad":"Current","oran":"6.5","aktif":true}]"#,
+    )
+    .unwrap();
+
     let loaded = CompensationPolicyService::load(
         &conn,
         &CompensationPolicyLoadRequest {
@@ -1376,6 +1392,9 @@ fn native_load_exposes_current_settings_as_exact_string_prefill_only() {
     assert_eq!(source, "LEGACY_INSTITUTION_SETTINGS");
     assert_eq!(sourcePeriodId, "2026-01");
     assert_eq!(state.gunlukTabanUcret, Some("1234.56789".into()));
+    let groups = state.isPrimiGruplari.unwrap();
+    assert_eq!(groups[0].id, "current");
+    assert_eq!(groups[0].oran, dec!(6.5));
 }
 
 fn seed_linked_rounding_conflicts(conn: &rusqlite::Connection) {

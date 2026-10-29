@@ -11,11 +11,16 @@ import {
   amountToKurus,
   buildSgkPrimKontroluExcelPayload,
   compareSgkPrimTotals,
-  getSgkPrimKontroluRows,
+  getSgkPrimKontroluRows as getRows,
   getSgkPrimKontroluRateLabels,
   getSgkPrimKontroluTotals,
   parseSgkTutarToKurus,
 } from './sgkPrimKontroluData';
+
+const getSgkPrimKontroluRows: typeof getRows = (period, personnel, payrolls, batches, allocations) =>
+  getRows(period, personnel, payrolls, batches, allocations, personnel.map((person) => ({
+    id: person.id, personelId: person.id, donemId: period.id, gunler: {},
+  })));
 
 const period: BordroDonemi = {
   id: '2026-09',
@@ -1164,7 +1169,7 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     const paymentRows = getSgkPrimKontroluRows(
       paymentPeriod,
       [person1],
-      [retroPayrollWithPaymentPek],
+      [retroPayrollWithPaymentPek, { ...payroll(person1.id, "normal-payment", "FINALIZED", { isverenSgkPrimi: 0, isverenIssizlikPrimi: 0, isciSgkPrimi: 0, isciIssizlikPrimi: 0 }), donemId: paymentPeriod.id }],
       [batch],
       [allocation]
     );
@@ -1172,4 +1177,16 @@ describe('SGK prim kontrolü oran başlıkları ve Excel payload', () => {
     expect(paymentRows[0].isciIssizlikPrimi).toBe(10);
     expect(paymentRows[0].isverenSgkPrimi).toBe(217.5);
   });
+});
+
+test('tediye alone or missing attendance cannot produce ready SGK data', () => {
+  const normal = addSgkDaySnapshot(payroll(person1.id, 'normal', 'CALCULATED', completeAmounts), 30);
+  const tediye = addSgkDaySnapshot(payroll(person1.id, 'tediye', 'CALCULATED', completeAmounts), 30);
+  tediye.accrualType = 'TEDIYE';
+  const attendance = [{ id: 'a', personelId: person1.id, donemId: period.id, gunler: {} }];
+  for (const row of [getRows(period, [person1], [tediye], [], [], []), getRows(period, [person1], [tediye], [], [], attendance), getRows(period, [person1], [normal, tediye], [], [], [])].map(rows => rows[0])) {
+    expect(row.status).toBe('notCalculated');
+    expect(row.sgkPrimGunSayisi).toBeNull();
+  }
+  expect(getRows(period, [person1], [normal, tediye], [], [], attendance)[0].status).toBe('authoritative');
 });
